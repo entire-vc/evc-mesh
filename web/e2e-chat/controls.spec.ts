@@ -3,9 +3,10 @@ import {
   type Forbidden, type Frame, assertDenied, assertDistinctSessions, assertFramesClean, assertFrozen, assertIntermediateThenFinal,
   assertEffectiveMode, assertFramesDiffer, assertMarkdownDom, assertReadable, assertMemoryAndEventsClean, assertNoDeltaAfter, assertNoLeak, assertOk,
   assertOpaque404, assertOwnEvents, assertFixtureDisjoint, canary, assertStreaming, assertToolEvents, assertDeltasInFinal, assertEarlyDelta,
-  assertTurnRunning,
+  assertTurnRunning, assertReplyCanStillCome, describeReply, type ReplyView,
 } from "./lib/detect";
-import { F1, redControl, row } from "./lib/harness";
+import { waitTurnFrame, withReplyState } from "./lib/chat";
+import { F1, redControl, row, until } from "./lib/harness";
 
 /**
  * Red controls of the detectors themselves, with no network and no browser: each
@@ -178,4 +179,62 @@ test("F1: an unset ui-state 404 is excused on the response and its console line;
   await redControl("F1-red-ui-state-500", "detector", () =>
     f1With([{ console: `Failed to load resource: the server responded with a status of 500 () @ ${unset}`, response: { method: "GET", path: unset, status: 500 } }]).verify("detector", false, false));
   f1With([{ console: `${consoleLine} @ ${unset}`, response: { method: "GET", path: unset, status: 404 } }]).verify("detector", false, false);
+});
+
+test("REPLY-WAIT: a reply that ended without text stops the wait and names its error; the timeout line names the turn's phase and never the body", async () => {
+  const user = { id: "u1", role: "user", status: "done", body: "Name the visual code CANARY-A-xyz" };
+  // job 436006, S04 codex: harness_error at 62 s with an empty body, then 3 min of silent waiting.
+  const failed: ReplyView = { items: [user, { id: "r1", role: "assistant", status: "failed", body: "", error_code: "harness_error" }], active_turn: null };
+  await redControl("REPLY-red-failed-empty", "detector", () => assertReplyCanStillCome(failed, "t1", 1), /ended failed without a body.*status failed, error_code harness_error, body 0 chars/);
+  await redControl("REPLY-red-cancelled-empty", "detector", () =>
+    assertReplyCanStillCome({ items: [{ id: "r1", role: "assistant", status: "cancelled", body: "" }], active_turn: null }, "t1", 1), /ended cancelled/);
+  // Still coming: no reply yet, an empty streaming reply, a failed reply that kept its text.
+  assertReplyCanStillCome({ items: [user], active_turn: { id: "k", state: "queued", queue_position: 2 } }, "t1", 1);
+  assertReplyCanStillCome({ items: [user, { id: "r1", role: "assistant", status: "streaming", body: "" }], active_turn: { id: "k", state: "streaming" } }, "t1", 1);
+  assertReplyCanStillCome({ items: [user, { id: "r1", role: "assistant", status: "failed", body: "partial" }], active_turn: null }, "t1", 1);
+  // job 436006, P04 B: the own turn sat queued behind other actors' turns for the whole budget.
+  const queued = describeReply({ items: [user], active_turn: { id: "k", state: "queued", queue_position: 2 } }, "t1", 1);
+  expect(queued).toBe("thread t1: turn k queued at queue position 2; reply #1 absent (0 assistant message(s)), status none, error_code none, body 0 chars");
+  const ended = describeReply({ items: [user, { id: "r1", role: "assistant", status: "streaming", body: "The code is CANARY-A-xyz" }], active_turn: { id: "k", state: "streaming" } }, "t1", 1);
+  expect(ended).toBe("thread t1: turn k streaming; reply #1 r1 status streaming, error_code none, body 24 chars");
+  // The line carries lengths, not text: the leak check that catches a line quoting the body passes it.
+  await redControl("REPLY-red-body-in-line", "detector", () => assertNoLeak("reply-wait line", `${ended} The code is CANARY-A-xyz`, F), /foreign data present/);
+  assertNoLeak("reply-wait line", `${queued} ${ended} ${describeReply(failed, "t1", 1)}`, F);
+});
+
+test("REPLY-WAIT: a timed-out wait carries the turn's state; any other error passes through unchanged", async () => {
+  const queued: ReplyView = { items: [{ id: "u1", role: "user", status: "done", body: "Name the visual code CANARY-A-xyz" }], active_turn: { id: "k", state: "queued", queue_position: 2 } };
+  const read = async () => queued;
+  const never = () => until("assistant reply #1 terminal", async () => false, 20, 5);
+  await redControl("REPLY-red-timeout-state", "detector", () => withReplyState(read, "t1", 1, never),
+    /^timed out after 20 ms waiting for: assistant reply #1 terminal; thread t1: turn k queued at queue position 2; reply #1 absent \(0 assistant message\(s\)\), status none, error_code none, body 0 chars$/);
+  await redControl("REPLY-red-timeout-unreadable", "detector", () => withReplyState(async () => { throw new Error("history 500\nstack"); }, "t1", 1, never),
+    /timed out after 20 ms.*; thread t1: state unreadable \(history 500\); turn unknown; reply #1 status unknown, error_code unknown, body unknown$/);
+  const other = new Error("reply #1 ended failed without a body");
+  await redControl("REPLY-red-other-error", "detector", () => withReplyState(read, "t1", 1, async () => { throw other; }), /^reply #1 ended failed without a body$/);
+  await withReplyState(read, "t1", 1, async () => { throw other; }).catch((e) => expect(e).toBe(other));
+  // An error that only reads like a timeout is not one: it passes through without a state line.
+  const lookalike = new Error("timed out after 5 ms waiting for: something else");
+  await redControl("REPLY-red-timeout-lookalike", "detector", () => withReplyState(read, "t1", 1, async () => { throw lookalike; }), /^timed out after 5 ms waiting for: something else$/);
+  await withReplyState(read, "t1", 1, async () => { throw lookalike; }).catch((e) => expect(e).toBe(lookalike));
+  let line = "";
+  await withReplyState(read, "t1", 1, never).catch((e: Error) => { line = e.message; });
+  assertNoLeak("reply-wait timeout line", line, F);
+  expect(await withReplyState(read, "t1", 1, async () => "ok")).toBe("ok");
+});
+
+test("REPLY-WAIT: a wait for a running turn's frame stops on a reply that ended without text and names the turn on timeout", async () => {
+  // job 442021, P05 B: T-A failed with harness_error in 4 s, the wait for its first delta ran the full 240 s.
+  const failed: ReplyView = { items: [{ id: "r1", role: "assistant", status: "failed", body: "", error_code: "harness_error" }], active_turn: null };
+  const t0 = Date.now();
+  await redControl("REPLY-red-frame-failed", "detector", () => waitTurnFrame(async () => failed, "t1", 1, "A's stream starts", () => undefined, 60_000, 10),
+    /^reply #1 ended failed without a body: .*status failed, error_code harness_error, body 0 chars$/);
+  expect(Date.now() - t0, "the failed reply ends the wait long before its budget").toBeLessThan(5_000);
+  const queued: ReplyView = { items: [], active_turn: { id: "k", state: "claimed" } };
+  await redControl("REPLY-red-frame-timeout", "detector", () => waitTurnFrame(async () => queued, "t1", 1, "A's stream starts", () => undefined, 20, 5),
+    /^timed out after 20 ms waiting for: A's stream starts; thread t1: turn k claimed; reply #1 absent .*status none, error_code none, body 0 chars$/);
+  // A frame that arrives wins; a streaming reply without text yet keeps the wait going.
+  const streaming: ReplyView = { items: [{ id: "r1", role: "assistant", status: "streaming", body: "" }], active_turn: { id: "k", state: "streaming" } };
+  let n = 0;
+  expect(await waitTurnFrame(async () => streaming, "t1", 1, "A's stream starts", () => (++n > 3 ? "delta" : undefined), 5_000, 1)).toBe("delta");
 });

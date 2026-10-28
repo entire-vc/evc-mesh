@@ -190,7 +190,7 @@ func TestTaskService_Create(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestTaskService_Create_WorkspaceResolutionFailures — #819e7b29: Create now
+// TestTaskService_Create_WorkspaceResolutionFailures — an internal ticket: Create now
 // resolves workspace_id BEFORE calling taskRepo.Create, so the task.created
 // activity entry can be built and written atomically. These are the three ways
 // that resolution can fail, mirroring the same three branches CreateSubtask
@@ -242,7 +242,7 @@ func TestTaskService_Create_ProjectDoesNotExist(t *testing.T) {
 
 // TestTaskService_Create_BackgroundCtxActorTypeDefaultsToSystem is the
 // mock-level companion to the real-Postgres regression test in
-// recurring_empty_actor_type_db_test.go (#fd8a3e43). The recurring scheduler's
+// recurring_empty_actor_type_db_test.go. The recurring scheduler's
 // 60s ticker (cmd/api/main.go) calls Create through
 // recurringService.RunDue -> createInstance on a bare context.Background() —
 // actorctx.FromContext(ctx) then returns actorType == "", and
@@ -1064,7 +1064,7 @@ func TestTaskService_CreateSubtask(t *testing.T) {
 			},
 		},
 		{
-			// Regression test for #d13fe920: create_subtask used to silently
+			// Regression test for an internal ticket: create_subtask used to silently
 			// drop assignee_id/assignee_type/labels/custom_fields/due_date/
 			// estimated_hours — the child was always born unassigned to the
 			// creator with empty labels regardless of what was passed. This
@@ -1211,7 +1211,7 @@ func TestTaskService_CreateSubtask(t *testing.T) {
 	}
 }
 
-// TestTaskService_CreateSubtask_PublishesEvent — #42d3daea. The #819e7b29
+// TestTaskService_CreateSubtask_PublishesEvent — an internal ticket. The an internal ticket
 // atomicity fix replaced CreateSubtask's call to the old logActivity (which
 // wrote activity_log AND published to the event bus, see the doc comment on
 // publishTaskEvent) with a direct atomic activity_log write, and dropped the
@@ -1255,7 +1255,7 @@ func TestTaskService_CreateSubtask_PublishesEvent(t *testing.T) {
 
 // TestTaskService_CreateSubtask_BackgroundCtxActorTypeFallsBackToCreatedByType
 // is the mock-level companion to the real-Postgres regression test in
-// recurring_empty_actor_type_db_test.go (#fd8a3e43). No ticker calls
+// recurring_empty_actor_type_db_test.go. No ticker calls
 // CreateSubtask on a bare context.Background() today, but the bug shape was
 // identical and latent here too: the activity_log entry's ActorType came
 // straight from actorctx.FromContext(ctx) instead of the already-defaulted
@@ -1285,7 +1285,7 @@ func TestTaskService_CreateSubtask_BackgroundCtxActorTypeFallsBackToCreatedByTyp
 }
 
 // ---------------------------------------------------------------------------
-// TestTaskService_CreateSubtask_WorkspaceResolutionFailures — #819e7b29, the
+// TestTaskService_CreateSubtask_WorkspaceResolutionFailures — an internal ticket, the
 // CreateSubtask mirror of TestTaskService_Create_WorkspaceResolutionFailures
 // above: the same three ways workspace_id resolution can fail before the
 // atomic taskRepo.Create(ctx, child, activityEntry) call.
@@ -1331,7 +1331,7 @@ func TestTaskService_CreateSubtask_ProjectDoesNotExist(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestTaskService_CreateSubtask_Notify — task #9304f2cc: CreateSubtask used to
+// TestTaskService_CreateSubtask_Notify — an internal ticket: CreateSubtask used to
 // skip notifyAssignee/notifyAssignedAgent entirely, so a subtask's assignee
 // never heard about it. These mirror the Create() notification tests above
 // one-for-one so the subtask code path can't silently diverge again.
@@ -1911,7 +1911,7 @@ func seedTestAgentWithCapabilities(t *testing.T, svc *taskService, id uuid.UUID,
 }
 
 // TestTaskService_applyAutoAssign_SkipsNoLaneCandidate is the negative
-// control for #042c09d0: a registry `capabilities.no_lane: true` marking
+// control for an internal ticket: a registry `capabilities.no_lane: true` marking
 // (used for form-intake/webhook-receiver identities like Sage, CRM,
 // mesh-dispatcher-svc — see registry docs) is documentation until
 // applyAutoAssign itself refuses to assign onto it. Run this test against
@@ -2487,7 +2487,7 @@ func TestTaskService_Update_DelegationLevelLogged(t *testing.T) {
 }
 
 // TestTaskService_Update_StartAfterLogged mirrors TestTaskService_Update_DelegationLevelLogged
-// for the start_after diff-tracking line added alongside due_date's own (#246b8fcc).
+// for the start_after diff-tracking line added alongside due_date's own.
 func TestTaskService_Update_StartAfterLogged(t *testing.T) {
 	svc, taskRepo, activityRepo, _, projRepo := setupTaskServiceForDelegation()
 	ctx := context.Background()
@@ -2979,7 +2979,7 @@ func TestTaskService_Update_ReviewerNoNotifyIfUnchanged(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Create — the reviewer-on-create path (task #6bf97281). Reviewer used to be
+// Create — the reviewer-on-create path. Reviewer used to be
 // settable only via a follow-up PATCH; these mirror the Update reviewer tests
 // above one-for-one so Create can't silently diverge from Update's contract.
 // ---------------------------------------------------------------------------
@@ -3274,7 +3274,7 @@ func setupTaskServiceWithDoneGate() (*taskService, *MockTaskRepository, *MockTas
 }
 
 // fakeGitHubPRChecker is a scripted githubapi.PullRequestChecker for the
-// done-evidence gate's live-check branch (#5f7f8c6e). It records every call
+// done-evidence gate's live-check branch. It records every call
 // so tests can assert the gate actually consulted it rather than passing/
 // failing for an unrelated reason.
 type fakeGitHubPRChecker struct {
@@ -3322,8 +3322,7 @@ func setupTaskServiceWithDoneGateAndGitHubChecker(checker githubapi.PullRequestC
 
 // fakeGitLabMRChecker is gitlabapi.MergeRequestChecker's counterpart to
 // fakeGitHubPRChecker, for the done-evidence gate's GitLab live-check branch
-// (#bc39d781).
-type fakeGitLabMRChecker struct {
+// type fakeGitLabMRChecker struct {
 	mu              sync.Mutex
 	state           gitlabapi.MergeRequestState
 	err             error
@@ -3465,7 +3464,7 @@ func TestTaskService_MoveTask_DoneGate_FallsBackToCachedStatusWhenGitLabUnreacha
 	assert.Contains(t, doneErr.Error(), linkedAt.UTC().Format(time.RFC3339))
 }
 
-// The reported case (#bc39d781): NO GitLab checker wired at all (empty
+// The reported case: NO GitLab checker wired at all (empty
 // MESH_GITLAB_URL/MESH_GITLAB_TOKEN) — the refusal must say access isn't
 // configured, not something that reads as a failed live attempt.
 func TestTaskService_MoveTask_DoneGate_NoGitLabCheckerWired_NamesNoAccessConfigured(t *testing.T) {
@@ -3735,17 +3734,17 @@ func TestTaskService_MoveTask_DoneGate_BlockedWhenPROpen(t *testing.T) {
 	require.ErrorAs(t, err, &doneErr)
 	assert.Contains(t, doneErr.Error(), "feat: my feature")
 	assert.Contains(t, doneErr.Error(), "open")
-	// #df734dd9: this branch has no comment-based escape hatch — a
+	// an internal ticket: this branch has no comment-based escape hatch — a
 	// justification comment is only consulted when VCSLinkCount == 0. The
 	// message must not promise one that doesn't exist on this path.
 	assert.NotContains(t, doneErr.Error(), "justification comment")
 }
 
-// #0fbed572: a GitLab-provider link with an unmerged cached status must NOT
+// an internal ticket: a GitLab-provider link with an unmerged cached status must NOT
 // get the GitHub-specific "could not verify live against GitHub" message.
 // This test uses setupTaskServiceWithDoneGate() — no GitLab checker wired —
 // so isPRMergedLive dispatches to isMRMergedOnGitLab, which short-circuits
-// on s.gitlabMRChecker == nil (#bc39d781 gave GitLab a real live-check path;
+// on s.gitlabMRChecker == nil (an internal ticket gave GitLab a real live-check path;
 // see TestTaskService_MoveTask_DoneGate_PassesWhenGitLabReportsLiveMerged
 // for the case where a checker IS wired). Either way, no GitHub attempt was
 // ever made for this link, and telling the reader otherwise sends them
@@ -3788,7 +3787,7 @@ func TestTaskService_MoveTask_DoneGate_BlockedWhenGitLabPROpen_NamesGitLabNotGit
 	assert.NotContains(t, doneErr.Error(), "against GitHub")
 }
 
-// #df734dd9: an empty recorded status (a link created before status
+// an internal ticket: an empty recorded status (a link created before status
 // tracking existed, or one add_vcs_link left blank) gets a message that
 // names the real cause — no webhook can ever arrive for a PR that was
 // merged before the link existed — instead of a generic "not merged" that
@@ -4360,15 +4359,15 @@ func TestTaskService_Update_RepoErrorPropagates(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestTaskService_SupersedeRecurringInstances — #8b57630b
+// TestTaskService_SupersedeRecurringInstances — an internal ticket
 //
 // A rollover must not manufacture a false `done` on a zero-work instance
 // (schedule 18388503's bug: 130 identical automated nudge comments read as
 // "evidence"), and must not leave a zero-evidence instance stuck open forever
-// waiting for evidence that will never arrive either (schedule 404ae199's
+// waiting for evidence that will never arrive either (schedule an internal ticket's
 // opposite bug: the done-evidence gate refuses it and the caller ignores the
 // refusal). Both are the same code path — see the acceptance table on
-// #8b57630b for the ПОЗИТИВНЫЙ/НЕГАТИВНЫЙ shape these tests mirror.
+// an internal ticket for the ПОЗИТИВНЫЙ/НЕГАТИВНЫЙ shape these tests mirror.
 // ---------------------------------------------------------------------------
 
 func setupSupersedeProject(statusRepo *MockTaskStatusRepository) (projectID, doneStatusID, cancelledStatusID, openStatusID uuid.UUID) {
@@ -4439,7 +4438,7 @@ func TestTaskService_SupersedeRecurringInstances_RealWork_ClosesDone(t *testing.
 }
 
 // НЕГАТИВНЫЙ (несущий): zero evidence closes as missed — not done (the
-// 18388503 bug), and not stuck open forever (the 404ae199 bug, since moving
+// 18388503 bug), and not stuck open forever (the an internal ticket bug, since moving
 // to cancelled doesn't run the done-evidence gate).
 func TestTaskService_SupersedeRecurringInstances_ZeroEvidence_ClosesMissed(t *testing.T) {
 	scheduleID, newTaskID := uuid.New(), uuid.New()
@@ -4814,4 +4813,39 @@ func TestTaskService_MoveTask_ReviewStampsAuthorWithoutRotation(t *testing.T) {
 	task.AssigneeID = &otherID
 	require.NoError(t, svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &todo}))
 	assert.Equal(t, otherID, *taskRepo.items[taskID].AssigneeID, "bounce-out without rotation must not restore the author")
+}
+
+func TestTaskService_MoveTask_CAS_ExpectedAssignee(t *testing.T) {
+	projectID := uuid.New()
+	svc, taskRepo, statusRepo := setupTaskService()
+
+	todoID, targetID := uuid.New(), uuid.New()
+	statusRepo.items[targetID] = &domain.TaskStatus{ID: targetID, ProjectID: projectID, Category: domain.StatusCategoryTodo}
+	owner, other := uuid.New(), uuid.New()
+	newTask := func(assignee *uuid.UUID) uuid.UUID {
+		id := uuid.New()
+		taskRepo.items[id] = &domain.Task{ID: id, ProjectID: projectID, StatusID: todoID, AssigneeID: assignee, Title: "assignee CAS"}
+		return id
+	}
+
+	// Stale assignee: 409 with the current owner, status unchanged.
+	id := newTask(&other)
+	err := svc.MoveTask(context.Background(), id, MoveTaskInput{StatusID: &targetID, ExpectedAssigneeID: &owner})
+	var casErr *CASConflictError
+	require.ErrorAs(t, err, &casErr)
+	require.NotNil(t, casErr.CurrentAssigneeID)
+	assert.Equal(t, other, *casErr.CurrentAssigneeID)
+	assert.Equal(t, todoID, taskRepo.items[id].StatusID)
+
+	// Expected unassigned (uuid.Nil) but someone took it: 409.
+	nilID := uuid.Nil
+	require.ErrorAs(t, svc.MoveTask(context.Background(), id, MoveTaskInput{StatusID: &targetID, ExpectedAssigneeID: &nilID}), &casErr)
+
+	// Matching assignee and matching "unassigned" both move.
+	id = newTask(&owner)
+	require.NoError(t, svc.MoveTask(context.Background(), id, MoveTaskInput{StatusID: &targetID, ExpectedAssigneeID: &owner, ExpectedStatusID: &todoID}))
+	assert.Equal(t, targetID, taskRepo.items[id].StatusID)
+	id = newTask(nil)
+	require.NoError(t, svc.MoveTask(context.Background(), id, MoveTaskInput{StatusID: &targetID, ExpectedAssigneeID: &nilID}))
+	assert.Equal(t, targetID, taskRepo.items[id].StatusID)
 }

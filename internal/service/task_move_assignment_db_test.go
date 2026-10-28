@@ -358,3 +358,91 @@ func TestMoveTask_ImplicitCASRetriesOverInterleavedWrite(t *testing.T) {
 	var conflict *domain.TaskConflict
 	require.ErrorAs(t, svc.MoveTask(ctx, id, MoveTaskInput{StatusID: &other, ExpectedStatusID: &cur.StatusID}), &conflict)
 }
+
+// an internal ticket: a caller that read (status, assignee) and moves on that snapshot
+// must get a 409 when the owner changes between its read and the move, and the
+// card must keep the new owner's state; on an unchanged card the move lands.
+func TestMoveTask_PostgresExpectedAssigneeLosesToReassign(t *testing.T) {
+	f, repo, _, id, owner := newCheckoutM1Fixture(t)
+	ctx := actorctx.WithActor(context.Background(), uuid.Nil, domain.ActorTypeSystem)
+	statusRepo := postgres.NewTaskStatusRepo(f.db)
+	target := &domain.TaskStatus{ID: uuid.New(), ProjectID: f.projectID, Name: "Back", Slug: "back", Category: domain.StatusCategoryTodo, Color: "#ffffff", Position: 1}
+	require.NoError(t, statusRepo.Create(ctx, target))
+	writer := &moveInterleavingRepo{TaskRepo: repo}
+	svc := NewTaskService(writer, statusRepo, nil, postgres.NewActivityLogRepo(f.db), WithProjectRepo(postgres.NewProjectRepo(f.db)))
+
+	snapshot, err := repo.GetByID(ctx, id)
+	require.NoError(t, err)
+	require.Nil(t, snapshot.AssigneeID)
+	unassigned := uuid.Nil
+	writer.beforeWrite = func(ctx context.Context, task *domain.Task) error {
+		edit, getErr := repo.GetByID(ctx, task.ID)
+		if getErr != nil {
+			return getErr
+		}
+		edit.AssigneeID, edit.AssigneeType = &owner, domain.AssigneeTypeAgent
+		return repo.Update(ctx, edit)
+	}
+	var conflict *domain.TaskConflict
+	require.ErrorAs(t, svc.MoveTask(ctx, id, MoveTaskInput{StatusID: &target.ID, ExpectedStatusID: &snapshot.StatusID, ExpectedAssigneeID: &unassigned}), &conflict)
+	require.NotNil(t, conflict.CurrentAssigneeID)
+	require.Equal(t, owner, *conflict.CurrentAssigneeID)
+	fresh, err := repo.GetByID(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, snapshot.StatusID, fresh.StatusID, "the losing move must not land")
+	require.Equal(t, owner, *fresh.AssigneeID)
+
+	// Matching expectation on the fresh card: the move lands.
+	writer.beforeWrite = nil
+	require.NoError(t, svc.MoveTask(ctx, id, MoveTaskInput{StatusID: &target.ID, ExpectedStatusID: &fresh.StatusID, ExpectedAssigneeID: &owner}))
+	fresh, err = repo.GetByID(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, target.ID, fresh.StatusID)
+}
+
+// A no-op move (target equals the current state) still answers a precondition
+// the row no longer satisfies: a reassignment after the pre-read is a 409, not
+// a success that never touched the database.
+func TestMoveTask_PostgresNoOpMoveHonoursExpectedAssignee(t *testing.T) {
+	f, repo, _, id, owner := newCheckoutM1Fixture(t)
+	ctx := actorctx.WithActor(context.Background(), uuid.Nil, domain.ActorTypeSystem)
+	statusRepo := postgres.NewTaskStatusRepo(f.db)
+	reassigning := &moveInterleavingGetRepo{TaskRepo: repo}
+	svc := NewTaskService(reassigning, statusRepo, nil, postgres.NewActivityLogRepo(f.db), WithProjectRepo(postgres.NewProjectRepo(f.db)))
+
+	snapshot, err := repo.GetByID(ctx, id)
+	require.NoError(t, err)
+	unassigned := uuid.Nil
+	reassigning.afterFirstGet = func(ctx context.Context, task *domain.Task) error {
+		edit := *task
+		edit.AssigneeID, edit.AssigneeType = &owner, domain.AssigneeTypeAgent
+		return repo.Update(ctx, &edit)
+	}
+	var conflict *domain.TaskConflict
+	require.ErrorAs(t, svc.MoveTask(ctx, id, MoveTaskInput{StatusID: &snapshot.StatusID, ExpectedAssigneeID: &unassigned}), &conflict)
+	require.NotNil(t, conflict.CurrentAssigneeID)
+	require.Equal(t, owner, *conflict.CurrentAssigneeID)
+
+	// Positive control: an unchanged row keeps the no-op a success.
+	reassigning.afterFirstGet = nil
+	require.NoError(t, svc.MoveTask(ctx, id, MoveTaskInput{StatusID: &snapshot.StatusID, ExpectedAssigneeID: &owner}))
+}
+
+// moveInterleavingGetRepo commits a write right after MoveTask's first read,
+// before the service decides the move is a no-op.
+type moveInterleavingGetRepo struct {
+	*postgres.TaskRepo
+	afterFirstGet func(context.Context, *domain.Task) error
+	reads         int
+}
+
+func (r *moveInterleavingGetRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Task, error) {
+	task, err := r.TaskRepo.GetByID(ctx, id)
+	r.reads++
+	if err == nil && task != nil && r.afterFirstGet != nil && r.reads == 1 {
+		if writeErr := r.afterFirstGet(ctx, task); writeErr != nil {
+			return nil, writeErr
+		}
+	}
+	return task, err
+}

@@ -300,3 +300,51 @@ func TestHandleMR_Merged_DoesNotCloseGatedOrSignalledReviewCard(t *testing.T) {
 		})
 	}
 }
+
+// an internal ticket: a card that was not created as a review card can still declare
+// its open MR the subject of its review through the metadata PATCH; the
+// gate then treats it exactly as a bound review subject. Without the marker
+// the link keeps blocking, and no other role value is accepted.
+func TestPatchMetadata_RoleReviewLetsDoneGatePass(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		patch   map[string]any
+		wantErr bool
+	}{
+		{"role=review patched", map[string]any{"role": "review"}, false},
+		{"no role", nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			linkSvc, linkRepo, _ := patchMetaSetup(domain.VCSLinkTypePR)
+			link := &domain.VCSLink{ID: uuid.New(), TaskID: uuid.New(), LinkType: domain.VCSLinkTypePR, Metadata: []byte(`{}`)}
+			linkRepo.links[link.ID] = link
+			meta := link.Metadata
+			if tc.patch != nil {
+				got, err := linkSvc.PatchMetadata(context.Background(), link.TaskID, link.ID, tc.patch)
+				require.NoError(t, err)
+				require.True(t, got.IsReviewSubject())
+				meta = got.Metadata
+			}
+
+			projectID, statusID := uuid.New(), uuid.New()
+			checker := &fakeGitLabMRChecker{err: fmt.Errorf("dial tcp: connection refused")}
+			svc, taskRepo, statusRepo, vcsRepo, commentRepo := setupTaskServiceWithDoneGateAndGitLabChecker(checker)
+			taskRepo.items[link.TaskID] = &domain.Task{ID: link.TaskID, ProjectID: projectID, StatusID: uuid.New(), Title: "sign-off", VCSLinkCount: 1}
+			commentRepo.items[uuid.New()] = &domain.Comment{TaskID: link.TaskID, Body: "verdict"}
+			statusRepo.items[statusID] = &domain.TaskStatus{ID: statusID, ProjectID: projectID, Category: domain.StatusCategoryDone}
+			vcsRepo.items = append(vcsRepo.items, domain.VCSLink{
+				ID: link.ID, TaskID: link.TaskID, Provider: domain.VCSProviderGitLab, LinkType: domain.VCSLinkTypePR,
+				Status: domain.VCSLinkStatusOpen, URL: reviewSubjectURL, ExternalID: "101", Metadata: meta,
+			})
+
+			err := svc.MoveTask(context.Background(), link.TaskID, MoveTaskInput{StatusID: &statusID})
+
+			if tc.wantErr {
+				var doneErr *DoneEvidenceError
+				require.ErrorAs(t, err, &doneErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}

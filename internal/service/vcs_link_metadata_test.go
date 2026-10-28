@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -64,7 +65,10 @@ func TestPatchMetadata_RejectsBadInput(t *testing.T) {
 	ctx := context.Background()
 	for name, patch := range map[string]map[string]any{
 		"head_sha":      {"head_sha": strings.Repeat("c", 40)},
-		"foreign key":   {"role": "x"},
+		"foreign key":   {"pipeline_sha": strings.Repeat("c", 40)},
+		"role x":        {"role": "x"},
+		"role REVIEW":   {"role": "REVIEW"},
+		"role non-str":  {"role": true},
 		"mixed":         {"ship_sha": strings.Repeat("b", 40), "head_sha": strings.Repeat("c", 40)},
 		"short sha":     {"ship_sha": "abc123"},
 		"uppercase sha": {"ship_sha": strings.Repeat("B", 40)},
@@ -82,6 +86,58 @@ func TestPatchMetadata_RejectsBadInput(t *testing.T) {
 	// Nothing was written by any rejected call.
 	assert.NotContains(t, string(link.Metadata), "ship_sha")
 	assert.Contains(t, string(link.Metadata), "head_sha")
+}
+
+func TestPatchMetadata_RoleReviewIsStampedWithActor(t *testing.T) {
+	repo := newFakeVCSLinkRepo()
+	link := &domain.VCSLink{ID: uuid.New(), TaskID: uuid.New(), LinkType: domain.VCSLinkTypePR, Metadata: json.RawMessage(`{"ship_sha":"` + strings.Repeat("b", 40) + `"}`)}
+	repo.links[link.ID] = link
+	svc := NewVCSLinkService(repo).(*vcsLinkService)
+	actor := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), actor, domain.ActorTypeAgent)
+
+	got, err := svc.PatchMetadata(ctx, link.TaskID, link.ID, map[string]any{"role": "review"})
+	require.NoError(t, err)
+	assert.True(t, got.IsReviewSubject())
+
+	var meta struct {
+		ShipSHA string `json:"ship_sha"`
+		RoleSet struct {
+			ByID   string `json:"by_id"`
+			ByType string `json:"by_type"`
+			At     string `json:"at"`
+		} `json:"role_set"`
+	}
+	require.NoError(t, json.Unmarshal(got.Metadata, &meta))
+	assert.Equal(t, strings.Repeat("b", 40), meta.ShipSHA, "other keys survive")
+	assert.Equal(t, actor.String(), meta.RoleSet.ByID)
+	assert.Equal(t, string(domain.ActorTypeAgent), meta.RoleSet.ByType)
+	assert.NotEmpty(t, meta.RoleSet.At)
+
+	// Setting it again is a no-op: the first stamp stands.
+	first := string(got.Metadata)
+	again, err := svc.PatchMetadata(actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeUser), link.TaskID, link.ID, map[string]any{"role": "review"})
+	require.NoError(t, err)
+	assert.JSONEq(t, first, string(again.Metadata))
+}
+
+// A marker bound from a review card's description carries no stamp; the
+// first PATCH that names it records the actor.
+func TestPatchMetadata_RoleReviewStampsAnUnstampedMarker(t *testing.T) {
+	svc, _, link := patchMetaSetup(domain.VCSLinkTypePR) // role=review, no role_set
+	actor := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), actor, domain.ActorTypeAgent)
+
+	got, err := svc.PatchMetadata(ctx, link.TaskID, link.ID, map[string]any{"role": "review"})
+	require.NoError(t, err)
+
+	var meta struct {
+		RoleSet struct {
+			ByID string `json:"by_id"`
+		} `json:"role_set"`
+	}
+	require.NoError(t, json.Unmarshal(got.Metadata, &meta))
+	assert.Equal(t, actor.String(), meta.RoleSet.ByID)
 }
 
 func TestPatchMetadata_NotFound(t *testing.T) {

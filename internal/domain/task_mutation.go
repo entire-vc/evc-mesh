@@ -12,6 +12,8 @@ type TaskConflict struct {
 	CurrentVersion   int64     `json:"current_version"`
 	CurrentStatusID  uuid.UUID `json:"current_status_id"`
 	CurrentUpdatedAt time.Time `json:"current_updated_at"`
+	// CurrentAssigneeID is nil for an unassigned task.
+	CurrentAssigneeID *uuid.UUID `json:"current_assignee_id"`
 }
 
 func (e *TaskConflict) Error() string {
@@ -40,9 +42,11 @@ type TaskTransition struct {
 	ExpectedVersion   int64
 	ExpectedStatusID  *uuid.UUID
 	ExpectedUpdatedAt *time.Time
-	Reaper            *ReaperExpectation
-	AlarmDue          *time.Time
-	AlarmLabels       []string
+	// ExpectedAssigneeID: uuid.Nil expects an unassigned task.
+	ExpectedAssigneeID *uuid.UUID
+	Reaper             *ReaperExpectation
+	AlarmDue           *time.Time
+	AlarmLabels        []string
 	// Automatic moves must leave registered WAITs to their atomic consumer.
 	DisallowParkedWait bool
 }

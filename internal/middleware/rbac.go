@@ -209,6 +209,13 @@ func RequirePermission(perm Permission, memberRepo repository.WorkspaceMemberRep
 			}
 
 			if IsAgent(c) {
+				// A viewer-role credential gets the viewer row of the matrix,
+				// not agentPerms. AgentReadOnlyGuard already
+				// refuses its writes group-wide; this keeps rbac() honest if a
+				// route is ever registered outside that group.
+				if IsReadOnlyAgent(c) && !hasPermission(domain.RoleViewer, perm) {
+					return c.JSON(http.StatusForbidden, apierror.Forbidden(ReadOnlyAgentMessage))
+				}
 				if !agentPerms[perm] {
 					// PermRegisterAgent gets its own message: the generic
 					// text leaves whoever granted this agent an admin role
@@ -372,6 +379,10 @@ func RequireConnectorPermission(perm Permission, memberRepo repository.Workspace
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if IsAgent(c) {
+				// Same viewer bar as RequirePermission.
+				if IsReadOnlyAgent(c) && !hasPermission(domain.RoleViewer, perm) {
+					return c.JSON(http.StatusForbidden, apierror.Forbidden(ReadOnlyAgentMessage))
+				}
 				if denied, err := clampConnector(c, perm, memberRepo, ownsWorkspace); denied {
 					return err
 				}

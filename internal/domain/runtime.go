@@ -128,6 +128,22 @@ type RuntimeReport struct {
 	EmergencyPaused bool                               `json:"emergency_paused"`
 	Pools           map[string]RuntimePoolObservation  `json:"pools"`
 	Profiles        map[string]RuntimeModelObservation `json:"profiles,omitempty"`
+	// Excluded is written by the server, never taken from the controller: the
+	// bindings of this controller that strict workspace isolation leaves out.
+	Excluded []RuntimeExclusion `json:"excluded,omitempty"`
+}
+
+// Reasons a binding is left out under strict workspace isolation.
+const (
+	RuntimeExcludedForeignWorkspace    = "foreign_workspace"
+	RuntimeExcludedRunnerOff           = "runner_off"
+	RuntimeExcludedProgramNotConnected = "program_not_connected"
+)
+
+// RuntimeExclusion is one binding the Runner does not run, and why.
+type RuntimeExclusion struct {
+	Ref    string `json:"ref"`
+	Reason string `json:"reason"`
 }
 
 type RuntimeControllerState struct {
@@ -495,6 +511,7 @@ type RuntimeDesired struct {
 	ControllerRef  string                `json:"controller_ref"`
 	Controller     RuntimeController     `json:"controller"`
 	Catalog        RuntimeDesiredCatalog `json:"catalog"`
+	Excluded       []RuntimeExclusion    `json:"excluded,omitempty"`
 }
 
 type RuntimeDesiredCatalog struct {

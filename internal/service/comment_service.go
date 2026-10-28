@@ -879,10 +879,22 @@ type commentService struct {
 	// webhookSvc carries the public comment.created event to webhook receivers
 	// and extension subscriptions; nil disables it.
 	webhookSvc WebhookService
+	// textGateOff disables the comment-text gate door (COMMENT_TEXT_GATE_PARSING
+	// =off): no arming from a "❓ Blocking" marker, no release by a human reply
+	// or a negator word, no triage exit keyed on an old marker. The zero value
+	// keeps today's parsing on.
+	textGateOff bool
 }
 
 // CommentServiceOption configures optional dependencies for CommentService.
 type CommentServiceOption func(*commentService)
+
+// WithCommentTextGateParsing turns the comment-text gate door on or off.
+// Off leaves set_human_gate / clear_human_gate as the only way to arm or clear
+// human_gate.
+func WithCommentTextGateParsing(enabled bool) CommentServiceOption {
+	return func(s *commentService) { s.textGateOff = !enabled }
+}
 
 // WithCommentWebhookService makes a created comment dispatch comment.created.
 func WithCommentWebhookService(ws WebhookService) CommentServiceOption {
@@ -1230,14 +1242,16 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 		// where it now is.
 		s.liftParkedCardOnAssigneeMention(ctx, comment, task, wsID)
 		s.notifyMentions(ctx, comment, task, "", wsID)
-		// Server-side enforcement: "❓ Blocking @user" → auto-move task to triage + arm gate.
-		s.enforceBlockingTriage(ctx, comment, task, wsID)
-		// Symmetric release: user comment after a prior blocking marker → clear human_gate.
-		s.releaseHumanGate(ctx, comment, task, wsID)
-		// Symmetric release: the SAME agent who raised a still-live ask withdraws it.
-		s.releaseHumanGateOnWithdrawal(ctx, comment, task, wsID)
-		// General triage EXIT: human user responds on a non-gated triage task → in_progress.
-		s.enforceTriageExit(ctx, comment, task, wsID)
+		if !s.textGateOff {
+			// Server-side enforcement: "❓ Blocking @user" → auto-move task to triage + arm gate.
+			s.enforceBlockingTriage(ctx, comment, task, wsID)
+			// Symmetric release: user comment after a prior blocking marker → clear human_gate.
+			s.releaseHumanGate(ctx, comment, task, wsID)
+			// Symmetric release: the SAME agent who raised a still-live ask withdraws it.
+			s.releaseHumanGateOnWithdrawal(ctx, comment, task, wsID)
+			// General triage EXIT: human user responds on a non-gated triage task → in_progress.
+			s.enforceTriageExit(ctx, comment, task, wsID)
+		}
 	}
 
 	// Surface what became of each @-addressed handle in the SAME response that
@@ -1338,7 +1352,7 @@ func (s *commentService) Update(ctx context.Context, comment *domain.Comment) er
 				// Re-evaluate enforcement only when the marker was newly added by this
 				// edit (absent in oldBody). The status idempotency check below is a
 				// second safeguard against double-triage.
-				if !hasBlockingMarker(oldBody) {
+				if !s.textGateOff && !hasBlockingMarker(oldBody) {
 					s.enforceBlockingTriage(ctx, existing, task, proj.WorkspaceID)
 				}
 			}

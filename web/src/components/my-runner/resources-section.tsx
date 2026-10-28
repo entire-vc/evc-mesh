@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -235,7 +235,10 @@ function ResourcesBody({ doc, onSaved }: { doc: ResourceDoc; onSaved: () => void
                 <li key={name} className="space-y-2">
                   <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-3 py-2">
                     <span className="min-w-0 flex-1">
-                      <span className="block break-all text-sm font-medium">{name}</span>
+                      {/* `a/b/spend` wraps after a `/`, not inside a segment, on a 393 screen too */}
+                      <span className="block break-words text-sm font-medium" title={name}>
+                        {name.split("/").map((p, i) => <Fragment key={i}>{i > 0 && <>/<wbr /></>}{p}</Fragment>)}
+                      </span>
                       <EntrySummary value={value} />
                     </span>
                     {schema && (

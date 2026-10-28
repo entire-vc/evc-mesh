@@ -90,6 +90,8 @@ func TestRecordHumanGateDecision_DispatchesGateDecided(t *testing.T) {
 			call := rec.next(t)
 			assert.Equal(t, ws, call.ws, "delivered in the task's workspace")
 			assert.Equal(t, extensions.EventTaskGateDecided, call.event)
+			// Receivers pick their signing secret by workspace_id (docs/webhooks.md).
+			assert.Equal(t, ws, call.payload["workspace_id"], "body names the task's workspace")
 			assert.Equal(t, taskID, call.payload["task_id"])
 			assert.Equal(t, d.ID, call.payload["decision_id"])
 			assert.Equal(t, "approve hash abc", call.payload["decision"])

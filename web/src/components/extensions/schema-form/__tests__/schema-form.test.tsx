@@ -116,6 +116,18 @@ describe("resolveSchema / validate", () => {
     expect(buildPayload(schema, { name: "x", bot_username: "unrelated_bot" })).toEqual({ name: "x" });
   });
 
+  it("marks with * only the required fields validation refuses empty: not a toggle, not a list that may be empty", () => {
+    const schema = {
+      type: "object",
+      required: ["name", "on", "tags", "aliases"],
+      properties: { name: { type: "string" }, on: { type: "boolean" }, tags: { type: "array", minItems: 1 }, aliases: { type: "array", minItems: 0 } },
+    } as FieldSchema;
+    render(<SchemaForm schema={schema} onSubmit={vi.fn()} />);
+    const marked = (f: string) => screen.getByText(f, { selector: "label" }).textContent!.includes("*");
+    expect(["name", "on", "tags", "aliases"].map(marked)).toEqual([true, false, true, false]);
+    expect(Object.keys(validate(schema, {}, { secretsSet: new Set() })).sort()).toEqual(["name", "tags"]);
+  });
+
   it("sends false for an untouched required boolean", () => {
     const schema = { type: "object", required: ["on"], properties: { on: { type: "boolean" }, opt: { type: "boolean" } } } as FieldSchema;
     expect(buildPayload(schema, {})).toEqual({ on: false });

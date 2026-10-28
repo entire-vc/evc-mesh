@@ -351,7 +351,7 @@ func (s *vcsLinkService) PatchMetadata(ctx context.Context, taskID, linkID uuid.
 	out := make(map[string]any, len(patch))
 	for k, v := range patch {
 		if !domain.AgentWritableVCSMetadataKeys[k] {
-			return nil, apierror.BadRequest("metadata key " + strconv.Quote(k) + " is not writable; allowed: ship_sha, implementation_sha, merged_sha, ci_verdict, deployed, acceptance")
+			return nil, apierror.BadRequest("metadata key " + strconv.Quote(k) + " is not writable; allowed: ship_sha, implementation_sha, merged_sha, ci_verdict, deployed, acceptance, role")
 		}
 		val, vErr := normalizeVCSMetadataValue(k, v, existing)
 		if vErr != nil {
@@ -365,6 +365,16 @@ func (s *vcsLinkService) PatchMetadata(ctx context.Context, taskID, linkID uuid.
 			continue
 		}
 		out[k] = val
+	}
+	if _, named := patch[domain.VCSLinkMetaRole]; named {
+		// role=review lifts the link out of the done-evidence gate, so the
+		// write is attributed the same way a hand-declared status is. A
+		// marker that is already there without a stamp (bound from a review
+		// card's description) is stamped by the first PATCH that names it;
+		// an existing stamp stands.
+		if _, stamped := stored[domain.VCSLinkMetaRoleSet]; !stamped {
+			out[domain.VCSLinkMetaRoleSet] = roleSetStamp(ctx, time.Now())
+		}
 	}
 	if len(out) == 0 {
 		return existing, nil
@@ -473,8 +483,28 @@ func normalizeVCSMetadataValue(key string, v any, existing *domain.VCSLink) (any
 			return nil, apierror.BadRequest("acceptance.sha must be a 40-character lowercase hex string")
 		}
 		return a, nil
+	case domain.VCSLinkMetaRole:
+		// Only a review subject can be declared; the gate keeps every other
+		// open pr link blocking, so no other value has a meaning here.
+		if str, ok := v.(string); !ok || str != domain.VCSLinkRoleReview {
+			return nil, apierror.BadRequest(`role must be "review"`)
+		}
+		return domain.VCSLinkRoleReview, nil
 	}
 	return nil, apierror.BadRequest("metadata key " + strconv.Quote(key) + " is not writable")
+}
+
+// roleSetStamp records who set role on a link and when.
+func roleSetStamp(ctx context.Context, at time.Time) map[string]any {
+	actorID, actorType := actorctx.FromContext(ctx)
+	stamp := map[string]any{"at": at.UTC().Format(time.RFC3339)}
+	if actorType != "" {
+		stamp["by_type"] = string(actorType)
+	}
+	if actorID != uuid.Nil {
+		stamp["by_id"] = actorID.String()
+	}
+	return stamp
 }
 
 // PatchShipSHAByURL resolves the pr links naming mrURL (number from the last

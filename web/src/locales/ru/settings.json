@@ -887,19 +887,7 @@
       "viewer": "Наблюдатель"
     },
     "team": {
-      "harnessModelTitle": "Среда · модель",
-      "tasksCount": "{{current}}/{{max}} задач",
-      "harnessModel": "Среда / модель",
-      "notReported": "не указано",
-      "responsibilityZone": "Зона ответственности",
-      "workingHours": "Рабочие часы",
-      "acceptsFrom": "Принимает от",
-      "description": "Описание",
-      "allCapabilities": "Все возможности",
-      "description2": "Все агенты и люди в этом рабочем пространстве",
-      "empty": "Участники команды не найдены. Агенты появятся здесь после регистрации.",
-      "agentsCount": "Агенты ({{n}})",
-      "humansCount": "Люди ({{n}})"
+      "agentsCount": "Агенты ({{n}})"
     },
     "assignment": {
       "selectAssignee": "Выберите исполнителя...",
@@ -941,7 +929,6 @@
       "profile": "Профиль",
       "general": "Общие",
       "members": "Участники",
-      "team": "Справочник команды",
       "assignment": "Правила назначения",
       "violations": "Нарушения",
       "workflowTemplates": "Шаблоны рабочего процесса",

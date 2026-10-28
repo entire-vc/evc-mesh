@@ -2,10 +2,10 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page } from "@playwright/test";
 import type { Actor, Ctx } from "./harness";
-import { chatBase, chatUrl, sha256, track, until } from "./harness";
+import { UntilTimeout, chatBase, chatUrl, sha256, track, until } from "./harness";
 import type { Harness } from "./env";
 import { cfg, OUT_DIR } from "./env";
-import { assertTurnRunning } from "./detect";
+import { type ReplyView, assertReplyCanStillCome, assertTurnRunning, describeReply } from "./detect";
 
 export interface ApiMessage {
   id: string;
@@ -13,6 +13,7 @@ export interface ApiMessage {
   body: string;
   status: string;
   turn_id: string | null;
+  error_code?: string | null;
   created_at: string;
   attachments: Array<{ id: string; mime: string; size: number; width: number | null; height: number | null; file_name: string }>;
 }
@@ -43,10 +44,12 @@ export async function listThreadIds(a: Actor, x: Ctx, agent: string): Promise<st
   return out;
 }
 
-export async function history(a: Actor, x: Ctx, threadId: string): Promise<{ items: ApiMessage[]; active_turn: { id: string; state: string } | null }> {
+export interface ActiveTurn { id: string; state: string; queue_position?: number; agent_offline?: boolean }
+
+export async function history(a: Actor, x: Ctx, threadId: string): Promise<{ items: ApiMessage[]; active_turn: ActiveTurn | null }> {
   const res = await a.api("GET", `${chatBase(x)}/threads/${threadId}/messages?limit=100`);
   expect(res.status, `history of ${threadId} must be readable by its author`).toBe(200);
-  const j = res.json() as { items: ApiMessage[]; active_turn: { id: string; state: string } | null };
+  const j = res.json() as { items: ApiMessage[]; active_turn: ActiveTurn | null };
   // The API orders by (created_at, id) DESC; assertions read oldest first, in the API's own order, not by timestamp ties.
   return { ...j, items: [...j.items].reverse() };
 }
@@ -147,11 +150,56 @@ export async function expectTurnRunning(a: Actor, x: Ctx, threadId: string, nth:
 export const codeOf = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
 
 export async function waitAssistantDone(a: Actor, x: Ctx, threadId: string, nth: number, ms = 240_000): Promise<ApiMessage> {
-  return until(`assistant reply #${nth} terminal`, async () => {
+  return withReplyState(() => history(a, x, threadId), threadId, nth, () => until(`assistant reply #${nth} terminal`, async () => {
     const h = await history(a, x, threadId);
     const m = h.items.filter((i) => i.role === "assistant")[nth - 1];
     return m && ["done", "failed", "cancelled"].includes(m.status) ? m : false;
-  }, ms, 1000);
+  }, ms, 1000));
+}
+
+/** The nth reply once it has text, streaming or done; a reply that ended without text fails at once. */
+export async function waitAssistantBody(a: Actor, x: Ctx, threadId: string, nth: number, ms = 240_000, every = 300): Promise<ApiMessage> {
+  return withReplyState(() => history(a, x, threadId), threadId, nth, () => until(`assistant reply #${nth} has a body (streaming or done)`, async () => {
+    const h = await history(a, x, threadId);
+    assertReplyCanStillCome(h, threadId, nth);
+    const m = h.items.filter((i) => i.role === "assistant")[nth - 1];
+    return m && m.body !== "" ? m : false;
+  }, ms, every));
+}
+
+/**
+ * Waits for a frame only a live turn sends (a delta, a tool call). The reply is read every
+ * `checkEvery` ms: one that ended without text fails at once (job 442021, P05 B waited 240 s on a
+ * turn that had failed in 4 s), and a timeout names where the turn stood.
+ */
+export async function waitTurnFrame<F>(read: () => Promise<ReplyView>, threadId: string, nth: number, what: string, pick: () => F | undefined, ms = 240_000, checkEvery = 2000): Promise<F> {
+  let next = Date.now() + checkEvery;
+  return withReplyState(read, threadId, nth, () => until(what, async () => {
+    const f = pick();
+    if (f) return f;
+    if (Date.now() >= next) {
+      assertReplyCanStillCome(await read(), threadId, nth);
+      next = Date.now() + checkEvery;
+    }
+    return undefined;
+  }, ms, 200));
+}
+
+/** A timed-out reply wait says where the turn stood (describeReply): queued, claimed, streaming or ended. */
+export async function withReplyState<T>(read: () => Promise<ReplyView>, threadId: string, nth: number, wait: () => Promise<T>): Promise<T> {
+  try {
+    return await wait();
+  } catch (e) {
+    if (!(e instanceof UntilTimeout)) throw e;
+    let state: string;
+    try {
+      state = describeReply(await read(), threadId, nth);
+    } catch (h) {
+      state = `thread ${threadId}: state unreadable (${h instanceof Error ? h.message.split("\n")[0] : String(h)}); turn unknown; reply #${nth} status unknown, error_code unknown, body unknown`;
+    }
+    e.message = `${e.message}; ${state}`;
+    throw e;
+  }
 }
 
 /**

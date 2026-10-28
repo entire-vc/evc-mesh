@@ -6,7 +6,7 @@ import {
 import {
   type Actor, type Ctx, chatBase, chatUrl, openAllActors, redControl, resolveCtx, row, sha256, step, timeline, track, until,
 } from "./lib/harness";
-import { agentId, expectTurnRunning, holdTurnPrompt, history, makeCodePng, sendVia, waitAssistantDone } from "./lib/chat";
+import { agentId, expectTurnRunning, holdTurnPrompt, history, makeCodePng, sendVia, waitAssistantDone, waitTurnFrame } from "./lib/chat";
 import { memoryWrites, sessionOf, threadEvents } from "./lib/diag";
 
 /**
@@ -260,6 +260,8 @@ for (const id of ATTACKERS) {
           const h = await history(U.A, x, seeded.A!.threadId);
           return JSON.stringify({ title: th.title, ids: h.items.map((m) => m.id), still: true });
         };
+        // The owner's own seed reply must land before the snapshot: job 445063 saw it end (failed) between the two reads.
+        await waitAssistantDone(U.A, x, seeded.A!.threadId, 1);
         const before = await snapshot();
         for (const call of ["rename", "delete", "send", "stop"] as P04Call[]) await checkP04(a, call);
         expect(await snapshot(), "T-A is unchanged for the owner").toBe(before);
@@ -314,7 +316,8 @@ for (const id of ATTACKERS) {
         // while the turn is still queued and Mesh cancels it without ever creating reply #2.
         const sentA = await sendVia(U.A.page, seeded.A!.threadId, () => U.A.page.getByTestId("chat-send").click());
         expect(sentA.turnId, "the send names its turn").toBeTruthy();
-        await until("A's stream starts", async () => U.A.frames.find((f) => f.event === "chat.message.delta" && f.turn_id === sentA.turnId), 240_000, 200);
+        await waitTurnFrame(() => history(U.A, x, seeded.A!.threadId), seeded.A!.threadId, nA, "A's stream starts",
+          () => U.A.frames.find((f) => f.event === "chat.message.delta" && f.turn_id === sentA.turnId));
         await expectTurnRunning(U.A, x, seeded.A!.threadId, nA, sentAt);
         await expect(U.A.page.getByTestId("chat-stop"), "A's turn is still running when Stop is pressed").toBeVisible({ timeout: 15_000 });
         await U.A.page.getByTestId("chat-stop").click();

@@ -299,13 +299,16 @@ export function trackedThreads(): Array<{ actor: ActorId; threadId: string }> {
 export const chatBase = (x: Ctx) => `/api/v1/projects/${x.projectId}/chat`;
 export const chatUrl = (x: Ctx, threadId?: string) => `/w/${x.wsSlug}/p/${x.projectSlug}/chat${threadId ? `/${threadId}` : ""}`;
 
+/** The one error until() throws when its budget runs out; callers tell it from other errors by class, not by text. */
+export class UntilTimeout extends Error {}
+
 /** Frames, screenshots and an HTTP-free DOM check must carry this to be a real wait: no sleeps. */
 export async function until<T>(what: string, fn: () => Promise<T | undefined | false>, ms = 120_000, every = 750): Promise<T> {
   const end = Date.now() + ms;
   for (;;) {
     const v = await fn();
     if (v) return v;
-    if (Date.now() > end) throw new Error(`timed out after ${ms} ms waiting for: ${what}`);
+    if (Date.now() > end) throw new UntilTimeout(`timed out after ${ms} ms waiting for: ${what}`);
     await new Promise((r) => setTimeout(r, every));
   }
 }

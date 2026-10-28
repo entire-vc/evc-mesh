@@ -220,6 +220,8 @@ var declaredQueryTenantParams = map[string]string{
 	// and WorkspaceRLS have both already resolved.
 	"event_handler.go:listEventsQuery.agent_id": "narrows: e.agent_id = $%d — pinned by e.project_id = $1",
 	"event_handler.go:listEventsQuery.task_id":  "narrows: e.task_id = $%d — pinned by e.project_id = $1",
+	// GET /tasks/:task_id/wait?agent_id= picks one agent's wait on a card the workspace guard already admitted.
+	"typed_outcome_handler.go:GetActiveWait.agent_id": "narrows: ($2::uuid IS NULL OR agent_id = $2) — pinned by task_id = $1",
 
 	// GET /me/tasks is the one worth reading twice. Nothing authorizes the
 	// workspace_id here — it goes straight from the query string into the SQL —
