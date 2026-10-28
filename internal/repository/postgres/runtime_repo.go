@@ -303,7 +303,7 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 			return nil, err
 		}
 	}
-	revision, _, err := runtimeRevision(ctx, tx, connection.ID)
+	revision, oldDigest, err := runtimeRevision(ctx, tx, connection.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -313,8 +313,8 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 	// Inventory redacts credential references, so an editor sends back an
 	// account with an empty credential_ref: it keeps the stored reference.
 	config := input.Config
+	var previous []byte
 	if revision > 0 {
-		var previous []byte
 		err = tx.GetContext(ctx, &previous, `SELECT config FROM runtime_catalog_revisions WHERE integration_id=$1 AND revision=$2`, connection.ID, revision)
 		if err != nil {
 			return nil, err
@@ -381,8 +381,9 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 			return nil, e
 		}
 	}
-	for _, b := range catalog.Bindings {
-		if _, err = runtimeGrant(ctx, tx, b.Binding); err != nil {
+	fingerprints := make(map[string]string, len(catalog.Bindings))
+	for ref, b := range catalog.Bindings {
+		if fingerprints[ref], err = runtimeGrant(ctx, tx, b.Binding); err != nil {
 			return nil, err
 		}
 	}
@@ -397,11 +398,86 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 	if err != nil {
 		return nil, err
 	}
+	err = carryRuntimeAdmissions(ctx, tx, connection.ID, previous, catalog, fingerprints, oldDigest, digest)
+	if err != nil {
+		return nil, err
+	}
 	err = tx.Commit()
 	if err != nil {
 		return nil, err
 	}
 	return &domain.RuntimeSnapshot{Mode: "managed", Revision: revision, Digest: digest, Enabled: connection.IsActive, DrainRequested: !connection.IsActive, Catalog: catalog.Redacted(), Controllers: []domain.RuntimeControllerState{}}, nil
+}
+
+// carryRuntimeAdmissions moves each receiver admission from the previous
+// catalog digest to the new one when the save left what that receiver approved
+// unchanged: its binding, the definitions of its permitted profiles, their
+// accounts, pools and controller host. Without it every catalog save read every
+// admission as disabled until the receiver granted it again, although most saves
+// touch other bindings. A binding whose projection changed keeps the old digest
+// and needs renewed approval, as before. The grant and its key fingerprint are
+// matched as in SetBindingPolicy, so a rotated key never inherits an admission.
+// The admission revision is the receiver's token and stays as is.
+func carryRuntimeAdmissions(ctx context.Context, tx *sqlx.Tx, connectionID uuid.UUID, previous []byte, catalog *domain.RuntimeCatalog, fingerprints map[string]string, oldDigest, digest string) error {
+	if len(previous) == 0 || oldDigest == digest {
+		return nil
+	}
+	// Decoded without validation: a revision stored under older rules must not
+	// fail a save, it only stops carrying admissions.
+	var before domain.RuntimeCatalog
+	if json.Unmarshal(previous, &before) != nil {
+		return nil
+	}
+	for ref, binding := range catalog.Bindings {
+		old, ok := runtimeBindingProjectionDigest(&before, ref)
+		if !ok {
+			continue
+		}
+		now, _ := runtimeBindingProjectionDigest(catalog, ref)
+		if old != now {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE runtime_binding_admissions SET catalog_digest=$3 WHERE integration_id=$1 AND binding_ref=$2 AND catalog_digest=$4 AND workspace_id=$5 AND agent_id=$6 AND grant_id=$7 AND grant_fingerprint=$8`, connectionID, ref, digest, oldDigest, binding.Binding.WorkspaceID, binding.Binding.AgentID, binding.Binding.GrantID, fingerprints[ref]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// runtimeBindingProjectionDigest hashes the part of a catalog one receiver
+// approved; ok is false when the catalog has no such binding. Map keys marshal
+// sorted, so equal content gives equal digests.
+func runtimeBindingProjectionDigest(catalog *domain.RuntimeCatalog, ref string) (string, bool) {
+	binding, ok := catalog.Bindings[ref]
+	if !ok {
+		return "", false
+	}
+	profiles := map[string]any{}
+	accounts := map[string]any{}
+	pools := map[string]any{}
+	hosts := map[string]string{}
+	for _, name := range binding.PermittedProfiles {
+		profile, ok := catalog.Profiles[name]
+		profiles[name] = map[string]any{"defined": ok, "profile": profile}
+		if !ok {
+			continue
+		}
+		hosts[profile.ControllerRef] = catalog.Controllers[profile.ControllerRef].Host
+		account, ok := catalog.Accounts[profile.AccountRef]
+		accounts[profile.AccountRef] = map[string]any{"defined": ok, "account": account}
+		for _, refs := range account.QuotaPoolsByMode {
+			for _, poolRef := range refs {
+				name, ok := catalog.ResolvePool(poolRef)
+				pools[poolRef] = map[string]any{"defined": ok, "name": name, "pool": catalog.Pools[name]}
+			}
+		}
+	}
+	data, err := json.Marshal(map[string]any{"binding": binding, "profiles": profiles, "accounts": accounts, "pools": pools, "hosts": hosts})
+	if err != nil {
+		return "", false
+	}
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:]), true
 }
 
 // Restore saves the catalog of an earlier revision as a new revision. The

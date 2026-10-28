@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -25,6 +27,9 @@ type MockWorkspaceMemberService struct {
 	AddMemberWithCreateFunc func(ctx context.Context, workspaceID uuid.UUID, email, name, role, password string, invitedBy uuid.UUID) (*domain.WorkspaceMemberWithUser, error)
 	UpdateMemberRoleFunc    func(ctx context.Context, workspaceID, targetUserID uuid.UUID, newRole string) error
 	SetDisplayNameFunc      func(ctx context.Context, workspaceID, targetUserID uuid.UUID, name string) error
+	SetEmailFunc            func(ctx context.Context, workspaceID, targetUserID uuid.UUID, email string) error
+	SetPasswordFunc         func(ctx context.Context, workspaceID, targetUserID uuid.UUID, password string) error
+	SetUsernameFunc         func(ctx context.Context, workspaceID, targetUserID uuid.UUID, username string) error
 	RemoveMemberFunc        func(ctx context.Context, workspaceID, targetUserID uuid.UUID) error
 	GetMyRoleFunc           func(ctx context.Context, workspaceID, userID uuid.UUID) (string, error)
 	SearchUsersFunc         func(ctx context.Context, workspaceID, callerID uuid.UUID, query string) ([]domain.UserWithMemberStatus, error)
@@ -68,6 +73,27 @@ func (m *MockWorkspaceMemberService) UpdateMemberRole(ctx context.Context, works
 func (m *MockWorkspaceMemberService) SetMemberDisplayName(ctx context.Context, workspaceID, targetUserID uuid.UUID, name string) error {
 	if m.SetDisplayNameFunc != nil {
 		return m.SetDisplayNameFunc(ctx, workspaceID, targetUserID, name)
+	}
+	return nil
+}
+
+func (m *MockWorkspaceMemberService) SetMemberEmail(ctx context.Context, workspaceID, targetUserID uuid.UUID, email string) error {
+	if m.SetEmailFunc != nil {
+		return m.SetEmailFunc(ctx, workspaceID, targetUserID, email)
+	}
+	return nil
+}
+
+func (m *MockWorkspaceMemberService) SetMemberPassword(ctx context.Context, workspaceID, targetUserID uuid.UUID, password string) error {
+	if m.SetPasswordFunc != nil {
+		return m.SetPasswordFunc(ctx, workspaceID, targetUserID, password)
+	}
+	return nil
+}
+
+func (m *MockWorkspaceMemberService) SetMemberUsername(ctx context.Context, workspaceID, targetUserID uuid.UUID, username string) error {
+	if m.SetUsernameFunc != nil {
+		return m.SetUsernameFunc(ctx, workspaceID, targetUserID, username)
 	}
 	return nil
 }
@@ -416,4 +442,110 @@ func TestWorkspaceMemberHandler_List_EmptyIsAnArrayNotNull(t *testing.T) {
 	c, rec := newMemberReq(t, http.MethodGet, "", uuid.New(), uuid.New(), uuid.New())
 	require.NoError(t, h.List(c))
 	assert.Contains(t, rec.Body.String(), `"members":[]`)
+}
+
+type recordingLockout struct{ reset []string }
+
+func (l *recordingLockout) Reset(_ context.Context, identifier string) error {
+	l.reset = append(l.reset, identifier)
+	return nil
+}
+
+// Account fields are forwarded to their own service calls, the password last,
+// the password never echoes back, and the member's login lockout is cleared.
+func TestWorkspaceMemberHandler_Update_SetsAccountFields(t *testing.T) {
+	wsID, userID := uuid.New(), uuid.New()
+	var calls []string
+
+	svc := &MockWorkspaceMemberService{
+		SetUsernameFunc: func(_ context.Context, _, _ uuid.UUID, username string) error {
+			calls = append(calls, "username:"+username)
+			return nil
+		},
+		SetEmailFunc: func(_ context.Context, _, _ uuid.UUID, email string) error {
+			calls = append(calls, "email:"+email)
+			return nil
+		},
+		SetPasswordFunc: func(_ context.Context, _, _ uuid.UUID, password string) error {
+			calls = append(calls, "password:"+password)
+			return nil
+		},
+		GetMemberFunc: func(_ context.Context, _, _ uuid.UUID) (*domain.WorkspaceMemberWithUser, error) {
+			m := memberFixture(wsID, userID)
+			m.User.Email = "New@Example.com"
+			return m, nil
+		},
+	}
+	lockout := &recordingLockout{}
+	h := NewWorkspaceMemberHandler(svc).WithLoginLockout(lockout)
+
+	c, rec := newMemberReq(t, http.MethodPatch,
+		`{"password":"NewPassw0rd!","email":"New@Example.com","username":"new-handle"}`, wsID, userID, uuid.New())
+	require.NoError(t, h.UpdateRole(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, []string{"username:new-handle", "email:New@Example.com", "password:NewPassw0rd!"}, calls)
+	assert.NotContains(t, rec.Body.String(), "NewPassw0rd", "the password must never come back")
+	assert.Equal(t, []string{"new@example.com"}, lockout.reset)
+}
+
+// A refused email must stop the request before the password is changed: the
+// password change ends the member's sessions and cannot be taken back.
+func TestWorkspaceMemberHandler_Update_RefusedEmailSkipsThePassword(t *testing.T) {
+	wsID, userID := uuid.New(), uuid.New()
+	passwordSet := false
+
+	svc := &MockWorkspaceMemberService{
+		SetEmailFunc: func(_ context.Context, _, _ uuid.UUID, _ string) error {
+			return apierror.Conflict("a user with this email already exists")
+		},
+		SetPasswordFunc: func(_ context.Context, _, _ uuid.UUID, _ string) error {
+			passwordSet = true
+			return nil
+		},
+	}
+	lockout := &recordingLockout{}
+	h := NewWorkspaceMemberHandler(svc).WithLoginLockout(lockout)
+
+	c, rec := newMemberReq(t, http.MethodPatch, `{"password":"NewPassw0rd!","email":"dup@example.com"}`, wsID, userID, uuid.New())
+	require.NoError(t, h.UpdateRole(c))
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.False(t, passwordSet)
+	assert.Empty(t, lockout.reset)
+}
+
+func TestWorkspaceMemberHandler_Update_ForbiddenPasswordIs403(t *testing.T) {
+	wsID, userID := uuid.New(), uuid.New()
+	svc := &MockWorkspaceMemberService{
+		SetPasswordFunc: func(_ context.Context, _, _ uuid.UUID, _ string) error {
+			return apierror.Forbidden("an admin cannot change the account of an owner")
+		},
+	}
+	h := NewWorkspaceMemberHandler(svc)
+
+	c, rec := newMemberReq(t, http.MethodPatch, `{"password":"NewPassw0rd!"}`, wsID, userID, uuid.New())
+	require.NoError(t, h.UpdateRole(c))
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+// Sessions not ended is still a stored password: the lockout is cleared and
+// the failure reported.
+func TestWorkspaceMemberHandler_Update_RevokeFailureStillClearsLockout(t *testing.T) {
+	wsID, userID := uuid.New(), uuid.New()
+	svc := &MockWorkspaceMemberService{
+		SetPasswordFunc: func(_ context.Context, _, _ uuid.UUID, _ string) error {
+			return fmt.Errorf("revoke: %w", service.ErrSessionsNotRevoked)
+		},
+		GetMemberFunc: func(_ context.Context, _, _ uuid.UUID) (*domain.WorkspaceMemberWithUser, error) {
+			m := memberFixture(wsID, userID)
+			m.User.Email = "Member@Example.com"
+			return m, nil
+		},
+	}
+	lockout := &recordingLockout{}
+	h := NewWorkspaceMemberHandler(svc).WithLoginLockout(lockout)
+
+	c, rec := newMemberReq(t, http.MethodPatch, `{"password":"NewPassw0rd!"}`, wsID, userID, uuid.New())
+	require.NoError(t, h.UpdateRole(c))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Equal(t, []string{"member@example.com"}, lockout.reset)
 }

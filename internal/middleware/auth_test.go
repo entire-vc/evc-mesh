@@ -832,3 +832,7 @@ func TestOptionalAuth_SetsWorkspaceRoleFromAuthenticatedAgent(t *testing.T) {
 	require.NoError(t, handler(c))
 	assert.Equal(t, "member", c.Get(ContextKeyWorkspaceRole))
 }
+
+func (r *mockUserRepo) UpdateEmail(_ context.Context, _ uuid.UUID, _ string) error { return nil }
+
+func (r *mockUserRepo) UpdatePasswordHash(_ context.Context, _ uuid.UUID, _ string) error { return nil }

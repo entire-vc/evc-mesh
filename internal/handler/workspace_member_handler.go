@@ -1,11 +1,14 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
+	"github.com/entire-vc/evc-mesh/internal/auth"
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -14,11 +17,27 @@ import (
 // WorkspaceMemberHandler handles HTTP requests for workspace member management.
 type WorkspaceMemberHandler struct {
 	svc service.WorkspaceMemberService
+	// loginLockout, when set, is cleared for the member's address after an
+	// admin sets their password: the failures recorded against the old one
+	// must not lock the person out of the new one.
+	loginLockout loginLockoutResetter
+}
+
+// loginLockoutResetter is the part of mw.LoginLockout this handler needs.
+type loginLockoutResetter interface {
+	Reset(ctx context.Context, identifier string) error
 }
 
 // NewWorkspaceMemberHandler creates a new WorkspaceMemberHandler.
 func NewWorkspaceMemberHandler(svc service.WorkspaceMemberService) *WorkspaceMemberHandler {
 	return &WorkspaceMemberHandler{svc: svc}
+}
+
+// WithLoginLockout wires the per-account login lockout that a password reset
+// clears. Optional; returns the handler for chaining.
+func (h *WorkspaceMemberHandler) WithLoginLockout(l loginLockoutResetter) *WorkspaceMemberHandler {
+	h.loginLockout = l
+	return h
 }
 
 // addMemberRequest represents the JSON body for adding a member.
@@ -34,11 +53,16 @@ type addMemberRequest struct {
 }
 
 // updateMemberRequest represents the JSON body for updating a member.
-// Both fields are optional: send role to change the role, name to fill in a
-// display name that was never chosen. Sending neither is a no-op, not an error.
+// Every field is optional: role changes the role, name fills in a display name
+// that was never chosen, and email / username / password change the member's
+// sign-in identity (see service.WorkspaceMemberService.SetMemberEmail for who
+// may). Sending nothing is a no-op, not an error.
 type updateMemberRequest struct {
-	Role string  `json:"role"`
-	Name *string `json:"name"`
+	Role     string  `json:"role"`
+	Name     *string `json:"name"`
+	Email    *string `json:"email"`
+	Username *string `json:"username"`
+	Password *string `json:"password"`
 }
 
 // List handles GET /workspaces/:ws_id/members
@@ -152,6 +176,30 @@ func (h *WorkspaceMemberHandler) UpdateRole(c echo.Context) error {
 			return handleError(c, err)
 		}
 	}
+	if req.Username != nil {
+		if err = h.svc.SetMemberUsername(ctx, wsID, targetUserID, *req.Username); err != nil {
+			return handleError(c, err)
+		}
+	}
+	if req.Email != nil {
+		if err = h.svc.SetMemberEmail(ctx, wsID, targetUserID, *req.Email); err != nil {
+			return handleError(c, err)
+		}
+	}
+	// Password last: it is the one change that ends the member's sessions, so
+	// it should not happen if an earlier field in the same request was refused.
+	if req.Password != nil {
+		if err = h.svc.SetMemberPassword(ctx, wsID, targetUserID, *req.Password); err != nil {
+			// The new password is stored even though the sessions were not
+			// ended: the lockout earned by the old one must still go.
+			if errors.Is(err, service.ErrSessionsNotRevoked) {
+				if member, getErr := h.svc.GetMember(ctx, wsID, targetUserID); getErr == nil && member != nil {
+					h.resetLoginLockout(c, member)
+				}
+			}
+			return handleError(c, err)
+		}
+	}
 
 	member, err := h.svc.GetMember(ctx, wsID, targetUserID)
 	if err != nil {
@@ -160,7 +208,21 @@ func (h *WorkspaceMemberHandler) UpdateRole(c echo.Context) error {
 	if member == nil {
 		return c.JSON(http.StatusNotFound, apierror.NotFound("WorkspaceMember"))
 	}
+	if req.Password != nil {
+		h.resetLoginLockout(c, member)
+	}
 	return c.JSON(http.StatusOK, member)
+}
+
+// resetLoginLockout clears the failed-login counter for the member's address
+// after their password was set; a failure is logged, the change stands.
+func (h *WorkspaceMemberHandler) resetLoginLockout(c echo.Context, member *domain.WorkspaceMemberWithUser) {
+	if h.loginLockout == nil {
+		return
+	}
+	if err := h.loginLockout.Reset(c.Request().Context(), auth.NormalizeEmail(member.User.Email)); err != nil {
+		c.Logger().Errorf("login lockout: reset after admin password change: %v", err)
+	}
 }
 
 // Remove handles DELETE /workspaces/:ws_id/members/:user_id

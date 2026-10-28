@@ -1362,6 +1362,15 @@ type WorkspaceMemberService interface {
 	// a chosen one from inside one workspace would change how the person appears
 	// in every other workspace they belong to.
 	SetMemberDisplayName(ctx context.Context, workspaceID, targetUserID uuid.UUID, name string) error
+	// SetMemberEmail, SetMemberPassword and SetMemberUsername change another
+	// member's sign-in identity. The actor must be a person who is an owner or
+	// admin at least as senior as the target in EVERY workspace the target
+	// belongs to; never on yourself, never on an agent's service account.
+	// A password change ends the target's sessions and is audited without the
+	// password.
+	SetMemberEmail(ctx context.Context, workspaceID, targetUserID uuid.UUID, email string) error
+	SetMemberPassword(ctx context.Context, workspaceID, targetUserID uuid.UUID, password string) error
+	SetMemberUsername(ctx context.Context, workspaceID, targetUserID uuid.UUID, username string) error
 	RemoveMember(ctx context.Context, workspaceID, targetUserID uuid.UUID) error
 	GetMyRole(ctx context.Context, workspaceID, userID uuid.UUID) (string, error)
 	// SearchUsers finds accounts callerID may add to workspaceID, annotated with

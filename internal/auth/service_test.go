@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
@@ -1314,3 +1315,19 @@ func TestValidatePassword(t *testing.T) {
 	assert.Error(t, ValidatePassword("ALLUPPER1")) // no lowercase
 	assert.Error(t, ValidatePassword("NoDigits"))  // no digit
 }
+
+// Everything the policy accepts must also hash: bcrypt stops at 72 bytes.
+func TestValidatePassword_LengthMatchesBcryptLimit(t *testing.T) {
+	longest := "Aa1" + strings.Repeat("x", 69)
+	require.NoError(t, ValidatePassword(longest))
+	_, err := bcrypt.GenerateFromPassword([]byte(longest), bcrypt.MinCost)
+	require.NoError(t, err)
+
+	assert.ErrorIs(t, ValidatePassword(longest+"x"), ErrPasswordTooLong)
+	// multi-byte characters count by bytes, as bcrypt does
+	assert.ErrorIs(t, ValidatePassword("Aa1"+strings.Repeat("я", 35)), ErrPasswordTooLong)
+}
+
+func (r *mockUserRepo) UpdateEmail(_ context.Context, _ uuid.UUID, _ string) error { return nil }
+
+func (r *mockUserRepo) UpdatePasswordHash(_ context.Context, _ uuid.UUID, _ string) error { return nil }

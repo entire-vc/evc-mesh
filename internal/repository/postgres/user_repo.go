@@ -9,8 +9,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 )
 
 // UserRepo implements repository.UserRepository with PostgreSQL.
@@ -65,7 +67,8 @@ func (r *UserRepo) Count(ctx context.Context) (int, error) {
 // constraint. Editing your own display name returned 500 for that reason alone.
 func (r *UserRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	const q = `SELECT id, email, password_hash, display_name, COALESCE(username, '') AS username,
-	                  COALESCE(avatar_url, '') AS avatar_url, is_active, display_name_self_set, locale, locale_set_explicitly, created_at, updated_at
+	                  COALESCE(avatar_url, '') AS avatar_url, is_active, display_name_self_set, locale, locale_set_explicitly,
+	                  service_agent_id, created_at, updated_at
 	           FROM users WHERE id = $1`
 	var user domain.User
 	if err := r.db.GetContext(ctx, &user, q, id); err != nil {
@@ -120,6 +123,29 @@ func (r *UserRepo) Update(ctx context.Context, user *domain.User) error {
 		user.ID, user.Name, user.AvatarURL, user.IsActive, user.Username,
 		user.DisplayNameSelfSet, user.Locale, user.LocaleSetExplicitly, time.Now(),
 	)
+	return err
+}
+
+// UpdateEmail rewrites the account's login address. Update deliberately does
+// not touch email: it is an identity column, written only by a path that has
+// already proven the actor may take it over (see
+// workspaceMemberService.SetMemberEmail). The unique index on lower(email) is
+// the last word on duplicates; a violation comes back as ErrEmailTaken.
+func (r *UserRepo) UpdateEmail(ctx context.Context, userID uuid.UUID, email string) error {
+	const q = `UPDATE users SET email = $2, updated_at = $3 WHERE id = $1`
+	_, err := r.db.ExecContext(ctx, q, userID, email, time.Now())
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+		return repository.ErrEmailTaken
+	}
+	return err
+}
+
+// UpdatePasswordHash replaces the account's password hash. Like UpdateEmail it
+// is kept out of Update so no profile edit can carry a stale hash back.
+func (r *UserRepo) UpdatePasswordHash(ctx context.Context, userID uuid.UUID, hash string) error {
+	const q = `UPDATE users SET password_hash = $2, updated_at = $3 WHERE id = $1`
+	_, err := r.db.ExecContext(ctx, q, userID, hash, time.Now())
 	return err
 }
 

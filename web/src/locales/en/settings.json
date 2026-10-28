@@ -971,7 +971,6 @@
       "deleteConfirm": "This will permanently delete \"{{name}}\" — its projects, tasks, and comments — for everyone in it. This action cannot be undone."
     },
     "members": {
-      "renameFailed": "Failed to update name",
       "removeFailed": "Failed to remove member",
       "description": "Manage who has access to this workspace",
       "inviteMember": "Invite Member",
@@ -981,16 +980,26 @@
       "noName": "No name set",
       "noNameHint": " — click the pencil to add one",
       "joined": "Joined {{date}}",
-      "editName": "Edit display name",
       "remove": "Remove member",
       "removeTitle": "Remove Member",
       "removeConfirm": "Are you sure you want to remove {{name}} ({{email}}) from this workspace?",
-      "renameDescription": "How {{email}} appears on tasks, comments and mentions.",
       "nameLabel": "Name",
       "namePlaceholder": "Jane Cooper",
       "renameHint": "They can change it themselves at any time, and once they do this becomes theirs to edit only.",
       "savingName": "Saving…",
-      "saveName": "Save name"
+      "editMember": "Edit member",
+      "emailLabel": "Email",
+      "emailRequired": "Email is required",
+      "usernameLabel": "Username",
+      "newPasswordLabel": "New password",
+      "confirmPasswordLabel": "Repeat password",
+      "passwordHint": "Leave empty to keep the current password. Setting one signs the member out everywhere.",
+      "passwordMismatch": "Passwords do not match",
+      "editDescription": "Account of {{email}}. These details are shared by every workspace this person belongs to.",
+      "saveMember": "Save",
+      "editForbidden": "You can't change this account: it is an owner, or this person also belongs to a workspace you don't administer.",
+      "editConflict": "This email or username is already used by another account.",
+      "editFailed": "Failed to save changes"
     },
     "agents": {
       "revokeFailed": "Failed to revoke agent connection",

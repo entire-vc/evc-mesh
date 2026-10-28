@@ -615,3 +615,9 @@ func TestIsRequestSecure_DoesNotTrustForwardedProto(t *testing.T) {
 		})
 	}
 }
+
+func (r *authTestUserRepo) UpdateEmail(_ context.Context, _ uuid.UUID, _ string) error { return nil }
+
+func (r *authTestUserRepo) UpdatePasswordHash(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
+}

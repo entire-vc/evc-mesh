@@ -22,7 +22,7 @@ import (
 // userPasswordBcryptCost is the bcrypt work factor for user (not agent API key —
 // see bcryptCost in agent_service.go) password hashes, shared with
 // invite_service.go's AcceptInvite. A var, not a literal, so tests can override
-// it — see main_test.go's TestMain. #6ae6f813: same real-cost-under-race problem
+// it — see main_test.go's TestMain. an internal ticket: same real-cost-under-race problem
 // as bcryptCost, just a second, separate call site that wasn't wired to the
 // existing override (TestAcceptInvite_UsernameMatchesRegistration alone was
 // 5.43s under -race before this fix).
@@ -33,12 +33,16 @@ type workspaceMemberService struct {
 	userRepo          repository.UserRepository
 	projectMemberRepo repository.ProjectMemberRepository
 	activityRepo      repository.ActivityLogRepository
-	// agentRepo backs generateUniqueUsername's agent-slug skip (task fee35355)
+	// agentRepo backs generateUniqueUsername's agent-slug skip
 	// — optional, nil in tests that don't exercise it, in which case candidates
 	// are only checked against other usernames, same as before.
 	agentRepo repository.AgentRepository
 	// events receives workspace.member.added / .removed; nil = not dispatched.
 	events PublicEventDispatcher
+	// workspaceRepo and refreshTokens back the account-edit path
+	// (workspace_member_account.go); wired by SetAccountEditDeps.
+	workspaceRepo repository.WorkspaceRepository
+	refreshTokens RefreshTokenRevoker
 }
 
 // SetEventDispatcher wires the dispatcher for the member events.
@@ -315,9 +319,9 @@ func usernameBaseFromEmail(email string) string {
 
 // generateUniqueUsername returns a username derived from the email that is not
 // already taken (case-insensitive, global) AND does not collide with an
-// existing agent's slug in workspaceID (task fee35355 — this is the "заведение
+// existing agent's slug in workspaceID (an internal ticket — this is the "заведение
 // пользователя" entry point that used to have no such check at all, silently
-// creating exactly the ambiguous-@-mention state task f4f47938 had to cope
+// creating exactly the ambiguous-@-mention state an internal ticket had to cope
 // with after the fact). On collision it appends an incrementing numeric
 // suffix, mirroring the migration backfill; an agent-slug collision is treated
 // the same way as a username-taken collision — just another reason to try the
@@ -541,8 +545,16 @@ func briefOf(u *domain.User) domain.UserBrief {
 
 // logMemberActivity writes an activity log entry. Failures are logged but not propagated.
 func (s *workspaceMemberService) logMemberActivity(ctx context.Context, workspaceID, entityID uuid.UUID, action string, changes map[string]interface{}) {
+	if err := s.recordMemberActivity(ctx, workspaceID, entityID, action, changes); err != nil {
+		log.Printf("[activity] WARNING: failed to log %s: %v", action, err)
+	}
+}
+
+// recordMemberActivity writes an activity log entry and returns the failure,
+// for the changes that must not happen without a record.
+func (s *workspaceMemberService) recordMemberActivity(ctx context.Context, workspaceID, entityID uuid.UUID, action string, changes map[string]interface{}) error {
 	if s.activityRepo == nil {
-		return
+		return nil
 	}
 	actorID, actorType := actorctx.FromContext(ctx)
 	changesJSON, _ := json.Marshal(changes)
@@ -557,7 +569,5 @@ func (s *workspaceMemberService) logMemberActivity(ctx context.Context, workspac
 		Changes:     changesJSON,
 		CreatedAt:   time.Now(),
 	}
-	if err := s.activityRepo.Create(ctx, entry); err != nil {
-		log.Printf("[activity] WARNING: failed to log %s: %v", action, err)
-	}
+	return s.activityRepo.Create(ctx, entry)
 }

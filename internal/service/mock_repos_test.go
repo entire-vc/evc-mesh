@@ -2878,7 +2878,14 @@ func (m *MockUserRepository) SearchInWorkspace(_ context.Context, _ uuid.UUID, _
 	return nil, nil
 }
 
-func (m *MockUserRepository) GetByUsernameGlobal(_ context.Context, _ string) (*domain.User, error) {
+func (m *MockUserRepository) GetByUsernameGlobal(_ context.Context, username string) (*domain.User, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, u := range m.byID {
+		if u.Username == username {
+			return u, nil
+		}
+	}
 	return nil, nil
 }
 
@@ -2886,6 +2893,45 @@ func (m *MockUserRepository) Count(_ context.Context) (int, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.byID), nil
+}
+
+// UpdateEmail mirrors the unique index on lower(email): an address held by a
+// different account is refused with repository.ErrEmailTaken.
+func (m *MockUserRepository) UpdateEmail(_ context.Context, userID uuid.UUID, email string) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, u := range m.byID {
+		if id != userID && strings.EqualFold(u.Email, email) {
+			return repository.ErrEmailTaken
+		}
+	}
+	u, ok := m.byID[userID]
+	if !ok {
+		return nil
+	}
+	stored := *u
+	stored.Email = email
+	m.byID[userID] = &stored
+	return nil
+}
+
+func (m *MockUserRepository) UpdatePasswordHash(_ context.Context, userID uuid.UUID, hash string) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u, ok := m.byID[userID]
+	if !ok {
+		return nil
+	}
+	stored := *u
+	stored.PasswordHash = hash
+	m.byID[userID] = &stored
+	return nil
 }
 
 // ---------------------------------------------------------------------------

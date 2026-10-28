@@ -50,6 +50,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/integration/teamrelay"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/reconciler"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/internal/storage"
@@ -742,6 +743,13 @@ func main() {
 	}); ok {
 		r.SetEventDispatcher(webhookService)
 	}
+	if r, ok := workspaceMemberService.(interface {
+		SetAccountEditDeps(repository.WorkspaceRepository, service.RefreshTokenRevoker)
+	}); ok {
+		r.SetAccountEditDeps(workspaceRepo, refreshTokenRepo)
+	} else {
+		log.Fatal("workspace member service does not accept account-edit deps")
+	}
 	projectMemberService := service.NewProjectMemberService(projectMemberRepo, workspaceMemberRepo, projectRepo,
 		service.WithAgentRepo(agentRepo),
 		service.WithAgentWorkspaceGrantRepo(agentWorkspaceGrantRepo),
@@ -1301,9 +1309,12 @@ func main() {
 	// brute-force defense (see mw.LoginLockout's doc comment). Wired
 	// unconditionally: unlike the IP-based limiter below it does not depend
 	// on trusting the reverse-proxy chain at all.
-	authHandler.WithLoginLockout(mw.NewLoginLockout(
+	loginLockout := mw.NewLoginLockout(
 		sharedRedis, cfg.RateLimit.AuthMaxFailures, cfg.RateLimit.AuthLockoutWindow,
-	))
+	)
+	authHandler.WithLoginLockout(loginLockout)
+	// An admin-set password clears the same per-account budget.
+	workspaceMemberHandler.WithLoginLockout(loginLockout)
 
 	// WebSocket Hub for real-time event streaming.
 	wsRedis := sharedRedis
