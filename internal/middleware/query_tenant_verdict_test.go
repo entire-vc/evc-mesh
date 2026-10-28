@@ -145,6 +145,11 @@ var declaredQueryTenantParams = map[string]string{
 	// the workspace the screen is open in. operatorWorkspace refuses a caller who
 	// is neither a member nor the owner of it before any agent row is read.
 	"user_runtime_handler.go:operatorWorkspace.workspace_id": "checked: UserRuntimeHandler.operatorWorkspace",
+	// GET /agents/me/operator-runtime/{agents,runners}?workspace_id= — the same
+	// screen for an agent with its operator's runtime_manager grant.
+	// managerWorkspace refuses an agent without the grant or not connected to
+	// the workspace before any agent row is read.
+	"user_runtime_handler.go:managerWorkspace.workspace_id": "checked: UserRuntimeHandler.managerWorkspace",
 
 	// GET /spark/agents(/popular|/:agent_id) — an optional workspace_id lets a
 	// caller ask "what does MY workspace's spark integration resolve to"

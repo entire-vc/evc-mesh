@@ -266,11 +266,13 @@
       "type": "object",
       "properties": {
         "x-secret": { "type": "boolean" },
-        "x-widget": { "enum": ["project-picker", "agent-picker", "textarea", "toggle", "select", "list", "group", "color", "font-select", "image", "field-picker", "widget-picker", "layout-picker", "order-list"] },
+        "x-widget": { "enum": ["project-picker", "agent-picker", "grant-picker", "workspace-picker", "textarea", "toggle", "select", "list", "group", "color", "font-select", "image", "field-picker", "widget-picker", "layout-picker", "order-list"] },
         "x-token": { "type": "string", "minLength": 1 },
         "x-options": { "type": "object", "additionalProperties": { "type": "string" } },
         "x-visible-if": { "type": "object" },
-        "x-help": { "type": "string" }
+        "x-help": { "type": "string" },
+        "x-agent-field": { "type": "string", "minLength": 1 },
+        "x-workspace-field": { "type": "string", "minLength": 1 }
       }
     }
   }

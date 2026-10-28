@@ -1003,3 +1003,18 @@ reverting the MR. Lead sign-off: the product lead, on the card.
 
 Measured locally on main `d3b9526c` with the change: 722.07 / 173.18 (−1.87 / −1.85); each ceiling is
 the smallest 0.1 step above that. Revert: restore 723.8 / 175.1 together with reverting the MR.
+
+`total_js_kb_gz` 722.1 → 722.7 (+0.6 KB gz); `login.initial_js_kb_gz` unchanged (173.2):
+
+- Runner agent settings pick the agent, its access grant and the workspace by name instead of three
+  typed UUIDs: `grant-picker` / `workspace-picker` in `schema-form` (`mesh-refs.tsx`), agent options in
+  the Runner resource editor, their en/ru strings. Per chunk against main `a4c00d12`: `schema-form`
+  +1.02, `my-runner` +0.19, `locale-ru` +0.14, `integrations` +0.10 KB gz; the initial chunk is untouched.
+- Trimmed before raising: the "every grant into the workspace" mode and its reporter-grant widget
+  (that field has no edit form yet), a duplicate "not found" string, the date guard (−0.08). The rest is
+  the two grant requests, the 403 fallback and the empty/loading/error states the screen needs; lazy
+  loading does not help, this metric counts every chunk.
+
+Main `a4c00d12` measured 721.08 against the 722.1 ceiling; with the change 722.69 locally, so the
+ceiling is the smallest 0.1 step above that. Revert: restore 722.1 together with reverting the MR.
+Lead sign-off: the product lead, requested on the card.

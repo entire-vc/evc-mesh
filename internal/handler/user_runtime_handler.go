@@ -55,6 +55,16 @@ func (h *UserRuntimeHandler) Get(c echo.Context) error {
 	return c.JSON(http.StatusOK, v)
 }
 
+// GetAsManager is GET /agents/me/operator-runtime: the operator's document and
+// revision, for an agent holding the runtime_manager grant.
+func (h *UserRuntimeHandler) GetAsManager(c echo.Context) error {
+	v, err := h.repo.GetAsManager(c.Request().Context(), userRuntimeActor(c))
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, v)
+}
+
 func (h *UserRuntimeHandler) Save(c echo.Context) error {
 	var in postgres.UserRuntimeSave
 	if err := runtimeBody(c, &in, "if_revision", "config"); err != nil {
@@ -83,6 +93,16 @@ func (h *UserRuntimeHandler) SaveAsManager(c echo.Context) error {
 func (h *UserRuntimeHandler) History(c echo.Context) error {
 	limit, _ := strconv.Atoi(c.QueryParam("limit"))
 	v, err := h.repo.History(c.Request().Context(), userRuntimeActor(c), limit)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, map[string]any{"history": v})
+}
+
+// HistoryAsManager is GET /agents/me/operator-runtime/history.
+func (h *UserRuntimeHandler) HistoryAsManager(c echo.Context) error {
+	limit, _ := strconv.Atoi(c.QueryParam("limit"))
+	v, err := h.repo.HistoryAsManager(c.Request().Context(), userRuntimeActor(c), limit)
 	if err != nil {
 		return handleError(c, err)
 	}
@@ -171,9 +191,27 @@ func (h *UserRuntimeHandler) operatorWorkspace(c echo.Context) (uuid.UUID, error
 	}
 	actor := userRuntimeActor(c)
 	if actor.UserID == uuid.Nil {
+		if actor.AgentID != uuid.Nil && !actor.Connector {
+			return uuid.Nil, apierror.Forbidden("operator runtime requires a signed-in user; an agent with Can manage My Runner uses /agents/me/operator-runtime")
+		}
 		return uuid.Nil, apierror.Forbidden("operator runtime requires a signed-in user")
 	}
 	if _, err = h.repo.WorkspaceAdmin(c.Request().Context(), id, actor.UserID); err != nil {
+		return uuid.Nil, err
+	}
+	return id, nil
+}
+
+// managerWorkspace is the ?workspace_id= of the operator's runner screen as seen
+// by an agent holding the runtime_manager grant: an agent without the grant, or
+// not connected to the workspace, is refused here, before any agent row is read;
+// the repository repeats the check.
+func (h *UserRuntimeHandler) managerWorkspace(c echo.Context) (uuid.UUID, error) {
+	id, err := uuid.Parse(c.QueryParam("workspace_id"))
+	if err != nil || id == uuid.Nil {
+		return uuid.Nil, apierror.BadRequest("workspace_id query parameter is required")
+	}
+	if _, err = h.repo.ManagerWorkspace(c.Request().Context(), userRuntimeActor(c), id); err != nil {
 		return uuid.Nil, err
 	}
 	return id, nil
@@ -201,6 +239,34 @@ func (h *UserRuntimeHandler) OperatorRunners(c echo.Context) error {
 		return handleError(c, err)
 	}
 	v, err := h.repo.OperatorRunners(c.Request().Context(), userRuntimeActor(c), ws)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, map[string]any{"runners": v})
+}
+
+// OperatorAgentsAsManager is GET /agents/me/operator-runtime/agents?workspace_id=:
+// OperatorAgents as the agent's operator sees it; the repository checks the
+// grant and that the agent is connected to the workspace.
+func (h *UserRuntimeHandler) OperatorAgentsAsManager(c echo.Context) error {
+	ws, err := h.managerWorkspace(c)
+	if err != nil {
+		return handleError(c, err)
+	}
+	v, err := h.repo.OperatorAgentsAsManager(c.Request().Context(), userRuntimeActor(c), ws)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, map[string]any{"agents": v})
+}
+
+// OperatorRunnersAsManager is GET /agents/me/operator-runtime/runners?workspace_id=.
+func (h *UserRuntimeHandler) OperatorRunnersAsManager(c echo.Context) error {
+	ws, err := h.managerWorkspace(c)
+	if err != nil {
+		return handleError(c, err)
+	}
+	v, err := h.repo.OperatorRunnersAsManager(c.Request().Context(), userRuntimeActor(c), ws)
 	if err != nil {
 		return handleError(c, err)
 	}

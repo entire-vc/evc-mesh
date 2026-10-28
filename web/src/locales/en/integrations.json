@@ -687,6 +687,23 @@
       "keyNamed": "{{name}}, key {{n}}",
       "valueNamed": "{{name}}: {{key}}",
       "removeNamed": "Remove {{name}}, row {{n}}"
+    },
+    "missingEntity": "Not found (removed or no access)",
+    "grant": {
+      "pickAgent": "Pick the agent first",
+      "loading": "Loading the agent's access…",
+      "loadFailed": "Couldn't load the agent's access. Reload the page.",
+      "none": "This agent has no access to any workspace yet. Invite it in the workspace members first.",
+      "since": "since {{date}}",
+      "role": {
+        "owner": "owner",
+        "admin": "admin",
+        "member": "member",
+        "viewer": "viewer"
+      }
+    },
+    "workspace": {
+      "other": "Another workspace (no access to its name)"
     }
   },
   "catalog": {

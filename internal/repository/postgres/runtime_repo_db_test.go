@@ -133,8 +133,9 @@ func TestRuntimeRepoExactGrantReceiverAdmissionAndDrain(t *testing.T) {
 	ctx := context.Background()
 	_, err := f.repo.Save(ctx, f.owner, f.receiverActor, f.input)
 	require.ErrorContains(t, err, "owner or admin")
+	// An agent key is refused for want of its operator's runtime_manager grant.
 	_, err = f.repo.Save(ctx, f.owner, f.worker, f.input)
-	require.ErrorContains(t, err, "owner or admin")
+	require.ErrorContains(t, err, "Can manage My Runner is off")
 	_, err = f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
 	require.NoError(t, err)
 	view, err := f.repo.Binding(ctx, f.owner, f.receiver, "worker-b", f.worker)

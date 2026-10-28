@@ -1703,6 +1703,11 @@ func main() {
 		return mw.RequireConnectorSelfOrPermission(agentIDParam, perm, workspaceMemberRepo, ownsWorkspace)
 	}
 
+	// runtimeCatalogRBAC is rbac(PermManageWebhooks), except that a plain agent key
+	// goes on to RuntimeRepo, which admits it only under its operator's
+	// runtime_manager grant.
+	runtimeCatalogRBAC := mw.RequireRuntimeCatalogPermission(mw.PermManageWebhooks, workspaceMemberRepo)
+
 	// Workspace routes.
 	api.GET("/workspaces", workspaceHandler.List)
 	api.POST("/workspaces", workspaceHandler.Create)
@@ -1764,10 +1769,10 @@ func main() {
 	// X-Agent-Key caller 403s on Invite/Revoke unconditionally; nothing extra
 	// needed here to keep "the workspace side always initiates" true.
 	api.GET("/workspaces/:ws_id/agent-grants", agentWorkspaceGrantHandler.List)
-	api.GET("/workspaces/:ws_id/runtime", runtimeHandler.Inventory, rbac(mw.PermManageWebhooks))
-	api.PUT("/workspaces/:ws_id/runtime", runtimeHandler.Save, rbac(mw.PermManageWebhooks))
-	api.POST("/workspaces/:ws_id/runtime/restore", runtimeHandler.Restore, rbac(mw.PermManageWebhooks))
-	api.GET("/workspaces/:ws_id/runtime/revisions", runtimeHandler.Revisions, rbac(mw.PermManageWebhooks))
+	api.GET("/workspaces/:ws_id/runtime", runtimeHandler.Inventory, runtimeCatalogRBAC)
+	api.PUT("/workspaces/:ws_id/runtime", runtimeHandler.Save, runtimeCatalogRBAC)
+	api.POST("/workspaces/:ws_id/runtime/restore", runtimeHandler.Restore, runtimeCatalogRBAC)
+	api.GET("/workspaces/:ws_id/runtime/revisions", runtimeHandler.Revisions, runtimeCatalogRBAC)
 	api.GET("/workspaces/:ws_id/runtime/capacity", runtimeHandler.Capacity)
 	api.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/report", runtimeHandler.Report)
 	api.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/desired", runtimeHandler.Desired)
@@ -2081,6 +2086,10 @@ func main() {
 	// Operator-level runtime ("My Runner"): the agent reads its settings by key; an
 	// agent holding the runtime_manager assignment edits its operator's document.
 	api.GET("/agents/me/runtime", userRuntimeHandler.AgentRuntime)
+	api.GET("/agents/me/operator-runtime", userRuntimeHandler.GetAsManager)
+	api.GET("/agents/me/operator-runtime/history", userRuntimeHandler.HistoryAsManager)
+	api.GET("/agents/me/operator-runtime/agents", userRuntimeHandler.OperatorAgentsAsManager)
+	api.GET("/agents/me/operator-runtime/runners", userRuntimeHandler.OperatorRunnersAsManager)
 	api.PUT("/agents/me/operator-runtime", userRuntimeHandler.SaveAsManager)
 	api.PUT("/agents/me/operator-runtime/agents/:agent_id/limits", userRuntimeHandler.SetLimitsAsManager)
 	api.POST("/agents/heartbeat", agentHandler.Heartbeat)
@@ -2538,18 +2547,27 @@ func main() {
 	api.GET("/workspaces/:ws_id/mentionables", mentionablesHandler.Search)
 
 	// Operator's own runtime document, history, limits and runtime_manager assignments.
-	api.GET("/me/runtime", userRuntimeHandler.Get, mw.RequireUserAuth())
-	api.PUT("/me/runtime", userRuntimeHandler.Save, mw.RequireUserAuth())
-	api.GET("/me/runtime/history", userRuntimeHandler.History, mw.RequireUserAuth())
+	// An agent key gets 403 naming /agents/me/operator-runtime instead of a bare 401.
+	agentToOperatorRuntime := func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if _, connector := mw.GetOAuthConnectorUserID(c); mw.IsAgent(c) && !connector {
+				return c.JSON(http.StatusForbidden, apierror.Forbidden("operator runtime requires a signed-in user; an agent with Can manage My Runner uses /agents/me/operator-runtime"))
+			}
+			return next(c)
+		}
+	}
+	api.GET("/me/runtime", userRuntimeHandler.Get, agentToOperatorRuntime, mw.RequireUserAuth())
+	api.PUT("/me/runtime", userRuntimeHandler.Save, agentToOperatorRuntime, mw.RequireUserAuth())
+	api.GET("/me/runtime/history", userRuntimeHandler.History, agentToOperatorRuntime, mw.RequireUserAuth())
 	// No RequireUserAuth here: it answers 401 to agent keys, while these two must
 	// answer 403 to them (UserRuntimeRepo.operatorOnly refuses agents and OAuth
 	// connectors); unauthenticated requests still get 401 from DualAuth.
 	api.GET("/me/runtime/agents", userRuntimeHandler.OperatorAgents)
 	api.GET("/me/runtime/runners", userRuntimeHandler.OperatorRunners)
-	api.PUT("/me/runtime/agents/:agent_id/limits", userRuntimeHandler.SetLimits, mw.RequireUserAuth())
-	api.GET("/me/runtime/managers", userRuntimeHandler.Managers, mw.RequireUserAuth())
-	api.POST("/me/runtime/managers", userRuntimeHandler.GrantManager, mw.RequireUserAuth())
-	api.POST("/me/runtime/managers/revoke", userRuntimeHandler.RevokeManager, mw.RequireUserAuth())
+	api.PUT("/me/runtime/agents/:agent_id/limits", userRuntimeHandler.SetLimits, agentToOperatorRuntime, mw.RequireUserAuth())
+	api.GET("/me/runtime/managers", userRuntimeHandler.Managers, agentToOperatorRuntime, mw.RequireUserAuth())
+	api.POST("/me/runtime/managers", userRuntimeHandler.GrantManager, agentToOperatorRuntime, mw.RequireUserAuth())
+	api.POST("/me/runtime/managers/revoke", userRuntimeHandler.RevokeManager, agentToOperatorRuntime, mw.RequireUserAuth())
 
 	// Current user's active tasks (excludes done/cancelled).
 	api.GET("/me/tasks", taskHandler.GetCurrentUserTasks)
