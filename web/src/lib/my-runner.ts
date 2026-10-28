@@ -81,7 +81,8 @@ export interface CatalogRevision {
  */
 export type ResourceDoc =
   /** `manifest`: the Runner manifest whose schemas build the entry forms; null when it could not be read. */
-  | { source: "workspace"; wsId: string; revision: number; enabled: boolean; config: RuntimeConfig; manifest: ExtensionManifest | null }
+  /** `excluded`: bindings the runner is not given, with the server's reason (absent on servers that do not report it). */
+  | { source: "workspace"; wsId: string; revision: number; enabled: boolean; config: RuntimeConfig; manifest: ExtensionManifest | null; excluded: Record<string, string> }
   | { source: "personal"; revision: number; config: RuntimeConfig };
 
 export type HistoryView =
@@ -122,12 +123,15 @@ export async function loadResources(wsId: string | undefined): Promise<ResourceD
   if (wsId) {
     try {
       const [raw, manifest] = await Promise.all([
-        api<{ mode?: string; revision?: number; enabled?: boolean; config?: unknown }>(`/api/v1/workspaces/${wsId}/runtime`),
+        api<{ mode?: string; revision?: number; enabled?: boolean; config?: unknown; excluded?: unknown }>(`/api/v1/workspaces/${wsId}/runtime`),
         loadRunnerManifest(wsId),
       ]);
       if (raw?.mode === "managed") {
         if (!raw.config || typeof raw.config !== "object" || Array.isArray(raw.config)) throw new Error("runtime catalog missing");
-        return { source: "workspace", wsId, revision: raw.revision ?? 0, enabled: raw.enabled === true, config: raw.config as RuntimeConfig, manifest };
+        return {
+          source: "workspace", wsId, revision: raw.revision ?? 0, enabled: raw.enabled === true, config: raw.config as RuntimeConfig, manifest,
+          excluded: excludedReasons(raw.excluded),
+        };
       }
     } catch (e) {
       if (status(e) !== 403) throw e;
@@ -163,10 +167,42 @@ export function saveResources(doc: ResourceDoc, config: RuntimeConfig): Promise<
 export const restoreRevision = (wsId: string, ifRevision: number, revision: number) =>
   api(`/api/v1/workspaces/${wsId}/runtime/restore`, { method: "POST", body: { if_revision: ifRevision, revision } });
 
-/** Profiles each agent may run with, by agent id, read from the catalog's bindings. */
-export function profilesByAgent(config: RuntimeConfig | null): Record<string, string[]> {
+/** `excluded: [{ref, reason}]` of the runtime answer as reason by binding ref; anything else reads as none. */
+export function excludedReasons(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!Array.isArray(raw)) return out;
+  for (const e of raw) {
+    const { ref, reason } = (e && typeof e === "object" ? e : {}) as { ref?: unknown; reason?: unknown };
+    if (typeof ref === "string" && typeof reason === "string" && reason) out[ref] = reason;
+  }
+  return out;
+}
+
+/** The workspace a catalog binding belongs to, or null when the entry names none. */
+export function bindingWorkspace(value: unknown): string | null {
+  const b = (value && typeof value === "object" ? value : {}) as { binding?: { workspace_id?: unknown } };
+  return typeof b.binding?.workspace_id === "string" ? b.binding.workspace_id : null;
+}
+
+/**
+ * Whether a binding is not this workspace's: it names another workspace or
+ * none at all. Such bindings are counted, never listed, and kept in the
+ * catalog as they are.
+ */
+export function isForeignBinding(value: unknown, wsId: string): boolean {
+  return bindingWorkspace(value) !== wsId;
+}
+
+/** A new binding made on a workspace's screen belongs to that workspace. */
+export function newBindingValue(wsId: string): Values {
+  return { binding: { workspace_id: wsId } };
+}
+
+/** Profiles each agent of the workspace may run with, by agent id, read from its own catalog bindings. */
+export function profilesByAgent(config: RuntimeConfig | null, wsId?: string): Record<string, string[]> {
   const out: Record<string, string[]> = {};
   for (const value of Object.values(config?.bindings ?? {})) {
+    if (wsId && isForeignBinding(value, wsId)) continue;
     const b = (value && typeof value === "object" ? value : {}) as { binding?: { agent_id?: unknown }; permitted_profiles?: unknown };
     const id = b.binding?.agent_id;
     if (typeof id !== "string" || !Array.isArray(b.permitted_profiles)) continue;

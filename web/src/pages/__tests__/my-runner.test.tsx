@@ -49,17 +49,17 @@ function route(path: string, init?: { method?: string; body?: unknown }): Promis
   const out = (v: unknown) => (v instanceof Error ? Promise.reject(v) : Promise.resolve(v));
   if (init?.method && init.method !== "GET") {
     if (path.endsWith("/runner/enable") && world.enableError) return Promise.reject(world.enableError);
-    if (path === "/api/v1/workspaces/ws-1/runtime" && init.method === "PUT") return saveCatalog(init.body as { if_revision: number; enabled: boolean; config: unknown });
+    if (path === "/api/v1/workspaces/0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02/runtime" && init.method === "PUT") return saveCatalog(init.body as { if_revision: number; enabled: boolean; config: unknown });
     world.posts.push({ path, body: init.body });
     return Promise.resolve({});
   }
-  if (path === "/api/v1/me/runtime/agents?workspace_id=ws-1") return out(world.agents instanceof Error ? world.agents : { agents: world.agents });
-  if (path === "/api/v1/me/runtime/runners?workspace_id=ws-1") return out(world.runners instanceof Error ? world.runners : { runners: world.runners });
+  if (path === "/api/v1/me/runtime/agents?workspace_id=0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02") return out(world.agents instanceof Error ? world.agents : { agents: world.agents });
+  if (path === "/api/v1/me/runtime/runners?workspace_id=0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02") return out(world.runners instanceof Error ? world.runners : { runners: world.runners });
   if (path.startsWith("/api/v1/me/runtime/history")) return out(world.history instanceof Error ? world.history : { history: world.history });
   if (path.endsWith("/members/me")) return path.includes("ws-2") ? Promise.resolve({ role: world.roleWs2 ?? "member" }) : (world.slowOwner ?? Promise.resolve({ role: world.role }));
   if (path === "/api/v1/me/runtime") return out(world.runtime);
-  if (path === "/api/v1/workspaces/ws-1/runtime") return out(world.catalog);
-  if (path.startsWith("/api/v1/workspaces/ws-1/runtime/revisions")) return Promise.resolve({ managed: (world.catalog as { mode?: string })?.mode === "managed", revisions: world.revisions });
+  if (path === "/api/v1/workspaces/0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02/runtime") return out(world.catalog);
+  if (path.startsWith("/api/v1/workspaces/0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02/runtime/revisions")) return Promise.resolve({ managed: (world.catalog as { mode?: string })?.mode === "managed", revisions: world.revisions });
   if (path === "/api/v1/extensions") return Promise.resolve({ extensions: [{ id: "runner", name: "Runner", version: "1", kind: "plugin", runtime: "builtin", publisher: "entire-vc", description: "", category: "agents" }, ...(world.program && world.program !== "catalog" ? [program()] : [])] });
   if (path === "/api/v1/extensions/catalog" && world.program === "catalog") return Promise.resolve({ extensions: [program()] });
   if (path === "/api/v1/extensions/updates") return Promise.resolve({ updates: world.program === "connected" ? [{ extension_id: "agent-runner", name: "Agent Runner", current_version: "0.1.0", latest_version: "0.2.0", update_available: true }] : [] });
@@ -92,7 +92,7 @@ type Tab = "overview" | "agents" | "resources" | "history";
 function renderPage(role: "owner" | "member", tab: Tab | string = "overview") {
   world.role = role;
   useMemberStore.setState({ myRole: null });
-  useWorkspaceStore.setState({ currentWorkspace: { id: "ws-1", slug: "w", name: "W" } as Workspace });
+  useWorkspaceStore.setState({ currentWorkspace: { id: "0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02", slug: "w", name: "W" } as Workspace });
   useAuthStore.setState({ user: { id: ME } as never });
   return render(<MemoryRouter initialEntries={[tab === "overview" ? "/" : `/?tab=${tab}`]}><MyRunnerPage /></MemoryRouter>);
 }
@@ -187,7 +187,7 @@ describe("MyRunnerPage", () => {
     fireEvent.click(within(row).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(mockedApi).toHaveBeenCalledWith("/api/v1/me/runtime/agents/a1/limits", { method: "PUT", body: { max_concurrent_tasks: 5 } }));
     // The save reloads the list, so the row is a new node.
-    await waitFor(() => expect(mockedApi.mock.calls.filter(([p]) => p === "/api/v1/me/runtime/agents?workspace_id=ws-1").length).toBeGreaterThan(1));
+    await waitFor(() => expect(mockedApi.mock.calls.filter(([p]) => p === "/api/v1/me/runtime/agents?workspace_id=0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02").length).toBeGreaterThan(1));
     const fresh = await screen.findByTestId("my-runner-agent-a1");
     fireEvent.change(within(fresh).getByLabelText(/Parallel tasks/), { target: { value: "7" } });
     fireEvent.keyDown(within(fresh).getByLabelText(/Parallel tasks/), { key: "Enter" });
@@ -208,7 +208,7 @@ describe("MyRunnerPage", () => {
     world.agents = [AGENT, { ...AGENT, agent_id: "a2", name: "Kidcash", operator_user_id: null, max_concurrent_tasks: 2 }];
     renderPage("owner", "agents");
     const row = await screen.findByTestId("my-runner-agent-a2");
-    expect(mockedApi).toHaveBeenCalledWith("/api/v1/me/runtime/agents?workspace_id=ws-1");
+    expect(mockedApi).toHaveBeenCalledWith("/api/v1/me/runtime/agents?workspace_id=0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02");
     expect(within(row).queryByLabelText(/Parallel tasks/)).toBeNull();
     expect(within(row).queryByRole("checkbox")).toBeNull();
     expect(within(row).getByTestId("my-runner-agent-readonly-a2")).toHaveTextContent("2");
@@ -261,14 +261,14 @@ describe("MyRunnerPage", () => {
 
     renderPage("owner");
     fireEvent.click(await screen.findByRole("button", { name: "Turn on Runner" }));
-    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith("/api/v1/workspaces/ws-1/extensions/runner/enable", expect.objectContaining({ method: "POST" })));
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith("/api/v1/workspaces/0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02/extensions/runner/enable", expect.objectContaining({ method: "POST" })));
   });
 
   it("ignores a role cached in the shared store", async () => {
     renderPage("member");
     act(() => useMemberStore.setState({ myRole: "owner" }));
     await screen.findByTestId("my-runner-runner-r1");
-    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith("/api/v1/workspaces/ws-1/members/me"));
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith("/api/v1/workspaces/0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02/members/me"));
     expect(screen.queryByTestId("my-runner-admin")).toBeNull();
   });
 
@@ -323,14 +323,14 @@ describe("MyRunnerPage", () => {
     expect(screen.queryByTestId("my-runner-disable-confirm")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Turn off Runner" }));
     fireEvent.click(within(screen.getByTestId("my-runner-disable-confirm")).getByRole("button", { name: "Turn off" }));
-    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith("/api/v1/workspaces/ws-1/extensions/runner/disable", { method: "POST", body: { confirm: true } }));
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith("/api/v1/workspaces/0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02/extensions/runner/disable", { method: "POST", body: { confirm: true } }));
   });
 
   it("while the status loads, the card claims neither on nor off", async () => {
     let release: (v: unknown) => void = () => {};
     const slow = new Promise((r) => { release = r; });
     mockedApi.mockImplementation((path: string, init?: { method?: string }) =>
-      path.endsWith("/workspaces/ws-1/extensions") && !init?.method ? slow : route(path, init));
+      path.endsWith("/workspaces/0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02/extensions") && !init?.method ? slow : route(path, init));
     renderPage("owner");
     const card = await screen.findByTestId("my-runner-admin");
     expect(card).not.toHaveTextContent("Runner is off");
@@ -369,7 +369,7 @@ describe("MyRunnerPage", () => {
       fireEvent.change(within(form).getByLabelText("Runner address"), { target: { value: "https://runner.example.com" } });
       fireEvent.click(connect);
       await waitFor(() => expect(world.posts).toContainEqual({
-        path: "/api/v1/workspaces/ws-1/extensions/agent-runner/connect",
+        path: "/api/v1/workspaces/0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02/extensions/agent-runner/connect",
         body: { settings: { runner_url: "https://runner.example.com" }, consent: { capabilities: ["api:tasks:read", "events:task.assigned"] } },
       }));
     });
@@ -493,7 +493,7 @@ describe("MyRunnerPage", () => {
       fireEvent.click(within(editor).getByRole("button", { name: "Apply" }));
       fireEvent.click(await screen.findByRole("button", { name: "Save resources" }));
       await waitFor(() => expect(world.puts).toHaveLength(1));
-      expect(mockedApi).toHaveBeenCalledWith("/api/v1/workspaces/ws-1/runtime", {
+      expect(mockedApi).toHaveBeenCalledWith("/api/v1/workspaces/0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02/runtime", {
         method: "PUT",
         body: { if_revision: 37, config: { ...CATALOG, pools: { ...CATALOG.pools, "claude-max": { ...CATALOG.pools["claude-max"], max_concurrency: 6 } } } },
       });
@@ -720,7 +720,7 @@ describe("MyRunnerPage", () => {
 
     it("a long catalog can be narrowed by a filter", async () => {
       const bindings: Record<string, unknown> = {};
-      for (let i = 0; i < 30; i++) bindings[`agent-${i}`] = { ...CATALOG.bindings.vera, binding: { agent_id: `a${i}`, workspace_id: "ws-1", grant_id: `g${i}` } };
+      for (let i = 0; i < 30; i++) bindings[`agent-${i}`] = { ...CATALOG.bindings.vera, binding: { agent_id: `a${i}`, workspace_id: "0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02", grant_id: `g${i}` } };
       (world.catalog as { config: unknown }).config = { ...CATALOG, bindings };
       renderPage("owner", "resources");
       const filter = await screen.findByRole("searchbox", { name: /Filter/ });
@@ -732,7 +732,7 @@ describe("MyRunnerPage", () => {
 
     it("an entry the server refused is reopened even when the filter hides it", async () => {
       const bindings: Record<string, unknown> = {};
-      for (let i = 0; i < 30; i++) bindings[`agent-${i}`] = { ...CATALOG.bindings.vera, binding: { agent_id: `a${i}`, workspace_id: "ws-1", grant_id: `g${i}` } };
+      for (let i = 0; i < 30; i++) bindings[`agent-${i}`] = { ...CATALOG.bindings.vera, binding: { agent_id: `a${i}`, workspace_id: "0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02", grant_id: `g${i}` } };
       (world.catalog as { config: unknown }).config = { ...CATALOG, bindings };
       world.refuse = new ApiRequestError("invalid runtime catalog", "validation_failed", 400, { "config.pools.claude-max.max_concurrency": "invalid" });
       renderPage("owner", "resources");
@@ -743,6 +743,112 @@ describe("MyRunnerPage", () => {
       const editor = await within(screen.getByTestId("my-runner-resources-pools")).findByTestId("my-runner-entry-editor");
       expect(within(editor).getByLabelText(/Concurrent runs, at most/)).toHaveAttribute("aria-invalid", "true");
     });
+    describe("only this workspace's bindings", () => {
+      const binding = (agent: string, ws: string) => ({ ...CATALOG.bindings.vera, binding: { agent_id: agent, workspace_id: ws, grant_id: `g-${agent}` } });
+      beforeEach(() => {
+        (world.catalog as { config: unknown }).config = {
+          ...CATALOG,
+          bindings: {
+            own1: binding("a-own1", "0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02"), own2: binding("a-own2", "0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02"), own3: binding("a-own3", "0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02"),
+            kepler: binding("a-kepler", "ws-vc"), scully: binding("a-scully", "ws-subrose"),
+          },
+        };
+      });
+
+      it("lists 3 own bindings out of 3 own + 2 foreign, and says 2 others are hidden", async () => {
+        renderPage("owner", "resources");
+        const list = await screen.findByTestId("my-runner-resources-bindings");
+        await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(3));
+        for (const n of ["own1", "own2", "own3"]) expect(list).toHaveTextContent(n);
+        expect(list).not.toHaveTextContent("kepler");
+        expect(list).not.toHaveTextContent("scully");
+        expect(within(list).getByTestId("my-runner-resources-foreign")).toHaveTextContent("2 bindings that are not this workspace's are hidden here");
+      });
+
+      it("a binding that names no workspace is not this workspace's either", async () => {
+        const cfg = (world.catalog as { config: { bindings: Record<string, unknown> } }).config;
+        cfg.bindings = { ...cfg.bindings, nameless: { ...CATALOG.bindings.vera, binding: { agent_id: "a-nameless", grant_id: "g-n" } } };
+        renderPage("owner", "resources");
+        const list = await screen.findByTestId("my-runner-resources-bindings");
+        await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(3));
+        expect(list).not.toHaveTextContent("nameless");
+        expect(within(list).getByTestId("my-runner-resources-foreign")).toHaveTextContent("3 bindings");
+      });
+
+      it("a binding added here starts as this workspace's", async () => {
+        renderPage("owner", "resources");
+        fireEvent.click(within(await screen.findByTestId("my-runner-resources-bindings")).getByRole("button", { name: "Add" }));
+        const fresh = await screen.findByTestId("my-runner-entry-editor");
+        expect(within(fresh).getByDisplayValue("0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02")).toBeInTheDocument();
+      });
+
+      it("a save keeps the hidden foreign bindings as they are", async () => {
+        renderPage("owner", "resources");
+        const list = await screen.findByTestId("my-runner-resources-bindings");
+        fireEvent.click(within(within(list).getByText("own2").closest("li") as HTMLElement).getByRole("button", { name: "Remove" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Save resources" }));
+        await waitFor(() => expect(world.puts).toHaveLength(1));
+        const sent = (world.puts[0] as { config: { bindings: Record<string, unknown> } }).config.bindings;
+        expect(Object.keys(sent).sort()).toEqual(["kepler", "own1", "own3", "scully"]);
+      });
+
+      it("no foreign binding, no warning", async () => {
+        (world.catalog as { config: unknown }).config = CATALOG;
+        renderPage("owner", "resources");
+        await screen.findByTestId("my-runner-resources-bindings");
+        expect(screen.queryByTestId("my-runner-resources-foreign")).toBeNull();
+      });
+
+      it("shows why the server does not run a binding, when it says so", async () => {
+        world.catalog = { ...(world.catalog as object), excluded: [{ ref: "own1", reason: "runner_off" }, { ref: "own2", reason: "something_new" }] };
+        renderPage("owner", "resources");
+        expect(await screen.findByTestId("my-runner-binding-excluded-own1")).toHaveTextContent("Not run: Runner is off in its workspace");
+        expect(screen.getByTestId("my-runner-binding-excluded-own2")).toHaveTextContent("Not run: something_new");
+        expect(screen.queryByTestId("my-runner-binding-excluded-own3")).toBeNull();
+      });
+
+      it("a foreign binding of the same agent adds no profiles to the agents table", async () => {
+        (world.catalog as { config: unknown }).config = {
+          ...CATALOG,
+          profiles: { ...CATALOG.profiles, alien: { ...CATALOG.profiles["claude-opus"] } },
+          bindings: { mine: binding("a1", "0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02"), theirs: { ...binding("a1", "ws-vc"), permitted_profiles: ["alien"] } },
+        };
+        renderPage("owner", "agents");
+        await waitFor(() => expect(screen.getByTestId("my-runner-agent-a1")).toHaveTextContent("claude-opus"));
+        expect(screen.getByTestId("my-runner-agent-a1")).not.toHaveTextContent("alien");
+      });
+    });
+
+    it("a catalog controller that leads nobody is marked off or silent, never live", async () => {
+      world.runners = [];
+      const ctl = (enabled: boolean) => ({ host: "h", version: "1", reporter_grant_id: "g", capabilities: [], heartbeat_max_age_seconds: 120, enabled });
+      const config = { ...CATALOG, controllers: { "ctl-off": ctl(false), "ctl-silent": ctl(true), "ctl-idle": ctl(true) } };
+      world.catalog = { ...(world.catalog as object), config, controllers: [{ controller_ref: "ctl-idle", report: { revision: 37, digest: "c".repeat(64), status: "applied" }, received_at: new Date().toISOString(), current: true }] };
+      renderPage("owner");
+      expect(await screen.findByTestId("my-runner-runner-state-ctl-off")).toHaveTextContent("off in the catalog");
+      expect(screen.getByTestId("my-runner-runner-state-ctl-silent")).toHaveTextContent("no report");
+      expect(screen.getByTestId("my-runner-runner-state-ctl-idle")).toHaveTextContent("leads no agents");
+      expect(screen.getByTestId("my-runner-runners")).not.toHaveTextContent(/\blive\b/);
+    });
+
+    it("a live lease does not make an off or silent catalog controller look live", async () => {
+      world.runners = [
+        { ...CONTROLLER, runner_id: "ctl-off", name: "ctl-off", agents: [] },
+        { ...CONTROLLER, runner_id: "ctl-silent", name: "ctl-silent", agents: [] },
+        { ...CONTROLLER, runner_id: "ctl-ok", name: "ctl-ok", agents: [{ agent_id: "a1", name: "Robin" }] },
+        { ...CONTROLLER, runner_id: "ctl-idle", name: "ctl-idle", agents: [] },
+      ];
+      const ctl = (enabled: boolean) => ({ host: "h", version: "1", reporter_grant_id: "g", capabilities: [], heartbeat_max_age_seconds: 120, enabled });
+      const config = { ...CATALOG, controllers: { "ctl-off": ctl(false), "ctl-silent": ctl(true), "ctl-ok": ctl(true), "ctl-idle": ctl(true) } };
+      const report = (ref: string) => ({ controller_ref: ref, report: { revision: 37, digest: "c".repeat(64), status: "applied" }, received_at: new Date().toISOString(), current: true });
+      world.catalog = { ...(world.catalog as object), config, controllers: [report("ctl-off"), report("ctl-ok"), report("ctl-idle")] };
+      renderPage("owner");
+      expect(await screen.findByTestId("my-runner-runner-state-ctl-off")).toHaveTextContent("off in the catalog");
+      expect(screen.getByTestId("my-runner-runner-state-ctl-silent")).toHaveTextContent("no report");
+      expect(screen.getByTestId("my-runner-runner-state-ctl-ok")).toHaveTextContent(/\blive\b/);
+      expect(screen.getByTestId("my-runner-runner-state-ctl-idle")).toHaveTextContent("leads no agents");
+    });
+
     it("an admin sees each controller with its applied revision and heartbeat", async () => {
       world.catalog = { ...(world.catalog as object), controllers: [{ controller_ref: "controller-mini", report: { revision: 37, digest: "c".repeat(64), status: "applied" }, received_at: new Date(Date.now() - 30_000).toISOString(), current: true }] };
       renderPage("owner");
@@ -758,7 +864,7 @@ describe("MyRunnerPage", () => {
       world.catalog = { ...(world.catalog as object), controllers: [{ controller_ref: "controller-mini", report: { revision: 37, digest: "c".repeat(64), status: "applied" }, received_at: new Date().toISOString(), current: true }] };
       renderPage("owner");
       const ctl = await screen.findByTestId("my-runner-controller-controller-mini");
-      const runners = screen.getAllByTestId(/^my-runner-runner-/);
+      const runners = screen.getAllByTestId(/^my-runner-runner-(?!state-)/);
       expect(runners).toHaveLength(1);
       expect(runners[0]).toContainElement(ctl);
       expect(runners[0]).toHaveTextContent("Robin");
@@ -771,7 +877,7 @@ describe("MyRunnerPage", () => {
       renderPage("owner");
       const ctl = await screen.findByTestId("my-runner-controller-mini-main");
       expect(screen.getByTestId("my-runner-runner-r1")).toContainElement(ctl);
-      expect(screen.getAllByTestId(/^my-runner-runner-/)).toHaveLength(1);
+      expect(screen.getAllByTestId(/^my-runner-runner-(?!state-)/)).toHaveLength(1);
     });
 
     it("a controller behind the catalog or silent says so", async () => {
@@ -806,16 +912,16 @@ describe("MyRunnerPage", () => {
       fireEvent.click(within(history.querySelector('[data-revision="37"]') as HTMLElement).getByRole("button", { name: "Restore" }));
       const ask = screen.getByTestId("my-runner-restore-37");
       expect(ask).toHaveTextContent("as revision 40");
-      expect(mockedApi).not.toHaveBeenCalledWith("/api/v1/workspaces/ws-1/runtime/restore", expect.anything());
+      expect(mockedApi).not.toHaveBeenCalledWith("/api/v1/workspaces/0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02/runtime/restore", expect.anything());
       fireEvent.click(within(ask).getByRole("button", { name: "Restore" }));
-      await waitFor(() => expect(mockedApi).toHaveBeenCalledWith("/api/v1/workspaces/ws-1/runtime/restore", { method: "POST", body: { if_revision: 39, revision: 37 } }));
+      await waitFor(() => expect(mockedApi).toHaveBeenCalledWith("/api/v1/workspaces/0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02/runtime/restore", { method: "POST", body: { if_revision: 39, revision: 37 } }));
     });
 
     it("a member, refused the runtime route, sees no controller block", async () => {
       world.catalog = new ApiRequestError("forbidden", "forbidden", 403);
       renderPage("member");
       await screen.findByTestId("my-runner-runner-r1");
-      await waitFor(() => expect(mockedApi).toHaveBeenCalledWith("/api/v1/workspaces/ws-1/runtime"));
+      await waitFor(() => expect(mockedApi).toHaveBeenCalledWith("/api/v1/workspaces/0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02/runtime"));
       await act(async () => {});
       expect(screen.queryByTestId("my-runner-controllers")).toBeNull();
       expect(screen.queryByText("Controllers")).toBeNull();

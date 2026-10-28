@@ -40,6 +40,27 @@ export function mergeRunners(runners: OperatorRunner[], state: RuntimeState | un
   return rows;
 }
 
+/**
+ * A catalog controller no agent is led through is not a working runner: it is
+ * off in the catalog, has never reported in this workspace, or reports without
+ * leading anyone yet. The badge says which, where a runner shows "live".
+ */
+export function controllerOnlyState(c: NonNullable<RunnerRow["controller"]>): string {
+  if (!c.entry.enabled) return "runners.off";
+  return c.report ? "runners.idle" : "runners.silent";
+}
+
+/**
+ * The row's badge. A lease alone does not make a runner working when its
+ * catalog controller is off, has never reported here, or leads no agent:
+ * the catalog state wins.
+ */
+export function runnerBadge(row: RunnerRow): { label: string; variant: "success" | "warning" | "outline" } {
+  const c = row.controller;
+  if (c && (!c.entry.enabled || !c.report || !row.runner?.agents.length)) return { label: controllerOnlyState(c), variant: "outline" };
+  return row.runner?.live ? { label: "runners.live", variant: "success" } : { label: "runners.lapsed", variant: "warning" };
+}
+
 export function RunnersSection({ result, reload, wsId }: { result: Loaded<OperatorRunner[]>; reload: () => void; wsId?: string }) {
   const { t } = useTranslation("runner");
   // The runtime route answers workspace admins only; everyone else (403) and a workspace
@@ -79,11 +100,12 @@ function RunnerItem({ row, state }: { row: RunnerRow; state: RuntimeState | unde
   const c = row.controller;
   const host = r?.host || c?.entry.host || "";
   const version = r?.version || c?.entry.version || "";
+  const badge = runnerBadge(row);
   return (
     <li className="space-y-2 rounded-lg border border-border p-3" data-testid={`my-runner-runner-${row.key}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="min-w-0 truncate font-medium">{r?.name || c?.ref}</span>
-        {r && <Badge variant={r.live ? "success" : "warning"}>{t(r.live ? "runners.live" : "runners.lapsed")}</Badge>}
+        <Badge variant={badge.variant} data-testid={`my-runner-runner-state-${row.key}`}>{t(badge.label)}</Badge>
       </div>
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
         <dt className="text-muted-foreground">{t("runners.host")}</dt>
