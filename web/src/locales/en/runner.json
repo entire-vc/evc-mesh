@@ -73,11 +73,12 @@
     "unknownVersion": "unknown",
     "leaseLive": "expires {{when}}",
     "leaseLapsed": "expired {{when}}",
-    "sync": "Catalog"
+    "sync": "Catalog",
+    "off": "off in the catalog",
+    "silent": "no report",
+    "idle": "leads no agents"
   },
   "controllers": {
-    "title": "Controllers",
-    "empty": "The runner catalog has no controllers yet.",
     "revision": "applied r{{applied}} · desired r{{desired}}",
     "desiredOnly": "desired r{{desired}}",
     "heartbeat": "heartbeat {{when}}",
@@ -140,7 +141,15 @@
       "capability_not_on_controller": "The runner host does not offer this capability",
       "not_permitted": "Only allowed profiles can be used here"
     },
-    "credentialOnRename": "A renamed account does not carry the hidden reference over: enter it again."
+    "credentialOnRename": "A renamed account does not carry the hidden reference over: enter it again.",
+    "foreignBindings_one": "{{count}} binding that is not this workspace's is hidden here and saved unchanged.",
+    "foreignBindings_other": "{{count}} bindings that are not this workspace's are hidden here and saved unchanged.",
+    "excluded": {
+      "foreign_workspace": "Not run: belongs to another workspace",
+      "runner_off": "Not run: Runner is off in its workspace",
+      "program_not_connected": "Not run: the runner program is not connected",
+      "other": "Not run: {{reason}}"
+    }
   },
   "history": {
     "title": "Revision history",
@@ -168,7 +177,6 @@
     "title": "Runner program",
     "notInstalled": "The runner program is not installed on this instance yet.",
     "openCatalog": "Open in the catalog",
-    "askAdmin": "Ask the instance administrator to install Runner from the catalog.",
     "connectHint": "Set up the runner on your host, then enter the address Mesh reaches it at.",
     "url": "Runner address",
     "urlPlaceholder": "https://runner.example.com",

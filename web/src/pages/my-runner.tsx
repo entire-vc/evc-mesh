@@ -38,7 +38,7 @@ export function MyRunnerPage() {
 
   const reloadAll = () => { agents.reload(); runners.reload(); history.reload(); };
   const catalog = runtime.result.state === "ready" && runtime.result.data.source === "workspace" ? runtime.result.data.config : null;
-  const profiles = useMemo(() => profilesByAgent(catalog), [catalog]);
+  const profiles = useMemo(() => profilesByAgent(catalog, wsId), [catalog, wsId]);
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-5 p-4 md:p-6" data-testid="my-runner-page">
