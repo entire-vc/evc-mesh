@@ -80,10 +80,17 @@ func NewUserRuntimeRepo(db *sqlx.DB) *UserRuntimeRepo { return &UserRuntimeRepo{
 
 func operatorOnly(actor UserRuntimeActor) error {
 	if actor.Connector || actor.AgentID != uuid.Nil || actor.UserID == uuid.Nil {
+		if actor.AgentID != uuid.Nil && !actor.Connector {
+			return errAgentOnOperatorRuntime
+		}
 		return apierror.Forbidden("operator runtime requires a signed-in user")
 	}
 	return nil
 }
+
+// errAgentOnOperatorRuntime points an agent key that knocked on the person's
+// /me/runtime paths to the ones its Can manage My Runner grant opens.
+var errAgentOnOperatorRuntime = apierror.Forbidden("operator runtime requires a signed-in user; an agent with Can manage My Runner uses /agents/me/operator-runtime")
 
 func normalizeConfig(raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) == 0 || len(raw) > maxUserRuntimeConfigBytes {
@@ -226,19 +233,38 @@ func managerOnly(actor UserRuntimeActor) error {
 	return nil
 }
 
-var errNotManager = apierror.Forbidden("agent is not a runtime_manager of its operator")
+var errNotManager = apierror.Forbidden("agent has no runtime_manager grant from its operator (Can manage My Runner is off)")
 
-// SaveAsManager lets an assigned agent edit its operator's document with its key.
-func (r *UserRuntimeRepo) SaveAsManager(ctx context.Context, actor UserRuntimeActor, in UserRuntimeSave) (UserRuntimeConfig, error) {
+// managerOperator returns the operator whose runtime the agent key manages, or
+// 403 when the key holds no live runtime_manager grant.
+func (r *UserRuntimeRepo) managerOperator(ctx context.Context, actor UserRuntimeActor) (uuid.UUID, error) {
 	if err := managerOnly(actor); err != nil {
-		return UserRuntimeConfig{}, err
+		return uuid.Nil, err
 	}
 	operator, ok, err := r.isManager(ctx, r.db, actor.AgentID)
 	if err != nil {
-		return UserRuntimeConfig{}, err
+		return uuid.Nil, err
 	}
 	if !ok {
-		return UserRuntimeConfig{}, errNotManager
+		return uuid.Nil, errNotManager
+	}
+	return operator, nil
+}
+
+// GetAsManager is the operator's document read by an assigned agent.
+func (r *UserRuntimeRepo) GetAsManager(ctx context.Context, actor UserRuntimeActor) (UserRuntimeConfig, error) {
+	operator, err := r.managerOperator(ctx, actor)
+	if err != nil {
+		return UserRuntimeConfig{}, err
+	}
+	return r.get(ctx, r.db, operator, false)
+}
+
+// SaveAsManager lets an assigned agent edit its operator's document with its key.
+func (r *UserRuntimeRepo) SaveAsManager(ctx context.Context, actor UserRuntimeActor, in UserRuntimeSave) (UserRuntimeConfig, error) {
+	operator, err := r.managerOperator(ctx, actor)
+	if err != nil {
+		return UserRuntimeConfig{}, err
 	}
 	return r.save(ctx, operator, "agent", actor.AgentID, in)
 }
@@ -248,12 +274,25 @@ func (r *UserRuntimeRepo) History(ctx context.Context, actor UserRuntimeActor, l
 	if err := operatorOnly(actor); err != nil {
 		return nil, err
 	}
+	return r.history(ctx, actor.UserID, limit)
+}
+
+// HistoryAsManager is the operator's history read by an assigned agent.
+func (r *UserRuntimeRepo) HistoryAsManager(ctx context.Context, actor UserRuntimeActor, limit int) ([]UserRuntimeHistory, error) {
+	operator, err := r.managerOperator(ctx, actor)
+	if err != nil {
+		return nil, err
+	}
+	return r.history(ctx, operator, limit)
+}
+
+func (r *UserRuntimeRepo) history(ctx context.Context, user uuid.UUID, limit int) ([]UserRuntimeHistory, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
 	out := []UserRuntimeHistory{}
 	err := r.db.SelectContext(ctx, &out, `SELECT id, revision, kind, detail, author_type, author_id, created_at
-		FROM user_runtime_history WHERE user_id=$1 ORDER BY id DESC LIMIT $2`, actor.UserID, limit)
+		FROM user_runtime_history WHERE user_id=$1 ORDER BY id DESC LIMIT $2`, user, limit)
 	return out, err
 }
 
@@ -296,15 +335,9 @@ func (r *UserRuntimeRepo) SetLimits(ctx context.Context, actor UserRuntimeActor,
 
 // SetLimitsAsManager: an assigned agent does the same for agents of its operator.
 func (r *UserRuntimeRepo) SetLimitsAsManager(ctx context.Context, actor UserRuntimeActor, agent uuid.UUID, limit int) error {
-	if err := managerOnly(actor); err != nil {
-		return err
-	}
-	operator, ok, err := r.isManager(ctx, r.db, actor.AgentID)
+	operator, err := r.managerOperator(ctx, actor)
 	if err != nil {
 		return err
-	}
-	if !ok {
-		return errNotManager
 	}
 	return r.setLimits(ctx, operator, "agent", actor.AgentID, agent, limit)
 }
@@ -650,15 +683,47 @@ func (r *UserRuntimeRepo) operatorRows(ctx context.Context, actor UserRuntimeAct
 	if err := operatorOnly(actor); err != nil {
 		return nil, err
 	}
+	return r.operatorRowsFor(ctx, actor.UserID, ws)
+}
+
+// ManagerWorkspace returns the operator whose runtime_manager grant the agent
+// holds, refusing an agent that is not connected to ws (home workspace or a live
+// workspace grant).
+func (r *UserRuntimeRepo) ManagerWorkspace(ctx context.Context, actor UserRuntimeActor, ws uuid.UUID) (uuid.UUID, error) {
+	operator, err := r.managerOperator(ctx, actor)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	var connected bool
+	if err := r.db.GetContext(ctx, &connected, `SELECT EXISTS (SELECT 1 FROM agents a WHERE a.id=$1 AND (a.workspace_id=$2
+		OR EXISTS (SELECT 1 FROM agent_workspace_grants g WHERE g.agent_id=a.id AND g.workspace_id=$2 AND g.revoked_at IS NULL)))`, actor.AgentID, ws); err != nil {
+		return uuid.Nil, err
+	}
+	if !connected {
+		return uuid.Nil, apierror.Forbidden("agent is not connected to this workspace")
+	}
+	return operator, nil
+}
+
+// managerRows is the operator's view of ws for an assigned agent.
+func (r *UserRuntimeRepo) managerRows(ctx context.Context, actor UserRuntimeActor, ws uuid.UUID) ([]operatorAgentRow, error) {
+	operator, err := r.ManagerWorkspace(ctx, actor, ws)
+	if err != nil {
+		return nil, err
+	}
+	return r.operatorRowsFor(ctx, operator, ws)
+}
+
+func (r *UserRuntimeRepo) operatorRowsFor(ctx context.Context, operator, ws uuid.UUID) ([]operatorAgentRow, error) {
 	if ws == uuid.Nil {
 		return nil, apierror.BadRequest("workspace_id is required")
 	}
-	admin, err := r.WorkspaceAdmin(ctx, ws, actor.UserID)
+	admin, err := r.WorkspaceAdmin(ctx, ws, operator)
 	if err != nil {
 		return nil, err
 	}
 	var rows []operatorAgentRow
-	err = r.db.SelectContext(ctx, &rows, operatorAgentsSQL, actor.UserID, ws, admin)
+	err = r.db.SelectContext(ctx, &rows, operatorAgentsSQL, operator, ws, admin)
 	return rows, err
 }
 
@@ -669,6 +734,19 @@ func (r *UserRuntimeRepo) OperatorAgents(ctx context.Context, actor UserRuntimeA
 	if err != nil {
 		return nil, err
 	}
+	return operatorAgents(rows), nil
+}
+
+// OperatorAgentsAsManager is OperatorAgents of the agent's operator.
+func (r *UserRuntimeRepo) OperatorAgentsAsManager(ctx context.Context, actor UserRuntimeActor, ws uuid.UUID) ([]OperatorAgent, error) {
+	rows, err := r.managerRows(ctx, actor, ws)
+	if err != nil {
+		return nil, err
+	}
+	return operatorAgents(rows), nil
+}
+
+func operatorAgents(rows []operatorAgentRow) []OperatorAgent {
 	out := make([]OperatorAgent, 0, len(rows))
 	for _, row := range rows {
 		a := OperatorAgent{AgentID: row.AgentID, Name: row.Name, OperatorUserID: row.OperatorUserID,
@@ -679,7 +757,7 @@ func (r *UserRuntimeRepo) OperatorAgents(ctx context.Context, actor UserRuntimeA
 		}
 		out = append(out, a)
 	}
-	return out, nil
+	return out
 }
 
 // OperatorRunners groups the agents OperatorAgents lists by the runner that leases them.
@@ -688,6 +766,19 @@ func (r *UserRuntimeRepo) OperatorRunners(ctx context.Context, actor UserRuntime
 	if err != nil {
 		return nil, err
 	}
+	return operatorRunners(rows), nil
+}
+
+// OperatorRunnersAsManager is OperatorRunners of the agent's operator.
+func (r *UserRuntimeRepo) OperatorRunnersAsManager(ctx context.Context, actor UserRuntimeActor, ws uuid.UUID) ([]OperatorRunner, error) {
+	rows, err := r.managerRows(ctx, actor, ws)
+	if err != nil {
+		return nil, err
+	}
+	return operatorRunners(rows), nil
+}
+
+func operatorRunners(rows []operatorAgentRow) []OperatorRunner {
 	out := []OperatorRunner{}
 	idx := map[string]int{}
 	for _, row := range rows {
@@ -709,7 +800,7 @@ func (r *UserRuntimeRepo) OperatorRunners(ctx context.Context, actor UserRuntime
 		}
 		o.Live = o.Live || (row.Live != nil && *row.Live)
 	}
-	return out, nil
+	return out
 }
 
 func deref(s *string) string {

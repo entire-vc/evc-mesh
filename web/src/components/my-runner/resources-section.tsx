@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,6 +7,9 @@ import { SchemaForm, type FieldSchema, type Values } from "@/components/extensio
 import { SectionShell } from "@/components/my-runner/section-shell";
 import type { Loaded } from "@/components/my-runner/use-load";
 import { apiErrorMessage } from "@/lib/api-error";
+import { useAgentStore } from "@/stores/agent";
+import { useAgentWorkspaceGrantStore } from "@/stores/agent-workspace-grant";
+import { useWorkspaceStore } from "@/stores/workspace";
 import {
   CATALOG_SECTIONS, CONFIG_SECTIONS, bindRefs, entrySchema, entrySummary, fieldErrorsByEntry, findSecretViolation, fromFormValue,
   isForeignBinding, newBindingValue, refOptions, saveResources, sectionEntries, toFormValue, isSchemaPath, unknownFields, withEntry,
@@ -54,6 +57,7 @@ function EntryEditor({ config, schema, editor, wsId, onApply, onCancel }: {
     return [atField, elsewhere] as const;
   }, [editor.serverErrors, schema, t]);
   const entryError = editor.serverErrors?.[""];
+  const agentOptions = useAgentOptions();
 
   const submit = async (payload: Values) => {
     const n = name.trim();
@@ -108,10 +112,29 @@ function EntryEditor({ config, schema, editor, wsId, onApply, onCancel }: {
         onValuesChange={setValues}
         submitLabel={t("resources.apply")}
         serverErrors={serverErrors}
+        agentOptions={agentOptions}
         actions={<Button type="button" variant="outline" onClick={onCancel}>{t("resources.cancel")}</Button>}
       />
     </div>
   );
+}
+
+/** Agents a binding may name, by name: the workspace's own and the ones invited into it. */
+function useAgentOptions() {
+  const ws = useWorkspaceStore((s) => s.currentWorkspace?.id);
+  const agents = useAgentStore((s) => s.agents);
+  const grants = useAgentWorkspaceGrantStore((s) => s.workspaceAgentGrants);
+  useEffect(() => {
+    if (!ws) return;
+    void useAgentStore.getState().fetchAgents(ws);
+    void useAgentWorkspaceGrantStore.getState().fetchWorkspaceAgentGrants(ws);
+  }, [ws]);
+  return useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const a of agents) byId.set(a.id, a.name);
+    for (const g of grants) if (!byId.has(g.agent_id)) byId.set(g.agent_id, g.agent?.name ?? g.agent?.slug ?? "");
+    return [...byId].filter(([, name]) => name !== "").map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label));
+  }, [agents, grants]);
 }
 
 function EntrySummary({ value }: { value: unknown }) {

@@ -15,7 +15,7 @@ import (
 
 // manifestV1SHA256 is the digest of manifest.v1.json fixed by the extensions
 // manifest ADR. The Spark side pins the same value.
-const manifestV1SHA256 = "6aaee6872b29431f7faa7dda0fe56d4b003546d371f5145b5e8a0440f40e4581"
+const manifestV1SHA256 = "708c31daa8c341c9e5e420a8f532884ef0c5d90d1eab5bc25df65d34a01d4638"
 
 const schemaFile = "manifest.v1.json"
 
@@ -91,7 +91,7 @@ func settingsField(t *testing.T, sch *jsonschema.Schema, field map[string]any) e
 
 func TestManifestV1_ThemeSettingsWidgets(t *testing.T) {
 	sch := compileSchema(t)
-	for _, w := range []string{"color", "font-select", "image", "field-picker", "widget-picker", "layout-picker", "order-list"} {
+	for _, w := range []string{"color", "font-select", "image", "field-picker", "widget-picker", "layout-picker", "order-list", "grant-picker", "workspace-picker"} {
 		require.NoError(t, settingsField(t, sch, map[string]any{"type": "string", "x-widget": w}), w)
 	}
 	require.NoError(t, settingsField(t, sch, map[string]any{"type": "string", "x-token": "primary", "x-options": map[string]any{"wide": "Wide"}}))

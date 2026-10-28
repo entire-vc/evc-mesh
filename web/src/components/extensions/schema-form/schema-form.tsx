@@ -12,6 +12,7 @@ import { useAgentStore } from "@/stores/agent";
 import { useCustomFieldStore } from "@/stores/custom-field";
 import { CORE_WIDGETS } from "@/core/dashboard";
 import { ColorWidget, FontWidget, ImageWidget, LayoutWidget, OrderedWidget, type PickerOption } from "./widgets";
+import { GrantWidget, WorkspaceWidget } from "./mesh-refs";
 import { resolveSchema } from "./resolve";
 import { buildPayload, initialState, setAtPath } from "./state";
 import { emptyAllowed, isMapSchema, validate, type Errors } from "./validate";
@@ -75,6 +76,12 @@ function widgetOf(f: FieldSchema): Widget | "text" | "checklist" | "map" {
   if (f.type === "object" && f.properties) return "group";
   if (isMapSchema(f)) return "map";
   return "text";
+}
+
+/** Picker options plus the stored value when it is not among them, so it stays visible (as "not found"), never a blank. */
+function withMissing(options: PickerOption[], value: unknown, missing: string): PickerOption[] {
+  if (value == null || value === "" || options.some((o) => o.value === String(value))) return options;
+  return [...options, { value: String(value), label: missing }];
 }
 
 /** Options of an enum, labelled by `x-options`; a value no longer among them stays visible, marked. */
@@ -228,7 +235,7 @@ function Fields({ schema, values, prefix, ctx }: { schema: FieldSchema; values: 
     <>
       {Object.entries(schema.properties ?? {}).map(([name, f]) =>
         isVisible(f, values) ? (
-          <Field key={name} name={name} field={f} value={values[name]} siblings={values} prefix={prefix} required={required.has(name) && !emptyAllowed(f)} ctx={ctx} />
+          <Field key={name} name={name} field={f} value={values[name]} siblings={values} parent={schema} prefix={prefix} required={required.has(name) && !emptyAllowed(f)} ctx={ctx} />
         ) : null,
       )}
     </>
@@ -239,6 +246,8 @@ function Field({
   name,
   field,
   value,
+  siblings,
+  parent,
   prefix,
   required,
   ctx,
@@ -247,6 +256,7 @@ function Field({
   field: FieldSchema;
   value: unknown;
   siblings: Values;
+  parent: FieldSchema;
   prefix: string[];
   required: boolean;
   ctx: Ctx;
@@ -342,14 +352,26 @@ function Field({
       </button>
     );
   } else if (widget === "select" || widget === "project-picker" || widget === "agent-picker") {
+    const missing = (v: string) => t("schemaForm.missingOption", { value: v });
     const options: PickerOption[] =
-      widget === "project-picker"
-        ? ctx.projectOptions
-        : widget === "agent-picker"
-          ? ctx.agentOptions
-          : enumOptions(field, [value], (v) => t("schemaForm.missingOption", { value: v }));
+      widget === "project-picker" || widget === "agent-picker"
+        ? withMissing(widget === "project-picker" ? ctx.projectOptions : ctx.agentOptions, value, t("schemaForm.missingEntity"))
+        : enumOptions(field, [value], missing);
+    // a grant picked for the previous agent is not one of the new agent's
+    const dependents = widget === "agent-picker" ? Object.entries(parent.properties ?? {}).filter(([, f]) => f["x-agent-field"] === name) : [];
     control = (
-      <Select {...common} value={value == null ? "" : String(value)} onChange={(e) => ctx.onChange(path, e.target.value === "" ? undefined : e.target.value)}>
+      <Select
+        {...common}
+        value={value == null ? "" : String(value)}
+        onChange={(e) => {
+          ctx.onChange(path, e.target.value === "" ? undefined : e.target.value);
+          for (const [dep, f] of dependents) {
+            ctx.onChange([...prefix, dep], undefined);
+            const ws = f["x-workspace-field"];
+            if (ws) ctx.onChange([...prefix, ws], undefined);
+          }
+        }}
+      >
         <option value="">{t("schemaForm.selectPlaceholder")}</option>
         {options.map((o) => (
           <option key={o.value} value={o.value}>
@@ -357,6 +379,34 @@ function Field({
           </option>
         ))}
       </Select>
+    );
+  } else if (widget === "grant-picker") {
+    const agentField = field["x-agent-field"];
+    const agent = agentField ? siblings[agentField] : undefined;
+    const wsField = field["x-workspace-field"];
+    control = (
+      <GrantWidget
+        {...common}
+        invalid={invalid}
+        describedBy={describedBy}
+        value={value}
+        agentId={typeof agent === "string" && agent !== "" ? agent : null}
+        onChange={(v) => ctx.onChange(path, v)}
+        onWorkspace={wsField ? (v) => ctx.onChange([...prefix, wsField], v) : undefined}
+      />
+    );
+  } else if (widget === "workspace-picker") {
+    // the agent whose access this workspace follows: the grant picker that writes into this field names it
+    const grantField = Object.values(parent.properties ?? {}).find((f) => f["x-widget"] === "grant-picker" && f["x-workspace-field"] === name);
+    const agent = grantField?.["x-agent-field"] ? siblings[grantField["x-agent-field"]] : undefined;
+    control = (
+      <WorkspaceWidget
+        {...common}
+        describedBy={describedBy}
+        value={value}
+        agentId={typeof agent === "string" && agent !== "" ? agent : null}
+        onChange={(v) => ctx.onChange(path, v)}
+      />
     );
   } else if (widget === "color") {
     const token = field["x-token"];

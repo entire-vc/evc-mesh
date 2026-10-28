@@ -567,39 +567,44 @@
           "properties": {
             "agent_id": {
               "type": "string",
-              "title": "Agent ID",
+              "title": "Agent",
               "title_i18n": {
-                "ru": "ID агента"
+                "ru": "Агент"
               },
-              "x-help": "The agent's ID in Mesh.",
+              "x-help": "The Mesh agent this runner starts.",
               "x-help_i18n": {
-                "ru": "ID агента в Mesh."
+                "ru": "Агент Mesh, которого запускает этот раннер."
               },
-              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-            },
-            "workspace_id": {
-              "type": "string",
-              "title": "Workspace ID",
-              "title_i18n": {
-                "ru": "ID рабочего пространства"
-              },
-              "x-help": "The ID of the workspace the agent works in.",
-              "x-help_i18n": {
-                "ru": "ID воркспейса, в котором работает агент."
-              },
-              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "x-widget": "agent-picker"
             },
             "grant_id": {
               "type": "string",
-              "title": "Access grant ID",
+              "title": "Access",
               "title_i18n": {
-                "ru": "ID доступа"
+                "ru": "Доступ"
               },
-              "x-help": "The ID of the access grant the runner acts under for this agent.",
+              "x-help": "The agent's access to a workspace the runner acts under. Its only one is picked by itself.",
               "x-help_i18n": {
-                "ru": "ID доступа, под которым раннер действует за этого агента."
+                "ru": "Доступ агента к воркспейсу, под которым действует раннер. Если доступ один, он выбирается сам."
               },
-              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "x-widget": "grant-picker",
+              "x-agent-field": "agent_id",
+              "x-workspace-field": "workspace_id"
+            },
+            "workspace_id": {
+              "type": "string",
+              "title": "Workspace",
+              "title_i18n": {
+                "ru": "Воркспейс"
+              },
+              "x-help": "Follows the picked access; it is not typed.",
+              "x-help_i18n": {
+                "ru": "Следует за выбранным доступом, вручную не вводится."
+              },
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "x-widget": "workspace-picker"
             }
           },
           "required": [

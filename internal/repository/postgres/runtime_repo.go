@@ -160,6 +160,55 @@ func runtimeAdmin(ctx context.Context, q sqlx.QueryerContext, ws uuid.UUID, acto
 	return nil
 }
 
+// runtimeEditor is whom a catalog read or write is done for: the signed-in
+// owner/admin, or the operator of an agent key that holds a live
+// runtime_manager grant (then agent is that key, recorded as the author).
+type runtimeEditor struct{ user, agent uuid.UUID }
+
+func (e runtimeEditor) authorAgent() *uuid.UUID {
+	if e.agent == uuid.Nil {
+		return nil
+	}
+	return &e.agent
+}
+
+// runtimeCatalogEditor gates the workspace catalog (inventory, revisions, save,
+// restore). A person needs owner/admin. An agent key gets exactly its operator's
+// right: a live runtime_manager grant, the operator owning or administering ws,
+// and the agent connected to ws (home workspace or a live workspace grant).
+func runtimeCatalogEditor(ctx context.Context, q sqlx.QueryerContext, ws uuid.UUID, actor RuntimeActor) (runtimeEditor, error) {
+	if actor.Connector || actor.AgentID == uuid.Nil {
+		return runtimeEditor{user: actor.UserID}, runtimeAdmin(ctx, q, ws, actor)
+	}
+	var row struct {
+		Operator  *uuid.UUID `db:"operator"`
+		Admin     bool       `db:"admin"`
+		Connected bool       `db:"connected"`
+	}
+	err := sqlx.GetContext(ctx, q, &row, `SELECT m.operator_user_id AS operator,
+		EXISTS (SELECT 1 FROM workspaces w WHERE w.id=$2 AND w.deleted_at IS NULL
+			AND (w.owner_id=m.operator_user_id OR EXISTS (SELECT 1 FROM workspace_members wm
+				WHERE wm.workspace_id=w.id AND wm.user_id=m.operator_user_id AND wm.role IN ('owner','admin')))) AS admin,
+		(a.workspace_id=$2 OR EXISTS (SELECT 1 FROM agent_workspace_grants g
+			WHERE g.agent_id=a.id AND g.workspace_id=$2 AND g.revoked_at IS NULL)) AS connected
+		FROM agents a LEFT JOIN user_runtime_managers m
+			ON m.agent_id=a.id AND m.operator_user_id=a.operator_user_id AND m.revoked_at IS NULL
+		WHERE a.id=$1 AND a.deleted_at IS NULL`, actor.AgentID, ws)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && row.Operator == nil) {
+		return runtimeEditor{}, errNotManager
+	}
+	if err != nil {
+		return runtimeEditor{}, err
+	}
+	if !row.Admin {
+		return runtimeEditor{}, apierror.Forbidden("operator is not an admin of this workspace")
+	}
+	if !row.Connected {
+		return runtimeEditor{}, apierror.Forbidden("agent is not connected to this workspace")
+	}
+	return runtimeEditor{user: *row.Operator, agent: actor.AgentID}, nil
+}
+
 func runtimeGrant(ctx context.Context, q sqlx.QueryerContext, identity domain.RuntimeIdentity) (string, error) {
 	var hash string
 	err := sqlx.GetContext(ctx, q, &hash, `SELECT g.api_key_hash FROM agent_workspace_grants g
@@ -223,7 +272,7 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	err = runtimeAdmin(ctx, tx, ws, actor)
+	editor, err := runtimeCatalogEditor(ctx, tx, ws, actor)
 	if err != nil {
 		return nil, err
 	}
@@ -340,7 +389,7 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 	revision++
 	// enabled is carried from the connection: a catalog edit never switches
 	// the Runner, so a stale editor cannot undo an operator's disable.
-	_, err = tx.ExecContext(ctx, `INSERT INTO runtime_catalog_revisions(integration_id,revision,digest,config,enabled,created_by) VALUES($1,$2,$3,$4,$5,$6)`, connection.ID, revision, digest, canonical, connection.IsActive, actor.UserID)
+	_, err = tx.ExecContext(ctx, `INSERT INTO runtime_catalog_revisions(integration_id,revision,digest,config,enabled,created_by,author_agent_id) VALUES($1,$2,$3,$4,$5,$6,$7)`, connection.ID, revision, digest, canonical, connection.IsActive, editor.user, editor.authorAgent())
 	if err != nil {
 		return nil, err
 	}
@@ -362,7 +411,7 @@ func (r *RuntimeRepo) Restore(ctx context.Context, ws uuid.UUID, actor RuntimeAc
 	if input.IfRevision < 0 || input.Revision < 1 {
 		return nil, apierror.BadRequest("if_revision and revision are required")
 	}
-	if err := runtimeAdmin(ctx, r.db, ws, actor); err != nil {
+	if _, err := runtimeCatalogEditor(ctx, r.db, ws, actor); err != nil {
 		return nil, err
 	}
 	connection, err := runtimeConnection(ctx, r.db, ws, false)
@@ -491,7 +540,11 @@ type RuntimeRevisionEntry struct {
 	Enabled    bool      `db:"enabled" json:"enabled"`
 	AuthorID   uuid.UUID `db:"author_id" json:"author_id"`
 	AuthorName string    `db:"author_name" json:"author_name"`
-	CreatedAt  time.Time `db:"created_at" json:"created_at"`
+	// AuthorType is "agent" when an agent key saved the revision for its
+	// operator (AuthorID); AuthorAgentID and AuthorName then name the agent.
+	AuthorType    string     `db:"author_type" json:"author_type"`
+	AuthorAgentID *uuid.UUID `db:"author_agent_id" json:"author_agent_id,omitempty"`
+	CreatedAt     time.Time  `db:"created_at" json:"created_at"`
 }
 
 // RuntimeRevisions is the body of GET /runtime/revisions. Managed tells a
@@ -504,7 +557,7 @@ type RuntimeRevisions struct {
 // Revisions lists the workspace catalog revisions with their authors; same
 // owner/admin gate as Inventory. No connection yet means managed=false.
 func (r *RuntimeRepo) Revisions(ctx context.Context, ws uuid.UUID, actor RuntimeActor, limit int) (*RuntimeRevisions, error) {
-	if err := runtimeAdmin(ctx, r.db, ws, actor); err != nil {
+	if _, err := runtimeCatalogEditor(ctx, r.db, ws, actor); err != nil {
 		return nil, err
 	}
 	connection, err := runtimeConnection(ctx, r.db, ws, false)
@@ -516,8 +569,10 @@ func (r *RuntimeRepo) Revisions(ctx context.Context, ws uuid.UUID, actor Runtime
 		return out, nil
 	}
 	out.Managed = true
-	err = r.db.SelectContext(ctx, &out.Revisions, `SELECT r.revision,r.digest,r.enabled,r.created_by AS author_id,COALESCE(u.display_name,'') AS author_name,r.created_at
-		FROM runtime_catalog_revisions r LEFT JOIN users u ON u.id=r.created_by
+	err = r.db.SelectContext(ctx, &out.Revisions, `SELECT r.revision,r.digest,r.enabled,r.created_by AS author_id,
+		COALESCE(ag.name,u.display_name,'') AS author_name,
+		CASE WHEN r.author_agent_id IS NULL THEN 'user' ELSE 'agent' END AS author_type,r.author_agent_id,r.created_at
+		FROM runtime_catalog_revisions r LEFT JOIN users u ON u.id=r.created_by LEFT JOIN agents ag ON ag.id=r.author_agent_id
 		WHERE r.integration_id=$1 ORDER BY r.revision DESC LIMIT $2`, connection.ID, limit)
 	if err != nil {
 		return nil, err
@@ -526,7 +581,7 @@ func (r *RuntimeRepo) Revisions(ctx context.Context, ws uuid.UUID, actor Runtime
 }
 
 func (r *RuntimeRepo) Inventory(ctx context.Context, ws uuid.UUID, actor RuntimeActor) (*domain.RuntimeSnapshot, error) {
-	if err := runtimeAdmin(ctx, r.db, ws, actor); err != nil {
+	if _, err := runtimeCatalogEditor(ctx, r.db, ws, actor); err != nil {
 		return nil, err
 	}
 	connection, err := runtimeConnection(ctx, r.db, ws, false)

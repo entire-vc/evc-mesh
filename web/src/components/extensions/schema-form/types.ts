@@ -6,6 +6,8 @@ export type Widget =
   | "group"
   | "project-picker"
   | "agent-picker"
+  | "grant-picker"
+  | "workspace-picker"
   | "color"
   | "font-select"
   | "image"
@@ -65,6 +67,10 @@ export interface FieldSchema {
   "x-ref"?: string;
   /** The same for the keys of a map (into `propertyNames.enum`). */
   "x-key-ref"?: string;
+  /** grant-picker: sibling field holding the agent whose grants are offered (changing it clears this one). */
+  "x-agent-field"?: string;
+  /** grant-picker: sibling field set to the picked grant's workspace (a workspace-picker). */
+  "x-workspace-field"?: string;
 }
 
 export type Values = Record<string, unknown>;
