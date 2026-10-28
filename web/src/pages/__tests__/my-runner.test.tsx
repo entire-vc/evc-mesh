@@ -504,6 +504,26 @@ describe("MyRunnerPage", () => {
       expect(history).toHaveTextContent("You");
     });
 
+    it("marks as required only a field that needs a value: an empty list of other names is a valid answer", async () => {
+      renderPage("owner", "resources");
+      const editor = await edit("pools", "claude-max");
+      const label = (text: string) => within(editor).getByText(text, { selector: "label" });
+      expect(label("Concurrent runs, at most")).toHaveTextContent("*");
+      expect(label("Other names")).not.toHaveTextContent("*");
+      fireEvent.click(within(editor).getByRole("button", { name: "Apply" }));
+      expect(await screen.findByRole("button", { name: "Save resources" })).toBeInTheDocument();
+    });
+
+    it("a long pool name breaks between its segments, never inside one", async () => {
+      world.catalog = { ...(world.catalog as object), config: { ...CATALOG, pools: { "provider-api/team-a/spend": CATALOG.pools["claude-max"] } } };
+      renderPage("owner", "resources");
+      const pools = await screen.findByTestId("my-runner-resources-pools");
+      const name = within(pools).getByText((_, el) => el?.textContent === "provider-api/team-a/spend" && el.tagName === "SPAN");
+      expect(name).not.toHaveClass("break-all");
+      expect(name.querySelectorAll("wbr")).toHaveLength(2);
+      expect(name).toHaveAttribute("title", "provider-api/team-a/spend");
+    });
+
     it("a stale revision reloads the latest catalog", async () => {
       renderPage("owner", "resources");
       const pools = await screen.findByTestId("my-runner-resources-pools");

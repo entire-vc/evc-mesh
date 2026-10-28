@@ -7,7 +7,7 @@ import {
   type Actor, type Ctx, chatBase, chatUrl, openActor, resolveCtx, sha256, snap, step, timeline, until,
 } from "./lib/harness";
 import {
-  holdTurnPrompt, expectTurnRunning, codeOf, history, makeCodePng, newChatViaUi, pastePng, waitAssistantDone, listThreadIds, agentId, sendVia, assertUserSettled,
+  holdTurnPrompt, expectTurnRunning, codeOf, history, makeCodePng, newChatViaUi, pastePng, waitAssistantDone, waitAssistantBody, listThreadIds, agentId, sendVia, assertUserSettled, waitTurnFrame,
 } from "./lib/chat";
 
 /**
@@ -118,11 +118,7 @@ for (const h of HARNESSES) {
     test(`S04 ${h}: streaming: text arrives as delta(s) before completed, final carries the code`, async () => {
       await step("S04", h, async () => {
         // Deltas are collected from the WS frames of this page, from the first message on.
-        const first = await until("first assistant body appears (streaming or done)", async () => {
-          const hist = await history(A, x, threadId);
-          const a = hist.items.find((i) => i.role === "assistant");
-          return a && a.body !== "" ? a : false;
-        }, 240_000, 300);
+        const first = await waitAssistantBody(A, x, threadId, 1);
         const intermediate = first.status === "streaming" ? first.body : "";
         const done = await waitAssistantDone(A, x, threadId, 1);
         expect(done.status, "turn ends done").toBe("done");
@@ -175,9 +171,11 @@ for (const h of HARNESSES) {
         const sentAt = Date.now();
         await A.page.getByTestId("chat-send").click();
         if (byTurn) {
-          await until("a tool call of the long turn", async () => A.frames.slice(before).find((f) => f.event === "chat.turn.tool" && f.thread_id === threadId), 240_000, 200);
+          await waitTurnFrame(() => history(A, x, threadId), threadId, 3, "a tool call of the long turn",
+            () => A.frames.slice(before).find((f) => f.event === "chat.turn.tool" && f.thread_id === threadId));
         } else {
-          await until("a delta of the long reply", async () => A.frames.slice(before).find((f) => f.event === "chat.message.delta" && (f.textLen ?? 0) > 0), 240_000, 200);
+          await waitTurnFrame(() => history(A, x, threadId), threadId, 3, "a delta of the long reply",
+            () => A.frames.slice(before).find((f) => f.event === "chat.message.delta" && (f.textLen ?? 0) > 0));
         }
         // Stop exists only while the turn runs: each reloaded frame must still be mid-turn. A turn that is
         // already over fails here by name, not as a missing button after the reload.

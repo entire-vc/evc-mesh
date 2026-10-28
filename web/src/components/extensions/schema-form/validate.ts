@@ -12,6 +12,14 @@ function empty(v: unknown): boolean {
   return v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0);
 }
 
+/**
+ * Required, yet asks for no value: a toggle always holds on or off, and `minItems: 0` says an
+ * empty list is a valid answer (the key must be there, not a value). Validation and the `*` read this.
+ */
+export function emptyAllowed(field: FieldSchema): boolean {
+  return field.type === "boolean" || (field.type === "array" && field.minItems === 0);
+}
+
 // A manifest pattern runs as a JS regex on the UI thread: bound it, leave the rest to the server.
 const MAX_PATTERN_LEN = 256;
 const MAX_PATTERN_INPUT = 2048;
@@ -122,9 +130,7 @@ export function validate(
     }
     if (empty(v)) {
       const storedSecret = field["x-secret"] && ctx.secretsSet.has(path);
-      // `minItems: 0` says an empty list is a valid answer, required or not
-      const emptyAllowed = field.type === "array" && field.minItems === 0;
-      if (required.has(name) && !storedSecret && field.type !== "boolean" && !emptyAllowed) errors[path] = { code: "required" };
+      if (required.has(name) && !storedSecret && !emptyAllowed(field)) errors[path] = { code: "required" };
       continue;
     }
     if (field.type === "array") {

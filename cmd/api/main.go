@@ -249,7 +249,7 @@ func main() {
 	}
 	extensionInstanceSettingsHandler := handler.NewExtensionInstanceSettingsHandler(instanceSettingRepo, instanceSettingRepo, extensionRegistry, extensionEnvSources).WithJournal(extensionPolicyRepo)
 	extensionInstanceAdminHandler := handler.NewExtensionInstanceAdminHandler(extensionPolicyRepo, instanceSettingRepo, postgres.NewInstalledExtensionRepo(db), instanceSettingRepo).WithUsage(postgres.NewInstalledExtensionRepo(db))
-	runtimeRepo := postgres.NewRuntimeRepo(db).WithAllowList(extensionPolicyRepo)
+	runtimeRepo := postgres.NewRuntimeRepo(db).WithAllowList(extensionPolicyRepo).WithStrictWorkspaceIsolation(cfg.Runtime.StrictWorkspaceIsolation)
 	projectUpdateRepo := postgres.NewProjectUpdateRepo(db)
 	initiativeRepo := postgres.NewInitiativeRepo(db)
 	ruleRepo := postgres.NewRuleRepo(db)
@@ -727,6 +727,7 @@ func main() {
 		service.WithCommentDependencyRepo(taskDependencyRepo),
 		service.WithClosedFollowUpRootRepo(closedFollowUpRootRepo),
 		service.WithClosedFollowUpPendingRepo(closedFollowUpPendingRepo),
+		service.WithCommentTextGateParsing(cfg.HumanGate.CommentTextParsing),
 	)
 	depService := service.WithDependencyResolver(service.NewTaskDependencyService(taskDependencyRepo, taskRepo, activityLogRepo, projectRepo), autoTransitionSvc)
 	activityLogService := service.NewActivityLogService(activityLogRepo)
@@ -1641,6 +1642,9 @@ func main() {
 	// fall-through) and DualAuth then skips the request.
 	api.Use(mw.ChatSessionAuth(chatSessionService))
 	api.Use(mw.DualAuth(authService, agentService, oauthService))
+	// A viewer-role agent credential is read-only: every non-GET/HEAD request is
+	// refused here, once for the whole group, including routes with no rbac().
+	api.Use(mw.AgentReadOnlyGuard())
 	// A refused chat-token call leaves an audit row (it changes nothing else).
 	api.Use(mw.ChatSessionDenialAudit(activityLogRepo))
 	// Deny-by-default route -> capability check for extension actors; inert for
@@ -1916,6 +1920,11 @@ func main() {
 	taskExternalRefHandler := handler.NewTaskExternalRefHandler(service.NewTaskExternalRefService(taskExternalRefRepo), taskService)
 	api.GET("/tasks/:task_id/external-ref", taskExternalRefHandler.Get, wsAccess)
 	api.PUT("/tasks/:task_id/external-ref", taskExternalRefHandler.Put, wsAccess, rbac(mw.PermUpdateTask))
+	// Runner reads of typed turn outcomes: latest outcomes of a session, the active wait.
+	typedOutcomeHandler := handler.NewTypedOutcomeHandler(
+		service.NewTypedOutcomeService(postgres.NewTaskWaitRepo(db), postgres.NewTurnOutcomeRepo(db)), taskService)
+	api.GET("/tasks/:task_id/turn-outcomes", typedOutcomeHandler.ListTurnOutcomes, wsAccess)
+	api.GET("/tasks/:task_id/wait", typedOutcomeHandler.GetActiveWait, wsAccess)
 	api.GET("/workspaces/:ws_id/tasks", taskHandler.SearchGlobal, wsAccess)
 
 	// Dependency routes.

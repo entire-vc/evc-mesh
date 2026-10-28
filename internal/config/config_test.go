@@ -235,3 +235,30 @@ func TestLoad_ExtensionDataPurgeOffByDefault(t *testing.T) {
 	assert.False(t, cfg.ExtensionRetention.PurgeEnabled, "prod must not change: purge is opt-in")
 	assert.Equal(t, 30*24*time.Hour, cfg.ExtensionRetention.Retention)
 }
+
+// COMMENT_TEXT_GATE_PARSING defaults to on so prod keeps arming/clearing gates from
+// comment text until the fleet switches it off; only an explicit off value turns it off.
+func TestLoad_CommentTextGateParsing(t *testing.T) {
+	for _, tc := range []struct {
+		val  string
+		set  bool
+		want bool
+	}{
+		{set: false, want: true},
+		{val: "on", set: true, want: true},
+		{val: "off", set: true, want: false},
+		{val: " OFF ", set: true, want: false},
+		{val: "false", set: true, want: false},
+		{val: "0", set: true, want: false},
+		{val: "of", set: true, want: true},
+	} {
+		t.Run(tc.val, func(t *testing.T) {
+			if tc.set {
+				t.Setenv("COMMENT_TEXT_GATE_PARSING", tc.val)
+			} else {
+				os.Unsetenv("COMMENT_TEXT_GATE_PARSING")
+			}
+			assert.Equal(t, tc.want, Load().HumanGate.CommentTextParsing)
+		})
+	}
+}

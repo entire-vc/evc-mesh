@@ -14,7 +14,7 @@ import { CORE_WIDGETS } from "@/core/dashboard";
 import { ColorWidget, FontWidget, ImageWidget, LayoutWidget, OrderedWidget, type PickerOption } from "./widgets";
 import { resolveSchema } from "./resolve";
 import { buildPayload, initialState, setAtPath } from "./state";
-import { isMapSchema, validate, type Errors } from "./validate";
+import { emptyAllowed, isMapSchema, validate, type Errors } from "./validate";
 import { isVisible } from "./visibility";
 import type { FieldError, FieldSchema, Values, Widget } from "./types";
 
@@ -223,11 +223,12 @@ function FieldMessage({ id, error, server }: { id: string; error?: FieldError; s
 
 function Fields({ schema, values, prefix, ctx }: { schema: FieldSchema; values: Values; prefix: string[]; ctx: Ctx }) {
   const required = new Set(schema.required ?? []);
+  // the asterisk follows validation: a required key whose empty value is valid asks for nothing
   return (
     <>
       {Object.entries(schema.properties ?? {}).map(([name, f]) =>
         isVisible(f, values) ? (
-          <Field key={name} name={name} field={f} value={values[name]} siblings={values} prefix={prefix} required={required.has(name)} ctx={ctx} />
+          <Field key={name} name={name} field={f} value={values[name]} siblings={values} prefix={prefix} required={required.has(name) && !emptyAllowed(f)} ctx={ctx} />
         ) : null,
       )}
     </>

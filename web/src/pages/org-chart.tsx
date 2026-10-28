@@ -3,13 +3,14 @@ import { agentLabel } from "@/lib/agent-label";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router";
 import { useTranslation } from "react-i18next";
-import { Bot, Plus, User, UserPlus } from "lucide-react";
+import { Bot, Plus, UserPlus } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { agentStatusConfig, isAgentStale } from "@/lib/agent-utils";
+import { agentStatusConfig, asCapabilityList, isAgentStale } from "@/lib/agent-utils";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useAgentStore } from "@/stores/agent";
 import { useMemberStore } from "@/stores/member";
 import { useRulesStore } from "@/stores/rules";
+import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -154,6 +155,24 @@ const STATUS_KEYS: Record<string, string> = {
   error: "orgChart.status.error",
 };
 
+/** First two capabilities as badges, the rest folded into "+N" (full list in title). */
+function CapabilityBadges({ capabilities }: { capabilities: unknown }) {
+  const caps = asCapabilityList(capabilities);
+  if (caps.length === 0) return null;
+  return (
+    <div className="flex items-center gap-1 min-w-0" title={caps.join(", ")}>
+      {caps.slice(0, 2).map((cap) => (
+        <Badge key={cap} variant="outline" className="text-xs px-1 py-0 h-4 min-w-0 truncate">
+          {cap}
+        </Badge>
+      ))}
+      {caps.length > 2 && (
+        <span className="text-xs text-muted-foreground shrink-0">+{caps.length - 2}</span>
+      )}
+    </div>
+  );
+}
+
 function AgentCard({
   agent,
   onClick,
@@ -168,6 +187,7 @@ function AgentCard({
     dotColor: "bg-tone-neutral-400",
   };
   const borderColor = statusBorderColors[agent.status] ?? "border-l-tone-neutral-400";
+  const runnerModel = [agent.agent_type, agent.model].filter(Boolean).join(" · ");
 
   return (
     <Card
@@ -200,11 +220,19 @@ function AgentCard({
           <p className="text-xs text-muted-foreground truncate">{agent.role}</p>
         )}
 
-        {agent.model && (
-          <p className="font-mono text-[11px] text-muted-foreground truncate" title={`${agent.agent_type} · ${agent.model}`}>
-            {agent.model}
+        {(agent.agent_type || agent.model) && (
+          <p className="font-mono text-[11px] text-muted-foreground truncate" title={runnerModel}>
+            {runnerModel}
           </p>
         )}
+
+        {agent.responsibility_zone && (
+          <p className="text-xs text-muted-foreground truncate" title={agent.responsibility_zone}>
+            {agent.responsibility_zone}
+          </p>
+        )}
+
+        <CapabilityBadges capabilities={agent.capabilities} />
 
         <div className="flex items-center gap-1.5">
           <span className={cn("h-2 w-2 rounded-full shrink-0", statusCfg.dotColor)} />
@@ -244,7 +272,7 @@ function HumanCard({ human }: { human: TeamDirectoryHuman }) {
     <Card className="w-52 shrink-0 border-l-4 border-l-tone-info-400 hover:shadow-md transition-shadow cursor-default">
       <CardContent className="p-3 space-y-1.5">
         <div className="flex items-center gap-1.5 min-w-0">
-          <User className="h-3.5 w-3.5 shrink-0 text-tone-info-400" />
+          <Avatar src={human.avatar_url || undefined} name={human.name || human.email} size="sm" />
           <span className="font-medium text-sm truncate" title={human.name}>
             {human.name}
           </span>
@@ -252,11 +280,28 @@ function HumanCard({ human }: { human: TeamDirectoryHuman }) {
 
         <p className="text-xs text-muted-foreground truncate">{human.email}</p>
 
-        {human.role && (
-          <Badge variant="outline" className="text-xs px-1 py-0 h-4">
-            {human.role}
-          </Badge>
+        {(human.role || human.availability) && (
+          <div className="flex flex-wrap items-center gap-1">
+            {human.role && (
+              <Badge variant="outline" className="text-xs px-1 py-0 h-4">
+                {human.role}
+              </Badge>
+            )}
+            {human.availability && (
+              <Badge variant="secondary" className="text-xs px-1 py-0 h-4 capitalize">
+                {human.availability}
+              </Badge>
+            )}
+          </div>
         )}
+
+        {human.responsibility_zone && (
+          <p className="text-xs text-muted-foreground truncate" title={human.responsibility_zone}>
+            {human.responsibility_zone}
+          </p>
+        )}
+
+        <CapabilityBadges capabilities={human.capabilities} />
 
         {human.projects && human.projects.length > 0 && (
           <div className="flex flex-wrap gap-1">

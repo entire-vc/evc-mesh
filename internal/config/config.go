@@ -28,6 +28,7 @@ type Config struct {
 	TeamRelay          TeamRelayConfig
 	HumanGate          HumanGateConfig
 	Telegram           TelegramConfig
+	Runtime            RuntimeConfig
 
 	// DocBodySoftLimit / DocBodyHardLimit are Mesh Doc body size limits in bytes:
 	// over soft a write succeeds with a warning, over hard it is refused.
@@ -71,6 +72,12 @@ type HumanGateConfig struct {
 	// (see ArmHumanGate's own CASE) — this only governs soft/unclassified
 	// gates that carry a real fallback.
 	DefaultTimeoutHours int
+	// CommentTextParsing switches the comment-text gate door: a
+	// "❓ Blocking @user" marker arming human_gate, and a human reply or a
+	// negator word ("снят", "resolved"…) clearing it. Env
+	// COMMENT_TEXT_GATE_PARSING, default "on" (prod unchanged); "off" leaves
+	// set_human_gate / clear_human_gate as the only way to arm or clear a gate.
+	CommentTextParsing bool
 }
 
 // TeamRelayConfig holds the INSTANCE-WIDE fallback for the Team Relay
@@ -133,6 +140,15 @@ type EmbeddingConfig struct {
 	Concurrency int
 	// HTTPTimeoutSecs is the timeout, in seconds, for the embedder's HTTP client (default: 30).
 	HTTPTimeoutSecs int
+}
+
+// RuntimeConfig holds instance switches of the Runner runtime API.
+type RuntimeConfig struct {
+	// StrictWorkspaceIsolation refuses catalog bindings of another workspace on
+	// save and leaves them, and bindings of a workspace whose Runner is off or
+	// not connected, out of what controllers run (default: false, rollback =
+	// set it back to false).
+	StrictWorkspaceIsolation bool
 }
 
 // SparkConfig holds configuration for the Spark agent catalog integration.
@@ -447,6 +463,9 @@ func Load() *Config {
 		Telegram: TelegramConfig{
 			Enabled: getEnvBool("MESH_TELEGRAM_ENABLED", true),
 		},
+		Runtime: RuntimeConfig{
+			StrictWorkspaceIsolation: getEnvBool("RUNTIME_STRICT_WORKSPACE_ISOLATION", false),
+		},
 		Webhook: WebhookConfig{
 			GitHubSecret: getEnv("MESH_GITHUB_WEBHOOK_SECRET", ""),
 			GitHubToken:  getEnvOrFile("MESH_GITHUB_TOKEN", "MESH_GITHUB_TOKEN_FILE"),
@@ -459,6 +478,7 @@ func Load() *Config {
 		},
 		HumanGate: HumanGateConfig{
 			DefaultTimeoutHours: getEnvInt("HUMAN_GATE_DEFAULT_TIMEOUT_H", 24),
+			CommentTextParsing:  getEnvOnOff("COMMENT_TEXT_GATE_PARSING", true),
 		},
 		Embedding: EmbeddingConfig{
 			Provider:        getEnv("EMBEDDING_PROVIDER", "none"),
@@ -505,6 +525,23 @@ func (c EmailConfig) BaseURLIsDefault() bool {
 func getEnv(key, defaultVal string) string {
 	if val, ok := os.LookupEnv(key); ok {
 		return val
+	}
+	return defaultVal
+}
+
+// getEnvOnOff reads an on/off switch. Only an explicit "off" (or "false",
+// "0", "no") turns it off; unset or any other value keeps defaultVal, so a
+// typo never silently disables a default-on behavior.
+func getEnvOnOff(key string, defaultVal bool) bool {
+	val, ok := os.LookupEnv(key)
+	if !ok {
+		return defaultVal
+	}
+	switch strings.ToLower(strings.TrimSpace(val)) {
+	case "off", "false", "0", "no":
+		return false
+	case "on", "true", "1", "yes":
+		return true
 	}
 	return defaultVal
 }

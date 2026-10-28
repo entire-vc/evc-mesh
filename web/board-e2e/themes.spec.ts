@@ -5,6 +5,7 @@ import { mkdirSync } from "node:fs";
 // settings in the same Settings window; Workspace Settings → Theme only links there.
 // The fixture is a stand for the UI, not the backend: saving to the database is covered by the Go tests.
 // Screenshots (S1 edited, S4 instance, S5 read-only; 1440/393 x light/dark) go to web/themes-shots, a CI artifact.
+// A merge request that changes this file repeats the 393 screens and the in-flight test 20 times in authed-e2e.
 const API = "http://127.0.0.1:8019";
 const SETTINGS_URL = "/w/board-fixture/settings";
 const CATALOG_URL = "/w/board-fixture/extensions";
@@ -70,6 +71,12 @@ const toBoard = async (page: Page) => {
   await page.getByRole("link", { name: /ContentHub fixture/ }).first().click();
   await expect(page.locator('[data-testid="task-card"]').first()).toBeVisible({ timeout: BOOT_MS });
 };
+// A toast opened under the pointer stays open while hovered (sonner pauses its timer), and at 393 the toasts cover the
+// buttons at the bottom of the page. Move the pointer away, as a user would, and let them close before the next click.
+const clearToasts = async (page: Page) => {
+  await page.mouse.move(0, 0);
+  await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 10_000 });
+};
 const backToTheme = async (page: Page) => {
   await page.goBack();
   await installedRow(page, "graphite").getByRole("button", { name: "Settings" }).click({ timeout: BOOT_MS });
@@ -77,9 +84,11 @@ const backToTheme = async (page: Page) => {
 
 // The board refetches /tasks after the last assertion of a test can already pass. Teardown closes the context, which
 // disposes the route.fetch() response still being read in the handler ("Response has been disposed" at res.json()).
-// Wait for the handlers in flight to finish before the context goes.
+// Waiting for those handlers is not enough: with two requests in flight, the first to finish sees no routes left and
+// Playwright drops the interception, which settles the second one under its handler ("Route is already handled!").
+// What a handler does after the test has ended is not part of the test: unroute and ignore its errors.
 test.afterEach(async ({ page, request }) => {
-  await page.unrouteAll({ behavior: "wait" });
+  await page.unrouteAll({ behavior: "ignoreErrors" });
   await request.post(`${API}/__fixture`, { data: { mode: "normal", role: "owner", resetTheme: true } });
 });
 
@@ -132,6 +141,7 @@ for (const [width, scheme] of [[1440, "light"], [1440, "dark"], [393, "light"], 
       await page.getByRole("button", { name: "Update" }).click();
       await expect(page.getByText("Forge updated")).toBeVisible();
       await shot(page, "S4-instance-installed-updated");
+      await clearToasts(page);
       await page.getByRole("button", { name: "Remove Slate" }).click();
       await expect(page.getByRole("button", { name: "Remove", exact: true })).toBeVisible();
       await shot(page, "S4-remove-dialog");
@@ -254,6 +264,7 @@ test.describe("behaviour (1440 light)", () => {
     await expect(page.getByText("Theme installed")).toBeVisible();
     await page.getByRole("button", { name: "Update" }).click();
     await expect(page.getByText("Forge updated")).toBeVisible();
+    await clearToasts(page);
     await page.getByRole("radio", { name: /Slate/ }).first().click();
     await page.getByRole("button", { name: "Save theme" }).click();
     await expect(page.getByText("Theme saved")).toBeVisible();
@@ -271,8 +282,8 @@ test.describe("behaviour (1440 light)", () => {
   });
 
   // The teardown race of the /tasks handler, made deterministic: the themes list is held by the fixture, so the test
-  // ends while a route.fetch() is still in flight. Without the unrouteAll in afterEach its res.json() is disposed.
-  test("a route handler in flight at the end of a test is waited for", async ({ page }) => {
+  // ends while route.fetch() calls are still in flight. With unrouteAll "wait" in afterEach this failed 2 of 20.
+  test("a route handler in flight at the end of a test does not fail it", async ({ page }) => {
     test.setTimeout(BOOT_MS + 30_000);
     await fixture(page, { themesDelay: 3000 });
     await page.route(/\/api\/v1\/themes(\?|$)/, async (route) => {

@@ -238,6 +238,12 @@ const (
 	VCSLinkMetaMergedSHA         = "merged_sha"
 	VCSLinkMetaDeployed          = "deployed"
 	VCSLinkMetaAcceptance        = "acceptance"
+
+	// role marks the link as the subject of a review card; the only value
+	// the metadata PATCH accepts is VCSLinkRoleReview. role_set records who
+	// set it there and when.
+	VCSLinkMetaRole    = "role"
+	VCSLinkMetaRoleSet = "role_set"
 )
 
 // VCSEnvProd is the environment whose deploy makes a link shipped.
@@ -439,6 +445,7 @@ func ExtractChangeRequestRefs(text string) []ChangeRequestRef {
 var AgentWritableVCSMetadataKeys = map[string]bool{
 	VCSLinkMetaShipSHA: true, VCSLinkMetaImplementationSHA: true, VCSLinkMetaMergedSHA: true,
 	VCSLinkMetaCIVerdict: true, VCSLinkMetaDeployed: true, VCSLinkMetaAcceptance: true,
+	VCSLinkMetaRole: true,
 }
 
 // IsFullCommitSHA reports whether s is a 40-character lowercase hex git SHA.

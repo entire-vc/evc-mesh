@@ -2238,3 +2238,47 @@ type ChatSessionTokenRepository interface {
 	// PurgeExpired deletes rows that expired before cutoff.
 	PurgeExpired(ctx context.Context, cutoff time.Time) (int64, error)
 }
+
+// TaskWaitRepository manages task_waits — the one active wait of an agent on a
+// card (typed outcomes, docs/api/typed-outcomes.md).
+type TaskWaitRepository interface {
+	// Declare stores w as the active wait of (w.TaskID, w.AgentID). An earlier
+	// active wait of the same pair is resolved as superseded in the same
+	// transaction. ID and CreatedAt are filled in.
+	Declare(ctx context.Context, w *domain.TaskWait) error
+
+	// GetActive returns the active wait of agentID on the task, or of any
+	// agent when agentID is nil (newest first). (nil, nil) when there is none.
+	GetActive(ctx context.Context, taskID uuid.UUID, agentID *uuid.UUID) (*domain.TaskWait, error)
+
+	// Resolve ends an active wait. Returns false when it was already resolved.
+	Resolve(ctx context.Context, id uuid.UUID, resolution domain.WaitResolution) (bool, error)
+}
+
+// TurnOutcomeRepository manages turn_outcomes. Append-only by design: there is
+// no update or delete, and the table refuses UPDATE.
+type TurnOutcomeRepository interface {
+	Append(ctx context.Context, o *domain.TurnOutcome) error
+
+	// ListByTask returns the task's outcomes newest first, limited to one
+	// session when sessionID is non-nil.
+	ListByTask(ctx context.Context, taskID uuid.UUID, sessionID *string, limit int) ([]domain.TurnOutcome, error)
+}
+
+// DecisionRequestRepository manages decision_requests — questions one agent
+// asks another.
+type DecisionRequestRepository interface {
+	// Open stores an open request, or returns the open one already asked with
+	// the same question by the same agent to the same addressee on the same
+	// card (reused=true).
+	Open(ctx context.Context, r *domain.DecisionRequest) (stored *domain.DecisionRequest, reused bool, err error)
+
+	// GetByID returns the request, or (nil, nil) when none matches.
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.DecisionRequest, error)
+
+	// Answer marks an open request answered. Returns false when it is not open.
+	Answer(ctx context.Context, id uuid.UUID, answerCommentID *uuid.UUID) (bool, error)
+
+	// Withdraw marks an open request withdrawn. Returns false when it is not open.
+	Withdraw(ctx context.Context, id uuid.UUID) (bool, error)
+}

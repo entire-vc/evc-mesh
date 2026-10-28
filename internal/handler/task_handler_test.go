@@ -2784,21 +2784,24 @@ func TestTaskHandler_MoveTask_CASConflict_Returns409(t *testing.T) {
 	statusID := uuid.New()
 	currentStatusID := uuid.New()
 	currentUpdatedAt := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
+	expectedAssignee, currentAssignee := uuid.New(), uuid.New()
 
 	mockSvc := &MockTaskService{
 		MoveTaskFunc: func(ctx context.Context, tid uuid.UUID, input service.MoveTaskInput) error {
 			require.Equal(t, int64(7), *input.ExpectedVersion)
+			require.Equal(t, expectedAssignee, *input.ExpectedAssigneeID)
 			return &service.CASConflictError{
-				CurrentVersion:   8,
-				CurrentStatusID:  currentStatusID,
-				CurrentUpdatedAt: currentUpdatedAt,
+				CurrentVersion:    8,
+				CurrentStatusID:   currentStatusID,
+				CurrentUpdatedAt:  currentUpdatedAt,
+				CurrentAssigneeID: &currentAssignee,
 			}
 		},
 	}
 
 	h, e := setupTaskTest(mockSvc)
 
-	body := `{"status_id":"` + statusID.String() + `","expected_version":7,"expected_status_id":"` + uuid.New().String() + `"}`
+	body := `{"status_id":"` + statusID.String() + `","expected_version":7,"expected_status_id":"` + uuid.New().String() + `","expected_assignee_id":"` + expectedAssignee.String() + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
@@ -2817,6 +2820,7 @@ func TestTaskHandler_MoveTask_CASConflict_Returns409(t *testing.T) {
 	assert.Equal(t, float64(8), body409["current_version"])
 	assert.NotEmpty(t, body409["current_status_id"])
 	assert.NotEmpty(t, body409["current_updated_at"])
+	assert.Equal(t, currentAssignee.String(), body409["current_assignee_id"])
 }
 
 func TestTaskHandler_MoveTask_DefaultSource_IsAPI(t *testing.T) {

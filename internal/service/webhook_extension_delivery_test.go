@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -151,6 +152,30 @@ func TestExtensionDelivery_SignedTaskUpdated(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Equal(t, []string{"task.updated"}, events)
+}
+
+// Every body an extension receives names its workspace (docs/webhooks.md):
+// receivers such as Keep pick the signing secret by workspace_id and refuse a
+// body without it. A payload that already carries workspace_id keeps it.
+func TestExtensionDelivery_BodyCarriesWorkspaceID(t *testing.T) {
+	bodies := make(chan map[string]any, 2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var m map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&m)
+		bodies <- m
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	f := newExtFixture(t, srv.URL, []domain.MaterializedSecret{{Name: "ext-hook-secret", Value: "v"}})
+	f.svc.Dispatch(context.Background(), f.ws, "task.updated", map[string]any{"task_id": "t1"})
+	got := <-bodies
+	assert.Equal(t, f.ws.String(), got["workspace_id"], "workspace_id added to a payload without it")
+	assert.Equal(t, "t1", got["task_id"], "the event's own fields are unchanged")
+
+	f.svc.Dispatch(context.Background(), f.ws, "task.updated", map[string]any{"task_id": "t2", "workspace_id": "kept"})
+	got = <-bodies
+	assert.Equal(t, "kept", got["workspace_id"], "a workspace_id set by the event is not overwritten")
 }
 
 // 500 from the receiver is retried; webhook_deliveries ends with the delivery

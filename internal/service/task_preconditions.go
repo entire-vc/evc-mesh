@@ -25,5 +25,5 @@ func CheckTaskPreconditions(task *domain.Task, expectedUpdatedAt *time.Time, exp
 }
 
 func taskPreconditionConflict(task *domain.Task) error {
-	return &CASConflictError{CurrentVersion: task.Version, CurrentStatusID: task.StatusID, CurrentUpdatedAt: task.UpdatedAt}
+	return taskConflictOf(task)
 }

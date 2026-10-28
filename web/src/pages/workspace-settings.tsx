@@ -4,7 +4,6 @@ import { AgentShortTag } from "@/components/agent-short-tag";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useTranslation } from "react-i18next";
-import { asCapabilityList } from "@/lib/agent-utils";
 import {
   AlertTriangle,
   ArrowRight,
@@ -69,7 +68,6 @@ import type {
   InviteDelivery,
   RuleViolation,
   TeamDirectoryAgent,
-  TeamDirectoryHuman,
   TeamImportResult,
   WorkflowRulesConfig,
   WorkspaceMemberWithUser,
@@ -104,159 +102,6 @@ function formatDate(iso: string): string {
   } catch {
     return iso;
   }
-}
-
-function agentStatusColor(status: string): string {
-  switch (status) {
-    case "online":
-      return "bg-tone-success-500";
-    case "busy":
-      return "bg-tone-warning-500";
-    case "error":
-      return "bg-tone-danger-500";
-    default:
-      return "bg-tone-neutral-400";
-  }
-}
-
-// ---- Team section sub-components ----
-
-function AgentRow({ agent }: { agent: TeamDirectoryAgent }) {
-  const { t } = useTranslation("settings");
-  const caps = asCapabilityList(agent.capabilities);
-  const [expanded, setExpanded] = useState(false);
-  return (
-    <div className="rounded-lg border border-border">
-      <button
-        type="button"
-        className="flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-muted/50 transition-colors"
-        onClick={() => setExpanded((v) => !v)}
-      >
-        <span
-          className={cn(
-            "h-2.5 w-2.5 shrink-0 rounded-full",
-            agentStatusColor(agent.status),
-          )}
-          title={agent.status}
-        />
-        <span className="flex-1 text-sm font-medium truncate">{agent.name}<AgentShortTag tag={agent.short_tag} /></span>
-        <Badge variant="secondary" className="text-xs capitalize shrink-0">
-          {agent.role}
-        </Badge>
-        <span
-          className="hidden max-w-[14rem] truncate font-mono text-xs text-muted-foreground sm:inline"
-          title={t("workspace.team.harnessModelTitle")}
-        >
-          {agent.agent_type}
-          {agent.model ? ` · ${agent.model}` : ""}
-        </span>
-        <span className="text-xs text-muted-foreground shrink-0">
-          {t("workspace.team.tasksCount", { current: agent.current_tasks, max: agent.max_concurrent_tasks })}
-        </span>
-        {caps.slice(0, 2).map((cap) => (
-          <Badge key={cap} variant="outline" className="text-xs shrink-0">
-            {cap}
-          </Badge>
-        ))}
-        {caps.length > 2 && (
-          <span className="text-xs text-muted-foreground shrink-0">
-            +{caps.length - 2}
-          </span>
-        )}
-      </button>
-      {expanded && (
-        <div className="border-t border-border px-4 py-3 space-y-2 text-sm bg-muted/30">
-          <div className="flex gap-2">
-            <span className="text-muted-foreground w-36 shrink-0">{t("workspace.team.harnessModel")}</span>
-            <span className="font-mono">
-              {agent.agent_type} / {agent.model || t("workspace.team.notReported")}
-            </span>
-          </div>
-          {agent.responsibility_zone && (
-            <div className="flex gap-2">
-              <span className="text-muted-foreground w-36 shrink-0">{t("workspace.team.responsibilityZone")}</span>
-              <span>{agent.responsibility_zone}</span>
-            </div>
-          )}
-          {agent.working_hours && (
-            <div className="flex gap-2">
-              <span className="text-muted-foreground w-36 shrink-0">{t("workspace.team.workingHours")}</span>
-              <span className="flex items-center gap-1">
-                <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-                {agent.working_hours}
-              </span>
-            </div>
-          )}
-          {agent.accepts_from.length > 0 && (
-            <div className="flex gap-2">
-              <span className="text-muted-foreground w-36 shrink-0">{t("workspace.team.acceptsFrom")}</span>
-              <span>{agent.accepts_from.join(", ")}</span>
-            </div>
-          )}
-          {agent.profile_description && (
-            <div className="flex gap-2">
-              <span className="text-muted-foreground w-36 shrink-0">{t("workspace.team.description")}</span>
-              <span className="text-muted-foreground">{agent.profile_description}</span>
-            </div>
-          )}
-          {caps.length > 0 && (
-            <div className="flex gap-2">
-              <span className="text-muted-foreground w-36 shrink-0">{t("workspace.team.allCapabilities")}</span>
-              <div className="flex flex-wrap gap-1">
-                {caps.map((cap) => (
-                  <Badge key={cap} variant="outline" className="text-xs">
-                    {cap}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function HumanRow({ human }: { human: TeamDirectoryHuman }) {
-  const caps = asCapabilityList(human.capabilities);
-  return (
-    <div className="flex items-center gap-3 py-2.5 px-3 rounded-lg border border-border">
-      <Avatar
-        src={human.avatar_url || undefined}
-        name={human.name || human.email}
-        size="md"
-      />
-      <div className="flex-1 min-w-0">
-        <span className="text-sm font-medium truncate block">{human.name}</span>
-        <p className="text-xs text-muted-foreground truncate">{human.email}</p>
-      </div>
-      <Badge variant="outline" className="text-xs capitalize shrink-0">
-        {human.role}
-      </Badge>
-      {human.responsibility_zone && (
-        <span className="text-xs text-muted-foreground shrink-0 hidden sm:inline">
-          {human.responsibility_zone}
-        </span>
-      )}
-      {human.availability && (
-        <Badge
-          variant="secondary"
-          className="text-xs capitalize shrink-0"
-        >
-          {human.availability}
-        </Badge>
-      )}
-      {caps.length > 0 && (
-        <div className="hidden md:flex gap-1">
-          {caps.slice(0, 2).map((cap) => (
-            <Badge key={cap} variant="outline" className="text-xs">
-              {cap}
-            </Badge>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
 
 // ---- Assignment Rules editor ----
@@ -694,7 +539,6 @@ export function WorkspaceSettingsPage() {
 
   const {
     teamDirectory,
-    isTeamLoading,
     fetchTeamDirectory,
     wsAssignmentRules,
     isWsRulesLoading,
@@ -770,7 +614,6 @@ export function WorkspaceSettingsPage() {
     { id: "general", label: t("workspace.tabs.general") },
     { id: "theme", label: t("workspace.tabs.theme") },
     { id: "members", label: t("workspace.tabs.members") },
-    { id: "team", label: t("workspace.tabs.team") },
     { id: "assignment", label: t("workspace.tabs.assignment") },
     { id: "violations", label: t("workspace.tabs.violations") },
     { id: "workflow-templates", label: t("workspace.tabs.workflowTemplates") },
@@ -1342,71 +1185,6 @@ export function WorkspaceSettingsPage() {
           </div>
           {deleteWorkspaceError && (
             <p className="text-sm text-destructive">{deleteWorkspaceError}</p>
-          )}
-        </CardContent>
-      </Card>
-      )}
-
-      {/* Section 2: Team Directory */}
-      {activeTab === "team" && (
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <Users className="h-4 w-4 text-muted-foreground" />
-            <div className="space-y-1.5">
-              <CardTitle>{t("workspace.tabs.team")}</CardTitle>
-              <CardDescription>
-                {t("workspace.team.description2")}
-              </CardDescription>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {isTeamLoading ? (
-            <div className="space-y-3">
-              {[1, 2, 3].map((i) => (
-                <Skeleton key={i} className="h-10 w-full rounded-lg" />
-              ))}
-            </div>
-          ) : !teamDirectory ||
-            (teamDirectory.agents.length === 0 &&
-              teamDirectory.humans.length === 0) ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">
-              {t("workspace.team.empty")}
-            </p>
-          ) : (
-            <div className="space-y-4">
-              {teamDirectory.agents.length > 0 && (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Bot className="h-4 w-4 text-muted-foreground" />
-                    <h3 className="text-sm font-medium text-muted-foreground">
-                      {t("workspace.team.agentsCount", { n: teamDirectory.agents.length })}
-                    </h3>
-                  </div>
-                  <div className="space-y-1.5">
-                    {teamDirectory.agents.map((agent) => (
-                      <AgentRow key={agent.id} agent={agent} />
-                    ))}
-                  </div>
-                </div>
-              )}
-              {teamDirectory.humans.length > 0 && (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Users className="h-4 w-4 text-muted-foreground" />
-                    <h3 className="text-sm font-medium text-muted-foreground">
-                      {t("workspace.team.humansCount", { n: teamDirectory.humans.length })}
-                    </h3>
-                  </div>
-                  <div className="space-y-1.5">
-                    {teamDirectory.humans.map((human) => (
-                      <HumanRow key={human.id} human={human} />
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
           )}
         </CardContent>
       </Card>

@@ -58,7 +58,7 @@ describe("OrgChartPage — cards follow edits made in the detail dialog", () => 
     useAgentStore.setState({ agents: [agent], fetchAgents: noop });
   });
 
-  it("shows the saved model on the card without a reload, and drops the line when it is cleared", () => {
+  it("shows the saved model on the card without a reload, and drops it when it is cleared", () => {
     render(
       <MemoryRouter>
         <OrgChartPage />
@@ -70,12 +70,13 @@ describe("OrgChartPage — cards follow edits made in the detail dialog", () => 
     act(() => {
       useAgentStore.setState({ agents: [{ ...agent, model: "gpt-6.1-sol" } as Agent] });
     });
-    expect(screen.getByText("gpt-6.1-sol")).toBeTruthy();
+    expect(screen.getByText("claude_code · gpt-6.1-sol")).toBeTruthy();
 
     act(() => {
       useAgentStore.setState({ agents: [{ ...agent, model: null } as unknown as Agent] });
     });
-    expect(screen.queryByText("gpt-6.1-sol")).toBeNull();
+    expect(screen.queryByText(/gpt-6\.1-sol/)).toBeNull();
+    expect(screen.getByText("claude_code")).toBeTruthy();
   });
   it.each(["/org-chart", "/org-chart/grid"])("adds and clears a saved tag at %s without using the role", (path) => {
     render(<MemoryRouter initialEntries={[path]}><OrgChartPage /></MemoryRouter>);

@@ -25,7 +25,7 @@ func (r *TaskRepo) taskConflict(ctx context.Context, id uuid.UUID) error {
 	if current == nil {
 		return apierror.NotFound("Task")
 	}
-	return &domain.TaskConflict{CurrentVersion: current.Version, CurrentStatusID: current.StatusID, CurrentUpdatedAt: current.UpdatedAt}
+	return &domain.TaskConflict{CurrentVersion: current.Version, CurrentStatusID: current.StatusID, CurrentUpdatedAt: current.UpdatedAt, CurrentAssigneeID: current.AssigneeID}
 }
 
 // UpdateTransition performs the decision and its assignment/alarm/lease effects
@@ -50,7 +50,7 @@ func (r *TaskRepo) UpdateTransition(ctx context.Context, task *domain.Task, inpu
 			if lockErr != nil {
 				return lockErr
 			}
-			lockedConflict = &domain.TaskConflict{CurrentVersion: current.Version, CurrentStatusID: current.StatusID, CurrentUpdatedAt: current.UpdatedAt}
+			lockedConflict = &domain.TaskConflict{CurrentVersion: current.Version, CurrentStatusID: current.StatusID, CurrentUpdatedAt: current.UpdatedAt, CurrentAssigneeID: current.AssigneeID}
 			var registered bool
 			if err := tx.GetContext(ctx, &registered, `SELECT EXISTS(SELECT 1 FROM parked_waits WHERE task_id=$1 AND release_id IS NULL)`, task.ID); err != nil {
 				return err
@@ -111,6 +111,13 @@ func (r *TaskRepo) UpdateTransition(ctx context.Context, task *domain.Task, inpu
 			return fmt.Errorf("unknown reaper mode %q", g.Mode)
 		}
 	}
+	if input.ExpectedAssigneeID != nil {
+		// Appended after the reaper predicates, which use fixed placeholders.
+		// Redundant with t.version for a fresh read, but keeps the caller's
+		// expectation in the statement itself; uuid.Nil expects unassigned.
+		args = append(args, *input.ExpectedAssigneeID)
+		q += fmt.Sprintf(` AND t.assignee_id IS NOT DISTINCT FROM NULLIF($%d::uuid,'00000000-0000-0000-0000-000000000000'::uuid)`, len(args))
+	}
 	if input.AssignedBy != nil {
 		args = append(args, *input.AssignedBy)
 		// This SET clause is appended before WHERE, including reaper predicates.
@@ -131,16 +138,17 @@ func (r *TaskRepo) UpdateTransition(ctx context.Context, task *domain.Task, inpu
 			}
 			if tx != nil {
 				var current struct {
-					Version   int64     `db:"version"`
-					StatusID  uuid.UUID `db:"status_id"`
-					UpdatedAt time.Time `db:"updated_at"`
+					Version    int64      `db:"version"`
+					StatusID   uuid.UUID  `db:"status_id"`
+					UpdatedAt  time.Time  `db:"updated_at"`
+					AssigneeID *uuid.UUID `db:"assignee_id"`
 				}
-				if readErr := tx.GetContext(ctx, &current, `SELECT version,status_id,updated_at FROM tasks WHERE id=$1 AND deleted_at IS NULL`, task.ID); errors.Is(readErr, sql.ErrNoRows) {
+				if readErr := tx.GetContext(ctx, &current, `SELECT version,status_id,updated_at,assignee_id FROM tasks WHERE id=$1 AND deleted_at IS NULL`, task.ID); errors.Is(readErr, sql.ErrNoRows) {
 					return apierror.NotFound("Task")
 				} else if readErr != nil {
 					return readErr
 				}
-				return &domain.TaskConflict{CurrentVersion: current.Version, CurrentStatusID: current.StatusID, CurrentUpdatedAt: current.UpdatedAt}
+				return &domain.TaskConflict{CurrentVersion: current.Version, CurrentStatusID: current.StatusID, CurrentUpdatedAt: current.UpdatedAt, CurrentAssigneeID: current.AssigneeID}
 			}
 			return r.taskConflict(ctx, task.ID)
 		}

@@ -271,3 +271,26 @@ func TestTaskCAS_AlarmAndStatusRollback(t *testing.T) {
 	require.Equal(t, input.AlarmLabels, []string(fresh.Labels))
 	require.Equal(t, snapshot.Version+1, fresh.Version)
 }
+
+// The assignee expectation is part of the UPDATE itself, not only the service
+// pre-read: with the row version matching, a different owner still refuses.
+func TestTaskCAS_ExpectedAssigneeInStatement(t *testing.T) {
+	r, snapshot, todo := reaperFixture(t, false)
+	stale := uuid.New()
+	write := *snapshot
+	write.StatusID, write.UpdatedAt = todo, time.Now()
+	var conflict *domain.TaskConflict
+	require.ErrorAs(t, r.UpdateTransition(context.Background(), &write, domain.TaskTransition{ExpectedVersion: snapshot.Version, ExpectedAssigneeID: &stale}), &conflict)
+	require.Equal(t, snapshot.AssigneeID, conflict.CurrentAssigneeID)
+	fresh, err := r.GetByID(context.Background(), snapshot.ID)
+	require.NoError(t, err)
+	require.Equal(t, snapshot.StatusID, fresh.StatusID)
+
+	expected := uuid.Nil
+	if snapshot.AssigneeID != nil {
+		expected = *snapshot.AssigneeID
+	}
+	write = *snapshot
+	write.StatusID, write.UpdatedAt = todo, time.Now()
+	require.NoError(t, r.UpdateTransition(context.Background(), &write, domain.TaskTransition{ExpectedVersion: snapshot.Version, ExpectedAssigneeID: &expected}))
+}

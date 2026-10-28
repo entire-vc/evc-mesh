@@ -185,10 +185,12 @@ type moveTaskRequest struct {
 	ExpectedVersion   *int64              `json:"expected_version,omitempty"`
 	ExpectedStatusID  *uuid.UUID          `json:"expected_status_id,omitempty"`
 	ExpectedUpdatedAt *time.Time          `json:"expected_updated_at,omitempty"`
-	Reason            string              `json:"reason,omitempty"`
-	SessionID         *uuid.UUID          `json:"session_id,omitempty"`
-	CorrelationID     *uuid.UUID          `json:"correlation_id,omitempty"`
-	Source            string              `json:"source,omitempty"` // "mcp" | "api" | "ui"
+	// ExpectedAssigneeID: the all-zero UUID expects an unassigned task.
+	ExpectedAssigneeID *uuid.UUID `json:"expected_assignee_id,omitempty"`
+	Reason             string     `json:"reason,omitempty"`
+	SessionID          *uuid.UUID `json:"session_id,omitempty"`
+	CorrelationID      *uuid.UUID `json:"correlation_id,omitempty"`
+	Source             string     `json:"source,omitempty"` // "mcp" | "api" | "ui"
 }
 
 // bindStrictJSON decodes the JSON request body into out, refusing any field
@@ -1119,14 +1121,15 @@ func (h *TaskHandler) MoveTask(c echo.Context) error {
 	}
 
 	input := service.MoveTaskInput{
-		StatusID:          req.StatusID,
-		Position:          req.Position,
-		AssigneeID:        req.AssigneeID,
-		AssigneeType:      req.AssigneeType,
-		ExpectedStatusID:  req.ExpectedStatusID,
-		ExpectedUpdatedAt: req.ExpectedUpdatedAt,
-		ExpectedVersion:   req.ExpectedVersion,
-		Source:            req.Source, Reason: req.Reason, SessionID: req.SessionID, CorrelationID: req.CorrelationID,
+		StatusID:           req.StatusID,
+		Position:           req.Position,
+		AssigneeID:         req.AssigneeID,
+		AssigneeType:       req.AssigneeType,
+		ExpectedStatusID:   req.ExpectedStatusID,
+		ExpectedUpdatedAt:  req.ExpectedUpdatedAt,
+		ExpectedVersion:    req.ExpectedVersion,
+		ExpectedAssigneeID: req.ExpectedAssigneeID,
+		Source:             req.Source, Reason: req.Reason, SessionID: req.SessionID, CorrelationID: req.CorrelationID,
 	}
 	if input.Source == "" {
 		input.Source = "api"
@@ -2007,12 +2010,13 @@ func handleError(c echo.Context, err error) error {
 	var casErr *service.CASConflictError
 	if errors.As(err, &casErr) {
 		return c.JSON(http.StatusConflict, map[string]interface{}{
-			"code":               "cas_conflict",
-			"error_code":         "cas_conflict",
-			"message":            "Task was modified concurrently — re-read the task and retry",
-			"current_status_id":  casErr.CurrentStatusID,
-			"current_version":    casErr.CurrentVersion,
-			"current_updated_at": casErr.CurrentUpdatedAt,
+			"code":                "cas_conflict",
+			"error_code":          "cas_conflict",
+			"message":             "Task was modified concurrently — re-read the task and retry",
+			"current_status_id":   casErr.CurrentStatusID,
+			"current_version":     casErr.CurrentVersion,
+			"current_updated_at":  casErr.CurrentUpdatedAt,
+			"current_assignee_id": casErr.CurrentAssigneeID,
 		})
 	}
 

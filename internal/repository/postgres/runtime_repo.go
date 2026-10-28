@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"time"
@@ -78,8 +79,9 @@ type RuntimeBindingView struct {
 }
 
 type RuntimeRepo struct {
-	db    *sqlx.DB
-	allow extensions.AllowList
+	db     *sqlx.DB
+	allow  extensions.AllowList
+	strict bool
 }
 
 func NewRuntimeRepo(db *sqlx.DB) *RuntimeRepo { return &RuntimeRepo{db: db} }
@@ -89,6 +91,54 @@ func NewRuntimeRepo(db *sqlx.DB) *RuntimeRepo { return &RuntimeRepo{db: db} }
 func (r *RuntimeRepo) WithAllowList(a extensions.AllowList) *RuntimeRepo {
 	r.allow = a
 	return r
+}
+
+// WithStrictWorkspaceIsolation turns on strict workspace isolation: a save
+// refuses a binding of another workspace, and Desired and Report leave out
+// bindings of another workspace or of a workspace whose Runner is off or not
+// connected. Off, every path behaves as before.
+func (r *RuntimeRepo) WithStrictWorkspaceIsolation(on bool) *RuntimeRepo {
+	r.strict = on
+	return r
+}
+
+// runtimeExclusions lists the bindings of refs that strict isolation leaves
+// out, sorted by ref. A binding of another workspace is foreign; one of ws
+// follows the ws Runner: no connection or not allowed on the instance means
+// the program is not connected, a connection switched off means runner_off.
+func (r *RuntimeRepo) runtimeExclusions(ctx context.Context, q sqlx.QueryerContext, ws uuid.UUID, bindings map[string]domain.RuntimeBinding) ([]domain.RuntimeExclusion, error) {
+	if !r.strict || len(bindings) == 0 {
+		return nil, nil
+	}
+	own := ""
+	connection, err := runtimeConnection(ctx, q, ws, false)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case connection == nil:
+		own = domain.RuntimeExcludedProgramNotConnected
+	case !connection.IsActive:
+		own = domain.RuntimeExcludedRunnerOff
+	case r.allow != nil:
+		allowed, allowErr := r.allow.Allowed(ctx, runner.ID)
+		if allowErr != nil {
+			return nil, allowErr
+		}
+		if !allowed {
+			own = domain.RuntimeExcludedProgramNotConnected
+		}
+	}
+	var out []domain.RuntimeExclusion
+	for _, ref := range slices.Sorted(maps.Keys(bindings)) {
+		switch {
+		case bindings[ref].Binding.WorkspaceID != ws:
+			out = append(out, domain.RuntimeExclusion{Ref: ref, Reason: domain.RuntimeExcludedForeignWorkspace})
+		case own != "":
+			out = append(out, domain.RuntimeExclusion{Ref: ref, Reason: own})
+		}
+	}
+	return out, nil
 }
 
 // admin must be checked in the transaction too: a route-level role check is not
@@ -255,6 +305,31 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 		identity.GrantID, identity.WorkspaceID = c.ReporterGrantID, ws
 		if _, err = runtimeGrant(ctx, tx, identity); err != nil {
 			return nil, err
+		}
+	}
+	if r.strict {
+		// A binding of ws that carries a grant of another workspace is refused
+		// as foreign too; an unknown grant is left to the grant check below.
+		foreign := map[string]string{}
+		for ref, b := range catalog.Bindings {
+			foreignGrant := false
+			if b.Binding.WorkspaceID == ws {
+				var grantWorkspace uuid.UUID
+				err = sqlx.GetContext(ctx, tx, &grantWorkspace, `SELECT workspace_id FROM agent_workspace_grants WHERE id=$1`, b.Binding.GrantID)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return nil, err
+				}
+				foreignGrant = err == nil && grantWorkspace != ws
+			}
+			if b.Binding.WorkspaceID != ws || foreignGrant {
+				foreign["config.bindings."+ref+".binding.workspace_id"] = domain.RuntimeExcludedForeignWorkspace
+			}
+		}
+		if len(foreign) > 0 {
+			e := apierror.ValidationError(foreign)
+			e.Code = http.StatusUnprocessableEntity
+			e.Message = "runtime bindings must belong to this workspace"
+			return nil, e
 		}
 	}
 	for _, b := range catalog.Bindings {
@@ -559,7 +634,14 @@ func (r *RuntimeRepo) Desired(ctx context.Context, ws uuid.UUID, ref string, act
 		return nil, err
 	}
 	slice, _ := catalog.DesiredFor(ref)
-	return &domain.RuntimeDesired{Revision: latest.Revision, Digest: latest.Digest, Enabled: latest.Enabled, DrainRequested: !latest.Enabled, ControllerRef: ref, Controller: controller, Catalog: slice}, nil
+	excluded, err := r.runtimeExclusions(ctx, r.db, ws, slice.Bindings)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range excluded {
+		delete(slice.Bindings, e.Ref)
+	}
+	return &domain.RuntimeDesired{Revision: latest.Revision, Digest: latest.Digest, Enabled: latest.Enabled, DrainRequested: !latest.Enabled, ControllerRef: ref, Controller: controller, Catalog: slice, Excluded: excluded}, nil
 }
 
 func (r *RuntimeRepo) Report(ctx context.Context, ws uuid.UUID, ref string, actor RuntimeActor, report domain.RuntimeReport) error {
@@ -645,6 +727,31 @@ func (r *RuntimeRepo) Report(ctx context.Context, ws uuid.UUID, ref string, acto
 		}
 	}
 	report.Pools = canonicalPools
+	// Observations of a profile that only excluded bindings run are not
+	// applied; the exclusions themselves are kept for the Runner screen.
+	slice, _ := catalog.DesiredFor(ref)
+	report.Excluded, err = r.runtimeExclusions(ctx, tx, ws, slice.Bindings)
+	if err != nil {
+		return err
+	}
+	if len(report.Excluded) > 0 {
+		excluded := map[string]bool{}
+		for _, e := range report.Excluded {
+			excluded[e.Ref] = true
+		}
+		for profileRef := range report.Profiles {
+			runs, kept := false, false
+			for bindingRef, b := range slice.Bindings {
+				if slices.Contains(b.PermittedProfiles, profileRef) {
+					runs = true
+					kept = kept || !excluded[bindingRef]
+				}
+			}
+			if runs && !kept {
+				delete(report.Profiles, profileRef)
+			}
+		}
+	}
 	data, err := json.Marshal(report)
 	if err != nil {
 		return err

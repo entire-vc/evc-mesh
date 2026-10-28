@@ -54,6 +54,9 @@ type MoveTaskInput struct {
 	ExpectedVersion   *int64     `json:"expected_version,omitempty"`
 	ExpectedStatusID  *uuid.UUID `json:"expected_status_id,omitempty"`
 	ExpectedUpdatedAt *time.Time `json:"expected_updated_at,omitempty"`
+	// ExpectedAssigneeID is the assignee the caller read; uuid.Nil means it
+	// read the task unassigned.
+	ExpectedAssigneeID *uuid.UUID `json:"expected_assignee_id,omitempty"`
 
 	// Source identifies the call origin for audit log: "mcp", "api", "ui".
 	// Not bound from the JSON body directly; set by the handler layer.

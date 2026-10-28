@@ -276,3 +276,40 @@ export function assertToolEvents(frames: Frame[], turnId: string, domLabels: str
   if (own.length === 0) throw new Error(`tools: no chat.turn.tool frame for turn ${turnId}`);
   if (domLabels.filter((l) => l.trim() !== "").length === 0) throw new Error("tools: the activity strip never showed a tool label");
 }
+
+/** The reply side of one thread as history shows it. Only ids, states and lengths leave this file. */
+export interface ReplyView {
+  items: Array<{ id: string; role: string; status: string; body: string; error_code?: string | null }>;
+  active_turn: { id: string; state: string; queue_position?: number; agent_offline?: boolean } | null;
+}
+
+/**
+ * Where a reply wait stopped: the turn and its phase (queued with its place, claimed, streaming, or
+ * none), the reply's id, status and error code. The body goes out as its length only, so a timeout
+ * names its cause without copying a prompt or a reply into the CI log (job 436006 timed out twice
+ * with nothing but "timed out after 240000 ms").
+ */
+export function describeReply(h: ReplyView, threadId: string, nth: number): string {
+  const replies = h.items.filter((i) => i.role === "assistant");
+  const m = replies[nth - 1];
+  const t = h.active_turn;
+  const turn = t
+    ? `turn ${t.id} ${t.state}${t.queue_position != null ? ` at queue position ${t.queue_position}` : ""}${t.agent_offline ? ", agent offline" : ""}`
+    : "no active turn";
+  // Every line names status, error_code and body length, "none"/0 when the reply does not exist yet.
+  const reply = m
+    ? `reply #${nth} ${m.id} status ${m.status}, error_code ${m.error_code || "none"}, body ${m.body.length} chars`
+    : `reply #${nth} absent (${replies.length} assistant message(s)), status none, error_code none, body 0 chars`;
+  return `thread ${threadId}: ${turn}; ${reply}`;
+}
+
+/**
+ * A reply that ended failed or cancelled with no text will never get one: waiting the full budget for
+ * a body only hides why (job 436006, S04 codex: harness_error at 62 s, the wait ran to 240 s).
+ */
+export function assertReplyCanStillCome(h: ReplyView, threadId: string, nth: number): void {
+  const m = h.items.filter((i) => i.role === "assistant")[nth - 1];
+  if (m && (m.status === "failed" || m.status === "cancelled") && m.body === "") {
+    throw new Error(`reply #${nth} ended ${m.status} without a body: ${describeReply(h, threadId, nth)}`);
+  }
+}

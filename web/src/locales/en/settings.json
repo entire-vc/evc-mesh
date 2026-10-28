@@ -881,19 +881,7 @@
       "viewer": "Viewer"
     },
     "team": {
-      "harnessModelTitle": "Harness · model",
-      "tasksCount": "{{current}}/{{max}} tasks",
-      "harnessModel": "Harness / model",
-      "notReported": "not reported",
-      "responsibilityZone": "Responsibility zone",
-      "workingHours": "Working hours",
-      "acceptsFrom": "Accepts from",
-      "description": "Description",
-      "allCapabilities": "All capabilities",
-      "description2": "All agents and humans in this workspace",
-      "empty": "No team members found. Agents appear here after registering.",
-      "agentsCount": "Agents ({{n}})",
-      "humansCount": "Humans ({{n}})"
+      "agentsCount": "Agents ({{n}})"
     },
     "assignment": {
       "selectAssignee": "Select assignee...",
@@ -935,7 +923,6 @@
       "profile": "Profile",
       "general": "General",
       "members": "Members",
-      "team": "Team Directory",
       "assignment": "Assignment Rules",
       "violations": "Violations",
       "workflowTemplates": "Workflow Templates",

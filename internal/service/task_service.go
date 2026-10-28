@@ -600,6 +600,9 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 			"status_id":   task.StatusID,
 		})
 	}
+	if task.AssigneeID != nil {
+		s.dispatchTaskAssigned(ctx, wsID, task)
+	}
 
 	// Notify assigned agent via push mechanisms (callback_url, SSE, long-poll).
 	s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
@@ -835,15 +838,8 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	}
 
 	// Dispatch webhook for task.assigned when the assignee changes (agent wakeup pipeline).
-	if assigneeChanged && s.webhookSvc != nil && s.projectRepo != nil {
-		if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
-			go s.webhookSvc.Dispatch(ctx, proj.WorkspaceID, "task.assigned", map[string]interface{}{
-				"task_id":       task.ID,
-				"project_id":    task.ProjectID,
-				"assignee_id":   task.AssigneeID,
-				"assignee_type": string(task.AssigneeType),
-			})
-		}
+	if assigneeChanged {
+		s.dispatchTaskAssigned(ctx, uuid.Nil, task)
 	}
 
 	// Notify newly assigned agent via push mechanisms (callback_url, SSE, long-poll).
@@ -961,7 +957,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 	// recompute on the fresh state instead of surfacing a spurious 409. Callers
 	// with their own CAS and the reaper/auto-transition keep fail-fast semantics.
 	attempts := 1
-	if input.ExpectedVersion == nil && input.ExpectedStatusID == nil && input.ExpectedUpdatedAt == nil &&
+	if input.ExpectedVersion == nil && input.ExpectedStatusID == nil && input.ExpectedUpdatedAt == nil && input.ExpectedAssigneeID == nil &&
 		input.Reaper == nil && input.Source != "auto_transition" {
 		attempts = moveTaskImplicitCASAttempts
 	}
@@ -991,23 +987,18 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 
 	oldVersion := task.Version
 	if input.ExpectedVersion != nil && *input.ExpectedVersion != task.Version {
-		return &CASConflictError{CurrentVersion: task.Version, CurrentStatusID: task.StatusID, CurrentUpdatedAt: task.UpdatedAt}
+		return taskConflictOf(task)
 	}
 
 	// CAS precondition: fail fast if the caller's snapshot is stale.
 	if input.ExpectedStatusID != nil && *input.ExpectedStatusID != task.StatusID {
-		return &CASConflictError{
-			CurrentVersion:   task.Version,
-			CurrentStatusID:  task.StatusID,
-			CurrentUpdatedAt: task.UpdatedAt,
-		}
+		return taskConflictOf(task)
 	}
 	if input.ExpectedUpdatedAt != nil && !input.ExpectedUpdatedAt.Equal(task.UpdatedAt) {
-		return &CASConflictError{
-			CurrentVersion:   task.Version,
-			CurrentStatusID:  task.StatusID,
-			CurrentUpdatedAt: task.UpdatedAt,
-		}
+		return taskConflictOf(task)
+	}
+	if input.ExpectedAssigneeID != nil && !assigneeMatches(task.AssigneeID, *input.ExpectedAssigneeID) {
+		return taskConflictOf(task)
 	}
 
 	// Tenancy of an explicit assignee is decided BEFORE anything is applied.
@@ -1305,11 +1296,26 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 
 	// Nothing changed — return early without touching the DB.
 	if !statusChanged && !positionChanged && !assignmentChanged && input.AlarmDue == nil {
+		// A caller with preconditions is told they held: confirm the row is still
+		// the one they were checked against, else a write since the pre-read
+		// (a reassignment, say) would be answered with success instead of 409.
+		if input.ExpectedVersion != nil || input.ExpectedStatusID != nil || input.ExpectedUpdatedAt != nil || input.ExpectedAssigneeID != nil {
+			fresh, err := s.taskRepo.GetByID(ctx, taskID)
+			if err != nil {
+				return err
+			}
+			if fresh == nil {
+				return apierror.NotFound("Task")
+			}
+			if fresh.Version != oldVersion {
+				return taskConflictOf(fresh)
+			}
+		}
 		return nil
 	}
 
 	task.UpdatedAt = timeNow()
-	transition := domain.TaskTransition{ExpectedVersion: oldVersion, ExpectedStatusID: input.ExpectedStatusID, ExpectedUpdatedAt: input.ExpectedUpdatedAt, Reaper: input.Reaper, AlarmDue: input.AlarmDue, AlarmLabels: input.AlarmLabels}
+	transition := domain.TaskTransition{ExpectedVersion: oldVersion, ExpectedStatusID: input.ExpectedStatusID, ExpectedUpdatedAt: input.ExpectedUpdatedAt, ExpectedAssigneeID: input.ExpectedAssigneeID, Reaper: input.Reaper, AlarmDue: input.AlarmDue, AlarmLabels: input.AlarmLabels}
 	transition.DisallowParkedWait = input.Source == "auto_transition"
 	transition.CheckoutStage = input.CheckoutStage && statusChanged
 	transition.Audit = s.moveAudit(ctx, task, input, oldStatusID, oldPosition, oldAssigneeID, oldAssigneeType, statusChanged, positionChanged, assignmentChanged, assignmentReason, transitionViolation)
@@ -1449,6 +1455,9 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 			s.logActivity(ctx, task.ProjectID, taskID, "task.assigned", changes)
 		}
 		s.notifyAssignedAgent(ctx, task, "task.assigned", changes)
+		if !sameAssigneeID(oldAssigneeID, task.AssigneeID) {
+			s.dispatchTaskAssigned(ctx, uuid.Nil, task)
+		}
 		if input.AssigneeID == nil {
 			s.postAssigneeChangeComment(ctx, task, oldAssigneeID, task.AssigneeID, assignmentReason)
 		}
@@ -1568,6 +1577,9 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 			"assignee_id":   map[string]interface{}{"old": oldAssigneeID, "new": input.AssigneeID},
 			"assignee_type": map[string]interface{}{"old": string(oldAssigneeType), "new": string(input.AssigneeType)},
 		})
+	}
+	if uuidPtrChanged(oldAssigneeID, input.AssigneeID) {
+		s.dispatchTaskAssigned(ctx, uuid.Nil, task)
 	}
 
 	// Notify newly assigned agent via push mechanisms (callback_url, SSE, long-poll).
@@ -1741,6 +1753,9 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 	// self-assignment — this path had neither, which is the bug this fixes.
 	// CreateSubtaskInput carries no reviewer field, so there is no reviewer
 	// notification to send here.
+	if child.AssigneeID != nil {
+		s.dispatchTaskAssigned(ctx, proj.WorkspaceID, child)
+	}
 	s.notifyAssignedAgent(ctx, child, "task.assigned", map[string]any{
 		"assignee_id": map[string]any{"old": nil, "new": child.AssigneeID},
 	})
@@ -1997,6 +2012,34 @@ func (s *taskService) buildTaskSnapshot(ctx context.Context, task *domain.Task) 
 	}
 
 	return snap
+}
+
+// dispatchTaskAssigned sends the public task.assigned event to webhook receivers
+// and extension subscriptions. Every path that changes the assignee calls it:
+// Update, AssignTask, a move that reassigns, Create and CreateSubtask with an
+// assignee. Before an internal ticket only Update did, so assignments made the way the
+// fleet makes them never reached a subscription. wsID may be uuid.Nil when the
+// caller has not resolved the workspace; it is then looked up from the project.
+func (s *taskService) dispatchTaskAssigned(ctx context.Context, wsID uuid.UUID, task *domain.Task) {
+	if s.webhookSvc == nil {
+		return
+	}
+	if wsID == uuid.Nil {
+		if s.projectRepo == nil {
+			return
+		}
+		proj, err := s.projectRepo.GetByID(ctx, task.ProjectID)
+		if err != nil || proj == nil {
+			return
+		}
+		wsID = proj.WorkspaceID
+	}
+	go s.webhookSvc.Dispatch(ctx, wsID, "task.assigned", map[string]interface{}{
+		"task_id":       task.ID,
+		"project_id":    task.ProjectID,
+		"assignee_id":   task.AssigneeID,
+		"assignee_type": string(task.AssigneeType),
+	})
 }
 
 // notifyAssignedAgent sends a push notification to the assigned agent if it's an agent type.
@@ -2310,6 +2353,19 @@ func (s *taskService) dispatchUserNotification(ctx context.Context, task *domain
 // expected_updated_at precondition does not match the current task state.
 // Callers should re-read the task using the returned fields and retry.
 type CASConflictError = domain.TaskConflict
+
+func taskConflictOf(task *domain.Task) *CASConflictError {
+	return &CASConflictError{CurrentVersion: task.Version, CurrentStatusID: task.StatusID, CurrentUpdatedAt: task.UpdatedAt, CurrentAssigneeID: task.AssigneeID}
+}
+
+// assigneeMatches compares a task's assignee with an expected_assignee_id,
+// where uuid.Nil stands for "unassigned".
+func assigneeMatches(current *uuid.UUID, expected uuid.UUID) bool {
+	if expected == uuid.Nil {
+		return current == nil
+	}
+	return current != nil && *current == expected
+}
 
 // ListRevisionStaleError is returned by List (ADR-0004,
 // dev-docs/adrs/0004-task-list-revision-and-stale-cursor.md) when a caller's

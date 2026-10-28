@@ -84,6 +84,7 @@ func (s *webhookService) dispatchExtensions(ctx context.Context, workspaceID uui
 		return
 	}
 	event := publicEventName(eventType)
+	payloadBytes = withWorkspaceID(payloadBytes, workspaceID)
 	subs, err := s.ext.subs.ListByEvent(ctx, event)
 	if err != nil {
 		log.Printf("[webhook] failed to list extension subscriptions for event %s: %v", event, err)
@@ -111,6 +112,27 @@ func (s *webhookService) dispatchExtensions(ctx context.Context, workspaceID uui
 			go s.deliverToSubscription(workspaceID, sub, event, payloadBytes)
 		}
 	}
+}
+
+// withWorkspaceID returns the payload with workspace_id set, as docs/webhooks.md
+// promises every receiver: an extension picks its signing secret by it, so a body
+// without it is refused before the signature is checked. A workspace_id the event
+// already carries is kept; a payload that is not a JSON object is sent as is.
+func withWorkspaceID(payloadBytes []byte, workspaceID uuid.UUID) []byte {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(payloadBytes, &m); err != nil || m == nil {
+		return payloadBytes
+	}
+	if _, ok := m["workspace_id"]; ok {
+		return payloadBytes
+	}
+	ws, _ := json.Marshal(workspaceID)
+	m["workspace_id"] = ws
+	out, err := json.Marshal(m)
+	if err != nil {
+		return payloadBytes
+	}
+	return out
 }
 
 // deliverToSubscription signs and sends one event and records the outcome in

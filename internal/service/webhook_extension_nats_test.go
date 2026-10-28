@@ -121,7 +121,7 @@ func TestExtensionNATS_TaskUpdatedOnOwnSubject(t *testing.T) {
 	require.NoError(t, json.Unmarshal(got[subjA].body, &env))
 	assert.Equal(t, "task.updated", env.Event)
 	assert.Equal(t, f.ws, env.WorkspaceID)
-	assert.JSONEq(t, `{"task_id":"t1"}`, string(env.Payload))
+	assert.JSONEq(t, `{"task_id":"t1","workspace_id":"`+f.ws.String()+`"}`, string(env.Payload))
 }
 
 // An event the connection did not subscribe to is not delivered, and another
