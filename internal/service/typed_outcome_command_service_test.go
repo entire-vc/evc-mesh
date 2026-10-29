@@ -197,7 +197,8 @@ func TestTurnCommandService_WaitForTargets(t *testing.T) {
 		{"open MR", "Waiting on MR g/p!10 until merged.", mr(10, "merged")},
 		{"running pipeline with jobs", "Waiting on pipeline g/p#500 until finished (jobs: test, lint).",
 			WaitForInput{On: "pipeline", ProjectPath: ptr("g/p"), PipelineID: ptr(int64(500)), Until: ptr("finished"), RequiredJobs: []string{"test", "lint"}}},
-		{"time with a note", "Waiting on time until", WaitForInput{On: "time", UntilAt: ptr(time.Now().Add(time.Hour)), Note: "  window  "}},
+		{"time with a note", "Waiting on time until", WaitForInput{On: "time", UntilAt: ptr(time.Now().Add(time.Hour)), Note: "  window  ",
+			EventRef: ptr("nightly-export"), Source: ptr("https://ci.example/schedules/1"), Why: ptr("the export job starts at this time")}},
 	}
 	for _, tc := range accepted {
 		t.Run(tc.name, func(t *testing.T) {

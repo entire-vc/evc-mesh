@@ -27,14 +27,24 @@ func TestTaskWaitValidate(t *testing.T) {
 	pipe := int64(7001)
 	at := func(d time.Duration) *time.Time { v := now.Add(d); return &v }
 	dr := uuid.New()
+	timed := func(d time.Duration, src string) TaskWait {
+		return TaskWait{TaskID: task, Kind: TaskWaitTime, UntilAt: at(d), EventRef: str("nightly-export"),
+			Source: str(src), Why: str("the export job publishes the file at this time"), UntilAtOffset: str("+03:00")}
+	}
+	noEvidence := func(edit func(w *TaskWait)) TaskWait {
+		w := timed(time.Hour, "https://status.example.com/jobs")
+		edit(&w)
+		return w
+	}
 
 	ok := []TaskWait{
 		{TaskID: task, Kind: TaskWaitCard, TargetTaskID: &other},
 		{TaskID: task, Kind: TaskWaitCard, TargetTaskID: &other, TargetCondition: str("shipped")},
 		{TaskID: task, Kind: TaskWaitMR, Provider: str("gitlab"), ProjectPath: str("entire-vc/evc-mesh"), MRIID: &iid, Until: str(WaitUntilMerged)},
 		{TaskID: task, Kind: TaskWaitPipeline, ProjectPath: str("entire-vc/evc-mesh"), PipelineID: &pipe, Until: str(WaitUntilGreen)},
-		{TaskID: task, Kind: TaskWaitTime, UntilAt: at(MinTimeWait)},
-		{TaskID: task, Kind: TaskWaitTime, UntilAt: at(MaxTimeWait)},
+		timed(MinTimeWait, "https://status.example.com/jobs/42"),
+		timed(MaxTimeWait, "comment:"+uuid.NewString()),
+		timed(time.Hour, "artifact:"+uuid.NewString()),
 		{TaskID: task, Kind: TaskWaitDecision, DecisionRequestID: &dr},
 		{TaskID: task, Kind: TaskWaitHuman, HumanGateRef: str("gate-1")},
 	}
@@ -56,6 +66,17 @@ func TestTaskWaitValidate(t *testing.T) {
 		{"time too soon", TaskWait{TaskID: task, Kind: TaskWaitTime, UntilAt: at(MinTimeWait - time.Second)}, CodeTimeOutOfBounds},
 		{"time too far", TaskWait{TaskID: task, Kind: TaskWaitTime, UntilAt: at(MaxTimeWait + time.Second)}, CodeTimeOutOfBounds},
 		{"time in past", TaskWait{TaskID: task, Kind: TaskWaitTime, UntilAt: at(-time.Hour)}, CodeTimeOutOfBounds},
+		{"time without evidence", TaskWait{TaskID: task, Kind: TaskWaitTime, UntilAt: at(time.Hour)}, CodeMissingEvidence},
+		{"time no event_ref", noEvidence(func(w *TaskWait) { w.EventRef = nil }), CodeMissingEvidence},
+		{"time no source", noEvidence(func(w *TaskWait) { w.Source = str("") }), CodeMissingEvidence},
+		{"time no why", noEvidence(func(w *TaskWait) { w.Why = nil }), CodeMissingEvidence},
+		{"time placeholder why", noEvidence(func(w *TaskWait) { w.Why = str("retry") }), CodeMissingEvidence},
+		{"time no offset", noEvidence(func(w *TaskWait) { w.UntilAtOffset = nil }), CodeMissingEvidence},
+		{"time http source", noEvidence(func(w *TaskWait) { w.Source = str("http://status.example.com") }), CodeMissingEvidence},
+		{"time card ref as source", noEvidence(func(w *TaskWait) { w.Source = str("card:00000000") }), CodeMissingEvidence},
+		{"time comment without uuid", noEvidence(func(w *TaskWait) { w.Source = str("comment:latest") }), CodeMissingEvidence},
+		{"time relative until", noEvidence(func(w *TaskWait) { w.Until = str("6h") }), CodeNaiveTime},
+		{"time relative until only", TaskWait{TaskID: task, Kind: TaskWaitTime, Until: str("6h")}, CodeNaiveTime},
 		{"decision no request", TaskWait{TaskID: task, Kind: TaskWaitDecision}, CodeInvalidTarget},
 		{"human no ref", TaskWait{TaskID: task, Kind: TaskWaitHuman, HumanGateRef: str("")}, CodeInvalidTarget},
 		{"unknown kind", TaskWait{TaskID: task, Kind: "someday"}, CodeInvalidTarget},

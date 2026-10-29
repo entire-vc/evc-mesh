@@ -313,3 +313,136 @@ export function assertReplyCanStillCome(h: ReplyView, threadId: string, nth: num
     throw new Error(`reply #${nth} ended ${m.status} without a body: ${describeReply(h, threadId, nth)}`);
   }
 }
+
+/** One turn as the workspace chat audit (actor C) reports it: lifecycle fields only, no bodies. */
+export interface AuditTurn {
+  id: string;
+  state: string;
+  runner_id: string | null;
+  attempt: number;
+  first_claimed_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  error_code: string | null;
+  stop_reason: string | null;
+  last_seq: number;
+  terminal_seq: number | null;
+}
+
+/** S07: a message to an offline agent waits in the queue untouched: nobody claimed or started it. */
+export function assertQueuedUnclaimed(t: AuditTurn | undefined): void {
+  if (!t) throw new Error("S07 queue: the turn is not in the audit");
+  const held = [
+    t.state !== "queued" && `state ${t.state}`,
+    t.runner_id && `runner_id ${t.runner_id}`,
+    t.attempt !== 0 && `attempt ${t.attempt}`,
+    t.first_claimed_at && "first_claimed_at set",
+    t.started_at && "started_at set",
+    t.finished_at && "finished_at set",
+  ].filter(Boolean);
+  if (held.length > 0) throw new Error(`S07 queue: turn ${t.id} is not an untouched queued turn (${held.join(", ")})`);
+}
+
+/**
+ * S07 recovery: the runner that came back took the turn exactly once and ended it exactly once.
+ * `claims` is how many claim answers carried the turn; `secondTerminal` is the answer to a second
+ * terminal event for the same turn, which the protocol must refuse with 409 chat_turn_terminal.
+ */
+export function assertOneClaimOneTerminal(
+  t: AuditTurn | undefined,
+  runnerId: string,
+  claims: number,
+  terminalSeq: number,
+  secondTerminal: { status: number; code: string },
+): void {
+  if (!t) throw new Error("S07 recovery: the turn is not in the audit");
+  if (claims !== 1) throw new Error(`S07 recovery: turn ${t.id} was handed out by ${claims} claim(s), need exactly 1`);
+  if (t.attempt !== 1) throw new Error(`S07 recovery: turn ${t.id} attempt ${t.attempt}, need exactly 1 claim`);
+  if (t.runner_id !== runnerId) throw new Error(`S07 recovery: turn ${t.id} is held by runner ${t.runner_id}, not by the recovered one`);
+  if (t.state !== "done" || t.stop_reason !== "end_turn") throw new Error(`S07 recovery: turn ${t.id} ended ${t.state}/${t.stop_reason}, need done/end_turn`);
+  if (!t.started_at || !t.finished_at) throw new Error(`S07 recovery: turn ${t.id} has no started_at/finished_at`);
+  if (t.terminal_seq !== terminalSeq || t.last_seq !== terminalSeq) {
+    throw new Error(`S07 recovery: turn ${t.id} terminal_seq ${t.terminal_seq}, last_seq ${t.last_seq}, need one terminal at seq ${terminalSeq}`);
+  }
+  if (secondTerminal.status !== 409 || secondTerminal.code !== "chat_turn_terminal") {
+    throw new Error(`S07 recovery: a second terminal for turn ${t.id} answered ${secondTerminal.status} ${secondTerminal.code || "no code"}, need 409 chat_turn_terminal`);
+  }
+}
+
+/**
+ * S07 expiry: the turn nobody took became expired with a finish time, was never claimed, and its
+ * user message is failed with not_delivered. A late runner neither gets it from a claim nor may
+ * act on it: start answers 403 chat_not_claim_holder (it never held the turn).
+ */
+export function assertExpiredNotDelivered(
+  t: AuditTurn | undefined,
+  user: { status: string; error_code?: string | null } | undefined,
+  lateClaimTurnIds: string[],
+  lateStart: { status: number; code: string },
+): void {
+  if (!t) throw new Error("S07 expiry: the turn is not in the audit");
+  if (t.state !== "expired") throw new Error(`S07 expiry: turn ${t.id} is ${t.state}, need expired`);
+  if (!t.finished_at) throw new Error(`S07 expiry: turn ${t.id} is expired without finished_at`);
+  if (t.error_code !== "not_delivered") throw new Error(`S07 expiry: turn ${t.id} error_code ${t.error_code}, need not_delivered`);
+  if (t.runner_id || t.attempt !== 0 || t.started_at) throw new Error(`S07 expiry: turn ${t.id} was claimed or started (runner ${t.runner_id}, attempt ${t.attempt})`);
+  if (!user || user.status !== "failed" || user.error_code !== "not_delivered") {
+    throw new Error(`S07 expiry: the user message is ${user?.status ?? "absent"}/${user?.error_code ?? "none"}, need failed/not_delivered`);
+  }
+  if (lateClaimTurnIds.includes(t.id)) throw new Error(`S07 expiry: a late claim handed out expired turn ${t.id}`);
+  if (lateStart.status !== 403 || lateStart.code !== "chat_not_claim_holder") {
+    throw new Error(`S07 expiry: a late start of turn ${t.id} answered ${lateStart.status} ${lateStart.code || "no code"}, need 403 chat_not_claim_holder`);
+  }
+}
+
+/** S01: the project tab strip in its full order, ids as the strip renders them (`data-tab-id`). */
+export function assertTabAfter(order: string[], before: string, tab: string): void {
+  const i = order.indexOf(tab);
+  if (i < 0) throw new Error(`S01: tab "${tab}" is not in the strip: ${order.join(",")}`);
+  const b = order.indexOf(before);
+  if (b < 0) throw new Error(`S01: tab "${before}" is not in the strip: ${order.join(",")}`);
+  if (i !== b + 1) throw new Error(`S01: tab "${tab}" is at ${i}, not right after "${before}" at ${b}: ${order.join(",")}`);
+}
+
+/** S01: a project without the chat has no Chat tab; an empty strip is not proof of that. */
+export function assertNoTab(order: string[], tab: string): void {
+  if (!order.includes("board")) throw new Error(`S01: the strip is not rendered (no board tab): ${order.join(",") || "empty"}`);
+  if (order.includes(tab)) throw new Error(`S01: tab "${tab}" is in the strip of a project without it: ${order.join(",")}`);
+}
+
+export interface ChatSettingsView {
+  enabled: boolean;
+  agents: string[];
+  allowed_roles?: string[];
+}
+
+/** S01: what a GET of the settings answers is what was saved: on/off, the same agents, the same roles. */
+export function assertSettingsReadback(what: string, want: ChatSettingsView, got: ChatSettingsView): void {
+  const set = (xs: string[] | undefined) => [...(xs ?? [])].sort().join(",");
+  if (got.enabled !== want.enabled) throw new Error(`${what}: enabled=${got.enabled}, saved ${want.enabled}`);
+  if (set(got.agents) !== set(want.agents)) throw new Error(`${what}: agents [${set(got.agents)}], saved [${set(want.agents)}]`);
+  if (want.allowed_roles && set(got.allowed_roles) !== set(want.allowed_roles)) {
+    throw new Error(`${what}: allowed_roles [${set(got.allowed_roles)}], saved [${set(want.allowed_roles)}]`);
+  }
+}
+
+/** S01: the workspace limits (retention, attachment, idle, expiry) read back unchanged, key by key. */
+export function assertLimitsReadback(what: string, want: Record<string, unknown>, got: Record<string, unknown>): void {
+  const keys = [...new Set([...Object.keys(want), ...Object.keys(got)])].sort();
+  if (keys.length === 0) throw new Error(`${what}: no limits in either answer`);
+  const diff = keys.filter((k) => want[k] !== got[k]).map((k) => `${k}=${String(got[k])} (was ${String(want[k])})`);
+  if (diff.length > 0) throw new Error(`${what}: limits changed: ${diff.join(", ")}`);
+}
+
+/** S01: a chat call in a project with the chat off is refused as not enabled, not served and not a 5xx. */
+export function assertChatOff(what: string, status: number, body: string): void {
+  if (status >= 200 && status < 300) throw new Error(`${what}: the chat answered ${status} in a project with the chat off`);
+  let code = "";
+  try { code = (JSON.parse(body) as { error_code?: string }).error_code ?? ""; } catch { code = ""; }
+  if (status !== 404 || code !== "chat_not_enabled") throw new Error(`${what}: expected 404 chat_not_enabled, got ${status} ${code || "no error_code"}`);
+}
+
+/** S01: switching the chat on with no agent is a validation error that stores nothing. */
+export function assertEmptyAgentsRejected(status: number, before: ChatSettingsView, after: ChatSettingsView): void {
+  if (status !== 422) throw new Error(`S01: enabled with no agents answered ${status}, expected 422`);
+  assertSettingsReadback("S01 settings after the rejected save", before, after);
+}

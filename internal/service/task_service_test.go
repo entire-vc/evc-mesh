@@ -2490,7 +2490,8 @@ func TestTaskService_Update_DelegationLevelLogged(t *testing.T) {
 // for the start_after diff-tracking line added alongside due_date's own.
 func TestTaskService_Update_StartAfterLogged(t *testing.T) {
 	svc, taskRepo, activityRepo, _, projRepo := setupTaskServiceForDelegation()
-	ctx := context.Background()
+	// A person's date: no evidence needed (prepareStartAfter).
+	ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeUser)
 
 	projID := uuid.New()
 	wsID := uuid.New()
@@ -2518,6 +2519,7 @@ func TestTaskService_Update_StartAfterLogged(t *testing.T) {
 
 	require.NotNil(t, found, "expected task.updated activity log entry")
 	assert.Contains(t, string(found.Changes), `"start_after"`)
+	assert.Contains(t, string(found.Changes), `"human_explicit"`)
 }
 
 func TestTaskService_Update_DelegationLevelNotifiesAgent(t *testing.T) {

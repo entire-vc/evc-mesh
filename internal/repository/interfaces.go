@@ -1181,6 +1181,9 @@ type WorkspaceMemberRepository interface {
 	ListWithProjects(ctx context.Context, workspaceID uuid.UUID) ([]HumanWithProjects, error)
 	// UpdateRole changes the role for a given workspace + user.
 	UpdateRole(ctx context.Context, workspaceID, userID uuid.UUID, role string) error
+	// UpdateProfile applies a partial team-profile update (nil field = keep);
+	// false when the user is not a member of the workspace.
+	UpdateProfile(ctx context.Context, workspaceID, userID uuid.UUID, upd domain.MemberProfileUpdate) (bool, error)
 	// Delete removes the workspace membership for the given user.
 	Delete(ctx context.Context, workspaceID, userID uuid.UUID) error
 	// CountOwners returns the number of members with the "owner" role in the workspace.

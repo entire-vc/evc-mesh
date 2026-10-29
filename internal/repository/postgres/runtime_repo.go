@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
@@ -402,6 +403,28 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 	if err != nil {
 		return nil, err
 	}
+	// An admission outlives its binding only as a disabled row: a binding taken
+	// out of the catalog, or given to another agent, grant or workspace, no
+	// longer leads the admitted agent, and a later revision that restores it
+	// needs a new admission, as any changed binding does.
+	refs := make([]string, 0, len(catalog.Bindings))
+	agents := make([]string, 0, len(catalog.Bindings))
+	workspaces := make([]string, 0, len(catalog.Bindings))
+	grants := make([]string, 0, len(catalog.Bindings))
+	for ref, b := range catalog.Bindings {
+		refs = append(refs, ref)
+		agents = append(agents, b.Binding.AgentID.String())
+		workspaces = append(workspaces, b.Binding.WorkspaceID.String())
+		grants = append(grants, b.Binding.GrantID.String())
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE runtime_binding_admissions adm SET enabled=false,updated_by=$6,updated_at=now()
+		WHERE adm.integration_id=$1 AND adm.enabled AND NOT EXISTS (
+			SELECT 1 FROM unnest($2::text[],$3::uuid[],$4::uuid[],$5::uuid[]) AS b(ref,agent_id,workspace_id,grant_id)
+			WHERE b.ref=adm.binding_ref AND b.agent_id=adm.agent_id AND b.workspace_id=adm.workspace_id AND b.grant_id=adm.grant_id)`,
+		connection.ID, pq.Array(refs), pq.Array(agents), pq.Array(workspaces), pq.Array(grants), editor.user)
+	if err != nil {
+		return nil, err
+	}
 	err = tx.Commit()
 	if err != nil {
 		return nil, err
@@ -779,7 +802,7 @@ func (r *RuntimeRepo) Report(ctx context.Context, ws uuid.UUID, ref string, acto
 	if actor.Connector || actor.AgentID == uuid.Nil || actor.AuthWorkspaceID != ws {
 		return apierror.Forbidden("controller report requires its exact owner-workspace agent key")
 	}
-	if report.SchemaVersion != 2 || report.Revision < 1 || (report.Status != "applied" && report.Status != "rejected") || len(report.Capabilities) > 256 || len(report.Pools) > 256 {
+	if report.SchemaVersion != 2 || report.Revision < 1 || (report.Status != "applied" && report.Status != "rejected") || len(report.Capabilities) > 256 || len(report.Pools) > 256 || (report.Version != "" && !domain.ValidRuntimeVersion(report.Version)) {
 		return apierror.BadRequest("invalid controller report")
 	}
 	tx, err := r.db.BeginTxx(ctx, nil)

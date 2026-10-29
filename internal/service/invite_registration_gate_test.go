@@ -121,6 +121,9 @@ func (r *minimalWorkspaceMemberRepo) ListWithProjects(_ context.Context, _ uuid.
 func (r *minimalWorkspaceMemberRepo) UpdateRole(_ context.Context, _, _ uuid.UUID, _ string) error {
 	return nil
 }
+func (r *minimalWorkspaceMemberRepo) UpdateProfile(_ context.Context, _, _ uuid.UUID, _ domain.MemberProfileUpdate) (bool, error) {
+	return true, nil
+}
 func (r *minimalWorkspaceMemberRepo) Delete(_ context.Context, _, _ uuid.UUID) error { return nil }
 func (r *minimalWorkspaceMemberRepo) CountOwners(_ context.Context, _ uuid.UUID) (int, error) {
 	return 1, nil

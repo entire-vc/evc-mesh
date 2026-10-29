@@ -72,12 +72,16 @@ type createTaskRequest struct {
 	ReviewerID      *uuid.UUID             `json:"reviewer_id"`
 	ReviewerType    *domain.AssigneeType   `json:"reviewer_type"`
 	DueDate         *time.Time             `json:"due_date"`
-	StartAfter      *time.Time             `json:"start_after"`
+	StartAfter      startAfterField        `json:"start_after"`
 	EstimatedHours  *float64               `json:"estimated_hours"`
 	Labels          []string               `json:"labels"`
 	CustomFields    json.RawMessage        `json:"custom_fields"`
 	DelegationLevel domain.DelegationLevel `json:"delegation_level"`
 	ThreadID        *string                `json:"thread_id"`
+	// Provenance of start_after: an agent's date needs evidence and cannot
+	// claim a human origin (see service.prepareStartAfter).
+	StartAfterOrigin   string                     `json:"start_after_origin"`
+	StartAfterEvidence *domain.StartAfterEvidence `json:"start_after_evidence"`
 }
 
 // flexTime is a *time.Time that also accepts date-only strings ("2026-03-20")
@@ -106,6 +110,33 @@ func (f *flexTime) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	return errors.New("due_date must be RFC3339 or YYYY-MM-DD")
+}
+
+// startAfterField keeps start_after as sent: the validator needs the offset
+// it was given in, and refuses a naive or relative value with a reason instead
+// of a generic bind error.
+type startAfterField struct {
+	raw    string
+	null   bool
+	wasSet bool
+}
+
+func (f *startAfterField) UnmarshalJSON(b []byte) error {
+	f.wasSet = true
+	if string(b) == "null" {
+		f.null = true
+		return nil
+	}
+	return json.Unmarshal(b, &f.raw)
+}
+
+// write is the request's start_after change, nil when the key was absent.
+// A create treats an explicit null as absent: there is nothing to clear.
+func (f startAfterField) write(origin string, ev *domain.StartAfterEvidence) *domain.StartAfterWrite {
+	if !f.wasSet {
+		return nil
+	}
+	return &domain.StartAfterWrite{Raw: f.raw, Null: f.null || f.raw == "", Origin: origin, Evidence: ev}
 }
 
 // flexUUID is a *uuid.UUID that also tracks whether the JSON key was present
@@ -148,7 +179,7 @@ type updateTaskRequest struct {
 	ReviewerType     *domain.AssigneeType    `json:"reviewer_type"`
 	ClearReviewer    bool                    `json:"clear_reviewer"`
 	DueDate          flexTime                `json:"due_date"`
-	StartAfter       flexTime                `json:"start_after"`
+	StartAfter       startAfterField         `json:"start_after"`
 	EstimatedHours   *float64                `json:"estimated_hours"`
 	Labels           *[]string               `json:"labels"`
 	CustomFields     json.RawMessage         `json:"custom_fields"`
@@ -156,6 +187,9 @@ type updateTaskRequest struct {
 	ThreadID         *string                 `json:"thread_id"`
 	HumanGate        *bool                   `json:"human_gate"`
 	CompletionSignal *bool                   `json:"completion_signal"`
+	// See createTaskRequest.
+	StartAfterOrigin   string                     `json:"start_after_origin"`
+	StartAfterEvidence *domain.StartAfterEvidence `json:"start_after_evidence"`
 
 	// Optional write preconditions, same contract as /move: 409 cas_conflict and
 	// no write when the task changed since the caller read it. Both given must
@@ -333,7 +367,7 @@ func (h *TaskHandler) Create(c echo.Context) error {
 		ReviewerID:      req.ReviewerID,
 		ReviewerType:    req.ReviewerType,
 		DueDate:         req.DueDate,
-		StartAfter:      req.StartAfter,
+		StartAfterWrite: req.StartAfter.write(req.StartAfterOrigin, req.StartAfterEvidence),
 		EstimatedHours:  req.EstimatedHours,
 		Labels:          pq.StringArray(req.Labels),
 		CustomFields:    req.CustomFields,
@@ -800,9 +834,9 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	if req.DueDate.wasSet {
 		task.DueDate = req.DueDate.Time // nil clears, non-nil sets
 	}
-	if req.StartAfter.wasSet {
-		task.StartAfter = req.StartAfter.Time // nil clears, non-nil sets
-	}
+	// start_after is applied by the service validator, which also decides
+	// whether an explicit null may clear it.
+	task.StartAfterWrite = req.StartAfter.write(req.StartAfterOrigin, req.StartAfterEvidence)
 	if req.EstimatedHours != nil {
 		task.EstimatedHours = req.EstimatedHours
 	}
@@ -1253,8 +1287,11 @@ type createSubtaskRequest struct {
 	Labels         []string            `json:"labels"`
 	CustomFields   json.RawMessage     `json:"custom_fields"`
 	DueDate        *time.Time          `json:"due_date"`
-	StartAfter     *time.Time          `json:"start_after"`
+	StartAfter     startAfterField     `json:"start_after"`
 	EstimatedHours *float64            `json:"estimated_hours"`
+	// See createTaskRequest.
+	StartAfterOrigin   string                     `json:"start_after_origin"`
+	StartAfterEvidence *domain.StartAfterEvidence `json:"start_after_evidence"`
 }
 
 // CreateSubtask handles POST /tasks/:task_id/subtasks
@@ -1289,16 +1326,16 @@ func (h *TaskHandler) CreateSubtask(c echo.Context) error {
 	}
 
 	input := service.CreateSubtaskInput{
-		Title:          req.Title,
-		Description:    req.Description,
-		Priority:       priority,
-		AssigneeID:     req.AssigneeID,
-		AssigneeType:   assigneeType,
-		Labels:         req.Labels,
-		CustomFields:   req.CustomFields,
-		DueDate:        req.DueDate,
-		StartAfter:     req.StartAfter,
-		EstimatedHours: req.EstimatedHours,
+		Title:           req.Title,
+		Description:     req.Description,
+		Priority:        priority,
+		AssigneeID:      req.AssigneeID,
+		AssigneeType:    assigneeType,
+		Labels:          req.Labels,
+		CustomFields:    req.CustomFields,
+		DueDate:         req.DueDate,
+		StartAfterWrite: req.StartAfter.write(req.StartAfterOrigin, req.StartAfterEvidence),
+		EstimatedHours:  req.EstimatedHours,
 	}
 
 	// Omitted status_id means "project default" — resolved by the service.
@@ -2004,6 +2041,27 @@ func handleError(c echo.Context, err error) error {
 			"source_path":     extLandedErr.SourcePath,
 			"sha256":          extLandedErr.SHA256,
 			"current_version": extLandedErr.CurrentVersion,
+		})
+	}
+
+	// A refused start_after write (and other typed-outcome refusals reaching
+	// a task route): 422 with the machine code.
+	var outcomeErr *domain.OutcomeError
+	if errors.As(err, &outcomeErr) {
+		return c.JSON(http.StatusUnprocessableEntity, &apierror.Error{
+			Code: http.StatusUnprocessableEntity, ErrorCode: outcomeErr.Code, Message: outcomeErr.Message,
+		})
+	}
+	var startAfterConflict *domain.StartAfterConflict
+	if errors.As(err, &startAfterConflict) {
+		return c.JSON(http.StatusConflict, map[string]interface{}{
+			"code":                "cas_conflict",
+			"error_code":          "cas_conflict",
+			"message":             "start_after changed since it was read — re-read the task; nothing was cleared",
+			"current_version":     startAfterConflict.CurrentVersion,
+			"current_start_after": startAfterConflict.CurrentStartAfter,
+			"current_origin":      startAfterConflict.CurrentOrigin,
+			"current_receipt":     startAfterConflict.CurrentReceipt,
 		})
 	}
 

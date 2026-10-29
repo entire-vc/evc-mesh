@@ -72,6 +72,9 @@ type MoveTaskInput struct {
 	// CheckoutStage is set only by checkout auto-progression; never bound from
 	// user JSON, and Source alone does not grant it (callers pick their Source).
 	CheckoutStage bool `json:"-"`
+	// Finish is set only by finish_task: its writes join the move's
+	// transaction (domain.TaskTransition.Finish).
+	Finish *domain.TaskFinish `json:"-"`
 }
 
 // AssignTaskInput holds parameters for assigning a task.
@@ -114,6 +117,9 @@ type CreateSubtaskInput struct {
 	DueDate        *time.Time          `json:"due_date,omitempty"`
 	StartAfter     *time.Time          `json:"start_after,omitempty"`
 	EstimatedHours *float64            `json:"estimated_hours,omitempty"`
+	// StartAfterWrite carries the raw value, claimed origin and evidence of
+	// start_after for the validator (see domain.StartAfterWrite).
+	StartAfterWrite *domain.StartAfterWrite `json:"-"`
 }
 
 // BulkUpdateTasksInput holds parameters for a bulk task update operation.
@@ -1371,6 +1377,10 @@ type WorkspaceMemberService interface {
 	SetMemberEmail(ctx context.Context, workspaceID, targetUserID uuid.UUID, email string) error
 	SetMemberPassword(ctx context.Context, workspaceID, targetUserID uuid.UUID, password string) error
 	SetMemberUsername(ctx context.Context, workspaceID, targetUserID uuid.UUID, username string) error
+	// UpdateMemberProfile applies a partial update of a member's team profile
+	// (capabilities, responsibility zone, availability) — the human side of
+	// UpdateAgentProfile, read back by the team directory.
+	UpdateMemberProfile(ctx context.Context, workspaceID, targetUserID uuid.UUID, upd domain.MemberProfileUpdate) error
 	RemoveMember(ctx context.Context, workspaceID, targetUserID uuid.UUID) error
 	GetMyRole(ctx context.Context, workspaceID, userID uuid.UUID) (string, error)
 	// SearchUsers finds accounts callerID may add to workspaceID, annotated with

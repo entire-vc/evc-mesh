@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/google/uuid"
@@ -182,6 +183,60 @@ func TestOperatorAgents_ExplicitAnnounceWins(t *testing.T) {
 	require.True(t, c.Live)
 }
 
+// The version on the screen is the one the runner reports about itself; the
+// catalog's is only the fallback for a runner that does not send it.
+func TestOperatorAgents_VersionFromReport(t *testing.T) {
+	d := seedDerived(t)
+	ctx := context.Background()
+	d.admitted(true)
+	catalogVersion := d.catalog.Controllers["runner-a"].Version
+	require.Equal(t, catalogVersion, d.agentRow(t).Controller.Version, "no reported version: the catalog's")
+
+	snapshot, err := d.runtimeFixture.repo.Inventory(ctx, d.owner, d.ownerActor)
+	require.NoError(t, err)
+	report := domain.RuntimeReport{SchemaVersion: 2, Revision: snapshot.Revision, Digest: snapshot.Digest, Status: "applied", Capabilities: d.catalog.Controllers["runner-a"].Capabilities, Pools: map[string]domain.RuntimePoolObservation{}, Version: "0.1.3"}
+	require.NotEqual(t, catalogVersion, report.Version)
+	require.NoError(t, d.runtimeFixture.repo.Report(ctx, d.owner, "runner-a", d.reporter, report))
+	require.Equal(t, "0.1.3", d.agentRow(t).Controller.Version)
+	runners, err := d.repo.OperatorRunners(ctx, d.actor, d.owner)
+	require.NoError(t, err)
+	require.Len(t, runners, 1)
+	require.Equal(t, "0.1.3", runners[0].Version)
+}
+
+// A binding taken out of the catalog no longer leads its agent: Save disables
+// its admission, and an admission still enabled for a binding the latest
+// revision lacks (left by an older server) is not counted either.
+func TestOperatorAgents_RemovedBindingNotLed(t *testing.T) {
+	d := seedDerived(t)
+	ctx := context.Background()
+	_, err := d.db.ExecContext(ctx, `UPDATE agents SET operator_user_id=NULL WHERE id=$1`, d.agent)
+	require.NoError(t, err)
+	d.admitted(true)
+	require.Equal(t, []uuid.UUID{d.agent}, agentIDs(t, d.repo, d.actor.UserID, d.owner))
+
+	snapshot, err := d.runtimeFixture.repo.Inventory(ctx, d.owner, d.ownerActor)
+	require.NoError(t, err)
+	var config map[string]any
+	require.NoError(t, json.Unmarshal(d.input.Config, &config))
+	config["bindings"] = map[string]any{}
+	data, err := json.Marshal(config)
+	require.NoError(t, err)
+	_, err = d.runtimeFixture.repo.Save(ctx, d.owner, d.ownerActor, RuntimeSave{IfRevision: snapshot.Revision, Config: data})
+	require.NoError(t, err)
+
+	var enabled bool
+	require.NoError(t, d.db.GetContext(ctx, &enabled, `SELECT enabled FROM runtime_binding_admissions WHERE integration_id=$1 AND binding_ref='worker-b'`, d.integ))
+	require.False(t, enabled, "Save disables the admission of a removed binding")
+	require.Empty(t, agentIDs(t, d.repo, d.actor.UserID, d.owner))
+	runners, err := d.repo.OperatorRunners(ctx, d.actor, d.owner)
+	require.NoError(t, err)
+	require.Empty(t, runners)
+
+	d.admitted(true)
+	require.Empty(t, agentIDs(t, d.repo, d.actor.UserID, d.owner), "an enabled admission of a removed binding is not counted")
+}
+
 func TestChatAgentPicker_DerivedController(t *testing.T) {
 	d := seedDerived(t)
 	ctx := context.Background()
@@ -202,4 +257,41 @@ func TestChatAgentPicker_DerivedController(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	require.Equal(t, ChatPresenceOffline, list[0].Presence)
+}
+
+// A binding ref given to another agent disables the old admission, so
+// restoring the earlier catalog does not revive it without a new admission.
+func TestOperatorAgents_ReassignedBindingNotRevived(t *testing.T) {
+	d := seedDerived(t)
+	ctx := context.Background()
+	_, err := d.db.ExecContext(ctx, `UPDATE agents SET operator_user_id=NULL WHERE id=$1`, d.agent)
+	require.NoError(t, err)
+	d.admitted(true)
+	require.Equal(t, []uuid.UUID{d.agent}, agentIDs(t, d.repo, d.actor.UserID, d.owner))
+
+	other := seedGrantAgent(t, d.db, d.owner)
+	otherGrant := insertGrant(t, d.db, other.ID, d.receiver, "member", "runtime-other", "synthetic-other-hash", nil)
+	catalog := *d.catalog
+	catalog.Bindings = map[string]domain.RuntimeBinding{}
+	for ref, b := range d.catalog.Bindings {
+		catalog.Bindings[ref] = b
+	}
+	b := catalog.Bindings["worker-b"]
+	b.Binding = domain.RuntimeIdentity{AgentID: other.ID, WorkspaceID: d.receiver, GrantID: otherGrant}
+	catalog.Bindings["worker-b"] = b
+	data, err := json.Marshal(catalog)
+	require.NoError(t, err)
+	snapshot, err := d.runtimeFixture.repo.Inventory(ctx, d.owner, d.ownerActor)
+	require.NoError(t, err)
+	_, err = d.runtimeFixture.repo.Save(ctx, d.owner, d.ownerActor, RuntimeSave{IfRevision: snapshot.Revision, Config: data})
+	require.NoError(t, err)
+
+	var enabled bool
+	require.NoError(t, d.db.GetContext(ctx, &enabled, `SELECT enabled FROM runtime_binding_admissions WHERE integration_id=$1 AND binding_ref='worker-b'`, d.integ))
+	require.False(t, enabled, "Save disables the admission of a reassigned binding")
+	require.Empty(t, agentIDs(t, d.repo, d.actor.UserID, d.owner))
+
+	_, err = d.runtimeFixture.repo.Restore(ctx, d.owner, d.ownerActor, RuntimeRestore{IfRevision: snapshot.Revision + 1, Revision: snapshot.Revision})
+	require.NoError(t, err)
+	require.Empty(t, agentIDs(t, d.repo, d.actor.UserID, d.owner), "restoring the old catalog does not revive the old admission")
 }

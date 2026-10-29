@@ -50,6 +50,7 @@
     "emptyThread": "Send {{agent}} the first message",
     "failed": "failed",
     "loading": "Loading",
+    "notDelivered": "not delivered",
     "older": "Show earlier messages",
     "queued": "queued",
     "retry": "Retry",

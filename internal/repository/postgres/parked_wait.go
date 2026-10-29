@@ -426,6 +426,11 @@ func (r *TaskRepo) ReleaseParkedWaitVerified(ctx context.Context, taskID uuid.UU
 			return nil, parkedConflict()
 		}
 	}
+	// The runner clears only its own schedule; a date a person set is kept
+	// even when it happens to equal the one the runner registered.
+	if p.ClearStartAfter && task.StartAfterOrigin != nil && *task.StartAfterOrigin == domain.StartAfterHumanExplicit {
+		return nil, parkedConflict()
+	}
 	activityID := uuid.New()
 	changes, err := json.Marshal(actorctx.AnnotateChanges(ctx, map[string]any{"status": map[string]string{"old": old.Name, "new": target.Name}, "source": "parked-wait-api", "reason": p.Reason, "trigger": input.Trigger, "pipeline_status": verifiedStatus, "required_jobs": p.Condition.RequiredJobs, "wait_comment_id": p.WaitCommentID, "feed_receipt_id": p.FeedReceiptID, "registration_id": p.ID, "release_id": input.ReleaseID, "removed_labels": p.RemoveLabels, "cleared_start_after": p.ClearStartAfter, "old_version": task.Version, "new_version": task.Version + 1}))
 	if err != nil {
@@ -435,6 +440,8 @@ func (r *TaskRepo) ReleaseParkedWaitVerified(ctx context.Context, taskID uuid.UU
 	err = tx.GetContext(ctx, &result.Version, `UPDATE tasks SET status_id=$2,status_changed_at=$3,completed_at=NULL,updated_at=$3,
  labels=ARRAY(SELECT label FROM unnest(labels) label WHERE NOT(label=ANY(COALESCE($4::text[],'{}'::text[])))),
  start_after=CASE WHEN $5 THEN NULL ELSE start_after END,
+ start_after_origin=CASE WHEN $5 THEN NULL ELSE start_after_origin END,
+ start_after_receipt_id=CASE WHEN $5 THEN NULL ELSE start_after_receipt_id END,
  checked_out_by=CASE WHEN $6 THEN NULL ELSE checked_out_by END,
  checkout_token=CASE WHEN $6 THEN NULL ELSE checkout_token END,
  checkout_expires=CASE WHEN $6 THEN NULL ELSE checkout_expires END,
@@ -444,6 +451,21 @@ func (r *TaskRepo) ReleaseParkedWaitVerified(ctx context.Context, taskID uuid.UU
  WHERE id=$1 AND version=$7 RETURNING version`, taskID, target.ID, now, pq.Array(p.RemoveLabels), p.ClearStartAfter, p.Lease.Mode == "owned", input.ExpectedVersion)
 	if err != nil {
 		return nil, err
+	}
+	if p.ClearStartAfter && task.StartAfter != nil {
+		origin := domain.StartAfterLegacyUnknown
+		if task.StartAfterOrigin != nil {
+			origin = *task.StartAfterOrigin
+		}
+		key, reason := "parked-release:"+activityID.String(), "cleared by the parked-wait release"
+		err = insertStartAfterReceipt(ctx, tx, &domain.StartAfterReceipt{
+			ID: uuid.New(), TaskID: taskID, Op: "clear", StartAfter: *task.StartAfter, Origin: origin,
+			ActorID: actor, ActorType: kind, ClearedReceiptID: task.StartAfterReceiptID,
+			IdempotencyKey: &key, Reason: &reason,
+		}, result.Version)
+		if err != nil {
+			return nil, err
+		}
 	}
 	activityInsert, err := tx.ExecContext(ctx, `INSERT INTO activity_log(id,workspace_id,entity_type,entity_id,action,actor_id,actor_type,changes,created_at) SELECT $1,workspace_id,'task',$2,'task.moved',$3,$4,$5,$6 FROM projects WHERE id=$7`, activityID, taskID, actor, kind, changes, now, task.ProjectID)
 	if err != nil {

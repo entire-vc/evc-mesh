@@ -80,7 +80,7 @@ var timeNow = time.Now
 const taskBaseColsNoAlias = `
 	id, version, project_id, status_id, title, description,
 	assignee_id, assignee_type, priority, parent_task_id, position,
-	due_date, start_after, estimated_hours, custom_fields, labels,
+	due_date, start_after, start_after_origin, start_after_receipt_id, estimated_hours, custom_fields, labels,
 	task_number, created_by, created_by_type, created_at, updated_at,
 	completed_at, deleted_at,
 	recurring_schedule_id, recurring_instance_number,
@@ -226,29 +226,33 @@ var taskComputedColsAliased = `
 // taskRow is the DB row representation (includes task_number and deleted_at
 // that the domain model does not have, plus 4 computed enrichment fields).
 type taskRow struct {
-	Version        int64               `db:"version"`
-	ID             uuid.UUID           `db:"id"`
-	ProjectID      uuid.UUID           `db:"project_id"`
-	StatusID       uuid.UUID           `db:"status_id"`
-	Title          string              `db:"title"`
-	Description    string              `db:"description"`
-	AssigneeID     *uuid.UUID          `db:"assignee_id"`
-	AssigneeType   domain.AssigneeType `db:"assignee_type"`
-	Priority       domain.Priority     `db:"priority"`
-	ParentTaskID   *uuid.UUID          `db:"parent_task_id"`
-	Position       float64             `db:"position"`
-	DueDate        *time.Time          `db:"due_date"`
-	StartAfter     *time.Time          `db:"start_after"`
-	EstimatedHours *float64            `db:"estimated_hours"`
-	CustomFields   json.RawMessage     `db:"custom_fields"`
-	Labels         pq.StringArray      `db:"labels"`
-	TaskNumber     int                 `db:"task_number"`
-	CreatedBy      uuid.UUID           `db:"created_by"`
-	CreatedByType  domain.ActorType    `db:"created_by_type"`
-	CreatedAt      time.Time           `db:"created_at"`
-	UpdatedAt      time.Time           `db:"updated_at"`
-	CompletedAt    *time.Time          `db:"completed_at"`
-	DeletedAt      *time.Time          `db:"deleted_at"`
+	Version      int64               `db:"version"`
+	ID           uuid.UUID           `db:"id"`
+	ProjectID    uuid.UUID           `db:"project_id"`
+	StatusID     uuid.UUID           `db:"status_id"`
+	Title        string              `db:"title"`
+	Description  string              `db:"description"`
+	AssigneeID   *uuid.UUID          `db:"assignee_id"`
+	AssigneeType domain.AssigneeType `db:"assignee_type"`
+	Priority     domain.Priority     `db:"priority"`
+	ParentTaskID *uuid.UUID          `db:"parent_task_id"`
+	Position     float64             `db:"position"`
+	DueDate      *time.Time          `db:"due_date"`
+	StartAfter   *time.Time          `db:"start_after"`
+	// Read only where the query selects them (taskBaseColsNoAlias); other
+	// lists leave them nil and TaskRepo.Update keeps the stored values.
+	StartAfterOrigin    *string          `db:"start_after_origin"`
+	StartAfterReceiptID *uuid.UUID       `db:"start_after_receipt_id"`
+	EstimatedHours      *float64         `db:"estimated_hours"`
+	CustomFields        json.RawMessage  `db:"custom_fields"`
+	Labels              pq.StringArray   `db:"labels"`
+	TaskNumber          int              `db:"task_number"`
+	CreatedBy           uuid.UUID        `db:"created_by"`
+	CreatedByType       domain.ActorType `db:"created_by_type"`
+	CreatedAt           time.Time        `db:"created_at"`
+	UpdatedAt           time.Time        `db:"updated_at"`
+	CompletedAt         *time.Time       `db:"completed_at"`
+	DeletedAt           *time.Time       `db:"deleted_at"`
 
 	// Recurring series fields.
 	RecurringScheduleID     *uuid.UUID `db:"recurring_schedule_id"`
@@ -339,6 +343,8 @@ func (r *taskRow) toDomainBase() domain.Task {
 		Position:                r.Position,
 		DueDate:                 r.DueDate,
 		StartAfter:              r.StartAfter,
+		StartAfterOrigin:        r.StartAfterOrigin,
+		StartAfterReceiptID:     r.StartAfterReceiptID,
 		EstimatedHours:          r.EstimatedHours,
 		CustomFields:            r.CustomFields,
 		Labels:                  r.Labels,
@@ -512,7 +518,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task, activity *doma
 			task_number, created_by, created_by_type, created_at, updated_at, completed_at,
 			recurring_schedule_id, recurring_instance_number,
 			delegation_level, thread_id, human_gate, is_shipped, assigned_by, completion_signal, status_changed_at,
-			reviewer_id, reviewer_type, start_after
+			reviewer_id, reviewer_type, start_after, start_after_origin, start_after_receipt_id
 		) VALUES (
 			$1, $2::uuid, $3, $4, $5,
 			$6, $7, $8, $9, $10,
@@ -521,7 +527,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task, activity *doma
 			$15, $16, $17, $18, $19,
 			$20, $21,
 			$22, $23, $24, $25, $26, $27, NOW(),
-			$28, $29, $30
+			$28, $29, $30, $31, $32
 		)
 	`
 	customFields := task.CustomFields
@@ -576,10 +582,15 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task, activity *doma
 				task.CreatedBy, task.CreatedByType, task.CreatedAt, task.UpdatedAt, task.CompletedAt,
 				task.RecurringScheduleID, task.RecurringInstanceNumber,
 				delegationLevel, task.ThreadID, task.HumanGate, task.IsShipped, task.AssignedBy, task.CompletionSignal,
-				task.ReviewerID, task.ReviewerType, task.StartAfter,
+				task.ReviewerID, task.ReviewerType, task.StartAfter, task.StartAfterOrigin, task.StartAfterReceiptID,
 			)
 			if err != nil {
 				return err
+			}
+			if task.StartAfterSet != nil {
+				if receiptErr := insertStartAfterReceipt(ctx, tx, task.StartAfterSet, 1); receiptErr != nil {
+					return receiptErr
+				}
 			}
 			// Statement 3: the creation audit entry, in the SAME transaction as the
 			// insert above. If this fails, the whole transaction rolls back — a task
@@ -733,7 +744,7 @@ func (r *TaskRepo) Search(ctx context.Context, workspaceID uuid.UUID, filter rep
 
 	dataQ := fmt.Sprintf(`SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
 		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position, t.human_gate,
-		t.due_date, t.start_after, t.estimated_hours, t.custom_fields, t.labels,
+		t.due_date, t.start_after, t.start_after_origin, t.start_after_receipt_id, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
 		t.completed_at, t.deleted_at,
 		t.recurring_schedule_id, t.recurring_instance_number,
@@ -763,7 +774,14 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		    completion_signal = $23, status_changed_at = $24,
 		    pre_review_assignee_id = $25, pre_review_assignee_type = $26,
 		    reviewer_id = $27, reviewer_type = $28, start_after = $29,
-		    pre_review_restore = $31
+		    pre_review_restore = $31,
+		    -- Provenance follows the date: an unchanged date keeps the stored
+		    -- origin and receipt whatever the caller's struct holds (a writer that
+		    -- loaded the task from a list never saw them); a changed one takes the
+		    -- values the service validator set, and the table CHECKs refuse a
+		    -- changed date that arrives without them.
+		    start_after_origin = CASE WHEN start_after IS NOT DISTINCT FROM $29 THEN start_after_origin ELSE $32 END,
+		    start_after_receipt_id = CASE WHEN start_after IS NOT DISTINCT FROM $29 THEN start_after_receipt_id ELSE $33 END
 		WHERE id = $1 AND deleted_at IS NULL AND version = $30
 		RETURNING version,checked_out_by,checkout_token,checkout_expires,checkout_acquired_at,checkout_session_id,checkout_request_id,checkout_generation,false AS changed
 	`
@@ -788,15 +806,17 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		GetContext(context.Context, interface{}, string, ...interface{}) error
 	} = r.db
 	var tx *sqlx.Tx
-	if task.ParentTaskID != nil {
+	if task.ParentTaskID != nil || task.StartAfterSet != nil {
 		var err error
 		tx, err = r.db.BeginTxx(ctx, nil)
 		if err != nil {
 			return err
 		}
 		defer func() { _ = tx.Rollback() }()
-		if _, err = tx.ExecContext(ctx, `SELECT completion_graph_lock(p.workspace_id) FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=$1`, task.ID); err != nil {
-			return err
+		if task.ParentTaskID != nil {
+			if _, err = tx.ExecContext(ctx, `SELECT completion_graph_lock(p.workspace_id) FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=$1`, task.ID); err != nil {
+				return err
+			}
 		}
 		reader = tx
 	}
@@ -811,7 +831,7 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		task.HumanGate, task.IsShipped, task.AssignedBy, task.CompletionSignal, task.StatusChangedAt,
 		task.PreReviewAssigneeID, task.PreReviewAssigneeType,
 		task.ReviewerID, task.ReviewerType, task.StartAfter, task.Version,
-		task.PreReviewRestore,
+		task.PreReviewRestore, task.StartAfterOrigin, task.StartAfterReceiptID,
 	)
 	pkgmetrics.RecordDBQuery("task.update", time.Since(dbStart))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -819,6 +839,13 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 	}
 	if err != nil {
 		return err
+	}
+	if task.StartAfterSet != nil {
+		// The receipt is written after the CAS update, in its transaction: a
+		// lost race leaves neither the date nor a receipt behind.
+		if err := insertStartAfterReceipt(ctx, tx, task.StartAfterSet, result.Version); err != nil {
+			return err
+		}
 	}
 	if tx != nil {
 		if err := tx.Commit(); err != nil {
@@ -1296,9 +1323,10 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 	}
 
 	where := "WHERE " + joinAnd(conditions)
-	// Default to updated_at DESC so any task mutation (create/update/move) floats
-	// the task to the top of the first page — the "write-through" effect.
-	// Callers may override via explicit sort_by/sort_dir query params.
+	// Default order is updated_at ASC (orderClause picks DESC only when
+	// sort_dir=desc), so the least recently touched task comes first and a
+	// mutated task moves to the end. Callers may override via explicit
+	// sort_by/sort_dir query params; tasks.id ASC breaks ties.
 	order := orderClause(pg, allowedSortColumns{
 		"title":      "title",
 		"priority":   "priority",
@@ -1489,7 +1517,7 @@ func (r *TaskRepo) ListByStatusCategory(ctx context.Context, workspaceID uuid.UU
 
 	dataQ := `SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
 		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
-		t.due_date, t.start_after, t.estimated_hours, t.custom_fields, t.labels,
+		t.due_date, t.start_after, t.start_after_origin, t.start_after_receipt_id, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
 		t.completed_at, t.deleted_at,
 		t.recurring_schedule_id, t.recurring_instance_number, ` + taskComputedColsAliased + `
@@ -1541,7 +1569,7 @@ func (r *TaskRepo) ListTriageQueue(ctx context.Context, workspaceID uuid.UUID, p
 
 	dataQ := `SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
 		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
-		t.due_date, t.start_after, t.estimated_hours, t.custom_fields, t.labels,
+		t.due_date, t.start_after, t.start_after_origin, t.start_after_receipt_id, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
 		t.completed_at, t.deleted_at,
 		t.recurring_schedule_id, t.recurring_instance_number,
@@ -1950,7 +1978,7 @@ func (r *TaskRepo) ListByUserActive(ctx context.Context, workspaceID, userID uui
 
 	dataQ := `SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
 		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
-		t.due_date, t.start_after, t.estimated_hours, t.custom_fields, t.labels,
+		t.due_date, t.start_after, t.start_after_origin, t.start_after_receipt_id, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
 		t.completed_at, t.deleted_at,
 		t.recurring_schedule_id, t.recurring_instance_number, ` + taskComputedColsAliased + `
@@ -1977,7 +2005,7 @@ func (r *TaskRepo) ListByUserActive(ctx context.Context, workspaceID, userID uui
 func (r *TaskRepo) ListOpenByRecurringScheduleID(ctx context.Context, scheduleID, exceptTaskID uuid.UUID) ([]domain.Task, error) {
 	q := `SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
 		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
-		t.due_date, t.start_after, t.estimated_hours, t.custom_fields, t.labels,
+		t.due_date, t.start_after, t.start_after_origin, t.start_after_receipt_id, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
 		t.completed_at, t.deleted_at,
 		t.recurring_schedule_id, t.recurring_instance_number,

@@ -1154,13 +1154,21 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 		}
 	}
 
+	// metadata.wakes=false marks a note (typed outcomes §4.5): it is written
+	// and shown, but creates no mention or handoff delivery, wakes no assignee
+	// and opens no closed-card follow-up. Its @-handles are plain text, so the
+	// handoff gate below has nothing to protect.
+	wakes := domain.CommentWakes(comment.Metadata)
+
 	// Mention-handoff gate (audit §3.1, an internal ticket): refuse to persist a
 	// comment that @-mentions a fiddler-driven agent lane with no real path
 	// for them to see it. Must run before commentRepo.Create — the whole
 	// point is that the dead-letter comment never gets written, not merely
 	// that it goes un-notified.
-	if err := s.enforceMentionHandoffGate(ctx, comment, task, wsID); err != nil {
-		return err
+	if wakes {
+		if err := s.enforceMentionHandoffGate(ctx, comment, task, wsID); err != nil {
+			return err
+		}
 	}
 
 	if comment.ID == uuid.Nil {
@@ -1204,7 +1212,7 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 			terminalTask = st.Category == domain.StatusCategoryDone || st.Category == domain.StatusCategoryCancelled
 		}
 	}
-	if s.agentNotifySvc != nil && task.AssigneeType == domain.AssigneeTypeAgent && task.AssigneeID != nil && !terminalTask {
+	if wakes && s.agentNotifySvc != nil && task.AssigneeType == domain.AssigneeTypeAgent && task.AssigneeID != nil && !terminalTask {
 		taskSnap := s.buildTaskSnap(ctx, task)
 
 		commentBody := comment.Body
@@ -1240,8 +1248,10 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 		// A person naming the assignee on their own parked card lifts it into
 		// the lane's feed first, so the verdict recorded below reads the card
 		// where it now is.
-		s.liftParkedCardOnAssigneeMention(ctx, comment, task, wsID)
-		s.notifyMentions(ctx, comment, task, "", wsID)
+		if wakes {
+			s.liftParkedCardOnAssigneeMention(ctx, comment, task, wsID)
+			s.notifyMentions(ctx, comment, task, "", wsID)
+		}
 		if !s.textGateOff {
 			// Server-side enforcement: "❓ Blocking @user" → auto-move task to triage + arm gate.
 			s.enforceBlockingTriage(ctx, comment, task, wsID)
@@ -1276,7 +1286,9 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 	// the closed card, route the remark onto a card the feed actually polls.
 	// Deliberately placed AFTER the comment is persisted: this routes a remark,
 	// it never rejects one.
-	s.createClosedTaskFollowUp(ctx, comment, task, terminalTask)
+	if wakes {
+		s.createClosedTaskFollowUp(ctx, comment, task, terminalTask)
+	}
 
 	// Dispatch in-app notification to subscribed workspace users for comment.created.
 	// Automation housekeeping ([fiddler] nudges, "🤖 auto:" notes) is not news

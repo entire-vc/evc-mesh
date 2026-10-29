@@ -266,6 +266,10 @@ func (r *mockWorkspaceMemberRepo) UpdateRole(_ context.Context, _, _ uuid.UUID, 
 	return nil
 }
 
+func (r *mockWorkspaceMemberRepo) UpdateProfile(_ context.Context, _, _ uuid.UUID, _ domain.MemberProfileUpdate) (bool, error) {
+	return true, nil
+}
+
 func (r *mockWorkspaceMemberRepo) Delete(_ context.Context, _, _ uuid.UUID) error {
 	return nil
 }

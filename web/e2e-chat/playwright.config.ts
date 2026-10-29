@@ -37,9 +37,18 @@ export default defineConfig({
     // Pure red controls: no network, no browser. Run first so a broken detector
     // is known before it is trusted against the live target.
     { name: "controls", testMatch: /controls\.spec\.ts$/ },
+    // S07 waits out the 1 h offline TTL; it runs before agent-chat so nothing else is queued for the
+    // offline agent while its runner claims, and a failure here does not skip the rest.
+    {
+      name: "s07",
+      testMatch: /s07\.spec\.ts$/,
+      dependencies: ["controls"],
+      timeout: 90 * 60_000,
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
     {
       name: "agent-chat",
-      testIgnore: /controls\.spec\.ts$/,
+      testIgnore: /(controls|s07)\.spec\.ts$/,
       dependencies: ["controls"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },

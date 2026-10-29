@@ -53,6 +53,7 @@ var wsScopedRoutes = []wsRoute{
 	{http.MethodPost, "/members", map[string]string{"user_id": dummyUUID, "role": "member"}},
 	{http.MethodPatch, "/members/" + dummyUUID, map[string]string{"role": "admin"}},
 	{http.MethodDelete, "/members/" + dummyUUID, nil},
+	{http.MethodPut, "/members/" + dummyUUID + "/profile", map[string]string{"responsibility_zone": "x"}},
 	{http.MethodGet, "/users/search?q=a", nil},
 
 	{http.MethodPost, "/invites", map[string]string{"email": "intruder@test.mesh.local"}},

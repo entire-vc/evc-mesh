@@ -4,6 +4,9 @@ import {
   assertEffectiveMode, assertFramesDiffer, assertMarkdownDom, assertReadable, assertMemoryAndEventsClean, assertNoDeltaAfter, assertNoLeak, assertOk,
   assertOpaque404, assertOwnEvents, assertFixtureDisjoint, canary, assertStreaming, assertToolEvents, assertDeltasInFinal, assertEarlyDelta,
   assertTurnRunning, assertReplyCanStillCome, describeReply, type ReplyView,
+  type AuditTurn, assertQueuedUnclaimed, assertOneClaimOneTerminal, assertExpiredNotDelivered,
+
+  assertTabAfter, assertNoTab, assertSettingsReadback, assertLimitsReadback, assertChatOff, assertEmptyAgentsRejected,
 } from "./lib/detect";
 import { waitTurnFrame, withReplyState } from "./lib/chat";
 import { F1, redControl, row, until } from "./lib/harness";
@@ -237,4 +240,68 @@ test("REPLY-WAIT: a wait for a running turn's frame stops on a reply that ended 
   const streaming: ReplyView = { items: [{ id: "r1", role: "assistant", status: "streaming", body: "" }], active_turn: { id: "k", state: "streaming" } };
   let n = 0;
   expect(await waitTurnFrame(async () => streaming, "t1", 1, "A's stream starts", () => (++n > 3 ? "delta" : undefined), 5_000, 1)).toBe("delta");
+});
+
+// S07 turns as the audit reports them: an untouched queued one, the one the recovered runner answered, an expired one.
+const turn = (o: Partial<AuditTurn>): AuditTurn => ({
+  id: "t", state: "queued", runner_id: null, attempt: 0, first_claimed_at: null, started_at: null, finished_at: null,
+  error_code: null, stop_reason: null, last_seq: 0, terminal_seq: null, ...o,
+});
+const answered = turn({ state: "done", runner_id: "r", attempt: 1, first_claimed_at: "x", started_at: "x", finished_at: "x", stop_reason: "end_turn", last_seq: 2, terminal_seq: 2 });
+const expiredTurn = turn({ state: "expired", finished_at: "x", error_code: "not_delivered" });
+const notDelivered = { status: "failed", error_code: "not_delivered" };
+const refusedTerminal = { status: 409, code: "chat_turn_terminal" };
+const refusedStart = { status: 403, code: "chat_not_claim_holder" };
+
+test("S07-recovery: a claimed, started or missing queued turn, two claims, a second attempt, another runner and a second terminal all fail; one claim and one terminal pass", async () => {
+  await redControl("S07-red-queued-claimed", "detector", () => assertQueuedUnclaimed(turn({ state: "claimed", runner_id: "r", attempt: 1 })), /not an untouched queued turn/);
+  await redControl("S07-red-queued-started", "detector", () => assertQueuedUnclaimed(turn({ started_at: "x" })), /started_at set/);
+  await redControl("S07-red-queued-absent", "detector", () => assertQueuedUnclaimed(undefined), /not in the audit/);
+  await redControl("S07-red-two-claims", "detector", () => assertOneClaimOneTerminal(answered, "r", 2, 2, refusedTerminal), /handed out by 2 claim/);
+  await redControl("S07-red-second-attempt", "detector", () => assertOneClaimOneTerminal({ ...answered, attempt: 2 }, "r", 1, 2, refusedTerminal), /attempt 2/);
+  await redControl("S07-red-other-runner", "detector", () => assertOneClaimOneTerminal(answered, "other", 1, 2, refusedTerminal), /not by the recovered one/);
+  await redControl("S07-red-not-done", "detector", () => assertOneClaimOneTerminal({ ...answered, state: "failed", stop_reason: null }, "r", 1, 2, refusedTerminal), /need done\/end_turn/);
+  await redControl("S07-red-second-terminal-applied", "detector", () => assertOneClaimOneTerminal({ ...answered, last_seq: 3 }, "r", 1, 2, refusedTerminal), /need one terminal at seq 2/);
+  await redControl("S07-red-second-terminal-accepted", "detector", () => assertOneClaimOneTerminal(answered, "r", 1, 2, { status: 200, code: "" }), /second terminal .* answered 200/);
+  assertQueuedUnclaimed(turn({}));
+  assertOneClaimOneTerminal(answered, "r", 1, 2, refusedTerminal);
+});
+
+test("S07-expiry: a queued or claimed turn, no finish time, a delivered message, a late claim that gets the turn and a late start that is not refused all fail; an expired, not delivered turn passes", async () => {
+  await redControl("S07-red-still-queued", "detector", () => assertExpiredNotDelivered(turn({}), notDelivered, [], refusedStart), /is queued, need expired/);
+  await redControl("S07-red-no-finished-at", "detector", () => assertExpiredNotDelivered({ ...expiredTurn, finished_at: null }, notDelivered, [], refusedStart), /without finished_at/);
+  await redControl("S07-red-wrong-code", "detector", () => assertExpiredNotDelivered({ ...expiredTurn, error_code: "runner_error" }, notDelivered, [], refusedStart), /need not_delivered/);
+  await redControl("S07-red-expired-was-claimed", "detector", () => assertExpiredNotDelivered({ ...expiredTurn, runner_id: "r", attempt: 1 }, notDelivered, [], refusedStart), /was claimed or started/);
+  await redControl("S07-red-message-delivered", "detector", () => assertExpiredNotDelivered(expiredTurn, { status: "done", error_code: null }, [], refusedStart), /user message is done/);
+  await redControl("S07-red-late-claim-gets-it", "detector", () => assertExpiredNotDelivered(expiredTurn, notDelivered, ["t"], refusedStart), /late claim handed out/);
+  await redControl("S07-red-late-start-accepted", "detector", () => assertExpiredNotDelivered(expiredTurn, notDelivered, [], { status: 200, code: "" }), /late start .* answered 200/);
+  assertExpiredNotDelivered(expiredTurn, notDelivered, ["other"], refusedStart);
+});
+
+test("S01 enable: Chat missing, after Updates or before Docs, a tab in a chat-off project, a changed readback and a served chat-off call all fail", async () => {
+  const builtin = ["board", "list", "timeline", "calendar", "docs", "updates"];
+  const good = ["board", "list", "timeline", "calendar", "docs", "chat", "updates", "ext:gitlab"];
+  await redControl("S01-red-tab-missing", "detector", () => assertTabAfter(builtin, "docs", "chat"), /"chat" is not in the strip/);
+  await redControl("S01-red-tab-after-updates", "detector", () => assertTabAfter([...builtin, "chat"], "docs", "chat"), /not right after "docs"/);
+  await redControl("S01-red-tab-before-docs", "detector", () => assertTabAfter(["board", "chat", "docs"], "docs", "chat"), /not right after "docs"/);
+  await redControl("S01-red-tab-in-off-project", "detector", () => assertNoTab(good, "chat"), /in the strip of a project without it/);
+  await redControl("S01-red-strip-not-rendered", "detector", () => assertNoTab([], "chat"), /strip is not rendered/);
+  const saved = { enabled: true, agents: ["a1", "a2"], allowed_roles: ["admin", "member"] };
+  await redControl("S01-red-readback-off", "detector", () => assertSettingsReadback("S01", saved, { ...saved, enabled: false }), /enabled=false/);
+  await redControl("S01-red-readback-agents", "detector", () => assertSettingsReadback("S01", saved, { ...saved, agents: ["a1"] }), /agents \[a1\]/);
+  await redControl("S01-red-readback-roles", "detector", () => assertSettingsReadback("S01", saved, { ...saved, allowed_roles: ["admin"] }), /allowed_roles/);
+  const limits = { history_retention_days: 0, max_attachment_mb: 25, session_idle_minutes: 10, offline_expiry_hours: 24 };
+  await redControl("S01-red-limits-changed", "detector", () => assertLimitsReadback("S01", limits, { ...limits, session_idle_minutes: 5 }), /session_idle_minutes=5/);
+  await redControl("S01-red-limits-empty", "detector", () => assertLimitsReadback("S01", {}, {}), /no limits/);
+  await redControl("S01-red-off-served", "detector", () => assertChatOff("S01", 201, "{}"), /answered 201/);
+  await redControl("S01-red-off-other-code", "detector", () => assertChatOff("S01", 404, JSON.stringify({ error_code: "thread_not_found" })), /expected 404 chat_not_enabled/);
+  await redControl("S01-red-off-5xx", "detector", () => assertChatOff("S01", 500, "Internal Server Error"), /expected 404 chat_not_enabled/);
+  await redControl("S01-red-empty-agents-saved", "detector", () => assertEmptyAgentsRejected(200, saved, saved), /answered 200/);
+  await redControl("S01-red-empty-agents-stored", "detector", () => assertEmptyAgentsRejected(422, saved, { ...saved, agents: [] }), /agents \[\]/);
+  assertTabAfter(good, "docs", "chat");
+  assertNoTab(builtin, "chat");
+  assertSettingsReadback("S01", saved, { enabled: true, agents: ["a2", "a1"], allowed_roles: ["member", "admin"] });
+  assertLimitsReadback("S01", limits, { ...limits });
+  assertChatOff("S01", 404, JSON.stringify({ error_code: "chat_not_enabled" }));
+  assertEmptyAgentsRejected(422, saved, saved);
 });

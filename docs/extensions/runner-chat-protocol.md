@@ -143,4 +143,6 @@ These are open work; do not rely on or promise them.
 
 Each row of §3 maps to a test: `internal/handler/chat_claim_handler_test.go`,
 `chat_runner_events_handler_test.go`, `chat_runner_handler_test.go` and their `_db_test.go`
-counterparts. Last checked against `origin/main` at the commit this page was merged on.
+counterparts. Offline expiry (§6) and recovery of a queued turn by a returning runner are
+exercised end to end against the published app by `web/e2e-chat/s07.spec.ts` (job
+`agent-chat-e2e`). Last checked against `origin/main` at the commit this page was merged on.

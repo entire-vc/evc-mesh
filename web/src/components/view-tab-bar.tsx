@@ -112,6 +112,7 @@ const MeasureStrip = memo(function MeasureStrip({
     <div
       ref={measureRef}
       aria-hidden
+      data-testid="project-tabs-order"
       className="pointer-events-none invisible col-start-1 row-start-1 flex h-0 w-max overflow-hidden"
     >
       {tabs.map((tab) => (
@@ -119,6 +120,7 @@ const MeasureStrip = memo(function MeasureStrip({
           key={tab.id}
           className="flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 text-sm font-medium"
           tabIndex={-1}
+          data-tab-id={tab.id}
         >
           <tab.Icon className="h-3.5 w-3.5" />
           <span>{tabLabel(tab, t)}</span>
@@ -321,6 +323,7 @@ export function ViewTabBar({
             return (
               <button
                 key={id}
+                data-tab-id={id}
                 onClick={() => go(tab)}
                 className={cn(
                   "flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 text-sm transition-colors",
@@ -362,6 +365,7 @@ export function ViewTabBar({
                   return (
                     <DropdownMenuItem
                       key={id}
+                      data-tab-id={id}
                       onClick={() => go(tab)}
                       className="gap-2"
                       aria-current={isActive ? "page" : undefined}

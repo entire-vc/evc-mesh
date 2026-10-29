@@ -17,7 +17,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Closed-card follow-up (task #754173eb, audit 1.14).
+// Closed-card follow-up (an internal ticket, audit 1.14).
 //
 // The task names four branches, and they are the four this file leads with:
 //
@@ -81,7 +81,7 @@ func (f *followUpTaskCreator) createdTasks() []*domain.Task {
 	return append([]*domain.Task(nil), f.created...)
 }
 
-// MoveTask is the reopen half of the double (#5194afd4): the contract's
+// MoveTask is the reopen half of the double: the contract's
 // closed-repeat branch returns the SAME root to todo through the task
 // service's ordinary move path (activity log, position handling), not a raw
 // repo write — so the double has to carry it too. It also mirrors the one
@@ -288,7 +288,7 @@ func TestClosedFollowUp_ForeignAgentCommentOpensFollowUpCard(t *testing.T) {
 }
 
 // The edge is relates_to and must NOT be blocks: a blocks edge onto a
-// still-open task freezes the feed (CLAUDE-workflow.md §ROUTE-gate), which
+// still-open task freezes the feed (the team workflow guide §ROUTE-gate), which
 // would make this mechanism silence the very card it just created.
 func TestClosedFollowUp_EdgeIsRelatesToNotBlocks(t *testing.T) {
 	env := setupFollowUpEnv(t)
@@ -377,6 +377,19 @@ func TestClosedFollowUp_DriverMetadataSourceCreatesNothing(t *testing.T) {
 	assert.Empty(t, env.taskSvc.createdTasks())
 }
 
+// metadata.wakes=false is a note: on a closed card it opens no follow-up. The
+// same remark without the flag does (positive control).
+func TestClosedFollowUp_WakesFalseNoteCreatesNothing(t *testing.T) {
+	env := setupFollowUpEnv(t)
+	env.comment(t, "header is not sticky", func(c *domain.Comment) {
+		c.Metadata = []byte(`{"wakes":false}`)
+	})
+	assert.Empty(t, env.taskSvc.createdTasks(), "wakes=false: no follow-up card")
+
+	env.comment(t, "header is not sticky")
+	assert.Len(t, env.taskSvc.createdTasks(), 1, "without the flag the same remark opens a follow-up")
+}
+
 // Negative control for the driver check, and the reason it matches a PREFIX of
 // the first line rather than a substring of the body: a person writing ABOUT a
 // driver is exactly the remark this mechanism exists to deliver. A substring
@@ -420,7 +433,7 @@ func TestClosedFollowUp_CancelledCardAlsoRoutes(t *testing.T) {
 	assert.Len(t, env.taskSvc.createdTasks(), 1)
 }
 
-// --- Identity, dedup and reopen (#5194afd4) ----------------------------------
+// --- Identity, dedup and reopen ----------------------------------
 //
 // The old label-scan dedup pinned "a burst of remarks → one card", whatever
 // the texts. The approved contract replaces that premise: a finding is the
@@ -470,10 +483,10 @@ func TestClosedFollowUp_DifferentFindingOpensItsOwnRoot(t *testing.T) {
 }
 
 // RED test, written and run against the pre-fix code BEFORE implementing the
-// #5194afd4 contract (P5 step 1). A repeat of the SAME finding after its root
+// an internal ticket contract (P5 step 1). A repeat of the SAME finding after its root
 // was closed must reopen THAT root — the same card back in todo, not a second
 // card. Against the pre-fix code this fails with createdTasks=2, which is the
-// measured defect (#9b712414 repro: f0d4539b closed → same text → 06b275a8).
+// measured defect (an internal ticket repro: an internal ticket closed → same text → an internal ticket).
 func TestClosedFollowUp_ClosedRepeatReopensTheSameRoot(t *testing.T) {
 	env := setupFollowUpEnv(t)
 	env.comment(t, "Шапка не sticky.")
@@ -710,7 +723,7 @@ func stubRootRetrySleep(t *testing.T) {
 	t.Cleanup(func() { followUpRootRetrySleep = prev })
 }
 
-// --- The claim/card visibility race (codex-review P1 on MR !1078) ----------
+// --- The claim/card visibility race (code review P1 on a review) ----------
 //
 // The claim row is visible before the winner's CARD is. A loser reading the
 // store in that window must WAIT for the card, not drop the repeat — the
@@ -789,7 +802,7 @@ func TestClosedFollowUp_WedgedWinnerDefersTheRepeatVisibly(t *testing.T) {
 	assert.Len(t, env.rootsRepo.items, 1, "the wedged claim stays — the next repeat retries against it")
 }
 
-// --- The shipped-root reopen (codex-review P2 on MR !1078) -----------------
+// --- The shipped-root reopen (code review P2 on a review) -----------------
 
 // A SHIPPED root refuses MoveTask to todo (TaskShippedError is the guard);
 // the reopen goes through the guard's own escape hatch — clear the flag
@@ -815,7 +828,7 @@ func TestClosedFollowUp_ReopenClearsTheShippedFlag(t *testing.T) {
 }
 
 // The shipped flag is cleared BEFORE the move, so a move that then fails must
-// put it back (codex-review P2, MR !1078, round 12): a failed reopen changes
+// put it back (code review P2, a review, round 12): a failed reopen changes
 // nothing about the closed root, and "fix verified live" was not disproved by
 // a repeat that was never delivered. RED against a failure path that only
 // returns the storm slot.
@@ -838,8 +851,8 @@ func TestClosedFollowUp_FailedReopenRestoresTheShippedFlag(t *testing.T) {
 	assert.True(t, fresh.IsShipped, "a reopen that failed must not cost the shipped flag")
 }
 
-// The storm budget counts DELIVERED reopens, not attempts (codex-review P2
-// on MR !1078, round 4). TryReopen takes its slot BEFORE the move that can
+// The storm budget counts DELIVERED reopens, not attempts (code review P2
+// on a review, round 4). TryReopen takes its slot BEFORE the move that can
 // fail; without compensation three failed reopens burn the whole 24h window
 // with nothing delivered and the fourth — healthy this time — is
 // storm-limited. RED against the pre-compensation code: the fourth comment
@@ -868,7 +881,7 @@ func TestClosedFollowUp_FailedReopenDoesNotConsumeTheStormBudget(t *testing.T) {
 }
 
 // The compensation returns the slot WHOLE — the window anchor with the count
-// (codex-review P2, MR !1078, round 5). Restoring the count while leaving the
+// (code review P2, a review, round 5). Restoring the count while leaving the
 // anchor at the failed attempt's instant stretches the window over reopens
 // that never delivered: a failed attempt near the window's end would
 // storm-limit a healthy repeat a day later. The anchor must return to the
@@ -922,7 +935,7 @@ func TestClosedFollowUp_FailedReopenDoesNotStretchTheWindow(t *testing.T) {
 		"a failed attempt must not stretch the window over reopens never delivered")
 }
 
-// The displaced-claim corner of the storm budget (codex-review P2, MR !1078,
+// The displaced-claim corner of the storm budget (code review P2, a review,
 // round 10): two repeats of one finding take slots close together, the later
 // claim displaces the earlier claim's pin, and the EARLIER reopen's move then
 // fails. Its compensation must still return its slot — the budget counts
@@ -1051,7 +1064,7 @@ func TestClosedFindingKey_Format(t *testing.T) {
 	}
 }
 
-// The "id:<ns>:<id>" join must be injective (codex-review P1, MR !1078,
+// The "id:<ns>:<id>" join must be injective (code review P1, a review,
 // round 7): ':' is the delimiter, so two DIFFERENT (ns, id) pairs that spell
 // the same joined string would merge distinct findings into one root. The
 // doc on findingIdentityFromMetadata promises a collision "only ever merges
@@ -1081,7 +1094,7 @@ func TestClosedFindingKey_ExplicitIdentityIsInjective(t *testing.T) {
 		"escaped and raw components must stay distinguishable")
 }
 
-// Whitespace is part of an explicit identity (codex-review P1, MR !1078,
+// Whitespace is part of an explicit identity (code review P1, a review,
 // round 9). The contract defines the identity by the metadata values as
 // written — nothing normalizes them — so " x" and "x" are different finding
 // ids and must not share a root. Trimming the value before the join merged
@@ -1112,7 +1125,7 @@ func TestClosedFollowUp_WhitespaceIsPartOfTheFindingIdentity(t *testing.T) {
 // The service-level shape of the same defect: two remarks whose explicit
 // identities JOIN to the same string are two findings, and the second must
 // get its own root — not be swallowed by "already open" against the first
-// one's root (codex-review P1, MR !1078, round 7).
+// one's root (code review P1, a review, round 7).
 func TestClosedFollowUp_CollidingExplicitIdentitiesAreDistinctFindings(t *testing.T) {
 	env := setupFollowUpEnv(t)
 
@@ -1160,7 +1173,7 @@ func utf8Valid(s string) bool {
 // two API calls, so the closing note lands on an ALREADY-closed card, and the
 // closer is usually not the assignee. Every routine cross-agent close —
 // which the fleet's own rules both permit and require a comment for — opened a
-// follow-up card. Live instance: `#0da96e03`, from the closer's own
+// follow-up card. Live instance: an internal ticket, from the closer's own
 // "Закрываю: …" note, within the same second.
 
 // logMove records a task.moved activity entry by actor at t.
@@ -1272,8 +1285,8 @@ func TestClosedFollowUp_UnreadableActivityLogStillRoutes(t *testing.T) {
 		"could-not-look must not read as could-not-find — this guard fails open by design")
 }
 
-// --- The informational-flag branch (task #df22e695, audit follow-up to
-// #754173eb) --------------------------------------------------------------
+// --- The informational-flag branch (an internal ticket, audit follow-up to
+// an internal ticket) --------------------------------------------------------------
 //
 // The task names three branches and all three are here, including the red
 // control (unflagged still routes) the task's own acceptance criteria demand:
@@ -1306,14 +1319,14 @@ func TestClosedFollowUp_UnflaggedAcknowledgementStillRoutes(t *testing.T) {
 		"forgetting the flag must cost nothing — an unflagged comment keeps today's behaviour")
 }
 
-// A live "❓ Blocking @pavel" marker in the same body overrides the flag: a
+// A live "❓ Blocking @alex" marker in the same body overrides the flag: a
 // question addressed to a human must never disappear because the author also
 // (mistakenly, or for the rest of the same comment) marked it informational.
 func TestClosedFollowUp_InformationalFlagDoesNotSuppressABlockingMarker(t *testing.T) {
 	env := setupFollowUpEnv(t)
 
 	env.comment(t, "Со своей стороны действий не требуется.\n\n"+
-		"---\n\n❓ **Blocking @pavel**: но нужно решение по бюджету на этот квартал.",
+		"---\n\n❓ **Blocking @alex**: но нужно решение по бюджету на этот квартал.",
 		func(c *domain.Comment) {
 			c.Metadata = []byte(`{"informational":true}`)
 		})

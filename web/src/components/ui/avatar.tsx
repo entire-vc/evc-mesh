@@ -13,10 +13,11 @@ const sizeClasses = {
   lg: "h-10 w-10 text-base",
 };
 
+// First letter or digit of each word, so "Hana (QA Mesh)" gives "HQ", not "H(".
 function getInitials(name: string): string {
   return name
-    .split(" ")
-    .map((part) => part[0])
+    .split(/\s+/)
+    .map((part) => part.match(/[\p{L}\p{N}]/u)?.[0])
     .filter(Boolean)
     .slice(0, 2)
     .join("")

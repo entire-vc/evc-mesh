@@ -56,6 +56,27 @@ test("393: Calendar is first in the menu, opens from there, and the trigger carr
   await expect(page.getByRole("menuitem", { name: "Calendar" })).toHaveAttribute("aria-current", "page");
 });
 
+// A project with Chat turned on: Chat is the tab right after Docs, at every width. The hidden
+// measuring copy holds the full order; at 393 Chat itself may be in the menu, after Docs there too.
+const order = (page: Page) =>
+  page.getByTestId("project-tabs-order").locator("[data-tab-id]").evaluateAll((els) => els.map((el) => el.getAttribute("data-tab-id")));
+for (const width of [1440, 393]) {
+  test(`${width}: Chat stands right after Docs`, async ({ page }) => {
+    await open(page, width, "light", IMPL, "&chat=1");
+    await expect(page.getByRole("button", { name: "Board", exact: true })).toBeVisible();
+    const ids = await order(page);
+    expect(ids.indexOf("chat"), ids.join(",")).toBe(ids.indexOf("docs") + 1);
+    const shown = await page.locator('button[data-tab-id]').evaluateAll((els) => els.map((el) => el.getAttribute("data-tab-id")));
+    if (shown.includes("chat")) expect(shown.indexOf("chat")).toBe(shown.indexOf("docs") + 1);
+    else {
+      await moreViews(page).click();
+      const menu = await page.locator('[role="menuitem"][data-tab-id]').evaluateAll((els) => els.map((el) => el.getAttribute("data-tab-id")));
+      expect(menu, "Chat not in the strip is in the menu").toContain("chat");
+      if (menu.includes("docs")) expect(menu.indexOf("chat")).toBe(menu.indexOf("docs") + 1);
+    }
+  });
+}
+
 // The harness wraps the strip in the real mobile header class, so the "…" trigger
 // takes its 44px touch target. At every width the shown tabs and the trigger must
 // sit side by side inside the strip: a tab that does not fit belongs in the menu.
@@ -87,5 +108,20 @@ for (const impl of ["before", "after"]) {
         await page.screenshot({ path: `${SHOTS}/${impl}-${width}-${theme}.png`, clip: { x: 0, y: 0, width, height: 90 } });
       });
     }
+  }
+}
+
+// The strip of a project with Chat, as the review sees it: at 393 the menu is open when Chat sits there.
+for (const width of [1440, 393]) {
+  for (const theme of ["light", "dark"]) {
+    test(`shot chat ${width} ${theme}`, async ({ page }) => {
+      await open(page, width, theme, IMPL, "&chat=1");
+      await expect(page.getByRole("button", { name: "Board", exact: true })).toBeVisible();
+      if (!(await page.locator('button[data-tab-id="chat"]').isVisible())) {
+        await moreViews(page).click();
+        await expect(page.locator('[role="menuitem"][data-tab-id="chat"]')).toBeVisible();
+      }
+      await page.screenshot({ path: `${SHOTS}/chat-${width}-${theme}.png`, clip: { x: 0, y: 0, width, height: width === 393 ? 400 : 90 } });
+    });
   }
 }

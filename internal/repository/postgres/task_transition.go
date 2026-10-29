@@ -28,6 +28,10 @@ func (r *TaskRepo) taskConflict(ctx context.Context, id uuid.UUID) error {
 	return &domain.TaskConflict{CurrentVersion: current.Version, CurrentStatusID: current.StatusID, CurrentUpdatedAt: current.UpdatedAt, CurrentAssigneeID: current.AssigneeID}
 }
 
+// alarmLabelsSet is UpdateTransition's labels assignment; finish_task swaps it
+// for its own value.
+const alarmLabelsSet = `labels=CASE WHEN $14::timestamptz IS NULL THEN labels ELSE $15 END`
+
 // UpdateTransition performs the decision and its assignment/alarm/lease effects
 // at one SQL linearization point. It never copies title, gates or other fields
 // from the caller's snapshot. All legacy writes also invalidate task.version.
@@ -35,7 +39,10 @@ func (r *TaskRepo) UpdateTransition(ctx context.Context, task *domain.Task, inpu
 	var queryer sqlx.QueryerContext = r.db
 	var tx *sqlx.Tx
 	var lockedConflict *domain.TaskConflict
-	if input.DisallowParkedWait || input.Audit != nil {
+	if input.Finish != nil && input.AlarmDue != nil {
+		return fmt.Errorf("a finish cannot also arm a park alarm")
+	}
+	if input.DisallowParkedWait || input.Audit != nil || input.Finish != nil {
 		var err error
 		tx, err = r.db.BeginTxx(ctx, nil)
 		if err != nil {
@@ -66,7 +73,7 @@ func (r *TaskRepo) UpdateTransition(ctx context.Context, task *domain.Task, inpu
  status_changed_at=$5, assignee_id=$6, assignee_type=$7,
  pre_review_assignee_id=$8, pre_review_assignee_type=$9, pre_review_restore=` + strconv.FormatBool(task.PreReviewRestore) + `, updated_at=$10,
  due_date=CASE WHEN $14::timestamptz IS NULL THEN due_date ELSE $14 END,
- labels=CASE WHEN $14::timestamptz IS NULL THEN labels ELSE $15 END`
+ ` + alarmLabelsSet
 	args := []any{task.ID, task.StatusID, task.Position, task.CompletedAt, task.StatusChangedAt,
 		task.AssigneeID, task.AssigneeType, task.PreReviewAssigneeID, task.PreReviewAssigneeType,
 		task.UpdatedAt, input.ExpectedVersion, input.ExpectedStatusID, input.ExpectedUpdatedAt, input.AlarmDue, pq.Array(input.AlarmLabels)}
@@ -124,6 +131,18 @@ func (r *TaskRepo) UpdateTransition(ctx context.Context, task *domain.Task, inpu
 		where := strings.Index(q, " WHERE t.id=")
 		q = q[:where] + fmt.Sprintf(", assigned_by=$%d", len(args)) + q[where:]
 	}
+	if f := input.Finish; f != nil {
+		// The base statement already assigns labels from $15 (the alarm CASE,
+		// refused together with Finish above): $15 carries the finish labels
+		// instead, since a second SET of one column is an error.
+		args[14] = pq.Array(f.Labels)
+		q = strings.Replace(q, alarmLabelsSet, "labels=$15::text[]", 1)
+		args = append(args, f.ResultKind)
+		where := strings.Index(q, " WHERE t.id=")
+		q = q[:where] + fmt.Sprintf(", result_kind=$%d", len(args)) + q[where:]
+		args = append(args, f.Caller)
+		q += fmt.Sprintf(` AND (t.checked_out_by IS NULL OR t.checked_out_by=$%d OR t.checkout_expires<clock_timestamp())`, len(args))
+	}
 	q += ` RETURNING version,checked_out_by,checkout_token,checkout_expires,checkout_acquired_at,checkout_session_id,checkout_request_id,checkout_generation,false AS changed`
 	var result struct {
 		domain.CheckoutLease
@@ -154,6 +173,11 @@ func (r *TaskRepo) UpdateTransition(ctx context.Context, task *domain.Task, inpu
 		}
 		return err
 	}
+	if input.Finish != nil {
+		if err := writeTaskFinish(ctx, tx, task.ID, input.Finish); err != nil {
+			return err
+		}
+	}
 	if input.Audit != nil {
 		if err := writeTransitionAudit(ctx, tx, task, input.ExpectedVersion, result.Version, input.Audit); err != nil {
 			return err
@@ -165,6 +189,9 @@ func (r *TaskRepo) UpdateTransition(ctx context.Context, task *domain.Task, inpu
 		}
 	}
 	task.Version = result.Version
+	if input.Finish != nil {
+		task.Labels = input.Finish.Labels
+	}
 	if input.AlarmDue != nil {
 		task.DueDate, task.Labels = input.AlarmDue, input.AlarmLabels
 	}

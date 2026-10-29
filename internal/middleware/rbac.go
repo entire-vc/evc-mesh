@@ -295,6 +295,29 @@ func RequireSelfOrPermission(agentIDParam string, perm Permission, memberRepo re
 	}
 }
 
+// RequireSelfUserOrPermission is RequireSelfOrPermission for a person: a
+// user-authenticated caller whose own id equals the userIDParam path param
+// proceeds with no permission lookup (editing their own member profile);
+// anyone else — another user, any agent or connector — falls back to
+// RequirePermission(perm). Only AuthTypeUser can match "self": a connector
+// acts for a user but is not that user, and an agent has no user id.
+func RequireSelfUserOrPermission(userIDParam string, perm Permission, memberRepo repository.WorkspaceMemberRepository) echo.MiddlewareFunc {
+	fallback := RequirePermission(perm, memberRepo)
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		guarded := fallback(next)
+		return func(c echo.Context) error {
+			if authType, _ := c.Get(ContextKeyAuthType).(string); authType == AuthTypeUser {
+				if callerID, err := GetUserID(c); err == nil {
+					if targetID, perr := uuid.Parse(c.Param(userIDParam)); perr == nil && targetID == callerID {
+						return next(c)
+					}
+				}
+			}
+			return guarded(c)
+		}
+	}
+}
+
 // WorkspaceOwnerCheck reports whether userID owns workspace wsID. It is the
 // owner fallback for a workspace whose owner has no workspace_members row (a
 // documented possibility: see oauthService.resolveMemberRole). nil disables the

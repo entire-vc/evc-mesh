@@ -2,6 +2,8 @@ package domain
 
 import (
 	"encoding/json"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -98,21 +100,29 @@ func outcomeErr(code, msg string) *OutcomeError { return &OutcomeError{Code: cod
 
 // TaskWait is the one active wait of an agent on a card (spec §4.1).
 type TaskWait struct {
-	ID                uuid.UUID       `json:"id" db:"id"`
-	TaskID            uuid.UUID       `json:"task_id" db:"task_id"`
-	AgentID           uuid.UUID       `json:"agent_id" db:"agent_id"`
-	SessionID         *string         `json:"session_id,omitempty" db:"session_id"`
-	Kind              TaskWaitKind    `json:"kind" db:"kind"`
-	TargetTaskID      *uuid.UUID      `json:"target_task_id,omitempty" db:"target_task_id"`
-	TargetCondition   *string         `json:"target_condition,omitempty" db:"target_condition"`
-	VCSLinkID         *uuid.UUID      `json:"vcs_link_id,omitempty" db:"vcs_link_id"`
-	Provider          *string         `json:"provider,omitempty" db:"provider"`
-	ProjectPath       *string         `json:"project_path,omitempty" db:"project_path"`
-	MRIID             *int            `json:"mr_iid,omitempty" db:"mr_iid"`
-	PipelineID        *int64          `json:"pipeline_id,omitempty" db:"pipeline_id"`
-	RequiredJobs      pq.StringArray  `json:"required_jobs" db:"required_jobs"`
-	Until             *string         `json:"until,omitempty" db:"until_state"`
-	UntilAt           *time.Time      `json:"until_at,omitempty" db:"until_at"`
+	ID              uuid.UUID      `json:"id" db:"id"`
+	TaskID          uuid.UUID      `json:"task_id" db:"task_id"`
+	AgentID         uuid.UUID      `json:"agent_id" db:"agent_id"`
+	SessionID       *string        `json:"session_id,omitempty" db:"session_id"`
+	Kind            TaskWaitKind   `json:"kind" db:"kind"`
+	TargetTaskID    *uuid.UUID     `json:"target_task_id,omitempty" db:"target_task_id"`
+	TargetCondition *string        `json:"target_condition,omitempty" db:"target_condition"`
+	VCSLinkID       *uuid.UUID     `json:"vcs_link_id,omitempty" db:"vcs_link_id"`
+	Provider        *string        `json:"provider,omitempty" db:"provider"`
+	ProjectPath     *string        `json:"project_path,omitempty" db:"project_path"`
+	MRIID           *int           `json:"mr_iid,omitempty" db:"mr_iid"`
+	PipelineID      *int64         `json:"pipeline_id,omitempty" db:"pipeline_id"`
+	RequiredJobs    pq.StringArray `json:"required_jobs" db:"required_jobs"`
+	Until           *string        `json:"until,omitempty" db:"until_state"`
+	UntilAt         *time.Time     `json:"until_at,omitempty" db:"until_at"`
+	// A time wait's evidence: the external event, where its deadline is
+	// published, why the card must wait for it, and the offset until_at was
+	// given in. EvidenceStatus is always "unverified" (see TimeEvidenceUnverified).
+	EventRef          *string         `json:"event_ref,omitempty" db:"event_ref"`
+	Source            *string         `json:"source,omitempty" db:"evidence_source"`
+	Why               *string         `json:"why,omitempty" db:"evidence_why"`
+	UntilAtOffset     *string         `json:"until_at_offset,omitempty" db:"until_at_offset"`
+	EvidenceStatus    *string         `json:"evidence_status,omitempty" db:"evidence_status"`
 	DecisionRequestID *uuid.UUID      `json:"decision_request_id,omitempty" db:"decision_request_id"`
 	HumanGateRef      *string         `json:"human_gate_ref,omitempty" db:"human_gate_ref"`
 	Note              string          `json:"note" db:"note"`
@@ -155,12 +165,16 @@ func (w *TaskWait) Validate(now time.Time) error {
 			return outcomeErr(CodeInvalidTarget, "a pipeline wait needs until: finished or green")
 		}
 	case TaskWaitTime:
+		if w.Until != nil {
+			return outcomeErr(CodeNaiveTime, "a time wait takes an absolute until_at, not a relative until")
+		}
 		if w.UntilAt == nil {
 			return outcomeErr(CodeInvalidTarget, "a time wait needs until_at")
 		}
 		if d := w.UntilAt.Sub(now); d < MinTimeWait || d > MaxTimeWait {
 			return outcomeErr(CodeTimeOutOfBounds, "until_at must be between 5 minutes and 30 days from now")
 		}
+		return validateTimeEvidence(w)
 	case TaskWaitDecision:
 		if w.DecisionRequestID == nil {
 			return outcomeErr(CodeInvalidTarget, "a decision wait needs decision_request_id")
@@ -294,4 +308,63 @@ type TurnCommandResult struct {
 	CommentID uuid.UUID       `json:"comment_id"`
 	Task      TurnCommandTask `json:"task"`
 	Released  bool            `json:"released"`
+}
+
+// TimeEvidenceUnverified is the only evidence status the server writes: it
+// checks the shape of a time wait's evidence and that a Mesh receipt exists,
+// not that the source really publishes this deadline.
+const TimeEvidenceUnverified = "unverified"
+
+// MaxTimeEvidenceLen bounds event_ref, source and why of a time wait and the
+// reason of a start_after write.
+const MaxTimeEvidenceLen = 500
+
+// minWhyLen keeps "why" from being a placeholder.
+const minWhyLen = 10
+
+// ParseEvidenceSource splits a time wait's source into an https URL or a Mesh
+// receipt ("comment:<uuid>" / "artifact:<uuid>"). receiptKind is empty for a URL.
+func ParseEvidenceSource(src string) (receiptKind string, receiptID uuid.UUID, err error) {
+	for _, kind := range []string{"comment", "artifact"} {
+		if rest, ok := strings.CutPrefix(src, kind+":"); ok {
+			id, perr := uuid.Parse(rest)
+			if perr != nil {
+				return "", uuid.Nil, outcomeErr(CodeMissingEvidence, "source "+kind+": needs a UUID")
+			}
+			return kind, id, nil
+		}
+	}
+	u, perr := url.Parse(src)
+	if perr != nil || u.Scheme != "https" || u.Host == "" {
+		return "", uuid.Nil, outcomeErr(CodeMissingEvidence, "source must be an https URL, comment:<uuid> or artifact:<uuid>")
+	}
+	return "", uuid.Nil, nil
+}
+
+// validateTimeEvidence refuses a time wait that names no external event with a
+// published deadline. A generic retry or poll has no such event and is refused.
+func validateTimeEvidence(w *TaskWait) error {
+	for name, v := range map[string]*string{"event_ref": w.EventRef, "source": w.Source, "why": w.Why} {
+		if emptyStr(v) {
+			return outcomeErr(CodeMissingEvidence, "a time wait needs event_ref, source and why: the external event and where its deadline is published")
+		}
+		if len(*v) > MaxTimeEvidenceLen {
+			return outcomeErr(CodeMissingEvidence, name+" is longer than 500 characters")
+		}
+	}
+	if len(strings.TrimSpace(*w.Why)) < minWhyLen {
+		return outcomeErr(CodeMissingEvidence, "why must say what happens at until_at")
+	}
+	if err := refuseGenericRetry(*w.EventRef); err != nil {
+		return err
+	}
+	if emptyStr(w.UntilAtOffset) {
+		return outcomeErr(CodeMissingEvidence, "until_at needs an explicit Z or UTC offset")
+	}
+	if _, _, err := ParseEvidenceSource(*w.Source); err != nil {
+		return err
+	}
+	status := TimeEvidenceUnverified
+	w.EvidenceStatus = &status
+	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -472,6 +473,34 @@ func (s *workspaceMemberService) SearchUsers(ctx context.Context, workspaceID, c
 		}
 	}
 	return result, nil
+}
+
+// UpdateMemberProfile writes a member's team profile. Partial: a field left
+// out of upd keeps its stored value. capabilities must be a JSON array of
+// strings, the shape the team directory and config export read back.
+func (s *workspaceMemberService) UpdateMemberProfile(ctx context.Context, workspaceID, targetUserID uuid.UUID, upd domain.MemberProfileUpdate) error {
+	if upd.Capabilities != nil {
+		var caps []string
+		if err := json.Unmarshal(upd.Capabilities, &caps); err != nil {
+			return apierror.ValidationError(map[string]string{"capabilities": "capabilities must be an array of strings"})
+		}
+		if caps == nil {
+			caps = []string{}
+		}
+		upd.Capabilities, _ = json.Marshal(caps)
+	}
+	if upd.Availability != nil && utf8.RuneCountInString(*upd.Availability) > 50 {
+		return apierror.ValidationError(map[string]string{"availability": "availability must be at most 50 characters"})
+	}
+
+	found, err := s.memberRepo.UpdateProfile(ctx, workspaceID, targetUserID, upd)
+	if err != nil {
+		return fmt.Errorf("workspace_member_service.UpdateMemberProfile: %w", err)
+	}
+	if !found {
+		return apierror.NotFound("WorkspaceMember")
+	}
+	return nil
 }
 
 // SetMemberDisplayName fills in the display name of a member of workspaceID.

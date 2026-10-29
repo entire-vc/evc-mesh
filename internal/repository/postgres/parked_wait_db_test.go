@@ -469,7 +469,7 @@ func TestParkedWaitStartAfterOwnership(t *testing.T) {
 		t.Run(fmt.Sprint(owned), func(t *testing.T) {
 			f := newParkedFixture(t)
 			future := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)
-			_, err := f.repo.db.Exec(`UPDATE tasks SET start_after=$2 WHERE id=$1`, f.id, future)
+			_, err := f.repo.db.Exec(`UPDATE tasks SET start_after=$2, start_after_origin='legacy_unknown' WHERE id=$1`, f.id, future)
 			require.NoError(t, err)
 			if owned {
 				meta, _ := json.Marshal(map[string]any{"parked_wait": map[string]any{"start_after": future}})
@@ -489,11 +489,14 @@ func TestParkedWaitStartAfterOwnership(t *testing.T) {
 			task, err := f.repo.GetByID(f.ctx, f.id)
 			require.NoError(t, err)
 			require.Nil(t, task.StartAfter)
+			var clears int
+			require.NoError(t, f.repo.db.Get(&clears, `SELECT count(*) FROM start_after_receipts WHERE task_id=$1 AND op='clear' AND start_after=$2`, f.id, future))
+			require.Equal(t, 1, clears, "the release leaves a clear receipt")
 		})
 	}
 	f := newParkedFixture(t)
 	future := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)
-	_, err := f.repo.db.Exec(`UPDATE tasks SET start_after=$2 WHERE id=$1`, f.id, future)
+	_, err := f.repo.db.Exec(`UPDATE tasks SET start_after=$2, start_after_origin='legacy_unknown' WHERE id=$1`, f.id, future)
 	require.NoError(t, err)
 	f.refresh(t)
 	f.plan.ClearStartAfter = true

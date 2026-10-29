@@ -49,4 +49,8 @@ type TaskTransition struct {
 	AlarmLabels        []string
 	// Automatic moves must leave registered WAITs to their atomic consumer.
 	DisallowParkedWait bool
+	// Finish carries finish_task's writes into this transition's transaction:
+	// labels and result_kind on the row, refused when another agent holds the
+	// checkout, then the closing comment, the cancelled wait and the outcome.
+	Finish *TaskFinish
 }

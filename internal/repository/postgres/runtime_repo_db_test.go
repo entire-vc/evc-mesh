@@ -336,8 +336,9 @@ func TestRuntimeRepoRefusesInvalidRequests(t *testing.T) {
 	}
 	observed := time.Now().Add(-time.Minute)
 	reports := map[string]domain.RuntimeReport{
-		"schema": mutate(func(r *domain.RuntimeReport) { r.SchemaVersion = 1 }),
-		"status": mutate(func(r *domain.RuntimeReport) { r.Status = "mystery" }),
+		"schema":  mutate(func(r *domain.RuntimeReport) { r.SchemaVersion = 1 }),
+		"status":  mutate(func(r *domain.RuntimeReport) { r.Status = "mystery" }),
+		"version": mutate(func(r *domain.RuntimeReport) { r.Version = "0.1.3 with spaces" }),
 		"unrelated pool": mutate(func(r *domain.RuntimeReport) {
 			r.Pools["not-in-catalog"] = domain.RuntimePoolObservation{State: "available", ObservedAt: observed}
 		}),

@@ -45,6 +45,8 @@ func TestTaskRepo_Update_SendsStartAfterColumn(t *testing.T) {
 			startAfter,       // $29 — the field this test exists to pin
 			int64(1),         // $30 — the snapshot version predicate
 			sqlmock.AnyArg(), // $31 — pre_review_restore
+			sqlmock.AnyArg(), // $32 — start_after_origin
+			sqlmock.AnyArg(), // $33 — start_after_receipt_id
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"version", "checked_out_by", "checkout_token", "checkout_expires", "checkout_acquired_at", "checkout_session_id", "checkout_request_id", "checkout_generation", "changed"}).AddRow(2, nil, nil, nil, nil, nil, nil, 0, false))
 
@@ -73,7 +75,7 @@ func TestTaskRepo_Search_SelectsStartAfterColumn(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(t.id) FROM tasks t")).
 		WithArgs(workspaceID).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-	mock.ExpectQuery(regexp.QuoteMeta("t.due_date, t.start_after, t.estimated_hours")).
+	mock.ExpectQuery(regexp.QuoteMeta("t.due_date, t.start_after, t.start_after_origin, t.start_after_receipt_id, t.estimated_hours")).
 		WithArgs(workspaceID, sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 
@@ -90,11 +92,29 @@ func TestTaskRepo_ListByStatusCategory_SelectsStartAfterColumn(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(t.id)")).
 		WithArgs(workspaceID, domain.StatusCategoryTriage).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-	mock.ExpectQuery(regexp.QuoteMeta("t.due_date, t.start_after, t.estimated_hours")).
+	mock.ExpectQuery(regexp.QuoteMeta("t.due_date, t.start_after, t.start_after_origin, t.start_after_receipt_id, t.estimated_hours")).
 		WithArgs(workspaceID, domain.StatusCategoryTriage, sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 
 	page, err := repo.ListByStatusCategory(context.Background(), workspaceID, domain.StatusCategoryTriage, pagination.Params{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, page.TotalCount)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTaskRepo_ListTriageQueue_SelectsStartAfterColumn(t *testing.T) {
+	repo, mock := newTaskRepoMock(t)
+	workspaceID := uuid.New()
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(t.id)")).
+		WithArgs(workspaceID, domain.StatusCategoryTriage, domain.StatusCategoryDone, domain.StatusCategoryCancelled).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery(regexp.QuoteMeta("t.due_date, t.start_after, t.start_after_origin, t.start_after_receipt_id, t.estimated_hours")).
+		WithArgs(workspaceID, domain.StatusCategoryTriage, domain.StatusCategoryDone, domain.StatusCategoryCancelled,
+			sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+	page, err := repo.ListTriageQueue(context.Background(), workspaceID, pagination.Params{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, page.TotalCount)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -107,7 +127,7 @@ func TestTaskRepo_ListByUserActive_SelectsStartAfterColumn(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(t.id)")).
 		WithArgs(workspaceID, userID).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-	mock.ExpectQuery(regexp.QuoteMeta("t.due_date, t.start_after, t.estimated_hours")).
+	mock.ExpectQuery(regexp.QuoteMeta("t.due_date, t.start_after, t.start_after_origin, t.start_after_receipt_id, t.estimated_hours")).
 		WithArgs(workspaceID, userID, sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 
@@ -121,7 +141,7 @@ func TestTaskRepo_ListOpenByRecurringScheduleID_SelectsStartAfterColumn(t *testi
 	repo, mock := newTaskRepoMock(t)
 	scheduleID, exceptTaskID := uuid.New(), uuid.New()
 
-	mock.ExpectQuery(regexp.QuoteMeta("t.due_date, t.start_after, t.estimated_hours")).
+	mock.ExpectQuery(regexp.QuoteMeta("t.due_date, t.start_after, t.start_after_origin, t.start_after_receipt_id, t.estimated_hours")).
 		WithArgs(scheduleID, exceptTaskID).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 

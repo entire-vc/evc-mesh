@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -36,18 +37,62 @@ func (b turnCommonBody) common() service.TurnCommon {
 
 type waitForBody struct {
 	turnCommonBody
-	On              string     `json:"on"`
-	TargetTaskID    *uuid.UUID `json:"target_task_id"`
-	TargetCondition *string    `json:"target_condition"`
-	VCSLinkID       *uuid.UUID `json:"vcs_link_id"`
-	Provider        *string    `json:"provider"`
-	ProjectPath     *string    `json:"project_path"`
-	MRIID           *int       `json:"mr_iid"`
-	PipelineID      *int64     `json:"pipeline_id"`
-	RequiredJobs    []string   `json:"required_jobs"`
-	Until           *string    `json:"until"`
-	UntilAt         *time.Time `json:"until_at"`
-	Note            string     `json:"note"`
+	On              string      `json:"on"`
+	TargetTaskID    *uuid.UUID  `json:"target_task_id"`
+	TargetCondition *string     `json:"target_condition"`
+	VCSLinkID       *uuid.UUID  `json:"vcs_link_id"`
+	Provider        *string     `json:"provider"`
+	ProjectPath     *string     `json:"project_path"`
+	MRIID           *int        `json:"mr_iid"`
+	PipelineID      *int64      `json:"pipeline_id"`
+	RequiredJobs    []string    `json:"required_jobs"`
+	Until           *string     `json:"until"`
+	UntilAt         untilAtJSON `json:"until_at"`
+	EventRef        *string     `json:"event_ref"`
+	Source          *string     `json:"source"`
+	Why             *string     `json:"why"`
+	Note            string      `json:"note"`
+}
+
+// untilAtJSON is until_at in a wait_for body. Anything but an RFC 3339 time
+// with Z or an offset ("6h", "2026-10-30T03:00:00") is a refused time wait,
+// 422 naive_time, not a malformed body.
+type untilAtJSON struct{ Time *time.Time }
+
+type untilAtTimeError struct{ value string }
+
+func (e *untilAtTimeError) Error() string {
+	return "until_at must be an absolute RFC 3339 time with Z or an offset, not " + e.value
+}
+
+func (u *untilAtJSON) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		u.Time = nil
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return &untilAtTimeError{value: string(b)}
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return &untilAtTimeError{value: string(b)}
+	}
+	u.Time = &t
+	return nil
+}
+
+// bindWaitFor binds a wait_for body; a naive or relative until_at is 422.
+func bindWaitFor(c echo.Context, b *waitForBody) *apierror.Error {
+	err := c.Bind(b)
+	if err == nil {
+		return nil
+	}
+	var uaErr *untilAtTimeError
+	if errors.As(err, &uaErr) {
+		return &apierror.Error{Code: http.StatusUnprocessableEntity, ErrorCode: domain.CodeNaiveTime, Message: uaErr.Error()}
+	}
+	return apierror.BadRequest("invalid request body")
 }
 
 // turnError renders a command refusal: an OutcomeError is 422 with its code,
@@ -73,14 +118,14 @@ func (h *TurnCommandHandler) WaitFor(c echo.Context) error {
 		return handleError(c, err)
 	}
 	var b waitForBody
-	err = c.Bind(&b)
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	if apiErr := bindWaitFor(c, &b); apiErr != nil {
+		return c.JSON(apiErr.Code, apiErr)
 	}
 	res, err := h.svc.WaitFor(c.Request().Context(), id, service.WaitForInput{
 		TurnCommon: b.common(), On: b.On, TargetTaskID: b.TargetTaskID, TargetCondition: b.TargetCondition,
 		VCSLinkID: b.VCSLinkID, Provider: b.Provider, ProjectPath: b.ProjectPath, MRIID: b.MRIID,
-		PipelineID: b.PipelineID, RequiredJobs: b.RequiredJobs, Until: b.Until, UntilAt: b.UntilAt, Note: b.Note,
+		PipelineID: b.PipelineID, RequiredJobs: b.RequiredJobs, Until: b.Until, UntilAt: b.UntilAt.Time,
+		EventRef: b.EventRef, Source: b.Source, Why: b.Why, Note: b.Note,
 	})
 	if err != nil {
 		return turnError(c, err)

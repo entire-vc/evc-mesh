@@ -618,10 +618,19 @@ type operatorAgentRow struct {
 // a) naming the runner that drives agent a. An explicit agent_controllers row
 // with a live lease wins. Otherwise the controller is derived from the agent's
 // enabled admission plus the freshest report of that admission's integration:
-// runner = controller_ref, host and version from the catalog entry, and the
-// lease end = received_at + the catalog's heartbeat_max_age_seconds (120 s when
-// the entry is missing). An agent without an enabled admission has no derived
+// runner = controller_ref, version from the report (the catalog entry's when
+// the runner does not send one), host from the catalog entry, and the lease
+// end = received_at + the catalog's heartbeat_max_age_seconds (120 s when the
+// entry is missing). An agent without an enabled admission has no derived
 // controller; a lapsed explicit row is the last resort.
+//
+// admittedBindingSQL limits an admission (alias adm) to a binding the latest
+// catalog revision still has, for the same agent: an admission row left
+// enabled after its binding was removed does not lead the agent.
+const admittedBindingSQL = `adm.enabled AND (SELECT cr.config->'bindings'->adm.binding_ref->'binding'->>'agent_id'
+		FROM runtime_catalog_revisions cr WHERE cr.integration_id = adm.integration_id
+		ORDER BY cr.revision DESC LIMIT 1) = adm.agent_id::text`
+
 const effectiveControllerSQL = `LEFT JOIN LATERAL (
 		SELECT u.runner_id, u.runner_name, u.host, u.version, u.lease_expires_at FROM (
 			SELECT c.runner_id::text AS runner_id, c.runner_name::text AS runner_name, c.host::text AS host,
@@ -629,13 +638,13 @@ const effectiveControllerSQL = `LEFT JOIN LATERAL (
 			FROM agent_controllers c WHERE c.agent_id = a.id AND c.lease_expires_at > now()
 			UNION ALL
 			(SELECT rep.controller_ref, rep.controller_ref,
-				COALESCE(cat.ctrl->>'host', ''), COALESCE(cat.ctrl->>'version', ''),
+				COALESCE(cat.ctrl->>'host', ''), COALESCE(NULLIF(rep.report->>'version', ''), cat.ctrl->>'version', ''),
 				rep.received_at + make_interval(secs => COALESCE(NULLIF((cat.ctrl->>'heartbeat_max_age_seconds')::int, 0), 120)), 1
 			FROM runtime_binding_admissions adm
 			JOIN runtime_controller_reports rep ON rep.integration_id = adm.integration_id
 			LEFT JOIN LATERAL (SELECT config->'controllers'->rep.controller_ref AS ctrl FROM runtime_catalog_revisions
 				WHERE integration_id = rep.integration_id ORDER BY revision DESC LIMIT 1) cat ON true
-			WHERE adm.agent_id = a.id AND adm.enabled
+			WHERE adm.agent_id = a.id AND ` + admittedBindingSQL + `
 			ORDER BY rep.received_at DESC LIMIT 1)
 			UNION ALL
 			SELECT c.runner_id::text, c.runner_name::text, c.host::text, c.version::text, c.lease_expires_at, 2
@@ -658,7 +667,7 @@ const operatorAgentsSQL = `SELECT a.id AS agent_id, a.name, a.operator_user_id, 
 	WHERE a.workspace_id=$2 AND a.deleted_at IS NULL
 		AND (a.operator_user_id=$1 OR ($3 AND EXISTS (SELECT 1 FROM runtime_binding_admissions adm
 			JOIN integration_configs ic ON ic.id=adm.integration_id
-			WHERE adm.agent_id=a.id AND adm.enabled
+			WHERE adm.agent_id=a.id AND ` + admittedBindingSQL + `
 				AND ic.workspace_id=$2 AND ic.provider IN ('runner','agent_runtime'))))
 	ORDER BY a.name, a.id`
 

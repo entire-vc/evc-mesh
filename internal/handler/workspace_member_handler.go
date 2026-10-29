@@ -225,6 +225,34 @@ func (h *WorkspaceMemberHandler) resetLoginLockout(c echo.Context, member *domai
 	}
 }
 
+// UpdateProfile handles PUT /workspaces/:ws_id/members/:user_id/profile.
+//
+// Like PUT /agents/:agent_id/profile this is a partial update (see
+// domain.MemberProfileUpdate). A person may always edit their own profile;
+// editing someone else's needs PermManageMembers (RequireSelfUserOrPermission,
+// wired at the route in cmd/api/main.go).
+func (h *WorkspaceMemberHandler) UpdateProfile(c echo.Context) error {
+	wsID, err := uuid.Parse(c.Param("ws_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid workspace_id"))
+	}
+
+	targetUserID, err := uuid.Parse(c.Param("user_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid user_id"))
+	}
+
+	var upd domain.MemberProfileUpdate
+	if err = c.Bind(&upd); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	if err := h.svc.UpdateMemberProfile(c.Request().Context(), wsID, targetUserID, upd); err != nil {
+		return handleError(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 // Remove handles DELETE /workspaces/:ws_id/members/:user_id
 func (h *WorkspaceMemberHandler) Remove(c echo.Context) error {
 	wsID, err := uuid.Parse(c.Param("ws_id"))
