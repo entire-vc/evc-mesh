@@ -106,6 +106,12 @@ func (r *TurnCommandRepo) CommitTurn(ctx context.Context, cmd *domain.TurnComman
 				return nil, err
 			}
 		}
+		if w.Kind == domain.TaskWaitTime {
+			err = checkEvidenceReceipt(ctx, tx, task.WorkspaceID, w)
+			if err != nil {
+				return nil, err
+			}
+		}
 		err = declareWaitTx(ctx, tx, w)
 		if err != nil {
 			return nil, err
@@ -293,13 +299,51 @@ func declareWaitTx(ctx context.Context, tx *sqlx.Tx, w *domain.TaskWait) error {
 		INSERT INTO task_waits
 			(task_id, agent_id, session_id, kind, target_task_id, target_condition,
 			 vcs_link_id, provider, project_path, mr_iid, pipeline_id, required_jobs,
-			 until_state, until_at, decision_request_id, human_gate_ref, note)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+			 until_state, until_at, decision_request_id, human_gate_ref, note,
+			 event_ref, evidence_source, evidence_why, until_at_offset, evidence_status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+			$18, $19, $20, $21, $22)
 		RETURNING id, created_at`,
 		w.TaskID, w.AgentID, w.SessionID, w.Kind, w.TargetTaskID, w.TargetCondition,
 		w.VCSLinkID, w.Provider, w.ProjectPath, w.MRIID, w.PipelineID, w.RequiredJobs,
 		w.Until, w.UntilAt, w.DecisionRequestID, w.HumanGateRef, w.Note,
+		w.EventRef, w.Source, w.Why, w.UntilAtOffset, w.EvidenceStatus,
 	).Scan(&w.ID, &w.CreatedAt)
+}
+
+// checkEvidenceReceipt confirms a time wait's Mesh receipt (comment:<uuid> or
+// artifact:<uuid>) exists in the card's workspace and was not written by the
+// waiting agent itself: an agent cannot vouch for its own deadline. An https
+// source is kept as given; the wait stays unverified either way.
+func checkEvidenceReceipt(ctx context.Context, tx *sqlx.Tx, workspaceID uuid.UUID, w *domain.TaskWait) error {
+	return checkEvidenceSource(ctx, tx, workspaceID, *w.Source, w.AgentID)
+}
+
+// checkEvidenceSource is checkEvidenceReceipt for any writer: start_after
+// evidence is held to the same receipt rule as a time wait's.
+func checkEvidenceSource(ctx context.Context, db sqlx.QueryerContext, workspaceID uuid.UUID, source string, writer uuid.UUID) error {
+	kind, id, err := domain.ParseEvidenceSource(source)
+	if err != nil || kind == "" {
+		return err
+	}
+	q := `SELECT c.author_id FROM comments c JOIN tasks t ON t.id = c.task_id JOIN projects p ON p.id = t.project_id
+		WHERE c.id = $1 AND p.workspace_id = $2`
+	if kind == "artifact" {
+		q = `SELECT a.uploaded_by FROM artifacts a JOIN tasks t ON t.id = a.task_id JOIN projects p ON p.id = t.project_id
+		WHERE a.id = $1 AND p.workspace_id = $2`
+	}
+	var author uuid.UUID
+	err = sqlx.GetContext(ctx, db, &author, q, id, workspaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.NewOutcomeError(domain.CodeMissingEvidence, "source "+kind+" not found in this workspace")
+	}
+	if err != nil {
+		return err
+	}
+	if author == writer {
+		return domain.NewOutcomeError(domain.CodeMissingEvidence, "source "+kind+" was written by the agent itself")
+	}
+	return nil
 }
 
 // waitRuntimeState is the card's runtime_state while the wait is active.

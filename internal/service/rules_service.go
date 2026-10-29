@@ -163,9 +163,9 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 			Email:              m.User.Email,
 			AvatarURL:          m.User.AvatarURL,
 			Role:               m.Role,
-			Capabilities:       json.RawMessage(`[]`),
-			ResponsibilityZone: "",
-			Availability:       "business-hours",
+			Capabilities:       memberCapabilities(m.Capabilities),
+			ResponsibilityZone: m.ResponsibilityZone,
+			Availability:       m.Availability,
 			Projects:           []string{},
 		})
 	}
@@ -175,6 +175,15 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 		Agents:    agents,
 		Humans:    humans,
 	}, nil
+}
+
+// memberCapabilities keeps the directory's capabilities an array: a member
+// value read without the column (nil) renders as [] rather than null.
+func memberCapabilities(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return json.RawMessage(`[]`)
+	}
+	return raw
 }
 
 // listGuestDirectoryAgents returns the GUEST agents of a workspace: home
@@ -350,12 +359,13 @@ func (s *rulesService) GetTeamDirectoryTree(ctx context.Context, workspaceID uui
 		humans = append(humans, domain.TeamDirectoryHuman{
 			ID:                 hwp.User.ID,
 			Name:               hwp.User.Name,
+			Username:           hwp.User.Username,
 			Email:              hwp.User.Email,
 			AvatarURL:          hwp.User.AvatarURL,
 			Role:               hwp.Role,
-			Capabilities:       json.RawMessage(`[]`),
-			ResponsibilityZone: "",
-			Availability:       "business-hours",
+			Capabilities:       memberCapabilities(hwp.Capabilities),
+			ResponsibilityZone: hwp.ResponsibilityZone,
+			Availability:       hwp.Availability,
 			Projects:           projects,
 		})
 	}
@@ -894,8 +904,10 @@ func (s *rulesService) ExportConfig(ctx context.Context, workspaceID uuid.UUID) 
 	}
 	for _, h := range dir.Humans {
 		hc := domain.TeamHumanConfig{
-			Name: h.Name,
-			Role: h.Role,
+			Name:               h.Name,
+			Role:               h.Role,
+			ResponsibilityZone: h.ResponsibilityZone,
+			Availability:       h.Availability,
 		}
 		if len(h.Capabilities) > 0 {
 			_ = json.Unmarshal(h.Capabilities, &hc.Capabilities)
@@ -1058,6 +1070,25 @@ func (s *rulesService) importTeamConfig(ctx context.Context, workspaceID uuid.UU
 		if hc.Role != "" && hc.Role != m.Role {
 			if err := s.memberRepo.UpdateRole(ctx, workspaceID, m.User.ID, hc.Role); err != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("human %q: update role error: %v", hc.Name, err))
+				continue
+			}
+		}
+		// Profile fields: like the role, an empty value in the YAML means
+		// "not given" and keeps what is stored.
+		var profile domain.MemberProfileUpdate
+		if hc.ResponsibilityZone != "" {
+			profile.ResponsibilityZone = &hc.ResponsibilityZone
+		}
+		if hc.Availability != "" {
+			profile.Availability = &hc.Availability
+		}
+		if hc.Capabilities != nil {
+			capJSON, _ := json.Marshal(hc.Capabilities)
+			profile.Capabilities = capJSON
+		}
+		if profile.ResponsibilityZone != nil || profile.Availability != nil || profile.Capabilities != nil {
+			if _, err := s.memberRepo.UpdateProfile(ctx, workspaceID, m.User.ID, profile); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("human %q: update profile error: %v", hc.Name, err))
 				continue
 			}
 		}

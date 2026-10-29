@@ -61,9 +61,9 @@ export const BUILTIN_PROJECT_TABS: readonly ProjectViewTabDescriptor[] = [
 export const CHAT_PROJECT_TAB = builtin("chat", MessageSquare, 5);
 
 /**
- * The strip of a project: the built-in tabs, Chat where the project turned it
- * on, and one tab per extension that is enabled and declares a screen. A
- * disabled extension is not in `screens`, so it has no tab.
+ * The strip of a project: the built-in tabs, Chat right after Docs where the
+ * project turned it on, and one tab per extension that is enabled and declares
+ * a screen. A disabled extension is not in `screens`, so it has no tab.
  */
 export function projectTabsWith(
   screens: ReadonlyArray<{ extensionId: string; title: string }>,
@@ -71,8 +71,7 @@ export function projectTabsWith(
 ): readonly ProjectViewTabDescriptor[] {
   if (screens.length === 0 && !chatEnabled) return BUILTIN_PROJECT_TABS;
   return [
-    ...BUILTIN_PROJECT_TABS,
-    ...(chatEnabled ? [CHAT_PROJECT_TAB] : []),
+    ...BUILTIN_PROJECT_TABS.flatMap((tab) => (chatEnabled && tab.id === "docs" ? [tab, CHAT_PROJECT_TAB] : [tab])),
     ...screens.map(({ extensionId, title }): ProjectViewTabDescriptor => ({
       id: `ext:${extensionId}`,
       labelKey: "viewTabs.tabs.extension",

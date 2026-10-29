@@ -180,7 +180,14 @@ function Bubble({ projectId, message, wsSlug }: { projectId: string; message: Ch
           {message.id.startsWith(LOCAL_PREFIX) && <span>{t("feed.sending")}</span>}
           {message.status === "queued" && !message.id.startsWith(LOCAL_PREFIX) && mine && <span>{t("feed.queued")}</span>}
           {message.status === "cancelled" && <span>{t("feed.stopped")}</span>}
-          {message.status === "failed" && <span className="text-destructive">{t("feed.failed")}</span>}
+          {message.status === "failed" &&
+            (message.error_code === "not_delivered" ? (
+              <span data-testid="chat-not-delivered" className="text-destructive" title={t("errors.not_delivered")}>
+                {t("feed.notDelivered")}
+              </span>
+            ) : (
+              <span className="text-destructive">{t("feed.failed")}</span>
+            ))}
           {!mine && message.body !== "" && (
             <button
               type="button"

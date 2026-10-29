@@ -292,4 +292,11 @@ describe("projectTabsWith", () => {
     expect(ext.label).toBe("GitLab");
     expect(ext.path("acme", "mesh")).toBe("/w/acme/p/mesh/x/gitlab");
   });
+
+  it("puts Chat right after Docs, before Updates and the extension tabs", () => {
+    const ids = projectTabsWith([{ extensionId: "gitlab", title: "GitLab" }], true).map((tab) => tab.id);
+    expect(ids.indexOf("chat")).toBe(ids.indexOf("docs") + 1);
+    expect(ids.slice(-1)).toEqual(["ext:gitlab"]);
+    expect(projectTabsWith([], false)).not.toContainEqual(expect.objectContaining({ id: "chat" }));
+  });
 });

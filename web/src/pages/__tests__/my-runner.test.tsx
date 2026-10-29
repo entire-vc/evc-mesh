@@ -132,13 +132,13 @@ describe("Runner entry schema", () => {
 describe("profileLabel", () => {
   const t = (k: string) => ({ "profiles.mode.subscription": "subscription", "profiles.mode.api": "API", "profiles.defaultModel": "default model" })[k] ?? k;
   const config = { profiles: {
-    "claude/work-team/subscription": { account_ref: "claude/work-team", harness: "claude_code", model: "claude-default", execution_mode: "subscription" },
+    "claude/blake-team/subscription": { account_ref: "claude/blake-team", harness: "claude_code", model: "claude-default", execution_mode: "subscription" },
     "anthropic-api/acme/api": { account_ref: "anthropic-api/acme", harness: "claude_code", model: "claude-sonnet-5-5", execution_mode: "api" },
     "glm/alex/subscription": { account_ref: "glm/alex", harness: "claude_code", model: "glm-5.3", execution_mode: "subscription" },
     "codex/alex/subscription": { account_ref: "codex/alex", harness: "codex", model: "codex-default", execution_mode: "subscription" },
   } };
   it("reads as tool · mode and account · model, the shapes of the live catalog", () => {
-    expect(profileLabel("claude/work-team/subscription", config, t)).toBe("Claude Code · subscription work-team · default model");
+    expect(profileLabel("claude/blake-team/subscription", config, t)).toBe("Claude Code · subscription blake-team · default model");
     expect(profileLabel("anthropic-api/acme/api", config, t)).toBe("Claude Code · API acme · Sonnet 5.5");
     expect(profileLabel("glm/alex/subscription", config, t)).toBe("Claude Code · subscription alex · GLM 5.3");
     expect(profileLabel("codex/alex/subscription", config, t)).toBe("Codex · subscription alex · default model");
@@ -238,6 +238,18 @@ describe("MyRunnerPage", () => {
     expect(screen.queryByTestId("my-runner-agent-dialog")).toBeNull();
     fireEvent.click(within(await openAgent("a1")).getByRole("button", { name: "Close" }));
     expect(screen.queryByTestId("my-runner-agent-dialog")).toBeNull();
+  });
+
+  it("the agent dialog takes focus on open, so Escape from the keyboard closes it, and gives it back to Edit", async () => {
+    renderPage("member", "agents");
+    const edit = within(await screen.findByTestId("my-runner-agent-a1")).getByRole("button", { name: /^Edit/ });
+    edit.focus();
+    fireEvent.click(edit);
+    const dialog = screen.getByTestId("my-runner-agent-dialog");
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByTestId("my-runner-agent-dialog")).toBeNull();
+    expect(document.activeElement).toBe(edit);
   });
 
   it("Escape puts the stored limit back", async () => {

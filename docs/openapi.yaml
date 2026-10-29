@@ -3922,6 +3922,68 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/v1/workspaces/{ws_id}/members/{user_id}/profile:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      tags: [Members]
+      summary: Update a member's team directory profile
+      description: >-
+        Partial update: a field left out keeps its stored value. A person may
+        always edit their own profile; editing someone else's requires the
+        manage-members permission. Read back by GET /workspaces/{ws_id}/team.
+      operationId: updateMemberProfile
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                responsibility_zone:
+                  type: string
+                capabilities:
+                  type: array
+                  items:
+                    type: string
+                availability:
+                  type: string
+                  maxLength: 50
+      responses:
+        "204":
+          description: Profile updated
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Not your profile and no manage-members permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Member not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/v1/workspaces/{ws_id}/users/search:
     parameters:
       - name: ws_id

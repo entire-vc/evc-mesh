@@ -69,6 +69,10 @@ func (r *rbacMockMemberRepo) UpdateRole(_ context.Context, _, _ uuid.UUID, _ str
 	return nil
 }
 
+func (r *rbacMockMemberRepo) UpdateProfile(_ context.Context, _, _ uuid.UUID, _ domain.MemberProfileUpdate) (bool, error) {
+	return true, nil
+}
+
 func (r *rbacMockMemberRepo) Delete(_ context.Context, _, _ uuid.UUID) error {
 	return nil
 }
@@ -357,7 +361,7 @@ func TestRBAC_Agent_CannotManageCF(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 }
 
-// TestRBAC_Agent_CannotRegisterAgent_NamesTheBoundary — #606c215e Part 2.
+// TestRBAC_Agent_CannotRegisterAgent_NamesTheBoundary — an internal ticket Part 2.
 // An admin-role grant does not help an agent actor here (the agent branch
 // checks agentPerms by ACTOR TYPE, never by role), and the generic "agents
 // cannot perform this action" message left whoever granted admin unable to
@@ -466,7 +470,7 @@ func TestRBAC_Viewer_CannotCreateTask(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: RequireSelfOrPermission — PUT /agents/:agent_id/profile (task #7acd2497)
+// Tests: RequireSelfOrPermission — PUT /agents/:agent_id/profile
 // ---------------------------------------------------------------------------
 
 // newRBACAgentContextWithParam is like newRBACAgentContext but also sets the
@@ -516,7 +520,7 @@ func TestRequireSelfOrPermission_AgentEditingOwnProfile_Allowed(t *testing.T) {
 }
 
 // TestRequireSelfOrPermission_AgentEditingAnotherAgent_Forbidden is the core
-// regression test for #7acd2497: agent A, authenticated with its own valid
+// regression test for an internal ticket: agent A, authenticated with its own valid
 // X-Agent-Key, must NOT be able to rewrite agent B's profile.
 func TestRequireSelfOrPermission_AgentEditingAnotherAgent_Forbidden(t *testing.T) {
 	repo := newRBACMockMemberRepo()
@@ -614,7 +618,7 @@ func TestHasPermission_OwnerHasAll(t *testing.T) {
 }
 
 func TestHasPermission_AgentLimitedPerms(t *testing.T) {
-	// PermMemoryIndex (task 440358b6): the fleet's mesh-embed-backfill.sh and
+	// PermMemoryIndex: the fleet's mesh-embed-backfill.sh and
 	// rechunk-prod-corpus.sh scripts call these routes under X-Agent-Key,
 	// so it must be allowed here once the routes move off connectorRBAC.
 	allowed := []Permission{PermCreateTask, PermUpdateTask, PermDeleteTask, PermAddComment, PermUploadArtifact, PermPublishEvent, PermManageRules, PermMemoryIndex}

@@ -182,6 +182,9 @@ func (authTestWorkspaceMemberRepo) ListWithProjects(_ context.Context, _ uuid.UU
 func (authTestWorkspaceMemberRepo) UpdateRole(_ context.Context, _, _ uuid.UUID, _ string) error {
 	return nil
 }
+func (authTestWorkspaceMemberRepo) UpdateProfile(_ context.Context, _, _ uuid.UUID, _ domain.MemberProfileUpdate) (bool, error) {
+	return true, nil
+}
 func (authTestWorkspaceMemberRepo) Delete(_ context.Context, _, _ uuid.UUID) error { return nil }
 func (authTestWorkspaceMemberRepo) CountOwners(_ context.Context, _ uuid.UUID) (int, error) {
 	return 1, nil

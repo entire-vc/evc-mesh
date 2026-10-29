@@ -1046,3 +1046,38 @@ above that. Revert: restore 722.7 after trimming ≥1.42 KB gz. Lead sign-off: t
 CI `perf-bundle` on the branch measured 727.09 / 173.23 (local build: the same), so the ceiling is the
 smallest 0.1 step above that. Revert: restore 724.2 / 173.2 together with reverting the MR.
 Lead sign-off: the product lead, signed 2026-10-29 on the card.
+
+`total_js_kb_gz` 727.1 → 727.2 (+0.1 KB gz), main's own growth:
+
+- The list view now pages in the table's sort order (`b9baaf972`, merged in parallel with the Runner
+  screen): `list-view.tsx` +26 lines. Each MR passed its own measurement; together main `29d95756f`
+  measures 727.2 in CI `perf-bundle` (job 461259), over the 727.1 ceiling by 0.1.
+- No UI share changed: the Runner screen's +2.9 stays as signed above.
+
+The ceiling is the smallest 0.1 step above the CI measurement. Revert: restore 727.1 after trimming
+≥0.1 KB gz. Lead sign-off: the product lead, signed 2026-10-29 on the card (raise only main's measured share).
+
+`total_js_kb_gz` 727.2 → 727.4 (+0.2 KB gz), keyboard access to the Runner agent dialog:
+
+- The dialog opened without taking focus, so Escape and Tab from the keyboard never reached it
+  (found in the live check of the Runner screen). The dialog now takes focus on open and gives it
+  back to the row's Edit button on close: `my-runner` chunk, total 727.20 → 727.32 measured on
+  main `c247a98a8`.
+- Cheaper variants do not work: React applies `autoFocus` only to form fields, not to the dialog
+  box, so the focus effect is the smallest fix.
+
+The ceiling is the smallest 0.1 step above 727.32. Revert: restore 727.2 together with reverting
+this change. Lead sign-off: the product lead, signed 2026-10-29 on the card.
+
+`total_js_kb_gz` 727.4 → 727.6 (+0.2 on main's ceiling at merge, the earlier change; +0.11 KB gz measured); `login.initial_js_kb_gz` unchanged (173.3):
+
+- Avatar initials taken from the first letter or digit of each word (`components/ui/avatar.tsx`:
+  `/[\p{L}\p{N}]/u` instead of the word's first character), so "Hana (QA Mesh)" shows "HQ", not "H(".
+  The emitted code grows by about 25 bytes, `index` by 9 bytes gz.
+- The rest is hash churn, not code: `index` gets a new content hash, and every lazy chunk that imports
+  from it carries the new file name, about +4 bytes gz each across the route chunks. Main had 0.01 KB
+  of headroom when measured (727.09 against 727.1), so any change to the initial chunk lands over the ceiling.
+- Nothing to trim: the diff is one regex and one split pattern.
+
+CI `perf-bundle` on the branch measured 727.21 / 173.24 against main at 727.1 (+0.11), so the raise is the smallest 0.1 step above
+that. Revert: lower by 0.2 together with reverting the MR. Lead sign-off: the product lead, signed 2026-10-29 on the card for +0.2 on main's ceiling at merge (if another raise lands first, rebase and recount from main).

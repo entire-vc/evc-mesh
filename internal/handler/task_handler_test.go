@@ -1238,27 +1238,33 @@ func TestTaskHandler_Update_ParentTaskID_NonexistentParentErrors(t *testing.T) {
 
 // --- start_after (an internal ticket, sub1 of an internal ticket) -------------------------------
 //
-// start_after mirrors due_date's read/write contract on the same three write
-// paths (Create, Update via flexTime, CreateSubtask) — same wasSet semantics,
-// same RFC3339-or-date-only parsing. due_date itself keeps its own separate
-// meaning (backlog wake-alarm) and must not be affected by writes to
-// start_after or vice versa — that independence is the whole point of the
-// split, so it is asserted explicitly below rather than assumed.
+// start_after is written on the same three paths (Create, Update,
+// CreateSubtask) with due_date's wasSet semantics, but the handler no longer
+// parses or applies it: it hands the raw value, claimed origin and evidence to
+// the service validator (service.prepareStartAfter), which owns the rules.
+// due_date itself keeps its own separate meaning (backlog wake-alarm) and must
+// not be affected by writes to start_after or vice versa — that independence
+// is the whole point of the split, so it is asserted explicitly.
 
 func TestTaskHandler_Create_WithStartAfter(t *testing.T) {
 	projectID := uuid.New()
 	mockSvc := &MockTaskService{
 		CreateFunc: func(ctx context.Context, task *domain.Task) error {
-			require.NotNil(t, task.StartAfter)
-			assert.Equal(t, "2026-09-16T00:00:00Z", task.StartAfter.UTC().Format(time.RFC3339))
+			require.NotNil(t, task.StartAfterWrite)
+			assert.Equal(t, "2026-09-16T00:00:00+03:00", task.StartAfterWrite.Raw, "the offset reaches the validator as sent")
+			require.NotNil(t, task.StartAfterWrite.Evidence)
+			assert.Equal(t, "nightly-export", task.StartAfterWrite.Evidence.EventRef)
 			assert.Nil(t, task.DueDate, "start_after must not implicitly set due_date")
+			at := time.Date(2026, 9, 15, 21, 0, 0, 0, time.UTC)
+			task.StartAfter = &at
 			return nil
 		},
 	}
 
 	h, e := setupTaskTest(mockSvc)
 
-	body := `{"title":"Not before next week","start_after":"2026-09-16T00:00:00Z"}`
+	body := `{"title":"Not before next week","start_after":"2026-09-16T00:00:00+03:00",
+		"start_after_evidence":{"event_ref":"nightly-export","source":"https://ci.example/schedules/1","why":"the export publishes at this time"}}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
@@ -1274,7 +1280,7 @@ func TestTaskHandler_Create_WithStartAfter(t *testing.T) {
 	var result domain.Task
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
 	require.NotNil(t, result.StartAfter)
-	assert.Equal(t, "2026-09-16T00:00:00Z", result.StartAfter.UTC().Format(time.RFC3339))
+	assert.Equal(t, "2026-09-15T21:00:00Z", result.StartAfter.UTC().Format(time.RFC3339))
 }
 
 // TestTaskHandler_Update_StartAfter_SetAndClear mirrors the due_date flexTime
@@ -1285,16 +1291,20 @@ func TestTaskHandler_Update_StartAfter_SetAndClear(t *testing.T) {
 	existingDue := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	existing := &domain.Task{ID: uuid.New(), Title: "Existing", DueDate: &existingDue}
 
-	got := updateTaskWithBody(t, existing, `{"start_after":"2026-09-16"}`)
-	require.NotNil(t, got.StartAfter, "date-only form must parse, same as due_date")
-	assert.Equal(t, "2026-09-16", got.StartAfter.Format("2006-01-02"))
+	got := updateTaskWithBody(t, existing, `{"start_after":"2026-09-16","start_after_origin":"human_explicit"}`)
+	require.NotNil(t, got.StartAfterWrite, "a present start_after reaches the validator")
+	assert.Equal(t, "2026-09-16", got.StartAfterWrite.Raw)
+	assert.Equal(t, "human_explicit", got.StartAfterWrite.Origin, "the claimed origin is passed on, the validator judges it")
 	require.NotNil(t, got.DueDate, "an unrelated start_after write must not touch due_date")
 	assert.True(t, existingDue.Equal(*got.DueDate))
 
-	// Explicit null clears it (wasSet=true, Time=nil) — same contract as due_date.
+	// Explicit null is a clear request (wasSet=true, Null) — whether it may
+	// clear is the validator's call, not the handler's.
 	existing2 := &domain.Task{ID: uuid.New(), Title: "Existing", StartAfter: &existingDue}
 	got2 := updateTaskWithBody(t, existing2, `{"start_after":null}`)
-	assert.Nil(t, got2.StartAfter, "explicit null must clear start_after")
+	require.NotNil(t, got2.StartAfterWrite)
+	assert.True(t, got2.StartAfterWrite.Null)
+	require.NotNil(t, got2.StartAfter, "the handler itself never clears start_after")
 }
 
 // TestTaskHandler_Update_StartAfter_OmittedLeavesUnchanged is the other half
@@ -1305,6 +1315,7 @@ func TestTaskHandler_Update_StartAfter_OmittedLeavesUnchanged(t *testing.T) {
 	existing := &domain.Task{ID: uuid.New(), Title: "Existing", StartAfter: &existingStart}
 
 	got := updateTaskWithBody(t, existing, `{"title":"New Title"}`)
+	assert.Nil(t, got.StartAfterWrite, "an omitted start_after is no write at all")
 	require.NotNil(t, got.StartAfter, "omitted start_after must leave the existing value untouched")
 	assert.True(t, existingStart.Equal(*got.StartAfter))
 }
@@ -1329,10 +1340,11 @@ func TestTaskHandler_CreateSubtask_WithStartAfter(t *testing.T) {
 
 	mockSvc := &MockTaskService{
 		CreateSubtaskFunc: func(ctx context.Context, pid uuid.UUID, input service.CreateSubtaskInput) (*domain.Task, error) {
-			require.NotNil(t, input.StartAfter)
-			assert.Equal(t, "2026-09-16T00:00:00Z", input.StartAfter.UTC().Format(time.RFC3339))
+			require.NotNil(t, input.StartAfterWrite)
+			assert.Equal(t, "2026-09-16T00:00:00Z", input.StartAfterWrite.Raw)
+			assert.Nil(t, input.StartAfter, "the date is set by the validator, not the handler")
 			assert.Nil(t, input.DueDate)
-			return &domain.Task{ID: uuid.New(), Title: input.Title, ParentTaskID: &pid, StartAfter: input.StartAfter}, nil
+			return &domain.Task{ID: uuid.New(), Title: input.Title, ParentTaskID: &pid}, nil
 		},
 	}
 

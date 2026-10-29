@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -235,16 +235,25 @@ function AgentDialog({ target, me, catalog, onClose, onAgentChanged, onCatalogSa
   const { t } = useTranslation("runner");
   const own = !!me && !!target.agent && target.agent.operator_user_id === me;
   const workspace = catalog?.source === "workspace" ? catalog : null;
+  // Focus moves into the dialog so Escape and Tab reach it, and goes back to the Edit button on close.
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    box.current?.focus();
+    return () => opener?.focus();
+  }, []);
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }} className="max-w-2xl">
       <DialogContent
+        ref={box}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="my-runner-agent-dialog-title"
         onClose={onClose}
         closeLabel={t("agents.close")}
         onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
-        className="max-h-[90dvh] space-y-5 overflow-y-auto p-4 sm:p-6"
+        className="max-h-[90dvh] space-y-5 overflow-y-auto p-4 outline-none sm:p-6"
         data-testid="my-runner-agent-dialog"
       >
         <DialogHeader>

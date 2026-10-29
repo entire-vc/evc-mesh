@@ -41,6 +41,17 @@ export function mergeRunners(runners: OperatorRunner[], state: RuntimeState | un
 }
 
 /**
+ * The version a runner runs: the one its controller report carries, else the
+ * one its lease announces, else the catalog entry's. catalogVersion is set
+ * only when the catalog entry names a different version than the runner does.
+ */
+export function runnerVersion(row: RunnerRow): { version: string; catalogVersion?: string } {
+  const reported = row.controller?.report?.report.version || row.runner?.version || "";
+  const catalog = row.controller?.entry.version || "";
+  return { version: reported || catalog, catalogVersion: reported && catalog && catalog !== reported ? catalog : undefined };
+}
+
+/**
  * A catalog controller no agent is led through is not a working runner: it is
  * off in the catalog, has never reported in this workspace, or reports without
  * leading anyone yet. The badge says which, where a runner shows "live".
@@ -99,7 +110,7 @@ function RunnerItem({ row, state }: { row: RunnerRow; state: RuntimeState | unde
   const r = row.runner;
   const c = row.controller;
   const host = r?.host || c?.entry.host || "";
-  const version = r?.version || c?.entry.version || "";
+  const { version, catalogVersion } = runnerVersion(row);
   const badge = runnerBadge(row);
   return (
     <li className="space-y-2 rounded-lg border border-border p-3" data-testid={`my-runner-runner-${row.key}`}>
@@ -111,7 +122,14 @@ function RunnerItem({ row, state }: { row: RunnerRow; state: RuntimeState | unde
         <dt className="text-muted-foreground">{t("runners.host")}</dt>
         <dd className="min-w-0 break-all">{host}</dd>
         <dt className="text-muted-foreground">{t("runners.version")}</dt>
-        <dd className="whitespace-nowrap">{version || t("runners.unknownVersion")}</dd>
+        <dd className="whitespace-nowrap">
+          {version || t("runners.unknownVersion")}
+          {catalogVersion && (
+            <span className="ml-2 text-xs text-warning" data-testid={`my-runner-catalog-version-${row.key}`}>
+              {t("runners.catalogVersion", { version: catalogVersion })}
+            </span>
+          )}
+        </dd>
         {r && (
           <>
             <dt className="text-muted-foreground">{t("runners.heartbeat")}</dt>

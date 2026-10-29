@@ -23,7 +23,7 @@ func TestTaskNoOpMetadataWritesNoActivity(t *testing.T) {
 	due := time.Now().Add(48 * time.Hour).UTC().Truncate(time.Second)
 	after := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
 	hours := 3.5
-	_, err := f.db.Exec(`UPDATE tasks SET due_date=$2,start_after=$3,estimated_hours=$4 WHERE id=$1`, id, due, after, hours)
+	_, err := f.db.Exec(`UPDATE tasks SET due_date=$2,start_after=$3,start_after_origin='legacy_unknown',estimated_hours=$4 WHERE id=$1`, id, due, after, hours)
 	require.NoError(t, err)
 	_, err = f.db.Exec(`DELETE FROM activity_log WHERE entity_id=$1`, id)
 	require.NoError(t, err)

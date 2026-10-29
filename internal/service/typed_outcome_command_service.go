@@ -65,7 +65,11 @@ type WaitForInput struct {
 	RequiredJobs    []string
 	Until           *string
 	UntilAt         *time.Time
-	Note            string
+	// EventRef, Source and Why are a time wait's evidence (see domain.TaskWait).
+	EventRef *string
+	Source   *string
+	Why      *string
+	Note     string
 }
 
 // TurnCommandService runs the commands.
@@ -82,6 +86,14 @@ type TurnCommandService struct {
 // and is refused; without hooks no assignee policy or notification runs.
 func NewTurnCommandService(store TurnCommandStore, links TurnVCSLinks, hooks TurnHooks, gitlab GitLabCheckerSource) *TurnCommandService {
 	return &TurnCommandService{store: store, links: links, hooks: hooks, gitlab: gitlab, now: time.Now}
+}
+
+func trimmed(v *string) *string {
+	if v == nil {
+		return nil
+	}
+	t := strings.TrimSpace(*v)
+	return &t
 }
 
 func refuse(code, msg string) error { return domain.NewOutcomeError(code, msg) }
@@ -114,7 +126,13 @@ func (s *TurnCommandService) WaitFor(ctx context.Context, taskID uuid.UUID, in W
 	case domain.TaskWaitPipeline:
 		w.ProjectPath, w.PipelineID, w.RequiredJobs, w.Until = in.ProjectPath, in.PipelineID, in.RequiredJobs, in.Until
 	case domain.TaskWaitTime:
-		w.UntilAt = in.UntilAt
+		// Until is copied only so a relative "6h" is refused, not dropped.
+		w.UntilAt, w.Until = in.UntilAt, in.Until
+		w.EventRef, w.Source, w.Why = trimmed(in.EventRef), trimmed(in.Source), trimmed(in.Why)
+		if in.UntilAt != nil {
+			off := in.UntilAt.Format("Z07:00")
+			w.UntilAtOffset = &off
+		}
 	default:
 		// decision and human waits have their own commands (ask_agent, set_human_gate).
 		return nil, refuse(domain.CodeInvalidTarget, "on must be card, mr, pipeline or time")

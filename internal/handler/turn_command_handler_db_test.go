@@ -147,6 +147,26 @@ func (f *turnFixture) checkout(t *testing.T, task, agent uuid.UUID) {
 	require.NoError(t, err)
 }
 
+// timeEvidence fills a time wait's evidence; keys already in m win.
+func timeEvidence(m map[string]any) map[string]any {
+	for k, v := range map[string]any{"event_ref": "nightly-export", "source": "https://status.example.com/jobs/42",
+		"why": "the export job publishes the file at this time"} {
+		if _, ok := m[k]; !ok {
+			m[k] = v
+		}
+	}
+	return m
+}
+
+// comment writes a comment by an agent and returns its id.
+func (f *turnFixture) comment(t *testing.T, task, author uuid.UUID) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	require.NoError(t, f.db.Get(&id, `INSERT INTO comments (id, task_id, author_id, author_type, body)
+		VALUES (gen_random_uuid(), $1, $2, 'agent', 'the export job starts at 03:00 MSK') RETURNING id`, task, author))
+	return id
+}
+
 func (f *turnFixture) post(as uuid.UUID, path string, body any) *httptest.ResponseRecorder {
 	raw, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+f.task.String()+path, bytes.NewReader(raw))
@@ -211,6 +231,21 @@ func TestTurnCommands_InvalidTargetsWriteNothing_DB(t *testing.T) {
 		{"hand_off to an unknown agent", "/handoff", map[string]any{"to": "nobody-" + uuid.NewString(), "why": "reason"}, domain.CodeNotAnAgent},
 		{"hand_off to oneself", "/handoff", map[string]any{"to": f.agent.String(), "why": "reason"}, domain.CodeNotAnAgent},
 	}
+	// Receipts for time waits live on the other card so they do not move the counts.
+	ownReceipt := f.comment(t, f.other, f.agent)
+	cases = append(cases, []struct {
+		name, path string
+		body       map[string]any
+		code       string
+	}{
+		{"time without evidence", "/wait", map[string]any{"on": "time", "until_at": now.Add(time.Hour)}, domain.CodeMissingEvidence},
+		{"time relative until", "/wait", timeEvidence(map[string]any{"on": "time", "until_at": now.Add(time.Hour), "until": "6h"}), domain.CodeNaiveTime},
+		{"time naive until_at", "/wait", timeEvidence(map[string]any{"on": "time", "until_at": "2026-10-30T03:00:00"}), domain.CodeNaiveTime},
+		{"time relative until_at", "/wait", timeEvidence(map[string]any{"on": "time", "until_at": "6h"}), domain.CodeNaiveTime},
+		{"time source is a card ref", "/wait", timeEvidence(map[string]any{"on": "time", "until_at": now.Add(time.Hour), "source": "card:" + f.other.String()}), domain.CodeMissingEvidence},
+		{"time receipt does not exist", "/wait", timeEvidence(map[string]any{"on": "time", "until_at": now.Add(time.Hour), "source": "comment:" + uuid.NewString()}), domain.CodeMissingEvidence},
+		{"time receipt written by the waiter", "/wait", timeEvidence(map[string]any{"on": "time", "until_at": now.Add(time.Hour), "source": "comment:" + ownReceipt.String()}), domain.CodeMissingEvidence},
+	}...)
 	before := f.counts(t)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -224,6 +259,14 @@ func TestTurnCommands_InvalidTargetsWriteNothing_DB(t *testing.T) {
 		})
 	}
 
+	t.Run("time without an offset", func(t *testing.T) {
+		naive := now.Add(time.Hour).UTC().Format("2006-01-02T15:04:05")
+		rec := f.post(f.agent, "/wait", timeEvidence(map[string]any{"on": "time", "until_at": naive}))
+		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+		assert.Contains(t, rec.Body.String(), domain.CodeNaiveTime)
+		assert.Equal(t, before, f.counts(t))
+	})
+
 	t.Run("caller without the checkout", func(t *testing.T) {
 		rec := f.post(f.agent2, "/next", map[string]any{"note": "x"})
 		assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
@@ -233,7 +276,10 @@ func TestTurnCommands_InvalidTargetsWriteNothing_DB(t *testing.T) {
 
 func TestTurnCommands_WaitSupersedesAndReleases_DB(t *testing.T) {
 	f := newTurnFixture(t)
-	rec := f.post(f.agent, "/wait", map[string]any{"on": "time", "until_at": time.Now().Add(time.Hour), "note": "window", "session_id": "s1"})
+	receipt := f.comment(t, f.other, f.agent2)
+	msk := time.FixedZone("MSK", 3*3600)
+	rec := f.post(f.agent, "/wait", timeEvidence(map[string]any{"on": "time", "until_at": time.Now().Add(time.Hour).In(msk),
+		"note": "window", "session_id": "s1", "source": "comment:" + receipt.String()}))
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	var first domain.TurnCommandResult
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &first))
@@ -243,6 +289,17 @@ func TestTurnCommands_WaitSupersedesAndReleases_DB(t *testing.T) {
 	assert.Equal(t, domain.TurnOutcomeWait, first.Outcome.Kind)
 	assert.Equal(t, first.Wait.ID, *first.Outcome.WaitID)
 	assert.Nil(t, f.holder(t), "wait_for must release the checkout")
+	var ev struct {
+		EventRef string `db:"event_ref"`
+		Source   string `db:"evidence_source"`
+		Offset   string `db:"until_at_offset"`
+		Status   string `db:"evidence_status"`
+	}
+	require.NoError(t, f.db.Get(&ev, `SELECT event_ref, evidence_source, until_at_offset, evidence_status FROM task_waits WHERE id = $1`, first.Wait.ID))
+	assert.Equal(t, "nightly-export", ev.EventRef)
+	assert.Equal(t, "comment:"+receipt.String(), ev.Source)
+	assert.Equal(t, "+03:00", ev.Offset, "the offset until_at was given in is kept")
+	assert.Equal(t, domain.TimeEvidenceUnverified, ev.Status)
 
 	var state struct {
 		Kind string `json:"kind"`
@@ -316,7 +373,7 @@ func TestTurnCommands_NextHandoffNote_DB(t *testing.T) {
 	assert.Equal(t, 1, f.counts(t).Outcomes, "add_note writes no outcome")
 
 	// A wait to be cancelled by the hand-off.
-	require.Equal(t, http.StatusCreated, f.post(f.agent, "/wait", map[string]any{"on": "time", "until_at": time.Now().Add(time.Hour)}).Code)
+	require.Equal(t, http.StatusCreated, f.post(f.agent, "/wait", timeEvidence(map[string]any{"on": "time", "until_at": time.Now().Add(time.Hour)})).Code)
 	f.checkout(t, f.task, f.agent)
 	rec = f.post(f.agent, "/handoff", map[string]any{"to": f.agent2Name, "why": "needs the frontend lane"})
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())

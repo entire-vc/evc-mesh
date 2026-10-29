@@ -82,6 +82,8 @@ export interface ControllerState {
     status: string;
     emergency_paused?: boolean;
     pools?: Record<string, PoolObservation>;
+    /** The controller's own build version, when it sends one. */
+    version?: string;
   };
   received_at: string;
   /** Server verdict: matching revision+digest, applied, fresh, grant intact. */

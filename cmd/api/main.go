@@ -1754,6 +1754,8 @@ func main() {
 	api.POST("/workspaces/:ws_id/members", workspaceMemberHandler.Add, rbac(mw.PermManageMembers))
 	api.PATCH("/workspaces/:ws_id/members/:user_id", workspaceMemberHandler.UpdateRole, rbac(mw.PermManageMembers))
 	api.DELETE("/workspaces/:ws_id/members/:user_id", workspaceMemberHandler.Remove, rbac(mw.PermManageMembers))
+	// A person edits their own team profile; someone else's needs manage-members.
+	api.PUT("/workspaces/:ws_id/members/:user_id/profile", workspaceMemberHandler.UpdateProfile, mw.RequireSelfUserOrPermission("user_id", mw.PermManageMembers, workspaceMemberRepo))
 	// SearchUsers cannot be narrowed to the workspace in the path — its entire
 	// job is to surface people who are NOT in it yet, which is how one account
 	// joins a second workspace instead of becoming a second account.
@@ -1902,6 +1904,7 @@ func main() {
 	api.POST("/tasks/:task_id/move", taskHandler.MoveTask, wsAccess, rbac(mw.PermUpdateTask))
 	api.POST("/tasks/:task_id/parked-waits", taskHandler.RegisterParkedWait, wsAccess, rbac(mw.PermUpdateTask))
 	api.POST("/tasks/:task_id/parked-waits/release", taskHandler.ReleaseParkedWait, wsAccess, rbac(mw.PermUpdateTask))
+	api.POST("/tasks/:task_id/start-after/compare-clear", taskHandler.CompareClearStartAfter, wsAccess, rbac(mw.PermUpdateTask))
 	api.POST("/tasks/:task_id/move-to-project", taskHandler.MoveToProject, wsAccess, rbac(mw.PermUpdateTask))
 	// Workspace comes from the caller's auth; the service refuses any task or
 	// destination project outside it (source and destination are both checked).
@@ -1941,6 +1944,13 @@ func main() {
 		service.NewTypedOutcomeService(postgres.NewTaskWaitRepo(db), postgres.NewTurnOutcomeRepo(db)), taskService)
 	api.GET("/tasks/:task_id/turn-outcomes", typedOutcomeHandler.ListTurnOutcomes, wsAccess)
 	api.GET("/tasks/:task_id/wait", typedOutcomeHandler.GetActiveWait, wsAccess)
+	// Turn-ending commands: ask an agent, answer it, finish a card with a typed result.
+	if cmds, ok := taskService.(service.TypedOutcomeCommands); ok {
+		typedCommandHandler := handler.NewTypedOutcomeCommandHandler(cmds, taskService)
+		api.POST("/tasks/:task_id/decision-requests", typedCommandHandler.AskAgent, wsAccess, rbac(mw.PermUpdateTask))
+		api.POST("/tasks/:task_id/finish", typedCommandHandler.FinishTask, wsAccess, rbac(mw.PermUpdateTask))
+		api.POST("/decision-requests/:decision_request_id/answer", typedCommandHandler.AnswerDecision, wsAccess, rbac(mw.PermAddComment))
+	}
 	// Turn-ending commands: each validates its target and writes the wait/outcome,
 	// the comment and the checkout change in one transaction.
 	turnCommandHandler := handler.NewTurnCommandHandler(service.NewTurnCommandService(

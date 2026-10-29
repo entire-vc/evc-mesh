@@ -170,3 +170,16 @@ func TestRuntimeCatalogNamesTheField(t *testing.T) {
 		})
 	}
 }
+
+func TestValidRuntimeVersion(t *testing.T) {
+	for _, v := range []string{"0.1.3", "v2", "1.2.0-rc.1+abc", "2026_10_28"} {
+		require.True(t, ValidRuntimeVersion(v), v)
+	}
+	long := make([]byte, 65)
+	for i := range long {
+		long[i] = '1'
+	}
+	for _, v := range []string{"", "0.1.3 beta", ".1", "-rc", "0.1.3\n", "0.1/3", string(long)} {
+		require.False(t, ValidRuntimeVersion(v), v)
+	}
+}

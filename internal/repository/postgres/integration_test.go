@@ -396,7 +396,7 @@ func TestTaskRepo_CreateAndGetByID(t *testing.T) {
 // by TestTaskRepo_CreateAndGetByID above; this closes the matching gap on the
 // Update path — same category of bug as TestTaskRepo_Create_ReviewerRoundTrip
 // below (a field present in one write path's SQL but silently missing from the
-// other's). Reported live 2026-08-20 (task #19d927d9): update_task(labels=[...])
+// other's). Reported live 2026-08-20: update_task(labels=[...])
 // via the fleet's MCP tool call returned labels=[] on the following get_task. At
 // this repo/DB layer the write path could not be made to reproduce that symptom
 // (see PR description for the live-reproduction evidence at the API layer); this
@@ -450,7 +450,7 @@ func TestTaskRepo_Update_LabelsRoundTrip(t *testing.T) {
 }
 
 // TestTaskRepo_StartAfter_RoundTrip is the repository-level regression test for
-// start_after (#246b8fcc, sub1 of #e9ce6b91): a field present in taskBaseColsNoAlias
+// start_after (an internal ticket, sub1 of an internal ticket): a field present in taskBaseColsNoAlias
 // but missing from Create's INSERT or Update's SET clause would silently come back
 // nil, same failure class as TestTaskRepo_Update_LabelsRoundTrip above. Also pins
 // that due_date is untouched by writes to start_after and vice versa — the two
@@ -463,19 +463,23 @@ func TestTaskRepo_StartAfter_RoundTrip(t *testing.T) {
 
 	startAfter := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
 	dueDate := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	// A stored date carries its provenance (tasks_start_after_origin_pair); the
+	// service sets it, so a direct repo write has to set it too.
+	origin := domain.StartAfterHumanExplicit
 	task := &domain.Task{
-		ID:            uuid.New(),
-		ProjectID:     proj.ID,
-		StatusID:      status.ID,
-		Title:         "Task for start_after round-trip",
-		AssigneeType:  domain.AssigneeTypeUnassigned,
-		Priority:      domain.PriorityMedium,
-		StartAfter:    &startAfter,
-		DueDate:       &dueDate,
-		CreatedBy:     uuid.New(),
-		CreatedByType: domain.ActorTypeUser,
-		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
-		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+		ID:               uuid.New(),
+		ProjectID:        proj.ID,
+		StatusID:         status.ID,
+		Title:            "Task for start_after round-trip",
+		AssigneeType:     domain.AssigneeTypeUnassigned,
+		Priority:         domain.PriorityMedium,
+		StartAfter:       &startAfter,
+		StartAfterOrigin: &origin,
+		DueDate:          &dueDate,
+		CreatedBy:        uuid.New(),
+		CreatedByType:    domain.ActorTypeUser,
+		CreatedAt:        time.Now().UTC().Truncate(time.Microsecond),
+		UpdatedAt:        time.Now().UTC().Truncate(time.Microsecond),
 	}
 	require.NoError(t, repo.Create(ctx, task, nil))
 
@@ -502,7 +506,7 @@ func TestTaskRepo_StartAfter_RoundTrip(t *testing.T) {
 	assert.True(t, dueDate.Equal(*afterUpdate.DueDate))
 
 	// Clearing start_after to nil must persist as NULL, not silently keep the old value.
-	afterUpdate.StartAfter = nil
+	afterUpdate.StartAfter, afterUpdate.StartAfterOrigin = nil, nil
 	afterUpdate.UpdatedAt = time.Now().UTC().Truncate(time.Microsecond)
 	require.NoError(t, repo.Update(ctx, afterUpdate))
 
@@ -697,7 +701,7 @@ func TestTaskRepo_ListWithFilters(t *testing.T) {
 	assert.Equal(t, 5, page.TotalCount)
 }
 
-// TestTaskRepo_List_HumanGateFilter (#098468fa subtask): human_gate=true/false must
+// TestTaskRepo_List_HumanGateFilter (an internal ticket subtask): human_gate=true/false must
 // each return exactly the tasks carrying that value — proven with both arms present
 // in the same project, so a filter that matched everything (or nothing) would fail.
 func TestTaskRepo_List_HumanGateFilter(t *testing.T) {

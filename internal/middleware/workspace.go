@@ -194,6 +194,17 @@ var workspaceParamResolvers = []workspaceParamResolver{
 	                                JOIN tasks t ON hgd.task_id = t.id AND t.deleted_at IS NULL
 	                                JOIN projects p ON t.project_id = p.id
 	                               WHERE hgd.id = $1`), notFoundResource: "HumanGateDecision"},
+	// A decision_request (typed outcomes: a question one agent asks another)
+	// names its tenant through the card it was asked on.
+	// POST /decision-requests/:decision_request_id/answer is the route.
+	// No notFoundResource, for the :att_id reason below: the route-coverage
+	// suite has no real request to hand it, so an unknown id and another
+	// tenant's id must both answer 403.
+	{param: "decision_request_id", resolve: uuidResolver(`SELECT p.workspace_id
+	                                FROM decision_requests dr
+	                                JOIN tasks t ON dr.task_id = t.id AND t.deleted_at IS NULL
+	                                JOIN projects p ON t.project_id = p.id
+	                               WHERE dr.id = $1`)},
 	{param: "view_id", resolve: uuidResolver(`SELECT p.workspace_id
 	                            FROM saved_views v
 	                            JOIN projects p ON v.project_id = p.id

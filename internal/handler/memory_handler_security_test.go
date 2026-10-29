@@ -48,6 +48,9 @@ func (m *mockWorkspaceMemberRepo) ListWithProjects(context.Context, uuid.UUID) (
 func (m *mockWorkspaceMemberRepo) UpdateRole(context.Context, uuid.UUID, uuid.UUID, string) error {
 	return nil
 }
+func (m *mockWorkspaceMemberRepo) UpdateProfile(context.Context, uuid.UUID, uuid.UUID, domain.MemberProfileUpdate) (bool, error) {
+	return true, nil
+}
 func (m *mockWorkspaceMemberRepo) Delete(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 func (m *mockWorkspaceMemberRepo) CountOwners(context.Context, uuid.UUID) (int, error) {
 	return 0, nil

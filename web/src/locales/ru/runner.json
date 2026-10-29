@@ -84,6 +84,7 @@
     "agents": "Агенты",
     "live": "на связи",
     "lapsed": "нет heartbeat",
+    "catalogVersion": "в каталоге {{version}}",
     "unknownVersion": "не указана",
     "leaseLive": "истекает {{when}}",
     "leaseLapsed": "истекла {{when}}",

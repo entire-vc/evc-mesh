@@ -36,6 +36,9 @@ returns the reason in the same turn.
 | `project_path`, `pipeline_id`, `required_jobs[]` | | `pipeline` |
 | `until` | string | `mr`: `merged` \| `green` \| `changed`; `pipeline`: `finished` \| `green` |
 | `until_at` | timestamp | `time` |
+| `event_ref`, `source`, `why` | string ≤ 500 | `time`: the external event, where its deadline is published, what happens at `until_at` |
+| `until_at_offset` | string | `time`: the offset `until_at` was given in (`Z`, `+03:00`) |
+| `evidence_status` | `unverified`, `legacy` | `time`: `unverified` — the server checks shape and Mesh receipts, not the deadline itself; `legacy` — declared before evidence was required, no evidence fields, can only be resolved |
 | `decision_request_id` | uuid | `decision` |
 | `human_gate_ref` | string ≤ 200 | `human` |
 | `note` | string ≤ 500 | |
@@ -76,6 +79,12 @@ Boolean, default `true`. `false` marks a note: no mention or handoff delivery is
 created and no waiting runner is woken. Absent, `null` or a non-boolean value
 reads as `true` (`domain.CommentWakes`).
 
+Implemented in `commentService.Create`: a `wakes=false` comment skips the
+mention-handoff gate, `notifyMentions` (delivery rows, mention notifications,
+`ensureMentionDelivery`), the parked-card lift, the assignee's `task.commented`
+wake and the closed-card follow-up. The text-gate parser and in-app
+subscriber notifications are unchanged.
+
 ## Reads
 
 Both require workspace membership, like every `/tasks/:task_id/...` read.
@@ -100,7 +109,7 @@ when there is none (a missing card is `404 not_found`).
 Common to all commands:
 
 - Caller: an authenticated agent (agent API key). A user key gets `403 forbidden`
-  except on `answer_decision` and `add_note`, which people may also use.
+  except on `add_note`, which people may also use.
 - Optional body fields on every task command: `session_id` and `turn_id` (strings
   ≤ 200), copied onto the outcome and the wait.
 - The generated comment is returned as `comment_id`; its body is written by the
@@ -127,9 +136,10 @@ Common to all commands:
   | `self_wait` | a card waits on itself |
   | `already_met` | the target is already in the awaited (or another terminal) state: an MR merged or closed, a pipeline finished, a card closed |
   | `time_out_of_bounds` | `until_at` is less than 5 minutes or more than 30 days away |
+  | `naive_time` | a `time` wait with a naive or relative `until_at`, or a relative `until` |
   | `not_an_agent` | the addressee of `ask_agent` or `hand_off` is not an agent of the directory |
   | `missing_result_kind` | `finish_task` without a valid `result_kind` |
-  | `missing_evidence` | `finish_task` without evidence |
+  | `missing_evidence` | `finish_task` without evidence; a `time` wait without `event_ref` / `source` / `why`, or with a receipt that does not qualify |
 
   Generic codes keep their meaning: `400 bad_request` (malformed body),
   `403 forbidden`, `404 not_found` (card or request), `409 conflict` (the caller
@@ -145,6 +155,8 @@ Common to all commands:
   "pipeline_id": 7001,                 "required_jobs": ["test"],
   "until": "merged | green | changed | finished",
   "until_at": "2026-10-29T06:00:00Z",
+  "event_ref": "nightly-export",       "source": "https://… | comment:<uuid> | artifact:<uuid>",
+  "why": "what happens at until_at",
   "note": "≤ 500 chars"
 }
 ```
@@ -156,7 +168,8 @@ or an MR of the project) names the target. For `card` a `blocks` dependency with
 caller's previous one), an outcome `wait`, the comment, and releases the checkout.
 
 `201` — envelope with `outcome`, `wait`, `released: true`.
-Errors: `invalid_target`, `self_wait`, `already_met`, `time_out_of_bounds`.
+Errors: `invalid_target`, `self_wait`, `already_met`, `time_out_of_bounds`,
+`missing_evidence`.
 
 How the target is confirmed:
 
@@ -170,6 +183,17 @@ How the target is confirmed:
 - `pipeline` — live from the workspace's GitLab only; without it the target
   cannot be confirmed and is `invalid_target`. `success`, `failed`, `canceled`
   and `skipped` are `already_met`.
+- `time` — only against a known external event whose source states the
+  deadline: a published job start, an approved measurement window, a provider
+  `Retry-After` or quota reset. A generic retry, poll or backoff has no such
+  event and is not a time wait. `until_at` is an absolute RFC 3339 timestamp
+  with `Z` or an offset; a naive or relative one, or a relative `until`
+  ("6h"), is `naive_time`. `event_ref`, `source` and `why` (at least 10 chars) are
+  required, else `missing_evidence`. `source` is an `https` URL, or a Mesh
+  receipt `comment:<uuid>` / `artifact:<uuid>` that exists in the workspace and
+  was not written by the waiting agent; a card reference is not a source. The
+  wait is stored with `evidence_status = unverified`: the server does not read
+  the source, so the deadline is the agent's assertion backed by a reference.
 
 The card's `runtime_state` becomes `waiting` with `ref = "wait:<wait id>"` and,
 for `time`, `until = until_at`. Such a state is not refreshed by the runner, so
@@ -189,6 +213,10 @@ Errors: `409 conflict` when the caller does not hold the checkout.
 
 ### 3. `ask_agent` — `POST /api/v1/tasks/:task_id/decision-requests`
 
+Implemented (`TaskRepo.AskAgent`, one transaction). The addressee is matched by
+id, slug or name (case-insensitive, `@` ignored) among the agents of the card's
+workspace; no match, more than one match, or the caller is `not_an_agent`.
+
 ```json
 { "to": "agent name or uuid from the team directory", "question": "≤ 4000 chars" }
 ```
@@ -201,11 +229,15 @@ Errors: `not_an_agent` (unknown name, a person, or the caller itself).
 
 ### 4. `answer_decision` — `POST /api/v1/decision-requests/:request_id/answer`
 
+Implemented (`TaskRepo.AnswerDecision`, one transaction). The asker's lane also
+gets a `task.commented` notification for the answer comment.
+
 ```json
 { "answer": "≤ 4000 chars" }
 ```
 
-Only the addressee (or a person) may answer. Writes the answer as a comment on
+Only the addressee agent may answer; anyone else, a person included, gets
+`403 forbidden`. Writes the answer as a comment on
 the asking card, marks the request `answered` with `answer_comment_id`, and
 resolves the asker's `decision` wait as `met`, which wakes the asker. A comment
 by the addressee with `metadata.answers = <request_id>` has the same effect.
@@ -214,6 +246,12 @@ Errors: `403 forbidden` (not the addressee), `404 not_found`,
 `409 conflict` (request answered or withdrawn).
 
 ### 5. `finish_task` — `POST /api/v1/tasks/:task_id/finish`
+
+Implemented as a move: `MoveTask` with `Finish` set, so every move gate runs
+first and the finish writes join the guarded transition's transaction
+(`domain.TaskTransition.Finish`). The target is the lowest-positioned status
+of the category; finishing into the status the card already has still writes
+the outcome and releases the checkout. Evidence over 4 KB is `400`.
 
 ```json
 {
@@ -254,6 +292,136 @@ Errors: `not_an_agent`; `409 conflict` when a person pinned the assignee
 
 Writes a comment with `metadata.wakes = false`: no delivery, no wake, no outcome,
 the checkout is untouched. `201` — `{ "comment_id": "uuid" }`.
+
+## `start_after` — provenance, evidence and compare-clear
+
+`start_after` holds a card out of the queue until a date. Who set that date and
+on what grounds is stored with it, and one server validator checks every write
+of it: `POST /tasks` (create_task), `POST /tasks/:task_id/subtasks`
+(create_subtask) and `PATCH /tasks/:task_id` (update_task).
+
+### Data model
+
+| field | type | |
+|---|---|---|
+| `tasks.start_after_origin` | `human_explicit` \| `agent_evidence` \| `legacy_unknown`, null exactly when `start_after` is null | |
+| `tasks.start_after_receipt_id` | uuid, nullable | the receipt of the current date; required for `agent_evidence` |
+
+`start_after_receipts` is append-only: `id, task_id, op (set|clear),
+start_after, origin, actor_id, actor_type, source_offset?, event_ref?, source?,
+why?, evidence_status?, cleared_receipt_id?, idempotency_key?, task_version?,
+reason?, created_at`. Every accepted set and every clear writes one row; the
+table refuses UPDATE and DELETE (rows go only with their task).
+
+- `human_explicit` — a person (user key) typed the date. No evidence needed; a
+  bare date (`2026-11-01`) is accepted and read as midnight UTC.
+- `agent_evidence` — anyone else set it against a known external event. The
+  evidence is stored as given with `evidence_status = unverified`: the server
+  checks its shape and Mesh receipts, not the deadline itself.
+- `legacy_unknown` — the date existed before provenance was recorded. Kept as
+  is, never re-guessed; no receipt. A person editing it makes it
+  `human_explicit`.
+
+The table refuses a date without an origin and an agent date without a receipt
+(`tasks_start_after_origin_pair`, `tasks_start_after_agent_receipt`), so a
+writer that bypasses the validator fails instead of storing an unexplained date.
+
+### Writing `start_after`
+
+Request fields on create, create-subtask and update:
+
+```json
+{
+  "start_after": "2026-11-01T09:00:00+03:00",
+  "start_after_origin": "agent_evidence",
+  "start_after_evidence": {
+    "event_ref": "nightly-export",
+    "source": "https://ci.example/schedules/nightly",
+    "why": "the nightly export publishes its report at this time"
+  }
+}
+```
+
+- `start_after_origin` is optional. An agent may only send `agent_evidence`;
+  the origin is always derived from the caller, never taken from the body.
+- `start_after_evidence` follows the `time` wait rules (`event_ref`, `source`,
+  `why`, each ≤ 500; `source` is an `https://` URL or a Mesh receipt
+  `comment:<uuid>` / `artifact:<uuid>` that the agent did not write itself).
+- For an agent the date is an absolute RFC 3339 instant with `Z` or an offset,
+  in the future. It is stored in UTC; the given offset is kept on the receipt
+  (`source_offset`).
+- Sending the date the card already has is a no-op: no evidence needed, no
+  receipt, the origin is kept. Omitting `start_after` keeps date and origin.
+- `"start_after": null` from a person clears it and writes a `clear` receipt
+  naming the removed date and schedule. From an agent it is refused: an agent
+  clears only through compare-clear.
+
+Refusals are `422` with nothing written:
+
+| `error_code` | meaning |
+|---|---|
+| `naive_time` | a datetime without `Z` or offset; for an agent also a bare date |
+| `relative_time` | a duration or relative phrase (`6h`, `+6h`, `in 2 days`, `tomorrow`) |
+| `missing_evidence` | an agent date without `start_after_evidence`, or with a field missing, or a source that does not qualify |
+| `generic_retry` | the event is a generic retry/poll/backoff (`retry-6h`, `poll`, `backoff`, `later`) rather than an external event |
+| `origin_forbidden` | an agent sent `human_explicit` or `legacy_unknown` |
+| `clear_requires_compare` | an agent sent `"start_after": null` |
+| `invalid_target` | unparseable value, or an agent date not in the future |
+
+The `time` wait (`wait_for` with `on: time`) refuses `generic_retry` the same way.
+
+Reads return `start_after_origin` and `start_after_receipt_id` on the task.
+
+### `POST /api/v1/tasks/:task_id/start-after/compare-clear`
+
+Clears `start_after` only if it is still exactly the schedule the caller read.
+Requires `update_task` permission.
+
+```json
+{
+  "expected_start_after": "2026-11-01T06:00:00Z",
+  "expected_version": 42,
+  "expected_origin": "agent_evidence",
+  "schedule_receipt_id": "uuid",
+  "idempotency_key": "runner-turn-7f3a",
+  "reason": "the export ran"
+}
+```
+
+- `expected_start_after`, `expected_version` and `idempotency_key` are
+  required. An agent also sends `expected_origin` and, unless the origin is
+  `legacy_unknown`, `schedule_receipt_id`.
+- In one transaction under the card's row lock: a repeated `idempotency_key`
+  returns the first receipt; otherwise date (to the microsecond), version,
+  origin and receipt are compared, and on a match the date, origin and receipt
+  pointer are cleared and a `clear` receipt is written.
+
+`200`:
+
+```json
+{ "receipt": { "id": "uuid", "op": "clear", "cleared_receipt_id": "uuid", "...": "start_after_receipts row" },
+  "replayed": false, "version": 43 }
+```
+
+`replayed: true` when the key was already used; nothing changes on a replay.
+
+`409` — the card changed since it was read (a person moved the date, the same
+instant was set again with a new version or receipt, it was already cleared).
+Nothing is written:
+
+```json
+{ "code": "cas_conflict", "error_code": "cas_conflict", "message": "...",
+  "current_version": 44, "current_start_after": "timestamp|null",
+  "current_origin": "human_explicit|null", "current_receipt": "uuid|null" }
+```
+
+`403` — an agent asked to clear a `human_explicit` date. `422 invalid_target` —
+a required `expected_*` field or the key is missing.
+
+Clearing does not touch human gates, dependencies, waits or `due_date`. A
+parked-wait release with `clear_start_after` refuses (`409`) to clear a
+`human_explicit` date; when it clears any other date it writes a `clear`
+receipt too.
 
 ## Compatibility
 

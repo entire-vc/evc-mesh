@@ -84,6 +84,7 @@
     "agents": "Agents",
     "live": "live",
     "lapsed": "no heartbeat",
+    "catalogVersion": "catalog says {{version}}",
     "unknownVersion": "unknown",
     "leaseLive": "expires {{when}}",
     "leaseLapsed": "expired {{when}}",

@@ -76,7 +76,7 @@ func TestUpsertTeamRelay_ShareFollowsFromAgentKey(t *testing.T) {
 	s := storedShare(t, pi)
 	assert.Equal(t, keyShareID, s.ShareID)
 	assert.Equal(t, "mesh-docs", s.ShareSlug)
-	assert.Equal(t, "Mesh Docs", s.ShareName)
+	assert.Equal(t, "Vault/Mesh Docs", s.ShareName)
 	assert.Equal(t, int32(1), calls.Load())
 }
 
@@ -92,7 +92,7 @@ func TestUpsertTeamRelay_SaveWithoutKeyKeepsBoundShare(t *testing.T) {
 	require.NoError(t, err)
 	s := storedShare(t, pi)
 	assert.Equal(t, keyShareID, s.ShareID)
-	assert.Equal(t, "Mesh Docs", s.ShareName)
+	assert.Equal(t, "Vault/Mesh Docs", s.ShareName)
 	assert.Equal(t, "notes", s.Subfolder)
 	assert.Equal(t, int32(1), calls.Load(), "no key, no relay call")
 }
@@ -107,7 +107,7 @@ func TestUpsertTeamRelay_ShareOtherThanTheKeysIsRefused(t *testing.T) {
 	})
 	var apiErr *apierror.Error
 	require.ErrorAs(t, err, &apiErr)
-	assert.Contains(t, apiErr.Validation["agent_key"], "Mesh Docs")
+	assert.Contains(t, apiErr.Validation["agent_key"], "Vault/Mesh Docs")
 }
 
 func TestUpsertTeamRelay_KeyTheRelayRejectsIsRefused(t *testing.T) {
@@ -213,7 +213,7 @@ func TestUpsertTeamRelay_UnpublishedShareDropsSentSlug(t *testing.T) {
 	s := storedShare(t, pi)
 	assert.Equal(t, keyShareID, s.ShareID)
 	assert.Equal(t, "", s.ShareSlug)
-	assert.Equal(t, "Drafts", s.ShareName)
+	assert.Equal(t, "Vault/Drafts", s.ShareName)
 }
 
 // Naming the bound share, by either field, is an ordinary save.
@@ -229,7 +229,7 @@ func TestUpsertTeamRelay_SameShareWithoutKeyIsKept(t *testing.T) {
 	s := storedShare(t, pi)
 	assert.Equal(t, keyShareID, s.ShareID)
 	assert.Equal(t, "mesh-docs", s.ShareSlug)
-	assert.Equal(t, "Mesh Docs", s.ShareName)
+	assert.Equal(t, "Vault/Mesh Docs", s.ShareName)
 }
 
 // A binding stored without a key is held to the same rule: a keyless save

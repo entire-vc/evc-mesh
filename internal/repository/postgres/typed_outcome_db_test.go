@@ -103,8 +103,16 @@ func TestTaskWait_DeclareSupersedes_DB(t *testing.T) {
 	require.NoError(t, f.waits.Declare(ctx, first))
 
 	until := time.Now().Add(time.Hour)
-	second := &domain.TaskWait{TaskID: f.task, AgentID: f.agent, Kind: domain.TaskWaitTime, UntilAt: &until}
+	str := func(s string) *string { return &s }
+	second := &domain.TaskWait{TaskID: f.task, AgentID: f.agent, Kind: domain.TaskWaitTime, UntilAt: &until,
+		EventRef: str("nightly-export"), Source: str("https://status.example.com/jobs/42"),
+		Why: str("the export job publishes the file at this time"), UntilAtOffset: str("Z"),
+		EvidenceStatus: str(domain.TimeEvidenceUnverified)}
 	require.NoError(t, f.waits.Declare(ctx, second))
+
+	// The schema refuses a time wait that carries no evidence.
+	bare := &domain.TaskWait{TaskID: f.task, AgentID: f.agent, Kind: domain.TaskWaitTime, UntilAt: &until}
+	require.Error(t, f.waits.Declare(ctx, bare))
 
 	active, err := f.waits.GetActive(ctx, f.task, &f.agent)
 	require.NoError(t, err)
@@ -131,16 +139,40 @@ func TestTaskWait_TableRefusesBadShapes_DB(t *testing.T) {
 	f := newTypedOutcomeFixture(t)
 	ctx := context.Background()
 	for name, q := range map[string]string{
-		"self wait":          `INSERT INTO task_waits (task_id, agent_id, kind, target_task_id) VALUES ($1, $2, 'card', $1)`,
-		"mr without iid":     `INSERT INTO task_waits (task_id, agent_id, kind, provider, project_path, until_state) VALUES ($1, $2, 'mr', 'gitlab', 'g/p', 'merged')`,
-		"pipeline bad until": `INSERT INTO task_waits (task_id, agent_id, kind, project_path, pipeline_id, until_state) VALUES ($1, $2, 'pipeline', 'g/p', 1, 'merged')`,
-		"time without until": `INSERT INTO task_waits (task_id, agent_id, kind) VALUES ($1, $2, 'time')`,
+		"self wait":             `INSERT INTO task_waits (task_id, agent_id, kind, target_task_id) VALUES ($1, $2, 'card', $1)`,
+		"mr without iid":        `INSERT INTO task_waits (task_id, agent_id, kind, provider, project_path, until_state) VALUES ($1, $2, 'mr', 'gitlab', 'g/p', 'merged')`,
+		"pipeline bad until":    `INSERT INTO task_waits (task_id, agent_id, kind, project_path, pipeline_id, until_state) VALUES ($1, $2, 'pipeline', 'g/p', 1, 'merged')`,
+		"time without until":    `INSERT INTO task_waits (task_id, agent_id, kind) VALUES ($1, $2, 'time')`,
+		"time without evidence": `INSERT INTO task_waits (task_id, agent_id, kind, until_at) VALUES ($1, $2, 'time', now())`,
+		"evidence, no status": `INSERT INTO task_waits (task_id, agent_id, kind, until_at, event_ref, evidence_source, evidence_why, until_at_offset)
+			VALUES ($1, $2, 'time', now(), 'e', 'https://ci.example/s', 'the export starts then', 'Z')`,
+		"new legacy wait":    `INSERT INTO task_waits (task_id, agent_id, kind, until_at, evidence_status) VALUES ($1, $2, 'time', now(), 'legacy')`,
 		"resolved no reason": `INSERT INTO task_waits (task_id, agent_id, kind, until_at, resolved_at) VALUES ($1, $2, 'time', now(), now())`,
 		"unknown kind":       `INSERT INTO task_waits (task_id, agent_id, kind) VALUES ($1, $2, 'someday')`,
 	} {
 		_, err := f.db.ExecContext(ctx, q, f.task, f.agent)
 		assert.Error(t, err, name)
 	}
+}
+
+// Nobody can launder an evidenced time wait into the legacy shape.
+func TestTaskWait_NoNewLegacyTimeWait_DB(t *testing.T) {
+	f := newTypedOutcomeFixture(t)
+	ctx := context.Background()
+
+	var id uuid.UUID
+	require.NoError(t, f.db.GetContext(ctx, &id, `INSERT INTO task_waits
+		(task_id, agent_id, kind, until_at, event_ref, evidence_source, evidence_why, until_at_offset, evidence_status)
+		VALUES ($1, $2, 'time', now() + interval '1 hour', 'nightly-export', 'https://ci.example/s', 'the export starts then', 'Z', 'unverified')
+		RETURNING id`, f.task, f.agent))
+	_, err := f.db.ExecContext(ctx, `UPDATE task_waits SET evidence_status = 'legacy' WHERE id = $1`, id)
+	require.Error(t, err, "an evidenced wait cannot be turned into a legacy one")
+	_, err = f.db.ExecContext(ctx, `UPDATE task_waits SET evidence_status = NULL WHERE id = $1`, id)
+	require.Error(t, err, "an evidenced wait cannot lose its status")
+
+	resolved, err := f.waits.Resolve(ctx, id, domain.WaitResolutionSuperseded)
+	require.NoError(t, err)
+	assert.True(t, resolved)
 }
 
 func TestTurnOutcomes_AppendOnlyAndSessionOrder_DB(t *testing.T) {

@@ -115,16 +115,28 @@ type Task struct {
 	// (a backlog wake-alarm on backlog, a deadline elsewhere) — the two used
 	// to collide on one field, which froze live todo/in_progress work when a
 	// due_date-based backfill ran (an internal ticket).
-	StartAfter     *time.Time      `json:"start_after" db:"start_after"`
-	EstimatedHours *float64        `json:"estimated_hours" db:"estimated_hours"`
-	CustomFields   json.RawMessage `json:"custom_fields" db:"custom_fields"`
-	Labels         pq.StringArray  `json:"labels" db:"labels"`
-	ThreadID       *string         `json:"thread_id,omitempty" db:"thread_id"`
-	CreatedBy      uuid.UUID       `json:"created_by" db:"created_by"`
-	CreatedByType  ActorType       `json:"created_by_type" db:"created_by_type"`
-	CreatedAt      time.Time       `json:"created_at" db:"created_at"`
-	UpdatedAt      time.Time       `json:"updated_at" db:"updated_at"`
-	CompletedAt    *time.Time      `json:"completed_at" db:"completed_at"`
+	StartAfter *time.Time `json:"start_after" db:"start_after"`
+	// StartAfterOrigin says who set StartAfter and on what grounds
+	// (StartAfterHumanExplicit / AgentEvidence / LegacyUnknown); nil with it.
+	// StartAfterReceiptID is the immutable receipt of the current date.
+	StartAfterOrigin    *string    `json:"start_after_origin,omitempty" db:"start_after_origin"`
+	StartAfterReceiptID *uuid.UUID `json:"start_after_receipt_id,omitempty" db:"start_after_receipt_id"`
+	// StartAfterSet is the receipt a start_after write must leave next to it
+	// (a new date, or a person's clear), filled by the service validator; never
+	// read from or sent to a client.
+	StartAfterSet *StartAfterReceipt `json:"-" db:"-"`
+	// StartAfterWrite is the start_after change a request asked for (raw
+	// value, claimed origin, evidence); nil when the request did not touch it.
+	StartAfterWrite *StartAfterWrite `json:"-" db:"-"`
+	EstimatedHours  *float64         `json:"estimated_hours" db:"estimated_hours"`
+	CustomFields    json.RawMessage  `json:"custom_fields" db:"custom_fields"`
+	Labels          pq.StringArray   `json:"labels" db:"labels"`
+	ThreadID        *string          `json:"thread_id,omitempty" db:"thread_id"`
+	CreatedBy       uuid.UUID        `json:"created_by" db:"created_by"`
+	CreatedByType   ActorType        `json:"created_by_type" db:"created_by_type"`
+	CreatedAt       time.Time        `json:"created_at" db:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at" db:"updated_at"`
+	CompletedAt     *time.Time       `json:"completed_at" db:"completed_at"`
 
 	// Recurring series fields — populated when the task is an instance of a recurring schedule.
 	RecurringScheduleID     *uuid.UUID `json:"recurring_schedule_id,omitempty" db:"recurring_schedule_id"`

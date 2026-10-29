@@ -4780,12 +4780,51 @@ func (m *MockWorkspaceMemberRepository) List(_ context.Context, workspaceID uuid
 	return out, nil
 }
 
-func (m *MockWorkspaceMemberRepository) ListWithProjects(_ context.Context, _ uuid.UUID) ([]repository.HumanWithProjects, error) {
-	return nil, m.errToReturn
+// ListWithProjects returns the seeded members of workspaceID with no projects —
+// the query GetTeamDirectoryTree calls.
+func (m *MockWorkspaceMemberRepository) ListWithProjects(_ context.Context, workspaceID uuid.UUID) ([]repository.HumanWithProjects, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []repository.HumanWithProjects
+	for _, it := range m.items {
+		if it.WorkspaceID == workspaceID {
+			out = append(out, repository.HumanWithProjects{WorkspaceMemberWithUser: it})
+		}
+	}
+	return out, nil
 }
 
 func (m *MockWorkspaceMemberRepository) UpdateRole(_ context.Context, _, _ uuid.UUID, _ string) error {
 	return m.errToReturn
+}
+
+// UpdateProfile applies the partial update to the seeded row, like the SQL COALESCE.
+func (m *MockWorkspaceMemberRepository) UpdateProfile(_ context.Context, workspaceID, userID uuid.UUID, upd domain.MemberProfileUpdate) (bool, error) {
+	if m.errToReturn != nil {
+		return false, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.items {
+		it := &m.items[i]
+		if it.WorkspaceID != workspaceID || it.UserID != userID {
+			continue
+		}
+		if upd.Capabilities != nil {
+			it.Capabilities = upd.Capabilities
+		}
+		if upd.ResponsibilityZone != nil {
+			it.ResponsibilityZone = *upd.ResponsibilityZone
+		}
+		if upd.Availability != nil {
+			it.Availability = *upd.Availability
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 func (m *MockWorkspaceMemberRepository) Delete(_ context.Context, workspaceID, userID uuid.UUID) error {

@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -55,8 +56,24 @@ type WorkspaceMember struct {
 	UserID      uuid.UUID  `json:"user_id" db:"user_id"`
 	Role        string     `json:"role" db:"role"`
 	InvitedBy   *uuid.UUID `json:"invited_by,omitempty" db:"invited_by"`
-	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at" db:"updated_at"`
+	// The person's team profile in this workspace — the human counterpart of
+	// an agent's capabilities/responsibility_zone/working_hours. Written by
+	// PUT /workspaces/:ws_id/members/:user_id/profile and by config import,
+	// read by the team directory.
+	Capabilities       json.RawMessage `json:"capabilities" db:"capabilities"`
+	ResponsibilityZone string          `json:"responsibility_zone" db:"responsibility_zone"`
+	Availability       string          `json:"availability" db:"availability"`
+	CreatedAt          time.Time       `json:"created_at" db:"created_at"`
+	UpdatedAt          time.Time       `json:"updated_at" db:"updated_at"`
+}
+
+// MemberProfileUpdate is a partial update of a member's team profile, with the
+// same semantics as AgentProfileUpdate: a field omitted from the request is
+// left untouched; send it explicitly (e.g. "responsibility_zone": "") to clear it.
+type MemberProfileUpdate struct {
+	Capabilities       json.RawMessage `json:"capabilities"`
+	ResponsibilityZone *string         `json:"responsibility_zone,omitempty"`
+	Availability       *string         `json:"availability,omitempty"`
 }
 
 // Workspace member roles.

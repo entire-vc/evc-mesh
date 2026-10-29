@@ -63,6 +63,17 @@ var (
 		},
 		[]string{"project", "gate", "result"},
 	)
+
+	// StartAfterWritesTotal counts start_after writes by origin and result:
+	// accepted, or the refusal code (missing_evidence, naive_time, ...). The
+	// refusals show which clients still send an unconfirmed date.
+	StartAfterWritesTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "mesh_start_after_writes_total",
+			Help: "start_after writes by origin and result (accepted or refusal code).",
+		},
+		[]string{"origin", "result"},
+	)
 )
 
 // RecordTaskTransition records a status move and emits time-in-status if known.
@@ -91,4 +102,9 @@ func RecordLeaseRelease(project string) {
 // RecordDoDGate records a DoD gate pass or fail.
 func RecordDoDGate(project, gate, result string) {
 	DoDGateTotal.WithLabelValues(project, gate, result).Inc()
+}
+
+// RecordStartAfterWrite records one start_after write or refusal.
+func RecordStartAfterWrite(origin, result string) {
+	StartAfterWritesTotal.WithLabelValues(origin, result).Inc()
 }

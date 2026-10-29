@@ -6,7 +6,7 @@ import { createMemoryRouter, RouterProvider, useLocation } from "react-router";
 import type { ComponentType } from "react";
 import { Puzzle } from "lucide-react";
 import { ViewTabBar } from "../src/components/view-tab-bar";
-import { BUILTIN_PROJECT_TABS, CHAT_PROJECT_TAB, type ProjectViewTabDescriptor } from "../src/lib/project-view-tabs";
+import { BUILTIN_PROJECT_TABS, projectTabsWith, type ProjectViewTabDescriptor } from "../src/lib/project-view-tabs";
 import "@/i18n";
 import "../src/index.css";
 
@@ -24,7 +24,7 @@ const Bar: Strip = params.get("impl") === "before"
 const tabs = params.get("extra") === "1"
   ? [...BUILTIN_PROJECT_TABS, { id: "extra", labelKey: "viewTabs.tabs.docs", Icon: Puzzle, path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/extra`, overflowRank: 5 }]
   : params.get("chat") === "1"
-    ? [...BUILTIN_PROJECT_TABS, CHAT_PROJECT_TAB]
+    ? projectTabsWith([], true)
     : undefined;
 
 function Page() {

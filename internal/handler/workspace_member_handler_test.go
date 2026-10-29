@@ -31,6 +31,7 @@ type MockWorkspaceMemberService struct {
 	SetPasswordFunc         func(ctx context.Context, workspaceID, targetUserID uuid.UUID, password string) error
 	SetUsernameFunc         func(ctx context.Context, workspaceID, targetUserID uuid.UUID, username string) error
 	RemoveMemberFunc        func(ctx context.Context, workspaceID, targetUserID uuid.UUID) error
+	UpdateProfileFunc       func(ctx context.Context, workspaceID, targetUserID uuid.UUID, upd domain.MemberProfileUpdate) error
 	GetMyRoleFunc           func(ctx context.Context, workspaceID, userID uuid.UUID) (string, error)
 	SearchUsersFunc         func(ctx context.Context, workspaceID, callerID uuid.UUID, query string) ([]domain.UserWithMemberStatus, error)
 }
@@ -94,6 +95,13 @@ func (m *MockWorkspaceMemberService) SetMemberPassword(ctx context.Context, work
 func (m *MockWorkspaceMemberService) SetMemberUsername(ctx context.Context, workspaceID, targetUserID uuid.UUID, username string) error {
 	if m.SetUsernameFunc != nil {
 		return m.SetUsernameFunc(ctx, workspaceID, targetUserID, username)
+	}
+	return nil
+}
+
+func (m *MockWorkspaceMemberService) UpdateMemberProfile(ctx context.Context, workspaceID, targetUserID uuid.UUID, upd domain.MemberProfileUpdate) error {
+	if m.UpdateProfileFunc != nil {
+		return m.UpdateProfileFunc(ctx, workspaceID, targetUserID, upd)
 	}
 	return nil
 }

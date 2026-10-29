@@ -38,6 +38,7 @@ var auditGuardCalls = map[string]string{
 	"connectorSelfOrRBAC":                 "connector-clamp",
 	"mw.RequirePermission":                "rbac",
 	"mw.RequireSelfOrPermission":          "rbac",
+	"mw.RequireSelfUserOrPermission":      "rbac",
 	"mw.RequireConnectorPermission":       "connector-clamp",
 	"mw.RequireConnectorSelfOrPermission": "connector-clamp",
 	"mw.RequireUserAuth":                  "human-only",

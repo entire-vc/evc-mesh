@@ -94,7 +94,17 @@ func TestShareOfAgentKey_ReadsTheKeysShare(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "share-1", share.ID)
 	assert.Equal(t, "mesh-docs", share.WebSlug)
-	assert.Equal(t, "Mesh Docs", share.Name())
+	assert.Equal(t, "Vault/Mesh Docs", share.Name())
+}
+
+// Shares are commonly a "docs" folder inside a project folder, so the last
+// path segment repeats across shares; the name keeps the whole path.
+func TestKeyShareName_TellsSharesApart(t *testing.T) {
+	mesh := KeyShare{Path: "Entire VC/Mesh/docs"}
+	spark := KeyShare{Path: "/Entire VC/Spark/docs/"}
+	assert.Equal(t, "Entire VC/Mesh/docs", mesh.Name())
+	assert.Equal(t, "Entire VC/Spark/docs", spark.Name())
+	assert.NotEqual(t, mesh.Name(), spark.Name())
 }
 
 // An older relay names only share_id; a share object without an id inherits it.

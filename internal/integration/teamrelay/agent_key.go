@@ -91,13 +91,11 @@ type KeyShare struct {
 	WebSlug string `json:"web_slug"`
 }
 
-// Name is how the share is shown to a person: the last segment of its path.
+// Name is how the share is shown to a person: its whole path. Shares are
+// commonly a "docs" folder inside a project folder, so the last segment alone
+// would name many shares the same.
 func (s KeyShare) Name() string {
-	p := strings.Trim(s.Path, "/")
-	if i := strings.LastIndex(p, "/"); i >= 0 {
-		return p[i+1:]
-	}
-	return p
+	return strings.Trim(s.Path, "/")
 }
 
 // keyShareResponse is the body of GET /v1/web/agent-key; only the share is read.

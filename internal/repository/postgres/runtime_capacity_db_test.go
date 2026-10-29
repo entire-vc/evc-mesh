@@ -64,7 +64,7 @@ func TestRuntimeCapacityProjection(t *testing.T) {
 	blocked := f.assignedTask(t, f.status, "")
 	_, err := f.db.Exec(`INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type) VALUES($1,$2,$3,'blocks')`, uuid.New(), blocked, blocker.ID)
 	require.NoError(t, err)
-	f.assignedTask(t, f.status, "start_after=now()+interval '1 day'")
+	f.assignedTask(t, f.status, "start_after=now()+interval '1 day', start_after_origin='legacy_unknown'")
 	parked := f.assignedTask(t, inProgress.ID, "")
 	_, err = f.db.Exec(`INSERT INTO parked_waits(id,task_id,wait_comment_id,plan,registered_by,registered_by_type,result) VALUES($1,$2,$3,'{}',$4,'agent','{}')`, uuid.New(), parked, uuid.New(), f.worker.AgentID)
 	require.NoError(t, err)

@@ -4,3 +4,4 @@ allow-add 20261013001_i18n_locale.sql
 allow-remove 20261013002_i18n_locale.sql
 allow-remove 20261017004_agent_operator_runtime.sql
 allow-remove 20261025001_task_dependency_condition.sql
+allow-remove 20261028300_task_waits_time_evidence.sql

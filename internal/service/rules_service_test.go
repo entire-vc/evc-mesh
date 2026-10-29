@@ -29,8 +29,11 @@ func (noopMemberRepo) ListWithProjects(context.Context, uuid.UUID) ([]repository
 	return nil, nil
 }
 func (noopMemberRepo) UpdateRole(context.Context, uuid.UUID, uuid.UUID, string) error { return nil }
-func (noopMemberRepo) Delete(context.Context, uuid.UUID, uuid.UUID) error             { return nil }
-func (noopMemberRepo) CountOwners(context.Context, uuid.UUID) (int, error)            { return 0, nil }
+func (noopMemberRepo) UpdateProfile(context.Context, uuid.UUID, uuid.UUID, domain.MemberProfileUpdate) (bool, error) {
+	return false, nil
+}
+func (noopMemberRepo) Delete(context.Context, uuid.UUID, uuid.UUID) error  { return nil }
+func (noopMemberRepo) CountOwners(context.Context, uuid.UUID) (int, error) { return 0, nil }
 
 // noopWsRuleRepo is a minimal repository.WorkspaceRuleConfigRepository stub
 // for tests that exercise ExportConfig and only care about the Team section —
@@ -158,7 +161,7 @@ func TestComputeAgentPermissions_NoTransitionsNoStatusesKnown(t *testing.T) {
 }
 
 // TestComputeAgentPermissions_EmptyConfigAllowsAll is the primary regression test
-// for #d9ec930b: a project with no workflow_rules row must report can_transition
+// for an internal ticket: a project with no workflow_rules row must report can_transition
 // populated true for every real status, not an empty map that reads as "blocked
 // from everywhere" — checkTransitionGate already treats this config as allow-all,
 // my_permissions must not contradict it.
@@ -230,7 +233,7 @@ func intPtr(i int) *int       { return &i }
 // TestUpdateAgentProfile_OmittedFieldsAreNotZeroed pins the documented
 // behavior of domain.AgentProfileUpdate: a request that only sets one field
 // must leave every other existing field untouched, not blank it out. This is
-// the regression test for the "full-replace footgun" described in task #7acd2497 —
+// the regression test for the "full-replace footgun" described in an internal ticket —
 // previously every field was assigned unconditionally, so a caller who forgot
 // to resend e.g. working_hours would silently wipe it.
 func TestUpdateAgentProfile_OmittedFieldsAreNotZeroed(t *testing.T) {
@@ -325,7 +328,7 @@ func TestUpdateAgentProfile_AllFieldsSetAppliesEverything(t *testing.T) {
 }
 
 // TestUpdateAgentProfile_MentionWakesSurvivesCapabilitiesArrayWrite is the
-// regression test for #33b7d4b7: agents.capabilities is written by two
+// regression test for an internal ticket: agents.capabilities is written by two
 // incompatible consumers (an object for the mention-handoff gate, a plain
 // string array for UpdateAgentProfile/config import), and UpdateAgentProfile
 // blind-replaces Capabilities rather than merging it. Before this fix,
@@ -361,7 +364,7 @@ func TestUpdateAgentProfile_MentionWakesSurvivesCapabilitiesArrayWrite(t *testin
 }
 
 // TestEscalationTo_SurvivesUpdateAndExportRoundTrip is the regression test
-// for a real bug found in code review of task #85714565: EscalationTo is a
+// for a real bug found in code review of an internal ticket: EscalationTo is a
 // single name (matches the MCP tool's mcpsdk.ParseString and
 // TeamAgentConfig.EscalationTo, both plain strings), NOT a list. Before this
 // fix, AgentProfileUpdate.EscalationTo was json.RawMessage and the new UI
@@ -388,18 +391,18 @@ func TestEscalationTo_SurvivesUpdateAndExportRoundTrip(t *testing.T) {
 	}))
 
 	err := svc.UpdateAgentProfile(context.Background(), agentID, domain.AgentProfileUpdate{
-		EscalationTo: strPtr("Garfield"),
+		EscalationTo: strPtr("the product lead"),
 	})
 	require.NoError(t, err)
 
 	got, err := agentRepo.GetByID(context.Background(), agentID)
 	require.NoError(t, err)
 	require.NotNil(t, got.EscalationTo, "UpdateAgentProfile must actually store the value")
-	assert.JSONEq(t, `"Garfield"`, string(*got.EscalationTo))
+	assert.JSONEq(t, `"the product lead"`, string(*got.EscalationTo))
 
 	yamlBytes, err := svc.ExportConfig(context.Background(), ws.ID)
 	require.NoError(t, err)
-	assert.Contains(t, string(yamlBytes), "escalation_to: Garfield",
+	assert.Contains(t, string(yamlBytes), "escalation_to: the product lead",
 		"export must not silently drop escalation_to for an agent configured through the UI")
 }
 

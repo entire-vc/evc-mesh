@@ -29,16 +29,16 @@ func (r *WorkspaceMemberRepo) Create(ctx context.Context, member *domain.Workspa
 	const q = `
 		INSERT INTO workspace_members (id, workspace_id, user_id, role, invited_by, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING capabilities, responsibility_zone, availability
 	`
-	_, err := r.db.ExecContext(ctx, q,
+	return r.db.QueryRowxContext(ctx, q,
 		member.ID, member.WorkspaceID, member.UserID,
 		member.Role, member.InvitedBy, member.CreatedAt, member.UpdatedAt,
-	)
-	return err
+	).Scan(&member.Capabilities, &member.ResponsibilityZone, &member.Availability)
 }
 
 func (r *WorkspaceMemberRepo) GetByWorkspaceAndUser(ctx context.Context, workspaceID, userID uuid.UUID) (*domain.WorkspaceMember, error) {
-	const q = `SELECT id, workspace_id, user_id, role, invited_by, created_at, updated_at FROM workspace_members WHERE workspace_id = $1 AND user_id = $2`
+	const q = `SELECT id, workspace_id, user_id, role, invited_by, capabilities, responsibility_zone, availability, created_at, updated_at FROM workspace_members WHERE workspace_id = $1 AND user_id = $2`
 	var member domain.WorkspaceMember
 	if err := r.db.GetContext(ctx, &member, q, workspaceID, userID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -77,18 +77,21 @@ func (r *WorkspaceMemberRepo) GetRole(ctx context.Context, workspaceID, userID u
 
 // workspaceMemberRow is a flat DB scan struct for the JOIN query.
 type workspaceMemberRow struct {
-	ID           uuid.UUID  `db:"id"`
-	WorkspaceID  uuid.UUID  `db:"workspace_id"`
-	UserID       uuid.UUID  `db:"user_id"`
-	Role         string     `db:"role"`
-	InvitedBy    *uuid.UUID `db:"invited_by"`
-	CreatedAt    time.Time  `db:"created_at"`
-	UpdatedAt    time.Time  `db:"updated_at"`
-	UserIDJoin   uuid.UUID  `db:"u_id"`
-	UserEmail    string     `db:"u_email"`
-	UserName     string     `db:"u_display_name"`
-	UserUsername string     `db:"u_username"`
-	UserAvatar   string     `db:"u_avatar_url"`
+	ID           uuid.UUID       `db:"id"`
+	WorkspaceID  uuid.UUID       `db:"workspace_id"`
+	UserID       uuid.UUID       `db:"user_id"`
+	Role         string          `db:"role"`
+	InvitedBy    *uuid.UUID      `db:"invited_by"`
+	Capabilities json.RawMessage `db:"capabilities"`
+	Zone         string          `db:"responsibility_zone"`
+	Availability string          `db:"availability"`
+	CreatedAt    time.Time       `db:"created_at"`
+	UpdatedAt    time.Time       `db:"updated_at"`
+	UserIDJoin   uuid.UUID       `db:"u_id"`
+	UserEmail    string          `db:"u_email"`
+	UserName     string          `db:"u_display_name"`
+	UserUsername string          `db:"u_username"`
+	UserAvatar   string          `db:"u_avatar_url"`
 }
 
 // List returns all workspace members with their user details.
@@ -96,6 +99,7 @@ func (r *WorkspaceMemberRepo) List(ctx context.Context, workspaceID uuid.UUID) (
 	const q = `
 		SELECT
 			wm.id, wm.workspace_id, wm.user_id, wm.role, wm.invited_by, wm.created_at, wm.updated_at,
+			wm.capabilities, wm.responsibility_zone, wm.availability,
 			u.id AS u_id, u.email AS u_email, u.display_name AS u_display_name,
 			COALESCE(u.username, '') AS u_username, COALESCE(u.avatar_url, '') AS u_avatar_url
 		FROM workspace_members wm
@@ -112,13 +116,16 @@ func (r *WorkspaceMemberRepo) List(ctx context.Context, workspaceID uuid.UUID) (
 	for i, row := range rows {
 		result[i] = domain.WorkspaceMemberWithUser{
 			WorkspaceMember: domain.WorkspaceMember{
-				ID:          row.ID,
-				WorkspaceID: row.WorkspaceID,
-				UserID:      row.UserID,
-				Role:        row.Role,
-				InvitedBy:   row.InvitedBy,
-				CreatedAt:   row.CreatedAt,
-				UpdatedAt:   row.UpdatedAt,
+				ID:                 row.ID,
+				WorkspaceID:        row.WorkspaceID,
+				UserID:             row.UserID,
+				Role:               row.Role,
+				InvitedBy:          row.InvitedBy,
+				CreatedAt:          row.CreatedAt,
+				UpdatedAt:          row.UpdatedAt,
+				Capabilities:       row.Capabilities,
+				ResponsibilityZone: row.Zone,
+				Availability:       row.Availability,
 			},
 			User: domain.UserBrief{
 				ID:        row.UserIDJoin,
@@ -137,6 +144,32 @@ func (r *WorkspaceMemberRepo) UpdateRole(ctx context.Context, workspaceID, userI
 	const q = `UPDATE workspace_members SET role = $3, updated_at = $4 WHERE workspace_id = $1 AND user_id = $2`
 	_, err := r.db.ExecContext(ctx, q, workspaceID, userID, role, time.Now())
 	return err
+}
+
+// UpdateProfile applies a partial team-profile update to one membership: a nil
+// field keeps the stored value. Returns false when there is no such membership.
+func (r *WorkspaceMemberRepo) UpdateProfile(ctx context.Context, workspaceID, userID uuid.UUID, upd domain.MemberProfileUpdate) (bool, error) {
+	const q = `
+		UPDATE workspace_members SET
+			capabilities        = COALESCE($3::jsonb, capabilities),
+			responsibility_zone = COALESCE($4, responsibility_zone),
+			availability        = COALESCE($5, availability),
+			updated_at          = $6
+		WHERE workspace_id = $1 AND user_id = $2
+	`
+	var caps any
+	if upd.Capabilities != nil {
+		caps = string(upd.Capabilities)
+	}
+	res, err := r.db.ExecContext(ctx, q, workspaceID, userID, caps, upd.ResponsibilityZone, upd.Availability, time.Now())
+	if err != nil {
+		return false, fmt.Errorf("update workspace member profile: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("update workspace member profile: %w", err)
+	}
+	return n > 0, nil
 }
 
 // Delete removes the workspace membership for the given user.
@@ -167,6 +200,7 @@ func (r *WorkspaceMemberRepo) ListWithProjects(ctx context.Context, workspaceID 
 	const q = `
 		SELECT
 			wm.id, wm.workspace_id, wm.user_id, wm.role, wm.invited_by, wm.created_at, wm.updated_at,
+			wm.capabilities, wm.responsibility_zone, wm.availability,
 			u.id AS u_id, u.email AS u_email, u.display_name AS u_display_name,
 			COALESCE(u.username, '') AS u_username, COALESCE(u.avatar_url, '') AS u_avatar_url,
 			COALESCE(
@@ -179,7 +213,8 @@ func (r *WorkspaceMemberRepo) ListWithProjects(ctx context.Context, workspaceID 
 		LEFT JOIN projects p ON p.id = pm.project_id AND p.workspace_id = $1 AND p.deleted_at IS NULL
 		WHERE wm.workspace_id = $1
 		GROUP BY wm.id, wm.workspace_id, wm.user_id, wm.role, wm.invited_by, wm.created_at, wm.updated_at,
-		         u.id, u.email, u.display_name, u.avatar_url
+		         wm.capabilities, wm.responsibility_zone, wm.availability,
+		         u.id, u.email, u.display_name, u.username, u.avatar_url
 		ORDER BY wm.created_at
 	`
 	var rows []workspaceMemberWithProjectsRow
@@ -196,18 +231,22 @@ func (r *WorkspaceMemberRepo) ListWithProjects(ctx context.Context, workspaceID 
 		result[i] = repository.HumanWithProjects{
 			WorkspaceMemberWithUser: domain.WorkspaceMemberWithUser{
 				WorkspaceMember: domain.WorkspaceMember{
-					ID:          row.ID,
-					WorkspaceID: row.WorkspaceID,
-					UserID:      row.UserID,
-					Role:        row.Role,
-					InvitedBy:   row.InvitedBy,
-					CreatedAt:   row.CreatedAt,
-					UpdatedAt:   row.UpdatedAt,
+					ID:                 row.ID,
+					WorkspaceID:        row.WorkspaceID,
+					UserID:             row.UserID,
+					Role:               row.Role,
+					InvitedBy:          row.InvitedBy,
+					CreatedAt:          row.CreatedAt,
+					UpdatedAt:          row.UpdatedAt,
+					Capabilities:       row.Capabilities,
+					ResponsibilityZone: row.Zone,
+					Availability:       row.Availability,
 				},
 				User: domain.UserBrief{
 					ID:        row.UserIDJoin,
 					Email:     row.UserEmail,
 					Name:      row.UserName,
+					Username:  row.UserUsername,
 					AvatarURL: row.UserAvatar,
 				},
 			},

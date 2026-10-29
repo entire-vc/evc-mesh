@@ -453,6 +453,9 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 			"title": "title is required",
 		})
 	}
+	if err := s.prepareStartAfter(ctx, nil, task); err != nil {
+		return err
+	}
 
 	// Validate custom field values if a custom field service is available.
 	if s.customFieldSvc != nil && len(task.CustomFields) > 0 && string(task.CustomFields) != "{}" && string(task.CustomFields) != "null" {
@@ -686,6 +689,9 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	if existing == nil {
 		return apierror.NotFound("Task")
 	}
+	if err := s.prepareStartAfter(ctx, existing, task); err != nil {
+		return err
+	}
 
 	// Validate custom field values if a custom field service is available.
 	if s.customFieldSvc != nil && len(task.CustomFields) > 0 && string(task.CustomFields) != "{}" && string(task.CustomFields) != "null" {
@@ -806,6 +812,10 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	}
 	if timePtrChanged(existing.StartAfter, task.StartAfter) {
 		changes["start_after"] = map[string]interface{}{"old": existing.StartAfter, "new": task.StartAfter}
+		changes["start_after_origin"] = map[string]interface{}{"old": existing.StartAfterOrigin, "new": task.StartAfterOrigin}
+		if task.StartAfterSet != nil {
+			changes["start_after_receipt_id"] = task.StartAfterSet.ID
+		}
 	}
 	if floatPtrChanged(existing.EstimatedHours, task.EstimatedHours) {
 		changes["estimated_hours"] = map[string]interface{}{"old": existing.EstimatedHours, "new": task.EstimatedHours}
@@ -999,6 +1009,16 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 	}
 	if input.ExpectedAssigneeID != nil && !assigneeMatches(task.AssigneeID, *input.ExpectedAssigneeID) {
 		return taskConflictOf(task)
+	}
+	// finish_task: another agent's live checkout refuses the close; the
+	// kind:* mirror is computed from the row this attempt read and written
+	// under its version, so a concurrent label edit conflicts instead of
+	// being overwritten.
+	if f := input.Finish; f != nil {
+		if task.CheckedOutBy != nil && *task.CheckedOutBy != f.Caller && task.CheckoutExpires != nil && task.CheckoutExpires.After(timeNow()) {
+			return apierror.Conflict("the card is checked out by another agent")
+		}
+		f.Labels = domain.MirrorResultKindLabel(task.Labels, f.ResultKind)
 	}
 
 	// Tenancy of an explicit assignee is decided BEFORE anything is applied.
@@ -1295,7 +1315,7 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 	assignmentChanged := !sameAssigneeID(oldAssigneeID, task.AssigneeID) || oldAssigneeType != task.AssigneeType
 
 	// Nothing changed — return early without touching the DB.
-	if !statusChanged && !positionChanged && !assignmentChanged && input.AlarmDue == nil {
+	if !statusChanged && !positionChanged && !assignmentChanged && input.AlarmDue == nil && input.Finish == nil {
 		// A caller with preconditions is told they held: confirm the row is still
 		// the one they were checked against, else a write since the pre-read
 		// (a reassignment, say) would be answered with success instead of 409.
@@ -1317,6 +1337,7 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 	task.UpdatedAt = timeNow()
 	transition := domain.TaskTransition{ExpectedVersion: oldVersion, ExpectedStatusID: input.ExpectedStatusID, ExpectedUpdatedAt: input.ExpectedUpdatedAt, ExpectedAssigneeID: input.ExpectedAssigneeID, Reaper: input.Reaper, AlarmDue: input.AlarmDue, AlarmLabels: input.AlarmLabels}
 	transition.DisallowParkedWait = input.Source == "auto_transition"
+	transition.Finish = input.Finish
 	transition.CheckoutStage = input.CheckoutStage && statusChanged
 	transition.Audit = s.moveAudit(ctx, task, input, oldStatusID, oldPosition, oldAssigneeID, oldAssigneeType, statusChanged, positionChanged, assignmentChanged, assignmentReason, transitionViolation)
 	if statusChanged && task.CheckedOutBy != nil {
@@ -1324,6 +1345,11 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 			transition.ReleaseCheckout = true
 			transition.Audit.Entries = append(transition.Audit.Entries, domain.TaskAuditEntry{Action: "task.checkout_released_auto", Changes: map[string]any{"reason": "terminal_status_transition", "new_status": st.Name, "new_category": string(st.Category)}})
 		}
+	}
+	if input.Finish != nil && !transition.ReleaseCheckout && task.CheckedOutBy != nil {
+		// Finishing into the status the card already has still hands it back.
+		transition.ReleaseCheckout = true
+		transition.Audit.Entries = append(transition.Audit.Entries, domain.TaskAuditEntry{Action: "task.checkout_released_auto", Changes: map[string]any{"reason": "finish_task"}})
 	}
 	durable := false
 	if writer, ok := s.taskRepo.(interface {
@@ -1336,7 +1362,7 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 	} else {
 		// Minimal repository doubles can exercise policy without SQL. Reaper guards
 		// are never silently downgraded on an implementation lacking the atomic API.
-		if input.Reaper != nil {
+		if input.Reaper != nil || input.Finish != nil {
 			return fmt.Errorf("repository lacks guarded task transitions")
 		}
 		if input.AlarmDue != nil {
@@ -1648,22 +1674,23 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 		assigneeType = domain.AssigneeTypeUnassigned
 	}
 	child := &domain.Task{
-		ID:             uuid.New(),
-		ProjectID:      parent.ProjectID,
-		StatusID:       statusID,
-		Title:          input.Title,
-		Priority:       input.Priority,
-		Description:    input.Description,
-		ParentTaskID:   &parentTaskID,
-		AssigneeID:     input.AssigneeID,
-		AssigneeType:   assigneeType,
-		Labels:         pq.StringArray(input.Labels),
-		CustomFields:   input.CustomFields,
-		DueDate:        input.DueDate,
-		StartAfter:     input.StartAfter,
-		EstimatedHours: input.EstimatedHours,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		ID:              uuid.New(),
+		ProjectID:       parent.ProjectID,
+		StatusID:        statusID,
+		Title:           input.Title,
+		Priority:        input.Priority,
+		Description:     input.Description,
+		ParentTaskID:    &parentTaskID,
+		AssigneeID:      input.AssigneeID,
+		AssigneeType:    assigneeType,
+		Labels:          pq.StringArray(input.Labels),
+		CustomFields:    input.CustomFields,
+		DueDate:         input.DueDate,
+		StartAfter:      input.StartAfter,
+		StartAfterWrite: input.StartAfterWrite,
+		EstimatedHours:  input.EstimatedHours,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 
 	// Apply auto-assign rules if the subtask has no assignee.
@@ -1677,6 +1704,9 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 	child.CreatedByType = creatorType
 	if child.CreatedByType == "" {
 		child.CreatedByType = domain.ActorTypeUser
+	}
+	if err := s.prepareStartAfter(ctx, nil, child); err != nil {
+		return nil, err
 	}
 
 	// Auto-enroll creator agent into project members.

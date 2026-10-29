@@ -128,6 +128,9 @@ type RuntimeReport struct {
 	EmergencyPaused bool                               `json:"emergency_paused"`
 	Pools           map[string]RuntimePoolObservation  `json:"pools"`
 	Profiles        map[string]RuntimeModelObservation `json:"profiles,omitempty"`
+	// Version is the controller's own build version. Optional: a controller
+	// that does not send it is shown with the catalog's version.
+	Version string `json:"version,omitempty"`
 	// Excluded is written by the server, never taken from the controller: the
 	// bindings of this controller that strict workspace isolation leaves out.
 	Excluded []RuntimeExclusion `json:"excluded,omitempty"`
@@ -195,6 +198,12 @@ var ErrRuntimeInput = errors.New("invalid runtime request")
 var runtimeRefPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$`)
 
 func ValidRuntimeRef(value string) bool { return runtimeRefPattern.MatchString(value) }
+
+var runtimeVersionPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$`)
+
+// ValidRuntimeVersion reports whether value is a plausible build version
+// ("0.1.3", "1.2.0-rc.1+abc"): no spaces, at most 64 characters.
+func ValidRuntimeVersion(value string) bool { return runtimeVersionPattern.MatchString(value) }
 
 // DecodeRuntimeJSON rejects duplicate keys, unknown fields and trailing documents.
 // Error text deliberately excludes submitted values (including accidental secrets).

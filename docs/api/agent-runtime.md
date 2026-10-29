@@ -77,6 +77,10 @@ Schema v2 is independent of monotonically increasing desired revision. Every sav
 including rollback, creates a new immutable revision. `if_revision=0` creates only
 when absent. Controller apply reports contain the exact revision and digest:
 future, mismatched and stale reports cannot mark the current revision applied.
+A report may carry the controller's own build `version` (optional, at most 64
+characters of `0-9A-Za-z.+_-`); the Runner screen shows it in place of the
+catalog entry's `version` and marks a catalog entry that says otherwise. Saving
+a catalog without a binding disables that binding's receiving admission.
 Heartbeat is separate from apply success. Controller rejection/capability mismatch
 and stale heartbeat remain visible. Local emergency pause survives synchronization.
 Disabling the integration denies new admissions and requests drain of existing
