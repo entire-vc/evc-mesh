@@ -346,7 +346,7 @@ describe("Settings of an instance-connected VCS extension", () => {
     const dlg = open("gitlab");
     const list = within(dlg).getByRole("list", { name: "Repositories sending links" });
     expect(within(list).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
-      expect.stringMatching(/entire-vc\/evc-mesh.*git\.entire\.host.*1,200 links/),
+      expect.stringMatching(/entire-vc\/evc-mesh.*gitlab\.example\.invalid.*1,200 links/),
       expect.stringMatching(/entire-vc\/evc-spark.*655 links/),
     ]);
     cleanup();
@@ -362,7 +362,7 @@ describe("Settings of an instance-connected VCS extension", () => {
       expect(li.className).toContain("flex-col");
       expect(li.className).not.toContain("justify-between");
       expect(li.children).toHaveLength(2);
-      expect(li.children[1]?.textContent).toMatch(/^git\.entire\.host · /);
+      expect(li.children[1]?.textContent).toMatch(/^gitlab\.example\.invalid · /);
     }
   });
 

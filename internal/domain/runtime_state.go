@@ -212,7 +212,10 @@ func ResolveRuntimeState(raw []byte, t *Task, now time.Time) *RuntimeState {
 		var s RuntimeState
 		if err := json.Unmarshal(raw, &s); err == nil && ValidRuntimeKind(s.Kind) {
 			s.Source = RuntimeStateSourceExplicit
-			s.Stale = now.Sub(s.UpdatedAt) > RuntimeStateStaleAfter || (s.Until != nil && now.After(*s.Until))
+			// A state written from a declared wait is refreshed by nobody: only
+			// its until can make it stale.
+			fromWait := s.Ref != nil && strings.HasPrefix(*s.Ref, WaitRuntimeRefPrefix)
+			s.Stale = (!fromWait && now.Sub(s.UpdatedAt) > RuntimeStateStaleAfter) || (s.Until != nil && now.After(*s.Until))
 			return &s
 		}
 	}

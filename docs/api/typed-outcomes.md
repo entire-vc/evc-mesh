@@ -1,10 +1,11 @@
 # Typed turn outcomes — data model and command API
 
 Status: implementation contract. The schema (migration
-`20261028001_typed_outcomes.sql`) and the two reads below are implemented. The
-seven commands are planned: their routes, bodies, responses and error codes are
-fixed here so the server handlers, the MCP tools and the runner can be built in
-parallel against the same contract.
+`20261028001_typed_outcomes.sql`), the two reads and the commands `wait_for`,
+`continue_next`, `hand_off` and `add_note` are implemented; `ask_agent`,
+`answer_decision` and `finish_task` are planned. Routes, bodies, responses and
+error codes are fixed here so the server handlers, the MCP tools and the runner
+can be built in parallel against the same contract.
 
 An agent's turn ends with a command, not with a marker line in a comment. The
 command validates its input on the server, writes the state, writes a
@@ -156,6 +157,23 @@ caller's previous one), an outcome `wait`, the comment, and releases the checkou
 
 `201` — envelope with `outcome`, `wait`, `released: true`.
 Errors: `invalid_target`, `self_wait`, `already_met`, `time_out_of_bounds`.
+
+How the target is confirmed:
+
+- `card` — the card exists in the same workspace and the edge's condition is
+  not already released (a closed card for `task_done`); a cycle in the
+  dependency graph is `invalid_target`. The `blocks` edge is written in the
+  same transaction.
+- `mr` — live from the workspace's GitLab when it is configured, otherwise from
+  a pr link of this card. Not found on either is `invalid_target`; merged or
+  closed is `already_met`. A matching link of the card is recorded on the wait.
+- `pipeline` — live from the workspace's GitLab only; without it the target
+  cannot be confirmed and is `invalid_target`. `success`, `failed`, `canceled`
+  and `skipped` are `already_met`.
+
+The card's `runtime_state` becomes `waiting` with `ref = "wait:<wait id>"` and,
+for `time`, `until = until_at`. Such a state is not refreshed by the runner, so
+it reads stale only after its `until`, not after the usual 15 minutes.
 A timer cannot ask anyone to act: a wait on another agent is `ask_agent`, on a
 person `ask_human` (the existing `set_human_gate`, which records a `human` wait).
 
@@ -224,7 +242,9 @@ Assigns the card to the addressee, moves it to its first `todo` status, writes a
 outcome `handoff` and the comment, resolves the caller's active wait as
 `cancelled`, and releases the checkout — one transaction instead of three calls
 that race. `200` — envelope with `outcome`, `released: true`.
-Errors: `not_an_agent`.
+Errors: `not_an_agent`; `409 conflict` when a person pinned the assignee
+(`assigned_by = human`). The addressee passes the same checks as `assign_task`
+(workspace tenancy, accepts assignments) and is enrolled in the project.
 
 ### 7. `add_note` — `POST /api/v1/tasks/:task_id/notes`
 

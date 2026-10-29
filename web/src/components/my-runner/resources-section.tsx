@@ -11,38 +11,39 @@ import { useAgentStore } from "@/stores/agent";
 import { useAgentWorkspaceGrantStore } from "@/stores/agent-workspace-grant";
 import { useWorkspaceStore } from "@/stores/workspace";
 import {
-  CATALOG_SECTIONS, CONFIG_SECTIONS, bindRefs, entrySchema, entrySummary, fieldErrorsByEntry, findSecretViolation, fromFormValue,
-  isForeignBinding, newBindingValue, refOptions, saveResources, sectionEntries, toFormValue, isSchemaPath, unknownFields, withEntry,
-  type ConfigSection, type ResourceDoc, type RuntimeConfig,
+  bindRefs, entrySchema, entrySummary, fieldErrorsByEntry, findSecretViolation, fromFormValue, profileLabel, profileLabels,
+  RESOURCE_SECTIONS, refOptions, saveResources, sectionEntries, toFormValue, isSchemaPath, unknownFields, withEntry,
+  type ConfigSection, type ResourceDoc, type ResourceSection, type RuntimeConfig,
 } from "@/lib/my-runner";
 
 /** A filter appears once the lists are too long to scan (the fleet catalog has 60+ bindings). */
 const FILTER_FROM = 20;
 
 /** `serverErrors`: the server's reasons for this entry from the last save, by field path. */
-type Editor = { section: ConfigSection; original: string | null; serverErrors?: Record<string, string> };
+export type Editor = { section: ConfigSection; original: string | null; serverErrors?: Record<string, string> };
 
 /**
  * One entry, edited only through the form the Runner manifest describes:
- * references are picked from what exists in the draft, never typed.
+ * references are picked from what exists in the draft, never typed, and
+ * profiles by their readable names.
  */
-function EntryEditor({ config, schema, editor, wsId, onApply, onCancel }: {
-  config: RuntimeConfig; schema: FieldSchema; editor: Editor; wsId?: string | null; onApply: (name: string, value: unknown) => void; onCancel: () => void;
+export function EntryEditor({ config, schema, editor, onApply, onCancel, initial, initialName, submitLabel }: {
+  config: RuntimeConfig; schema: FieldSchema; editor: Editor; onApply: (name: string, value: unknown) => void | Promise<unknown>; onCancel: () => void;
+  /** Starting values of a new entry (the agent a new binding is for). */
+  initial?: Values;
+  initialName?: string;
+  submitLabel?: string;
 }) {
   const { t } = useTranslation("runner");
   const isNew = editor.original === null;
-  const stored = isNew ? undefined : config[editor.section]?.[editor.original!];
-  // A binding added on a workspace's screen starts as that workspace's, so it stays in its list.
-  const existing = useMemo(
-    () => (isNew && editor.section === "bindings" && wsId ? newBindingValue(wsId) : stored),
-    [isNew, editor.section, wsId, stored],
-  );
-  const start = useMemo(() => toFormValue(editor.section, existing, isNew), [editor.section, existing, isNew]);
-  const [name, setName] = useState(editor.original ?? "");
+  const existing = isNew ? undefined : config[editor.section]?.[editor.original!];
+  const start = useMemo(() => ({ ...toFormValue(editor.section, existing, isNew), ...(isNew ? initial : {}) }), [editor.section, existing, isNew, initial]);
+  const [name, setName] = useState(editor.original ?? initialName ?? "");
   const [nameError, setNameError] = useState<string | null>(null);
   const [values, setValues] = useState<Values>(start);
+  const labels = useMemo(() => ({ profiles: profileLabels(config, t) }), [config, t]);
   // options follow the draft: allowed profiles narrow "first choice" as they are ticked
-  const bound = useMemo(() => bindRefs(schema, refOptions(config, editor.section, values)), [schema, config, editor.section, values]);
+  const bound = useMemo(() => bindRefs(schema, refOptions(config, editor.section, values), labels), [schema, config, editor.section, values, labels]);
   const dropped = useMemo(() => unknownFields(schema, existing), [schema, existing]);
   // Reasons for fields the form has go to the field; the rest (an unknown field) are listed above the form.
   const [serverErrors, orphanErrors] = useMemo(() => {
@@ -78,7 +79,7 @@ function EntryEditor({ config, schema, editor, wsId, onApply, onCancel }: {
       setNameError(t("resources.secretRejected", { path: secret }));
       return false;
     }
-    onApply(n, value);
+    await onApply(n, value);
   };
 
   return (
@@ -110,7 +111,7 @@ function EntryEditor({ config, schema, editor, wsId, onApply, onCancel }: {
         value={start}
         onSubmit={submit}
         onValuesChange={setValues}
-        submitLabel={t("resources.apply")}
+        submitLabel={submitLabel ?? t("resources.apply")}
         serverErrors={serverErrors}
         agentOptions={agentOptions}
         actions={<Button type="button" variant="outline" onClick={onCancel}>{t("resources.cancel")}</Button>}
@@ -156,9 +157,10 @@ function matches(name: string, value: unknown, query: string): boolean {
   return [name, ...s.text].some((x) => x.toLowerCase().includes(query));
 }
 
-function ResourcesBody({ doc, onSaved }: { doc: ResourceDoc; onSaved: () => void }) {
+function ResourcesBody({ doc, section, onSaved, onShowSection }: {
+  doc: ResourceDoc; section: ResourceSection; onSaved: () => void; onShowSection?: (section: ResourceSection) => void;
+}) {
   const { t } = useTranslation("runner");
-  const sections = doc.source === "workspace" ? CATALOG_SECTIONS : CONFIG_SECTIONS;
   const manifest = doc.source === "workspace" ? doc.manifest : null;
   // The personal document has no schema the runner reads: it is shown, not edited.
   const editable = doc.source === "workspace" && manifest !== null;
@@ -171,6 +173,12 @@ function ResourcesBody({ doc, onSaved }: { doc: ResourceDoc; onSaved: () => void
   // A newer server revision replaces the draft (after a save or a conflict reload). Done while
   // rendering, not in an effect: a mount effect could land after the first click and wipe the edit
   // it made (my-runner tests lost "Remove" and the "Add" editor on a loaded CI runner).
+  // the filter belongs to the list it narrows: a switch to another resource tab clears it
+  const [listed, setListed] = useState(section);
+  if (listed !== section) {
+    setListed(section);
+    setQuery("");
+  }
   const [shown, setShown] = useState(doc);
   if (shown.revision !== doc.revision || shown.config !== doc.config) {
     setShown(doc);
@@ -206,10 +214,15 @@ function ResourcesBody({ doc, onSaved }: { doc: ResourceDoc; onSaved: () => void
       const conflict = (e as { status?: number }).status === 409;
       // Reasons per field: reopen the first entry the server refused, each reason at its field.
       const refused = conflict ? [] : fieldErrorsByEntry((e as { details?: Record<string, string> }).details, draft);
-      if (refused.length > 0) {
-        const first = refused[0]!;
+      // Agent settings have no tab here: a refused one (a removed profile it still allows) is named, fixed under Agents.
+      const own = refused.filter((r) => (RESOURCE_SECTIONS as readonly string[]).includes(r.section));
+      if (own.length > 0) {
+        const first = own[0]!;
         setEditor({ section: first.section, original: first.name, serverErrors: first.fields });
+        if (first.section !== section) onShowSection?.(first.section as ResourceSection);
         toast.error(t("resources.refused", { count: refused.length }));
+      } else if (refused.length > 0) {
+        toast.error(t("resources.refusedAgents", { names: refused.map((r) => r.name).join(", ") }));
       } else {
         toast.error(conflict ? t("resources.conflict") : apiErrorMessage(e, t("resources.saveFailed")));
       }
@@ -219,18 +232,14 @@ function ResourcesBody({ doc, onSaved }: { doc: ResourceDoc; onSaved: () => void
     }
   };
 
-  // Another workspace's bindings are not this workspace's agents: counted, never listed or edited.
-  // They stay in the draft untouched, so a save neither drops nor changes them.
-  const wsId = doc.source === "workspace" ? doc.wsId : null;
-  const excluded = doc.source === "workspace" ? doc.excluded : {};
-  const own = useMemo(() => {
-    const out = {} as Record<ConfigSection, [string, unknown][]>;
-    for (const s of sections) out[s] = sectionEntries(draft, s).filter(([, v]) => !(s === "bindings" && wsId && isForeignBinding(v, wsId)));
-    return out;
-  }, [draft, sections, wsId]);
-  const foreign = (sections as readonly ConfigSection[]).includes("bindings") ? sectionEntries(draft, "bindings").length - own.bindings.length : 0;
-  const total = sections.reduce((n, s) => n + own[s].length, 0);
-  const q = total > FILTER_FROM ? query.trim().toLowerCase() : "";
+  const all = sectionEntries(draft, section);
+  const q = all.length > FILTER_FROM ? query.trim().toLowerCase() : "";
+  const schema = editable ? entrySchema(manifest, section) : null;
+  // The entry open in the editor stays listed whatever the filter: a refused save reopens it.
+  const entries = all.filter(([name, value]) =>
+    (editor?.section === section && editor.original === name)
+    || matches(name, value, q)
+    || (section === "profiles" && !!q && profileLabel(name, draft, t).toLowerCase().includes(q)));
 
   return (
     <div className="space-y-5">
@@ -240,7 +249,8 @@ function ResourcesBody({ doc, onSaved }: { doc: ResourceDoc; onSaved: () => void
       {doc.source === "workspace" && !manifest && (
         <p role="alert" className="text-sm text-destructive" data-testid="my-runner-resources-no-schema">{t("resources.noSchema")}</p>
       )}
-      {total > FILTER_FROM && (
+      {section === "profiles" && <p className="text-sm" data-testid="my-runner-profiles-hint">{t("profiles.hint")}</p>}
+      {all.length > FILTER_FROM && (
         <Input
           type="search"
           value={query}
@@ -250,69 +260,53 @@ function ResourcesBody({ doc, onSaved }: { doc: ResourceDoc; onSaved: () => void
           className="h-9 sm:max-w-xs"
         />
       )}
-      {sections.map((section) => {
-        const all = own[section];
-        const schema = editable ? entrySchema(manifest, section) : null;
-        // The entry open in the editor stays listed whatever the filter: a refused save reopens it.
-        const entries = all.filter(([name, value]) => (editor?.section === section && editor.original === name) || matches(name, value, q));
-        return (
-          <div key={section} className="space-y-2" data-testid={`my-runner-resources-${section}`}>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-sm font-medium">{t(`resources.sections.${section}`)}</h3>
-              {schema && <Button size="sm" variant="outline" onClick={() => setEditor({ section, original: null })}>{t("resources.add")}</Button>}
-            </div>
-            {section === "bindings" && foreign > 0 && (
-              <p role="status" className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm" data-testid="my-runner-resources-foreign">
-                {t("resources.foreignBindings", { count: foreign })}
-              </p>
-            )}
-            {entries.length === 0 && !(editor?.section === section && editor.original === null) && (
-              <p className="text-sm text-muted-foreground">{t(all.length > 0 ? "resources.noMatches" : "resources.empty")}</p>
-            )}
-            {/* The editor opens where the click was: under Add for a new entry, under the row being edited. */}
-            {schema && editor?.section === section && editor.original === null && (
-              <EntryEditor key="new" config={draft} schema={schema} editor={editor} wsId={wsId} onApply={apply} onCancel={() => setEditor(null)} />
-            )}
-            <ul className="space-y-2">
-              {entries.map(([name, value]) => (
-                <li key={name} className="space-y-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-3 py-2">
-                    <span className="min-w-0 flex-1">
-                      {/* `a/b/spend` wraps after a `/`, not inside a segment, on a 393 screen too */}
-                      <span className="block break-words text-sm font-medium" title={name}>
-                        {name.split("/").map((p, i) => <Fragment key={i}>{i > 0 && <>/<wbr /></>}{p}</Fragment>)}
-                      </span>
-                      <EntrySummary value={value} />
-                      {section === "bindings" && excluded[name] && (
-                        <span className="mt-1 block text-xs font-medium text-warning" data-testid={`my-runner-binding-excluded-${name}`}>
-                          {t(`resources.excluded.${excluded[name]}`, { defaultValue: t("resources.excluded.other", { reason: excluded[name] }) })}
-                        </span>
-                      )}
-                    </span>
-                    {schema && (
-                      <span className="flex shrink-0 gap-2">
-                        <Button size="sm" variant="ghost" onClick={() => setEditor({ section, original: name })}>{t("resources.edit")}</Button>
-                        <Button size="sm" variant="ghost" onClick={() => remove(section, name)}>{t("resources.remove")}</Button>
-                      </span>
-                    )}
-                  </div>
-                  {schema && editor?.section === section && editor.original === name && (
-                    <EntryEditor
-                      key={`${name}:${JSON.stringify(editor.serverErrors ?? {})}`}
-                      config={draft}
-                      schema={schema}
-                      editor={editor}
-                      wsId={wsId}
-                      onApply={apply}
-                      onCancel={() => setEditor(null)}
-                    />
-                  )}
-                </li>
-              ))}
-            </ul>
+      <div className="space-y-2" data-testid={`my-runner-resources-${section}`}>
+        {schema && (
+          <div className="flex justify-end">
+            <Button size="sm" variant="outline" onClick={() => setEditor({ section, original: null })}>{t("resources.add")}</Button>
           </div>
-        );
-      })}
+        )}
+        {entries.length === 0 && !(editor?.section === section && editor.original === null) && (
+          <p className="text-sm text-muted-foreground">{t(all.length > 0 ? "resources.noMatches" : "resources.empty")}</p>
+        )}
+        {/* The editor opens where the click was: under Add for a new entry, under the row being edited. */}
+        {schema && editor?.section === section && editor.original === null && (
+          <EntryEditor key="new" config={draft} schema={schema} editor={editor} onApply={apply} onCancel={() => setEditor(null)} />
+        )}
+        <ul className="space-y-2">
+          {entries.map(([name, value]) => (
+            <li key={name} className="space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-3 py-2">
+                <span className="min-w-0 flex-1">
+                  {section === "profiles" && <span className="block break-words text-sm font-medium">{profileLabel(name, draft, t)}</span>}
+                  {/* `a/b/spend` wraps after a `/`, not inside a segment, on a 393 screen too */}
+                  <span className={section === "profiles" ? "block break-words font-mono text-xs text-muted-foreground" : "block break-words text-sm font-medium"} title={name}>
+                    {name.split("/").map((p, i) => <Fragment key={i}>{i > 0 && <>/<wbr /></>}{p}</Fragment>)}
+                  </span>
+                  {section !== "profiles" && <EntrySummary value={value} />}
+                  {section === "profiles" && entrySummary(value).disabled && <EntrySummary value={{ enabled: false }} />}
+                </span>
+                {schema && (
+                  <span className="flex shrink-0 gap-2">
+                    <Button size="sm" variant="ghost" onClick={() => setEditor({ section, original: name })}>{t("resources.edit")}</Button>
+                    <Button size="sm" variant="ghost" onClick={() => remove(section, name)}>{t("resources.remove")}</Button>
+                  </span>
+                )}
+              </div>
+              {schema && editor?.section === section && editor.original === name && (
+                <EntryEditor
+                  key={`${name}:${JSON.stringify(editor.serverErrors ?? {})}`}
+                  config={draft}
+                  schema={schema}
+                  editor={editor}
+                  onApply={apply}
+                  onCancel={() => setEditor(null)}
+                />
+              )}
+            </li>
+          ))}
+        </ul>
+      </div>
       {dirty && (
         // Sticky: after an edit deep in a long list, Save stays in reach instead of 60 rows below.
         <div className="sticky bottom-0 z-10 -mx-1 flex flex-wrap items-center gap-3 border-t border-border bg-card px-1 py-3" data-testid="my-runner-resources-dirty">
@@ -327,11 +321,19 @@ function ResourcesBody({ doc, onSaved }: { doc: ResourceDoc; onSaved: () => void
   );
 }
 
-export function ResourcesSection({ result, reload }: { result: Loaded<ResourceDoc>; reload: () => void }) {
+/**
+ * Accounts, pools or profiles, one tab each. The page keeps one instance across
+ * the three tabs, so an unsaved draft survives a switch between them.
+ */
+export function ResourcesSection({ result, reload, section, onShowSection }: {
+  result: Loaded<ResourceDoc>; reload: () => void; section: ResourceSection;
+  /** Opens another resource tab: where the server refused an entry of the saved draft. */
+  onShowSection?: (section: ResourceSection) => void;
+}) {
   const { t } = useTranslation("runner");
   return (
-    <SectionShell title={t("resources.title")} testId="my-runner-resources" result={result} onRetry={reload}>
-      {(doc) => <ResourcesBody doc={doc} onSaved={reload} />}
+    <SectionShell title={t(`resources.sections.${section}`)} testId="my-runner-resources" result={result} onRetry={reload}>
+      {(doc) => <ResourcesBody doc={doc} section={section} onSaved={reload} onShowSection={onShowSection} />}
     </SectionShell>
   );
 }

@@ -288,14 +288,41 @@ jobs:
           # loudly here instead of silently downgrading to plaintext.
           MESH_INTEGRATION_ENCRYPTION_KEY: "ZXZjLW1lc2gtY2ktaW50ZWdyYXRpb24tdGVzdC1rMzI="
           MESH_INTEGRATION_ENCRYPTION_REQUIRED: "1"
+          # Workspace secrets live in Keep only, so the secrets tests need a
+          # Keep: tests/keepstub, started below, serves Keep's two Mesh routes
+          # over TLS. The ids and the events secret are fixed, published and
+          # CI-only; they sign requests to a stub that dies with the runner.
+          MESH_KEEP_URL: "https://127.0.0.1:8443"
+          MESH_KEEP_ORG_ID: "00000000-0000-4000-8000-00000000c1a0"
+          MESH_KEEP_WORKSPACE_ID: "00000000-0000-4000-8000-00000000c1a1"
+          MESH_KEEP_EVENTS_SECRET: "ci-keepstub-events-secret-not-a-real-one"
           APP_ENV: test
         run: |
           go build -o /tmp/mesh-api ./cmd/api
-          /tmp/mesh-api &
-          # Wait up to 15s for the server to be ready on default port 8005
+          go build -o /tmp/keepstub ./tests/keepstub
+          /tmp/keepstub -addr 127.0.0.1:8443 -cert-out /tmp/keepstub.pem -secret "$MESH_KEEP_EVENTS_SECRET" &
+          ok=0
           for i in $(seq 15); do
-            curl -sf http://localhost:8005/healthz && break || sleep 1
+            if curl -sf --cacert /tmp/keepstub.pem https://127.0.0.1:8443/healthz >/dev/null; then ok=1; break; fi
+            sleep 1
           done
+          if [ "$ok" -ne 1 ]; then
+            echo "keepstub did not become healthy on :8443"
+            exit 1
+          fi
+          # The API trusts the stub's throwaway certificate and nothing else changes.
+          SSL_CERT_FILE=/tmp/keepstub.pem /tmp/mesh-api &
+          # /healthz does not exist on this server; wait on the real endpoint
+          # and fail when the API never comes up instead of echoing "ready".
+          ok=0
+          for i in $(seq 15); do
+            if curl -sf http://localhost:8005/api/v1/healthz/version >/dev/null; then ok=1; break; fi
+            sleep 1
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "API server did not become healthy on :8005"
+            exit 1
+          fi
           echo "API server ready"
 
       - name: Run integration tests
@@ -475,13 +502,41 @@ jobs:
           # mistake fails loudly instead of silently downgrading to plaintext.
           MESH_INTEGRATION_ENCRYPTION_KEY: "ZXZjLW1lc2gtY2ktaW50ZWdyYXRpb24tdGVzdC1rMzI="
           MESH_INTEGRATION_ENCRYPTION_REQUIRED: "1"
+          # Workspace secrets live in Keep only, so the secrets tests need a
+          # Keep: tests/keepstub, started below, serves Keep's two Mesh routes
+          # over TLS. The ids and the events secret are fixed, published and
+          # CI-only; they sign requests to a stub that dies with the runner.
+          MESH_KEEP_URL: "https://127.0.0.1:8443"
+          MESH_KEEP_ORG_ID: "00000000-0000-4000-8000-00000000c1a0"
+          MESH_KEEP_WORKSPACE_ID: "00000000-0000-4000-8000-00000000c1a1"
+          MESH_KEEP_EVENTS_SECRET: "ci-keepstub-events-secret-not-a-real-one"
           APP_ENV: test
         run: |
           go build -o /tmp/mesh-api ./cmd/api
-          /tmp/mesh-api &
+          go build -o /tmp/keepstub ./tests/keepstub
+          /tmp/keepstub -addr 127.0.0.1:8443 -cert-out /tmp/keepstub.pem -secret "$MESH_KEEP_EVENTS_SECRET" &
+          ok=0
           for i in $(seq 15); do
-            curl -sf http://localhost:8005/healthz && break || sleep 1
+            if curl -sf --cacert /tmp/keepstub.pem https://127.0.0.1:8443/healthz >/dev/null; then ok=1; break; fi
+            sleep 1
           done
+          if [ "$ok" -ne 1 ]; then
+            echo "keepstub did not become healthy on :8443"
+            exit 1
+          fi
+          # The API trusts the stub's throwaway certificate and nothing else changes.
+          SSL_CERT_FILE=/tmp/keepstub.pem /tmp/mesh-api &
+          # /healthz does not exist on this server; wait on the real endpoint
+          # and fail when the API never comes up instead of echoing "ready".
+          ok=0
+          for i in $(seq 15); do
+            if curl -sf http://localhost:8005/api/v1/healthz/version >/dev/null; then ok=1; break; fi
+            sleep 1
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "API server did not become healthy on :8005"
+            exit 1
+          fi
           echo "API server ready"
 
       - name: Run tenancy + RBAC tests (blocking)

@@ -38,7 +38,7 @@ type AgentKeyDescription struct {
 
 // DescribeAgentKey calls GET /v1/web/shares/{shareID}/agent-key — the
 // self-describe endpoint Team Relay shipped at Mesh's request specifically
-// for this (evc-team-relay PR #230, #bc11d499): "requested by the Mesh
+// for this (evc-team-relay a PR): "requested by the Mesh
 // integration, which holds a key issued by a share owner but has no way to
 // learn the key's own lifetime today short of parsing a 403 after expiry".
 //
@@ -81,4 +81,70 @@ func DescribeAgentKey(ctx context.Context, relayURL, shareID, agentKey string) (
 		return nil, fmt.Errorf("teamrelay: parse agent-key response: %w", jsonErr)
 	}
 	return &parsed, nil
+}
+
+// KeyShare is the share an agent key belongs to, as GET /v1/web/agent-key
+// reports it. WebSlug is empty for a share that is not web-published.
+type KeyShare struct {
+	ID      string `json:"id"`
+	Path    string `json:"path"`
+	WebSlug string `json:"web_slug"`
+}
+
+// Name is how the share is shown to a person: the last segment of its path.
+func (s KeyShare) Name() string {
+	p := strings.Trim(s.Path, "/")
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
+// keyShareResponse is the body of GET /v1/web/agent-key; only the share is read.
+type keyShareResponse struct {
+	ShareID string    `json:"share_id"`
+	Share   *KeyShare `json:"share"`
+}
+
+// ShareOfAgentKey asks the relay which share a key belongs to:
+// GET /v1/web/agent-key, the share-less form of DescribeAgentKey. A key is
+// bound to exactly one share, so a person pastes the key and never the share's
+// UUID. A relay without the route answers 404 (ErrNotFound); the caller then
+// falls back to a share it already knows.
+func ShareOfAgentKey(ctx context.Context, relayURL, agentKey string) (*KeyShare, error) {
+	if relayURL == "" {
+		return nil, fmt.Errorf("teamrelay: relay URL not configured")
+	}
+	endpoint := strings.TrimRight(relayURL, "/") + "/v1/web/agent-key"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("teamrelay: build agent-key request: %w", err)
+	}
+	req.Header.Set("X-Agent-Key", agentKey)
+
+	resp, err := relayHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUnreachable, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxDocumentBytes))
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, classifySyncError("agent-key", "", resp.StatusCode, body)
+	}
+	var parsed keyShareResponse
+	if jsonErr := json.Unmarshal(body, &parsed); jsonErr != nil {
+		return nil, fmt.Errorf("teamrelay: parse agent-key response: %w", jsonErr)
+	}
+	share := KeyShare{ID: parsed.ShareID}
+	if parsed.Share != nil {
+		share = *parsed.Share
+		if share.ID == "" {
+			share.ID = parsed.ShareID
+		}
+	}
+	if share.ID == "" {
+		return nil, fmt.Errorf("teamrelay: agent-key response names no share")
+	}
+	return &share, nil
 }

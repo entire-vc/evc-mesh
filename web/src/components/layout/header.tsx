@@ -486,6 +486,7 @@ const WORKSPACE_PAGES: Array<{
   { pattern: /\/w\/[^/]+\/events\/?$/, titleKey: "nav.events", icon: "Activity" },
   { pattern: /\/w\/[^/]+\/analytics\/?$/, titleKey: "nav.analytics", icon: "BarChart2" },
   { pattern: /\/w\/[^/]+\/extensions\/?$/, titleKey: "nav.extensions", icon: "Settings" },
+  { pattern: /\/w\/[^/]+\/runner\/?$/, titleKey: "nav.myRunner", icon: "Server" },
   { pattern: /\/w\/[^/]+\/initiatives\/?$/, titleKey: "nav.initiatives", icon: "Target" },
   { pattern: /\/w\/[^/]+\/triage\/?$/, titleKey: "nav.triage", icon: "Inbox" },
   { pattern: /\/w\/[^/]+\/me\/?$/, titleKey: "nav.profile", icon: "UserRound" },

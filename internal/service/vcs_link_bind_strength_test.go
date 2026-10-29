@@ -43,7 +43,7 @@ func TestHandleMR_BodyMentionOfOtherProjectCard_NoTransition(t *testing.T) {
 	assert.Equal(t, "mentioned_only", res.Reason)
 	assert.Empty(t, h.taskSvc.moveCalls, "a mention must never move the card")
 	assert.Equal(t, h.statusIDs[domain.StatusCategoryReview], h.taskRepo.tasks[card.ID].StatusID)
-	assert.Equal(t, "🤖 Auto: MR merged — mentioned only, no status change.", lastComment(h))
+	assert.Equal(t, "🤖 Auto: MR !"+"178"+" merged — mentioned only, no status change.", lastComment(h))
 
 	links := h.linksFor(card.ID)
 	require.Len(t, links, 1)

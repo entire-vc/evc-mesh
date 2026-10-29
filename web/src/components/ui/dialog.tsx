@@ -68,8 +68,8 @@ export function Dialog({ open, onOpenChange, children, className, closeOnBackdro
 
 export const DialogContent = forwardRef<
   HTMLDivElement,
-  HTMLAttributes<HTMLDivElement> & { onClose?: () => void }
->(({ className, children, onClose, ...props }, ref) => (
+  HTMLAttributes<HTMLDivElement> & { onClose?: () => void; /** Accessible name of the close button. */ closeLabel?: string }
+>(({ className, children, onClose, closeLabel, ...props }, ref) => (
   <div
     ref={ref}
     className={cn(
@@ -81,7 +81,9 @@ export const DialogContent = forwardRef<
     {children}
     {onClose && (
       <button
+        type="button"
         onClick={onClose}
+        aria-label={closeLabel}
         className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100"
       >
         <X className="h-4 w-4" />

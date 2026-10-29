@@ -80,7 +80,7 @@ describe("Extensions section", () => {
     expect(fetchMyRole).toHaveBeenCalledWith("ws-uuid-1");
   });
 
-  it("Installed has no runner controllers block: that lives on My Runner", async () => {
+  it("Installed has no runner controllers block: that lives on the Runner screen", async () => {
     useWorkspaceStore.setState({ currentWorkspace: { id: "ws-uuid-1", slug: "acme", name: "Acme" } as never });
     renderAt("/w/acme/extensions?tab=installed");
     expect(await screen.findByText("mcp-reference")).toBeTruthy();

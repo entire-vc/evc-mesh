@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { RunnerAdminCard } from "@/components/my-runner/admin-card";
 import { RunnerProgramCard } from "@/components/my-runner/program-card";
@@ -6,17 +5,19 @@ import { AgentsSection } from "@/components/my-runner/agents-section";
 import { HistorySection } from "@/components/my-runner/history-section";
 import { ResourcesSection } from "@/components/my-runner/resources-section";
 import { RunnersSection } from "@/components/my-runner/runners-section";
-import { RunnerTabList, useRunnerTab } from "@/components/my-runner/runner-tabs";
+import { RunnerTabList, useRunnerTab, type RunnerTab } from "@/components/my-runner/runner-tabs";
 import { useLoad } from "@/components/my-runner/use-load";
 import {
-  getOperatorAgents, getOperatorRunners, loadHistory, loadResources, profilesByAgent, type OperatorAgent, type OperatorRunner,
+  RESOURCE_SECTIONS, getOperatorAgents, getOperatorRunners, loadHistory, loadResources, type OperatorAgent, type OperatorRunner, type ResourceSection,
 } from "@/lib/my-runner";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
 
+const isResourceTab = (tab: RunnerTab): tab is ResourceSection => (RESOURCE_SECTIONS as readonly string[]).includes(tab);
+
 /**
- * The Runner section: overview (the on/off switch, runners, controllers),
- * agents, resources and revision history, one tab each.
+ * The Runner section: overview (the on/off switch, the program, runners), agents
+ * with their settings, accounts, pools, profiles and revision history, one tab each.
  */
 export function MyRunnerPage() {
   const { t } = useTranslation("runner");
@@ -37,8 +38,8 @@ export function MyRunnerPage() {
     : runtime.result.data.source === "workspace" ? "subtitle.workspace" : "subtitle.personal";
 
   const reloadAll = () => { agents.reload(); runners.reload(); history.reload(); };
-  const catalog = runtime.result.state === "ready" && runtime.result.data.source === "workspace" ? runtime.result.data.config : null;
-  const profiles = useMemo(() => profilesByAgent(catalog, wsId), [catalog, wsId]);
+  const reloadCatalog = () => { runtime.reload(); history.reload(); };
+  const doc = runtime.result.state === "ready" ? runtime.result.data : null;
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-5 p-4 md:p-6" data-testid="my-runner-page">
@@ -56,8 +57,9 @@ export function MyRunnerPage() {
             <RunnersSection result={runners.result} reload={runners.reload} wsId={wsId} />
           </>
         )}
-        {tab === "agents" && <AgentsSection result={agents.result} reload={reloadAll} me={me} profiles={profiles} />}
-        {tab === "resources" && <ResourcesSection result={runtime.result} reload={() => { runtime.reload(); history.reload(); }} />}
+        {tab === "agents" && <AgentsSection result={agents.result} reload={reloadAll} me={me} catalog={doc} onCatalogSaved={reloadCatalog} />}
+        {/* One instance for the three resource tabs: a draft survives switching between them. */}
+        {isResourceTab(tab) && <ResourcesSection result={runtime.result} reload={reloadCatalog} section={tab} onShowSection={selectTab} />}
         {tab === "history" && (
           <HistorySection
             result={history.result}
@@ -65,7 +67,7 @@ export function MyRunnerPage() {
             me={me}
             agents={agents.result.state === "ready" ? agents.result.data : []}
             wsId={wsId}
-            onRestored={() => { runtime.reload(); history.reload(); }}
+            onRestored={reloadCatalog}
           />
         )}
       </div>

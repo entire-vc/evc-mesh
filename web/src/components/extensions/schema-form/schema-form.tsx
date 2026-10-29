@@ -111,7 +111,7 @@ function Checklist({ id, label, options, value, disabled, describedBy, onChange 
             checked={value.includes(o.value)}
             onChange={(e) => onChange(e.target.checked ? [...value, o.value] : value.filter((x) => x !== o.value))}
           />
-          <span className="min-w-0 break-all">{o.label}</span>
+          <span className="min-w-0 [overflow-wrap:anywhere]">{o.label}</span>
         </label>
       ))}
     </div>

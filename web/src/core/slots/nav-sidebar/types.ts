@@ -13,7 +13,7 @@ export interface NavItem {
   origin: "core" | "extension";
   /** (+) which block of the list the item belongs to; blocks are separated by a rule. */
   group: "top" | "inbox" | "tools" | "footer";
-  /** (+) false: the collapsed rail does not draw this item (today: «My Runner» and the settings links). */
+  /** (+) false: the collapsed rail does not draw this item (today: «Runner» and the settings links). */
   inRail: boolean;
 }
 

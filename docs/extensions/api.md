@@ -226,6 +226,15 @@ project Docs, empty = project top level), `excluded_paths` (top-level share
 folders not mounted; absent = `["artifacts"]`, `[]` = mount everything),
 `sync_interval_minutes` (`0` = scheduled sync off, otherwise ≥ 5; absent = 15).
 `key_expires_at` is read-only: it is asked of the relay, never set by a client.
+
+The share follows from the agent key: a key belongs to exactly one share, so a
+save with a new `agent_key` asks the relay (`GET /v1/web/agent-key`) which one
+and stores its `share_id`, `share_slug` and the read-only `share_name` the form
+shows. A `share_id` that is not the key's is a `400` on `agent_key`; a key the
+relay rejects is the same. A save without a new key keeps the bound share;
+naming another share without that share's key is a `400` on `agent_key`. When
+the relay cannot answer (unreachable, or a relay without that route), the
+`share_id`/`share_slug` the client sent are stored as before.
 Saving settings does not interrupt sync: the documents mounted from the share
 stay as they are and the next scheduled or manual mount refreshes them.
 

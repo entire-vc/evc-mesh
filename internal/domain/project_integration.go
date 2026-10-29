@@ -55,8 +55,11 @@ type TeamRelaySettings struct {
 	// ShareID is the relay share UUID (shares.id = folder GUID). Preferred over ShareSlug
 	// because it works for private sync folders that have web_published=false.
 	// When non-empty, transport() sends this UUID to the relay upload endpoint.
-	ShareID            string `json:"share_id,omitempty"`
-	ShareSlug          string `json:"share_slug"`
+	ShareID   string `json:"share_id,omitempty"`
+	ShareSlug string `json:"share_slug"`
+	// ShareName is the share's name as the relay reported it for the agent key
+	// (teamrelay.ShareOfAgentKey); shown in the form instead of the UUID.
+	ShareName          string `json:"share_name,omitempty"`
 	Subfolder          string `json:"subfolder"`
 	IncludeProjectSlug bool   `json:"include_project_slug"`
 

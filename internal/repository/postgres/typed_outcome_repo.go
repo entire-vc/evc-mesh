@@ -43,27 +43,7 @@ func (r *TaskWaitRepo) Declare(ctx context.Context, w *domain.TaskWait) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE task_waits SET resolved_at = now(), resolution = 'superseded'
-		 WHERE task_id = $1 AND agent_id = $2 AND resolved_at IS NULL`,
-		w.TaskID, w.AgentID); err != nil {
-		return err
-	}
-	if w.RequiredJobs == nil {
-		w.RequiredJobs = []string{}
-	}
-	if err := tx.QueryRowxContext(ctx, `
-		INSERT INTO task_waits
-			(task_id, agent_id, session_id, kind, target_task_id, target_condition,
-			 vcs_link_id, provider, project_path, mr_iid, pipeline_id, required_jobs,
-			 until_state, until_at, decision_request_id, human_gate_ref, note)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-		RETURNING id, created_at`,
-		w.TaskID, w.AgentID, w.SessionID, w.Kind, w.TargetTaskID, w.TargetCondition,
-		w.VCSLinkID, w.Provider, w.ProjectPath, w.MRIID, w.PipelineID, w.RequiredJobs,
-		w.Until, w.UntilAt, w.DecisionRequestID, w.HumanGateRef, w.Note,
-	).Scan(&w.ID, &w.CreatedAt); err != nil {
+	if err := declareWaitTx(ctx, tx, w); err != nil {
 		return err
 	}
 	return tx.Commit()

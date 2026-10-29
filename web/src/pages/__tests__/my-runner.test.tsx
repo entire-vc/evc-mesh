@@ -1,5 +1,5 @@
 /**
- * Runner section: four tabs (overview, agents, resources, history), every block
+ * Runner section: six tabs (overview, agents, accounts, pools, profiles, history), every block
  * has a loading, empty, error and ready state, the operator's edits go to the
  * right route, and only a workspace admin sees the on/off switch, which is the
  * one place Runner is turned on or off. Only the network is mocked.
@@ -25,7 +25,7 @@ import { useAuthStore } from "@/stores/auth";
 import type { Workspace } from "@/types";
 import runnerManifest from "../../../../internal/extensions/runner/mesh-extension.json";
 import r39Shape from "@/components/my-runner/__fixtures__/catalog-r39-shape.json";
-import { entrySchema, unknownFields } from "@/lib/my-runner";
+import { entrySchema, profileLabel, unknownFields } from "@/lib/my-runner";
 import type { ExtensionManifest } from "@/hooks/useExtensionCatalog";
 
 const mockedApi = api as unknown as ReturnType<typeof vi.fn>;
@@ -87,7 +87,7 @@ function saveCatalog(body: { if_revision: number; enabled: boolean; config: unkn
   return Promise.resolve(world.catalog);
 }
 
-type Tab = "overview" | "agents" | "resources" | "history";
+type Tab = "overview" | "agents" | "accounts" | "pools" | "profiles" | "history";
 
 function renderPage(role: "owner" | "member", tab: Tab | string = "overview") {
   world.role = role;
@@ -97,8 +97,14 @@ function renderPage(role: "owner" | "member", tab: Tab | string = "overview") {
   return render(<MemoryRouter initialEntries={[tab === "overview" ? "/" : `/?tab=${tab}`]}><MyRunnerPage /></MemoryRouter>);
 }
 
-const TAB_NAMES: Record<Tab, string> = { overview: "Overview", agents: "Agents", resources: "Resources", history: "History" };
+const TAB_NAMES: Record<Tab, string> = { overview: "Overview", agents: "Agents", accounts: "Accounts", pools: "Pools", profiles: "Profiles", history: "History" };
 const openTab = (tab: Tab) => fireEvent.click(screen.getByRole("tab", { name: TAB_NAMES[tab] }));
+/** Opens the agent's dialog from its row (looked up again: a save reloads the list). */
+const openAgent = async (id: string) => {
+  const row = await screen.findByTestId(`my-runner-agent-${id}`);
+  fireEvent.click(within(row).getByRole("button", { name: /^Edit/ }));
+  return screen.getByTestId("my-runner-agent-dialog");
+};
 
 beforeEach(async () => {
   await setLanguage("en");
@@ -123,6 +129,25 @@ describe("Runner entry schema", () => {
   });
 });
 
+describe("profileLabel", () => {
+  const t = (k: string) => ({ "profiles.mode.subscription": "subscription", "profiles.mode.api": "API", "profiles.defaultModel": "default model" })[k] ?? k;
+  const config = { profiles: {
+    "claude/work-team/subscription": { account_ref: "claude/work-team", harness: "claude_code", model: "claude-default", execution_mode: "subscription" },
+    "anthropic-api/acme/api": { account_ref: "anthropic-api/acme", harness: "claude_code", model: "claude-sonnet-5-5", execution_mode: "api" },
+    "glm/alex/subscription": { account_ref: "glm/alex", harness: "claude_code", model: "glm-5.3", execution_mode: "subscription" },
+    "codex/alex/subscription": { account_ref: "codex/alex", harness: "codex", model: "codex-default", execution_mode: "subscription" },
+  } };
+  it("reads as tool · mode and account · model, the shapes of the live catalog", () => {
+    expect(profileLabel("claude/work-team/subscription", config, t)).toBe("Claude Code · subscription work-team · default model");
+    expect(profileLabel("anthropic-api/acme/api", config, t)).toBe("Claude Code · API acme · Sonnet 5.5");
+    expect(profileLabel("glm/alex/subscription", config, t)).toBe("Claude Code · subscription alex · GLM 5.3");
+    expect(profileLabel("codex/alex/subscription", config, t)).toBe("Codex · subscription alex · default model");
+  });
+  it("a profile the catalog does not hold stays its key", () => {
+    expect(profileLabel("gone/x", config, t)).toBe("gone/x");
+  });
+});
+
 describe("MyRunnerPage", () => {
   it("each tab shows its own block: runners, agents, resources", async () => {
     renderPage("member");
@@ -132,8 +157,16 @@ describe("MyRunnerPage", () => {
     expect(screen.getByRole("tab", { name: "Agents" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByTestId("my-runner-agent-a1")).toHaveTextContent("Robin");
     expect(screen.queryByTestId("my-runner-runners")).toBeNull();
-    openTab("resources");
+    openTab("pools");
     expect(await screen.findByTestId("my-runner-resources-pools")).toHaveTextContent("main");
+    expect(screen.queryByTestId("my-runner-resources-accounts")).toBeNull();
+  });
+
+  it("an old ?tab=resources link opens Accounts; there is no Resources tab", async () => {
+    renderPage("member", "resources");
+    expect(screen.getByRole("tab", { name: "Accounts" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("tab", { name: "Resources" })).toBeNull();
+    expect(await screen.findByTestId("my-runner-resources-accounts")).toBeInTheDocument();
   });
 
   it("?tab= opens that tab, an unknown one falls back to the overview, arrows move between tabs", async () => {
@@ -179,24 +212,37 @@ describe("MyRunnerPage", () => {
     expect(await screen.findByTestId("my-runner-agent-a1")).toBeInTheDocument();
   });
 
-  it("saves a changed limit in its row: Save appears only for a change, Enter saves too", async () => {
+  it("the row is read-only; Edit opens the agent's dialog, which saves a changed limit (Save only for a change, Enter too)", async () => {
     renderPage("member", "agents");
     const row = await screen.findByTestId("my-runner-agent-a1");
-    expect(within(row).queryByRole("button", { name: "Save" })).toBeNull();
-    fireEvent.change(within(row).getByLabelText(/Parallel tasks/), { target: { value: "5" } });
-    fireEvent.click(within(row).getByRole("button", { name: "Save" }));
+    expect(within(row).queryByLabelText(/Parallel tasks/)).toBeNull();
+    expect(within(row).getByTestId("my-runner-agent-limit-a1")).toHaveTextContent("3");
+    const dialog = await openAgent("a1");
+    expect(dialog).toHaveAttribute("role", "dialog");
+    expect(dialog).toHaveTextContent("Agent Robin");
+    expect(within(dialog).queryByRole("button", { name: "Save" })).toBeNull();
+    fireEvent.change(within(dialog).getByLabelText(/Parallel tasks/), { target: { value: "5" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(mockedApi).toHaveBeenCalledWith("/api/v1/me/runtime/agents/a1/limits", { method: "PUT", body: { max_concurrent_tasks: 5 } }));
-    // The save reloads the list, so the row is a new node.
+    // The save reloads the list; the dialog stays open on the agent.
     await waitFor(() => expect(mockedApi.mock.calls.filter(([p]) => p === "/api/v1/me/runtime/agents?workspace_id=0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02").length).toBeGreaterThan(1));
-    const fresh = await screen.findByTestId("my-runner-agent-a1");
+    const fresh = await screen.findByTestId("my-runner-agent-dialog");
     fireEvent.change(within(fresh).getByLabelText(/Parallel tasks/), { target: { value: "7" } });
     fireEvent.keyDown(within(fresh).getByLabelText(/Parallel tasks/), { key: "Enter" });
     await waitFor(() => expect(mockedApi).toHaveBeenCalledWith("/api/v1/me/runtime/agents/a1/limits", { method: "PUT", body: { max_concurrent_tasks: 7 } }));
   });
 
+  it("the agent dialog closes on Escape and on its close button", async () => {
+    renderPage("member", "agents");
+    fireEvent.keyDown(await openAgent("a1"), { key: "Escape" });
+    expect(screen.queryByTestId("my-runner-agent-dialog")).toBeNull();
+    fireEvent.click(within(await openAgent("a1")).getByRole("button", { name: "Close" }));
+    expect(screen.queryByTestId("my-runner-agent-dialog")).toBeNull();
+  });
+
   it("Escape puts the stored limit back", async () => {
     renderPage("member", "agents");
-    const row = await screen.findByTestId("my-runner-agent-a1");
+    const row = await openAgent("a1");
     const input = within(row).getByLabelText(/Parallel tasks/);
     fireEvent.change(input, { target: { value: "9" } });
     fireEvent.keyDown(input, { key: "Escape" });
@@ -209,17 +255,17 @@ describe("MyRunnerPage", () => {
     renderPage("owner", "agents");
     const row = await screen.findByTestId("my-runner-agent-a2");
     expect(mockedApi).toHaveBeenCalledWith("/api/v1/me/runtime/agents?workspace_id=0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02");
-    expect(within(row).queryByLabelText(/Parallel tasks/)).toBeNull();
-    expect(within(row).queryByRole("checkbox")).toBeNull();
-    expect(within(row).getByTestId("my-runner-agent-readonly-a2")).toHaveTextContent("2");
+    // no catalog to edit and not the operator: nothing to change here
+    expect(within(row).queryByRole("button", { name: /^Edit/ })).toBeNull();
+    expect(within(row).getByTestId("my-runner-agent-limit-a2")).toHaveTextContent("2");
     expect(row).toHaveTextContent("No one");
     expect(screen.getByTestId("my-runner-agent-a1")).toHaveTextContent("You");
-    expect(within(screen.getByTestId("my-runner-agent-a1")).getByLabelText(/Parallel tasks/)).toBeInTheDocument();
+    expect(within(await openAgent("a1")).getByLabelText(/Parallel tasks/)).toBeInTheDocument();
   });
 
   it("refuses a limit outside 0..1000 and offers no Save", async () => {
     renderPage("member", "agents");
-    const row = await screen.findByTestId("my-runner-agent-a1");
+    const row = await openAgent("a1");
     fireEvent.change(within(row).getByLabelText(/Parallel tasks/), { target: { value: "1001" } });
     expect(within(row).queryByRole("button", { name: "Save" })).toBeNull();
     expect(within(row).getByRole("alert")).toBeInTheDocument();
@@ -227,13 +273,13 @@ describe("MyRunnerPage", () => {
 
   it("assigns and takes back runtime_manager", async () => {
     renderPage("member", "agents");
-    const row = await screen.findByTestId("my-runner-agent-a1");
+    const row = await openAgent("a1");
     fireEvent.click(within(row).getByRole("checkbox"));
     await waitFor(() => expect(mockedApi).toHaveBeenCalledWith("/api/v1/me/runtime/managers", { method: "POST", body: { agent_id: "a1" } }));
   });
 
   it("the personal document is shown read-only: no Edit, no Add, no JSON", async () => {
-    renderPage("member", "resources");
+    renderPage("member", "pools");
     const pools = await screen.findByTestId("my-runner-resources-pools");
     expect(pools).toHaveTextContent("main");
     expect(within(pools).queryByRole("button", { name: "Edit" })).toBeNull();
@@ -343,7 +389,7 @@ describe("MyRunnerPage", () => {
     world.extensionOn = true;
     renderPage("owner");
     await screen.findByRole("button", { name: "Turn off Runner" });
-    for (const tab of ["agents", "resources", "history"] as const) {
+    for (const tab of ["agents", "accounts", "pools", "profiles", "history"] as const) {
       openTab(tab);
       expect(screen.queryByTestId("my-runner-admin")).toBeNull();
     }
@@ -415,6 +461,22 @@ describe("MyRunnerPage", () => {
       expect(await screen.findByTestId("my-runner-program-update")).toBeInTheDocument();
     });
 
+    it("blocked without a stated reason still says so: the card is never a bare title", async () => {
+      world.program = "connected";
+      world.programExtra = { blocked: true, blocked_reason: "" };
+      renderPage("owner");
+      expect(await screen.findByTestId("my-runner-program-not-allowed")).toHaveTextContent("Blocked on this instance");
+    });
+
+    it("installed and connected: version, state and address are shown", async () => {
+      world.program = "connected";
+      renderPage("owner");
+      const card = await screen.findByTestId("my-runner-program");
+      await waitFor(() => expect(card).toHaveTextContent("Version 0.1.0"));
+      expect(within(card).getByTestId("my-runner-program-health")).toHaveTextContent("not answering");
+      expect(within(card).getByLabelText("Runner address")).toHaveValue("https://runner.example.com");
+    });
+
     it("connected but no longer allowed: the address stays editable", async () => {
       world.program = "connected";
       world.programExtra = { allowed: false };
@@ -454,7 +516,9 @@ describe("MyRunnerPage", () => {
         },
       },
     };
-    const SECTIONS = ["accounts", "pools", "profiles", "bindings"] as const;
+    const SECTIONS = ["accounts", "pools", "profiles"] as const;
+    const VERA = CATALOG.bindings.vera.binding.agent_id;
+    const OPUS = "Claude Code · subscription alex · Opus";
     // The row is looked up again on every attempt: a save reloads the catalog and replaces the list.
     const edit = async (section: string, name: string) => {
       await screen.findByTestId(`my-runner-resources-${section}`);
@@ -472,13 +536,17 @@ describe("MyRunnerPage", () => {
       world.revisions = [{ revision: 37, digest: "c".repeat(64), enabled: true, author_id: "u-fleet", author_name: "Fleet Admin", created_at: new Date().toISOString() }];
     });
 
-    it("shows the workspace catalog, not the personal config, and its revisions", async () => {
-      renderPage("owner", "resources");
+    it("shows the workspace catalog, not the personal config, one tab per section, and its revisions", async () => {
+      renderPage("owner", "accounts");
       expect(await screen.findByTestId("my-runner-resources-accounts")).toHaveTextContent("claude/alex");
+      openTab("pools");
       expect(screen.getByTestId("my-runner-resources-pools")).toHaveTextContent("claude-max");
+      openTab("profiles");
       expect(screen.getByTestId("my-runner-resources-profiles")).toHaveTextContent("claude-opus");
-      expect(screen.getByTestId("my-runner-resources-bindings")).toHaveTextContent("vera");
       expect(screen.getByTestId("my-runner-resources")).not.toHaveTextContent("Nothing here yet");
+      // per-agent settings live on the Agents tab only
+      expect(screen.queryByTestId("my-runner-resources-bindings")).toBeNull();
+      expect(screen.getByTestId("my-runner-resources")).not.toHaveTextContent("Agent settings");
       openTab("history");
       const history = await screen.findByTestId("my-runner-history");
       await waitFor(() => expect(history).toHaveTextContent("Revision 37"));
@@ -487,7 +555,7 @@ describe("MyRunnerPage", () => {
     });
 
     it("an edited field is saved with the revision and lands in the history", async () => {
-      renderPage("owner", "resources");
+      renderPage("owner", "pools");
       const editor = await edit("pools", "claude-max");
       fireEvent.change(within(editor).getByLabelText(/Concurrent runs, at most/), { target: { value: "6" } });
       fireEvent.click(within(editor).getByRole("button", { name: "Apply" }));
@@ -505,7 +573,7 @@ describe("MyRunnerPage", () => {
     });
 
     it("marks as required only a field that needs a value: an empty list of other names is a valid answer", async () => {
-      renderPage("owner", "resources");
+      renderPage("owner", "pools");
       const editor = await edit("pools", "claude-max");
       const label = (text: string) => within(editor).getByText(text, { selector: "label" });
       expect(label("Concurrent runs, at most")).toHaveTextContent("*");
@@ -516,7 +584,7 @@ describe("MyRunnerPage", () => {
 
     it("a long pool name breaks between its segments, never inside one", async () => {
       world.catalog = { ...(world.catalog as object), config: { ...CATALOG, pools: { "provider-api/team-a/spend": CATALOG.pools["claude-max"] } } };
-      renderPage("owner", "resources");
+      renderPage("owner", "pools");
       const pools = await screen.findByTestId("my-runner-resources-pools");
       const name = within(pools).getByText((_, el) => el?.textContent === "provider-api/team-a/spend" && el.tagName === "SPAN");
       expect(name).not.toHaveClass("break-all");
@@ -525,7 +593,7 @@ describe("MyRunnerPage", () => {
     });
 
     it("a stale revision reloads the latest catalog", async () => {
-      renderPage("owner", "resources");
+      renderPage("owner", "pools");
       const pools = await screen.findByTestId("my-runner-resources-pools");
       (world.catalog as { revision: number }).revision = 40;
       fireEvent.click(within(within(pools).getByText("claude-max").closest("li") as HTMLElement).getByRole("button", { name: "Remove" }));
@@ -544,8 +612,10 @@ describe("MyRunnerPage", () => {
     });
 
     it("no entry of any section is edited as JSON: every editor is a form, with no textarea", async () => {
-      renderPage("owner", "resources");
+      world.agents = [AGENT, { ...AGENT, agent_id: VERA, name: "Vera" }];
+      renderPage("owner", "accounts");
       for (const section of SECTIONS) {
+        openTab(section);
         const name = Object.keys(CATALOG[section]).sort()[0]!;
         const editor = await edit(section, name);
         expect(within(editor).getByRole("button", { name: "Apply" })).toBeInTheDocument();
@@ -557,11 +627,14 @@ describe("MyRunnerPage", () => {
         expect(fresh.querySelector("textarea")).toBeNull();
         fireEvent.click(within(fresh).getByRole("button", { name: "Cancel" }));
       }
+      openTab("agents");
+      const dialog = await openAgent(VERA);
+      expect(within(dialog).getByTestId("my-runner-entry-editor")).toBeInTheDocument();
       expect(document.querySelector("textarea")).toBeNull();
     });
 
     it("a stored credential reference stays hidden and is kept; a new one must be a cred: reference", async () => {
-      renderPage("owner", "resources");
+      renderPage("owner", "accounts");
       let editor = await edit("accounts", "claude/alex");
       expect(within(editor).getByText("Set")).toBeInTheDocument();
       expect(editor.querySelector("input[type=password]")).toBeNull();
@@ -584,7 +657,7 @@ describe("MyRunnerPage", () => {
     });
 
     it("a renamed account asks for its credential reference again instead of dropping it", async () => {
-      renderPage("owner", "resources");
+      renderPage("owner", "accounts");
       const editor = await edit("accounts", "claude/alex");
       fireEvent.change(within(editor).getByRole("textbox", { name: "Name" }), { target: { value: "claude/alex-2" } });
       fireEvent.click(within(editor).getByRole("button", { name: "Apply" }));
@@ -602,7 +675,7 @@ describe("MyRunnerPage", () => {
     });
 
     it("an account added in this draft keeps its typed reference when edited again", async () => {
-      renderPage("owner", "resources");
+      renderPage("owner", "accounts");
       fireEvent.click(within(await screen.findByTestId("my-runner-resources-accounts")).getByRole("button", { name: "Add" }));
       let editor = await screen.findByTestId("my-runner-entry-editor");
       fireEvent.change(within(editor).getByRole("textbox", { name: "Name" }), { target: { value: "openai/new" } });
@@ -620,27 +693,53 @@ describe("MyRunnerPage", () => {
       expect(accounts["openai/new"]).toBeUndefined();
     });
 
-    it("a reference is picked from what exists, and first choice only from the allowed profiles", async () => {
-      renderPage("owner", "resources");
-      const editor = await edit("bindings", "vera");
+    it("Edit in the agent's row: profiles are picked by readable name, first choice only from the allowed ones, saved at once", async () => {
+      world.agents = [AGENT, { ...AGENT, agent_id: VERA, name: "Vera" }];
+      renderPage("owner", "agents");
+      const dialog = await openAgent(VERA);
+      expect(dialog).toHaveTextContent("A profile is a launch recipe");
+      const editor = within(dialog).getByTestId("my-runner-entry-editor");
       const allowed = within(editor).getByRole("group", { name: "Allowed profiles" });
+      expect(editor).toHaveTextContent("Allow several so it can switch");
+      expect(within(allowed).getByLabelText(`${OPUS} (claude-opus)`)).toBeChecked();
       const first = () => within(editor).getByRole("group", { name: "First choice" });
-      expect(within(first()).queryByLabelText("claude-sonnet")).toBeNull();
-      fireEvent.click(within(allowed).getByLabelText("claude-sonnet"));
-      fireEvent.click(within(first()).getByLabelText("claude-sonnet"));
-      fireEvent.click(within(editor).getByRole("button", { name: "Apply" }));
-      fireEvent.click(await screen.findByRole("button", { name: "Save resources" }));
+      expect(within(first()).queryByLabelText(/\(claude-sonnet\)/)).toBeNull();
+      fireEvent.click(within(allowed).getByLabelText(/\(claude-sonnet\)/));
+      fireEvent.click(within(first()).getByLabelText(/\(claude-sonnet\)/));
+      fireEvent.click(within(editor).getByRole("button", { name: "Save settings" }));
       await waitFor(() => expect(world.puts).toHaveLength(1));
+      await waitFor(() => expect(screen.queryByTestId("my-runner-agent-dialog")).toBeNull());
+      expect(toast.success).toHaveBeenCalledWith("Agent settings saved");
       const sent = (world.puts[0] as { config: typeof CATALOG }).config.bindings.vera;
       expect(sent.permitted_profiles).toEqual(["claude-opus", "claude-sonnet"]);
       expect(sent.policy.primary_profiles).toEqual(["claude-opus", "claude-sonnet"]);
       expect(sent.policy.qa).toEqual({ mode: "prefer", quota_fallback: false });
     });
 
+    it("another member's agent: the dialog shows its limit and management read-only and says who sets them", async () => {
+      world.agents = [AGENT, { ...AGENT, agent_id: VERA, name: "Vera", operator_user_id: "someone-else", max_concurrent_tasks: 4, runtime_manager: true }];
+      renderPage("owner", "agents");
+      const dialog = await openAgent(VERA);
+      const work = within(dialog).getByTestId("my-runner-agent-work-readonly");
+      expect(work).toHaveTextContent("Parallel tasks");
+      expect(work).toHaveTextContent("4");
+      expect(work).toHaveTextContent("Managesyes");
+      expect(work).toHaveTextContent("Another member operates this agent and sets its limits.");
+      expect(within(dialog).queryByLabelText(/Parallel tasks/)).toBeNull();
+      expect(within(dialog).getByTestId("my-runner-entry-editor")).toBeInTheDocument();
+    });
+
+    it("own agent: the management switch says what the agent may read and edit", async () => {
+      renderPage("owner", "agents");
+      const dialog = await openAgent("a1");
+      expect(within(dialog).queryByTestId("my-runner-agent-work-readonly")).toBeNull();
+      expect(dialog).toHaveTextContent("The agent reads and edits your runner settings, limits, and the runner catalog of workspaces where you are an admin, with its own key");
+    });
+
     it("a profile pointing at a removed account shows it as not found and is not applied", async () => {
       const config = { ...CATALOG, profiles: { ...CATALOG.profiles, "claude-opus": { ...CATALOG.profiles["claude-opus"], account_ref: "gone" } } };
       (world.catalog as { config: unknown }).config = config;
-      renderPage("owner", "resources");
+      renderPage("owner", "profiles");
       const editor = await edit("profiles", "claude-opus");
       expect(within(editor).getByLabelText(/^Account/)).toHaveDisplayValue("gone (not found)");
       fireEvent.click(within(editor).getByRole("button", { name: "Apply" }));
@@ -649,7 +748,7 @@ describe("MyRunnerPage", () => {
 
     it("the server's reason per field reopens the entry with the reason at that field", async () => {
       world.refuse = new ApiRequestError("invalid runtime catalog", "validation_failed", 400, { "config.pools.claude-max.max_concurrency": "invalid" });
-      renderPage("owner", "resources");
+      renderPage("owner", "pools");
       const pools = await screen.findByTestId("my-runner-resources-pools");
       fireEvent.click(within(within(pools).getByText("codex-plus").closest("li") as HTMLElement).getByRole("button", { name: "Remove" }));
       fireEvent.click(await screen.findByRole("button", { name: "Save resources" }));
@@ -662,7 +761,7 @@ describe("MyRunnerPage", () => {
 
     it("the server's reason for a field the form lacks is shown in the reopened entry, next to its path", async () => {
       world.refuse = new ApiRequestError("invalid runtime catalog", "validation_failed", 400, { "config.pools.claude-max.burst": "unknown_field" });
-      renderPage("owner", "resources");
+      renderPage("owner", "pools");
       const pools = await screen.findByTestId("my-runner-resources-pools");
       fireEvent.click(within(within(pools).getByText("codex-plus").closest("li") as HTMLElement).getByRole("button", { name: "Remove" }));
       fireEvent.click(await screen.findByRole("button", { name: "Save resources" }));
@@ -673,7 +772,7 @@ describe("MyRunnerPage", () => {
     });
 
     it("an entry name already used is refused before anything is applied", async () => {
-      renderPage("owner", "resources");
+      renderPage("owner", "pools");
       const editor = await edit("pools", "codex-plus");
       fireEvent.change(within(editor).getByRole("textbox", { name: "Name" }), { target: { value: "claude-max" } });
       fireEvent.click(within(editor).getByRole("button", { name: "Apply" }));
@@ -683,7 +782,7 @@ describe("MyRunnerPage", () => {
 
     it("without the Runner form description the catalog is listed but not editable", async () => {
       world.manifest = undefined;
-      renderPage("owner", "resources");
+      renderPage("owner", "pools");
       const pools = await screen.findByTestId("my-runner-resources-pools");
       expect(pools).toHaveTextContent("claude-max");
       expect(within(pools).queryByRole("button", { name: "Edit" })).toBeNull();
@@ -693,8 +792,8 @@ describe("MyRunnerPage", () => {
     it("tells an admin that catalog changes apply to the whole workspace, not only to them", async () => {
       renderPage("owner");
       const subtitle = await screen.findByTestId("my-runner-subtitle");
-      await waitFor(() => expect(subtitle).toHaveTextContent("Catalog changes apply to the whole workspace."));
-      expect(subtitle).not.toHaveTextContent("only you");
+      await waitFor(() => expect(subtitle).toHaveTextContent("Changes here apply to the whole workspace."));
+      expect(subtitle).not.toHaveTextContent("read-only");
     });
 
     it("keeps the controller version on one line", async () => {
@@ -706,39 +805,77 @@ describe("MyRunnerPage", () => {
 
     it("a failed catalog load is an error with retry, never the personal config", async () => {
       world.catalog = new ApiRequestError("boom", "internal", 500);
-      renderPage("owner", "resources");
+      renderPage("owner", "pools");
       expect(await screen.findByTestId("my-runner-resources-error")).toBeInTheDocument();
       expect(mockedApi).not.toHaveBeenCalledWith("/api/v1/me/runtime");
     });
 
     it("without rights to the catalog (403) the personal config stays", async () => {
       world.catalog = new ApiRequestError("forbidden", "forbidden", 403);
-      renderPage("member", "resources");
+      renderPage("member", "pools");
       expect(await screen.findByTestId("my-runner-resources-pools")).toHaveTextContent("main");
-      expect(screen.getByTestId("my-runner-subtitle")).toHaveTextContent("Changes affect only you.");
+      expect(screen.getByTestId("my-runner-subtitle")).toHaveTextContent("shown read-only");
     });
 
-    it("a long catalog can be narrowed by a filter", async () => {
-      const bindings: Record<string, unknown> = {};
-      for (let i = 0; i < 30; i++) bindings[`agent-${i}`] = { ...CATALOG.bindings.vera, binding: { agent_id: `a${i}`, workspace_id: "0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02", grant_id: `g${i}` } };
-      (world.catalog as { config: unknown }).config = { ...CATALOG, bindings };
-      renderPage("owner", "resources");
+    const manyPools = () => {
+      const pools: Record<string, unknown> = { ...CATALOG.pools };
+      for (let i = 0; i < 30; i++) pools[`pool-${i}`] = { ...CATALOG.pools["claude-max"], resource_ref: `pool-${i}` };
+      (world.catalog as { config: unknown }).config = { ...CATALOG, pools };
+    };
+
+    it("a long list can be narrowed by a filter; the filter belongs to its tab", async () => {
+      manyPools();
+      renderPage("owner", "pools");
       const filter = await screen.findByRole("searchbox", { name: /Filter/ });
-      fireEvent.change(filter, { target: { value: "agent-1" } });
-      const list = screen.getByTestId("my-runner-resources-bindings");
-      expect(within(list).getAllByRole("listitem")).toHaveLength(11);
+      fireEvent.change(filter, { target: { value: "pool-1" } });
+      expect(within(screen.getByTestId("my-runner-resources-pools")).getAllByRole("listitem")).toHaveLength(11);
+      fireEvent.change(filter, { target: { value: "nothing-like-it" } });
       expect(screen.getByTestId("my-runner-resources-pools")).toHaveTextContent("No matches");
+      // a short list has no filter
+      openTab("accounts");
+      expect(screen.queryByRole("searchbox", { name: /Filter/ })).toBeNull();
+    });
+
+    it("an unsaved draft survives switching between the resource tabs", async () => {
+      renderPage("owner", "pools");
+      const pools = await screen.findByTestId("my-runner-resources-pools");
+      fireEvent.click(within(within(pools).getByText("codex-plus").closest("li") as HTMLElement).getByRole("button", { name: "Remove" }));
+      openTab("accounts");
+      expect(screen.getByTestId("my-runner-resources-dirty")).toBeInTheDocument();
+      openTab("pools");
+      expect(screen.getByTestId("my-runner-resources-pools")).not.toHaveTextContent("codex-plus");
+      fireEvent.click(screen.getByRole("button", { name: "Save resources" }));
+      await waitFor(() => expect(world.puts).toHaveLength(1));
+      expect(Object.keys((world.puts[0] as { config: typeof CATALOG }).config.pools)).toEqual(["claude-max"]);
+    });
+
+    it("a saved draft the server refuses in another tab's entry opens that tab at the entry", async () => {
+      world.refuse = new ApiRequestError("invalid runtime catalog", "validation_failed", 400, { "config.pools.claude-max.max_concurrency": "invalid" });
+      renderPage("owner", "accounts");
+      const accounts = await screen.findByTestId("my-runner-resources-accounts");
+      fireEvent.click(within(within(accounts).getByText("claude/alex").closest("li") as HTMLElement).getByRole("button", { name: "Remove" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Save resources" }));
+      await waitFor(() => expect(screen.getByRole("tab", { name: "Pools" })).toHaveAttribute("aria-selected", "true"));
+      const editor = await within(screen.getByTestId("my-runner-resources-pools")).findByTestId("my-runner-entry-editor");
+      expect(within(editor).getByLabelText(/Concurrent runs, at most/)).toHaveAttribute("aria-invalid", "true");
+    });
+
+    it("a refused agent's settings are named, to be fixed under Agents", async () => {
+      world.refuse = new ApiRequestError("invalid runtime catalog", "validation_failed", 400, { "config.bindings.vera.permitted_profiles": "missing_reference" });
+      renderPage("owner", "profiles");
+      const profiles = await screen.findByTestId("my-runner-resources-profiles");
+      fireEvent.click(within(within(profiles).getByText("claude-opus").closest("li") as HTMLElement).getByRole("button", { name: "Remove" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Save resources" }));
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("the settings of vera need fixing")));
     });
 
     it("an entry the server refused is reopened even when the filter hides it", async () => {
-      const bindings: Record<string, unknown> = {};
-      for (let i = 0; i < 30; i++) bindings[`agent-${i}`] = { ...CATALOG.bindings.vera, binding: { agent_id: `a${i}`, workspace_id: "0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02", grant_id: `g${i}` } };
-      (world.catalog as { config: unknown }).config = { ...CATALOG, bindings };
+      manyPools();
       world.refuse = new ApiRequestError("invalid runtime catalog", "validation_failed", 400, { "config.pools.claude-max.max_concurrency": "invalid" });
-      renderPage("owner", "resources");
-      fireEvent.change(await screen.findByRole("searchbox", { name: /Filter/ }), { target: { value: "agent-1" } });
-      const list = screen.getByTestId("my-runner-resources-bindings");
-      fireEvent.click(within(within(list).getByText("agent-10").closest("li") as HTMLElement).getByRole("button", { name: "Remove" }));
+      renderPage("owner", "pools");
+      fireEvent.change(await screen.findByRole("searchbox", { name: /Filter/ }), { target: { value: "pool-1" } });
+      const list = screen.getByTestId("my-runner-resources-pools");
+      fireEvent.click(within(within(list).getByText("pool-10").closest("li") as HTMLElement).getByRole("button", { name: "Remove" }));
       fireEvent.click(await screen.findByRole("button", { name: "Save resources" }));
       const editor = await within(screen.getByTestId("my-runner-resources-pools")).findByTestId("my-runner-entry-editor");
       expect(within(editor).getByLabelText(/Concurrent runs, at most/)).toHaveAttribute("aria-invalid", "true");
@@ -755,67 +892,92 @@ describe("MyRunnerPage", () => {
         };
       });
 
-      it("lists 3 own bindings out of 3 own + 2 foreign, and says 2 others are hidden", async () => {
-        renderPage("owner", "resources");
-        const list = await screen.findByTestId("my-runner-resources-bindings");
-        await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(3));
-        for (const n of ["own1", "own2", "own3"]) expect(list).toHaveTextContent(n);
-        expect(list).not.toHaveTextContent("kepler");
-        expect(list).not.toHaveTextContent("scully");
-        expect(within(list).getByTestId("my-runner-resources-foreign")).toHaveTextContent("2 bindings that are not this workspace's are hidden here");
+      // own1..own3 name agents this list does not show, so they are the unlisted entries of the Agents tab
+      it("lists 3 own settings out of 3 own + 2 foreign, and says 2 others are hidden", async () => {
+        renderPage("owner", "agents");
+        const unlisted = await screen.findByTestId("my-runner-agents-unlisted");
+        await waitFor(() => expect(within(unlisted).getAllByRole("listitem")).toHaveLength(3));
+        for (const n of ["own1", "own2", "own3"]) expect(unlisted).toHaveTextContent(n);
+        const tab = screen.getByTestId("my-runner-page");
+        expect(tab).not.toHaveTextContent("kepler");
+        expect(tab).not.toHaveTextContent("scully");
+        expect(screen.getByTestId("my-runner-agents-foreign")).toHaveTextContent("2 bindings that are not this workspace's are hidden here");
       });
 
-      it("a binding that names no workspace is not this workspace's either", async () => {
+      it("settings that name no workspace are not this workspace's either", async () => {
         const cfg = (world.catalog as { config: { bindings: Record<string, unknown> } }).config;
         cfg.bindings = { ...cfg.bindings, nameless: { ...CATALOG.bindings.vera, binding: { agent_id: "a-nameless", grant_id: "g-n" } } };
-        renderPage("owner", "resources");
-        const list = await screen.findByTestId("my-runner-resources-bindings");
-        await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(3));
-        expect(list).not.toHaveTextContent("nameless");
-        expect(within(list).getByTestId("my-runner-resources-foreign")).toHaveTextContent("3 bindings");
+        renderPage("owner", "agents");
+        const unlisted = await screen.findByTestId("my-runner-agents-unlisted");
+        await waitFor(() => expect(within(unlisted).getAllByRole("listitem")).toHaveLength(3));
+        expect(unlisted).not.toHaveTextContent("nameless");
+        expect(screen.getByTestId("my-runner-agents-foreign")).toHaveTextContent("3 bindings");
       });
 
-      it("a binding added here starts as this workspace's", async () => {
-        renderPage("owner", "resources");
-        fireEvent.click(within(await screen.findByTestId("my-runner-resources-bindings")).getByRole("button", { name: "Add" }));
-        const fresh = await screen.findByTestId("my-runner-entry-editor");
-        expect(within(fresh).getByDisplayValue("0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02")).toBeInTheDocument();
-      });
-
-      it("a save keeps the hidden foreign bindings as they are", async () => {
-        renderPage("owner", "resources");
-        const list = await screen.findByTestId("my-runner-resources-bindings");
-        fireEvent.click(within(within(list).getByText("own2").closest("li") as HTMLElement).getByRole("button", { name: "Remove" }));
-        fireEvent.click(await screen.findByRole("button", { name: "Save resources" }));
+      it("a save keeps the hidden foreign settings as they are", async () => {
+        renderPage("owner", "agents");
+        // the form checks ids are UUIDs: own2 gets real ones, the hidden entries stay as they are
+        const cfg = (world.catalog as { config: { bindings: Record<string, unknown> } }).config;
+        cfg.bindings = { ...cfg.bindings, own2: CATALOG.bindings.vera };
+        fireEvent.click(within(await screen.findByTestId("my-runner-agents-unlisted")).getByRole("button", { name: "own2" }));
+        const dialog = screen.getByTestId("my-runner-agent-dialog");
+        fireEvent.change(within(dialog).getByLabelText(/Attempts, at most/), { target: { value: "7" } });
+        fireEvent.click(within(dialog).getByRole("button", { name: "Save settings" }));
         await waitFor(() => expect(world.puts).toHaveLength(1));
         const sent = (world.puts[0] as { config: { bindings: Record<string, unknown> } }).config.bindings;
-        expect(Object.keys(sent).sort()).toEqual(["kepler", "own1", "own3", "scully"]);
+        expect(Object.keys(sent).sort()).toEqual(["kepler", "own1", "own2", "own3", "scully"]);
+        expect(sent.kepler).toEqual(binding("a-kepler", "ws-vc"));
       });
 
-      it("no foreign binding, no warning", async () => {
+      it("with no agents listed, the catalog's own entries, the hidden count and reasons still show", async () => {
+        world.agents = [];
+        world.catalog = { ...(world.catalog as object), excluded: [{ ref: "own1", reason: "runner_off" }] };
+        renderPage("owner", "agents");
+        const unlisted = await screen.findByTestId("my-runner-agents-unlisted");
+        expect(within(unlisted).getAllByRole("listitem")).toHaveLength(3);
+        expect(screen.getByTestId("my-runner-agents-empty")).toBeInTheDocument();
+        expect(screen.getByTestId("my-runner-agents-foreign")).toHaveTextContent("2 bindings");
+        expect(screen.getByTestId("my-runner-binding-excluded-own1")).toHaveTextContent("Not run: Runner is off in its workspace");
+      });
+
+      it("without the Runner form the catalog's entries, hidden count and reasons are still shown, read-only", async () => {
+        world.manifest = undefined;
+        world.catalog = { ...(world.catalog as object), excluded: [{ ref: "own1", reason: "runner_off" }] };
+        renderPage("owner", "agents");
+        const unlisted = await screen.findByTestId("my-runner-agents-unlisted");
+        expect(within(unlisted).getAllByRole("listitem")).toHaveLength(3);
+        expect(within(unlisted).queryByRole("button")).toBeNull();
+        expect(screen.getByTestId("my-runner-agents-foreign")).toHaveTextContent("2 bindings");
+        expect(screen.getByTestId("my-runner-binding-excluded-own1")).toHaveTextContent("Not run: Runner is off in its workspace");
+      });
+
+      it("no foreign settings, no warning", async () => {
         (world.catalog as { config: unknown }).config = CATALOG;
-        renderPage("owner", "resources");
-        await screen.findByTestId("my-runner-resources-bindings");
-        expect(screen.queryByTestId("my-runner-resources-foreign")).toBeNull();
+        renderPage("owner", "agents");
+        await screen.findByTestId("my-runner-agents-unlisted");
+        expect(screen.queryByTestId("my-runner-agents-foreign")).toBeNull();
       });
 
-      it("shows why the server does not run a binding, when it says so", async () => {
-        world.catalog = { ...(world.catalog as object), excluded: [{ ref: "own1", reason: "runner_off" }, { ref: "own2", reason: "something_new" }] };
-        renderPage("owner", "resources");
+      it("shows why the server does not run an agent's settings, when it says so", async () => {
+        const cfg = (world.catalog as { config: { bindings: Record<string, unknown> } }).config;
+        cfg.bindings = { ...cfg.bindings, robin: binding("a1", "0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02") };
+        world.catalog = { ...(world.catalog as object), excluded: [{ ref: "own1", reason: "runner_off" }, { ref: "own2", reason: "something_new" }, { ref: "robin", reason: "program_not_connected" }] };
+        renderPage("owner", "agents");
         expect(await screen.findByTestId("my-runner-binding-excluded-own1")).toHaveTextContent("Not run: Runner is off in its workspace");
         expect(screen.getByTestId("my-runner-binding-excluded-own2")).toHaveTextContent("Not run: something_new");
         expect(screen.queryByTestId("my-runner-binding-excluded-own3")).toBeNull();
+        expect(screen.getByTestId("my-runner-agent-excluded-a1")).toHaveTextContent("Not run: the runner program is not connected");
       });
 
       it("a foreign binding of the same agent adds no profiles to the agents table", async () => {
         (world.catalog as { config: unknown }).config = {
           ...CATALOG,
-          profiles: { ...CATALOG.profiles, alien: { ...CATALOG.profiles["claude-opus"] } },
+          profiles: { ...CATALOG.profiles, alien: { ...CATALOG.profiles["claude-opus"], model: "haiku" } },
           bindings: { mine: binding("a1", "0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02"), theirs: { ...binding("a1", "ws-vc"), permitted_profiles: ["alien"] } },
         };
         renderPage("owner", "agents");
-        await waitFor(() => expect(screen.getByTestId("my-runner-agent-a1")).toHaveTextContent("claude-opus"));
-        expect(screen.getByTestId("my-runner-agent-a1")).not.toHaveTextContent("alien");
+        await waitFor(() => expect(screen.getByTestId("my-runner-agent-a1")).toHaveTextContent("Opus"));
+        expect(screen.getByTestId("my-runner-agent-a1")).not.toHaveTextContent("Haiku");
       });
     });
 
@@ -888,12 +1050,57 @@ describe("MyRunnerPage", () => {
       expect(row).toHaveTextContent("applied r35 · desired r37");
     });
 
-    it("the agents table shows each agent's profiles from the catalog bindings", async () => {
-      const vera = CATALOG.bindings.vera.binding.agent_id;
-      world.agents = [AGENT, { ...AGENT, agent_id: vera, name: "Vera" }];
+    it("the agents table shows each agent's profiles from the catalog bindings, by readable name", async () => {
+      world.agents = [AGENT, { ...AGENT, agent_id: VERA, name: "Vera" }];
       renderPage("owner", "agents");
-      await waitFor(() => expect(screen.getByTestId(`my-runner-agent-${vera}`)).toHaveTextContent("claude-opus"));
-      expect(screen.getByTestId("my-runner-agent-a1")).not.toHaveTextContent("claude-opus");
+      await waitFor(() => expect(screen.getByTestId(`my-runner-agent-${VERA}`)).toHaveTextContent(OPUS));
+      expect(screen.getByTestId("my-runner-agent-a1")).not.toHaveTextContent("Opus");
+    });
+
+    it("the profiles tab explains what a profile is and names each one readably, key beside it", async () => {
+      renderPage("owner", "profiles");
+      expect(await screen.findByTestId("my-runner-profiles-hint")).toHaveTextContent("A profile is a launch recipe");
+      const row = within(screen.getByTestId("my-runner-resources-profiles")).getByText(OPUS).closest("li") as HTMLElement;
+      expect(row).toHaveTextContent("claude-opus");
+    });
+
+    it("an agent turned off in the catalog says so in its row", async () => {
+      (world.catalog as { config: unknown }).config = { ...CATALOG, bindings: { vera: { ...CATALOG.bindings.vera, enabled: false } } };
+      world.agents = [AGENT, { ...AGENT, agent_id: VERA, name: "Vera" }];
+      renderPage("owner", "agents");
+      await waitFor(() => expect(screen.getByTestId(`my-runner-agent-${VERA}`)).toHaveTextContent("off"));
+      expect(within(screen.getByTestId("my-runner-agent-a1")).queryByText("off")).toBeNull();
+    });
+
+    it("an agent with no runner settings yet gets a new entry for itself in this workspace", async () => {
+      renderPage("owner", "agents");
+      const dialog = await openAgent("a1");
+      const editor = within(dialog).getByTestId("my-runner-entry-editor");
+      expect(within(editor).getByRole("textbox", { name: "Name" })).toHaveValue("robin");
+      expect(within(editor).getByLabelText(/^Agent/)).toHaveValue("a1");
+      // the workspace follows the access and is shown by name: this workspace's id resolves to "W"
+      expect(within(editor).getByTestId("schema-form-workspace")).toHaveTextContent("W");
+    });
+
+    it("settings for an agent the list does not show stay reachable", async () => {
+      renderPage("owner", "agents");
+      const unlisted = await screen.findByTestId("my-runner-agents-unlisted");
+      fireEvent.click(within(unlisted).getByRole("button", { name: "vera" }));
+      const dialog = screen.getByTestId("my-runner-agent-dialog");
+      expect(dialog).toHaveTextContent("Agent vera");
+      expect(within(dialog).queryByLabelText(/Parallel tasks/)).toBeNull();
+      expect(within(dialog).getByTestId("my-runner-entry-editor")).toBeInTheDocument();
+    });
+
+    it("a refused agent save keeps what was sent and puts the reason at its field", async () => {
+      world.agents = [AGENT, { ...AGENT, agent_id: VERA, name: "Vera" }];
+      world.refuse = new ApiRequestError("invalid runtime catalog", "validation_failed", 400, { "config.bindings.vera.policy.max_attempts": "invalid" });
+      renderPage("owner", "agents");
+      const dialog = await openAgent(VERA);
+      fireEvent.change(within(dialog).getByLabelText(/Attempts, at most/), { target: { value: "7" } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save settings" }));
+      await waitFor(() => expect(within(screen.getByTestId("my-runner-agent-dialog")).getByLabelText(/Attempts, at most/)).toHaveAttribute("aria-invalid", "true"));
+      expect(within(screen.getByTestId("my-runner-agent-dialog")).getByLabelText(/Attempts, at most/)).toHaveValue(7);
     });
 
     it("history tells a switch from a save and restores an earlier revision after a confirm", async () => {

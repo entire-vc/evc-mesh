@@ -144,6 +144,7 @@ func setupTriageEnvWithOptions(t *testing.T, withTriageColumn bool, extra ...Com
 
 	// Pavel is a human user; agents (e.g. @linus) are intentionally NOT registered here.
 	userRepo.AddUser(wsID, &domain.User{ID: uuid.New(), Username: "pavel", Name: "Pavel"})
+	userRepo.AddUser(wsID, &domain.User{ID: uuid.New(), Username: "alex", Name: "Alex"})
 
 	timeNow = func() time.Time { return frozenTime }
 
