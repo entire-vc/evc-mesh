@@ -33,8 +33,13 @@ export default defineConfig({
     baseURL: `http://localhost:${PORT}`,
     actionTimeout: 15_000,
     navigationTimeout: 30_000,
-    trace: "off",
-    screenshot: "off",
+    // Kept only for a failed test (CI uploads perf/test-results/). Unlike
+    // ../playwright.config.ts, the token in these traces belongs to the job's
+    // throwaway API and fixture account, gone when the job ends. No trace
+    // screenshots: the screencast would run during every measured action;
+    // DOM snapshots plus the failure screenshot show the end state.
+    trace: { mode: "retain-on-failure", screenshots: false, snapshots: true },
+    screenshot: "only-on-failure",
   },
   webServer: {
     command: `pnpm exec vite preview --outDir dist-perf --port ${PORT} --strictPort`,

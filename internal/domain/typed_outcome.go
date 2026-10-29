@@ -252,3 +252,46 @@ func oneOfStr(s string, vals ...string) bool {
 	}
 	return false
 }
+
+// NewOutcomeError builds a refusal of a typed-outcome command.
+func NewOutcomeError(code, msg string) *OutcomeError { return outcomeErr(code, msg) }
+
+// WaitRuntimeRefPrefix marks a runtime_state written from a task_waits row:
+// ref = "wait:<wait id>". Such a state is kept fresh by the wait itself, not
+// by a runner's periodic PUT, so it goes stale only when its until passes.
+const WaitRuntimeRefPrefix = "wait:"
+
+// TurnCommand is one turn-ending command after its input has been checked:
+// everything the store writes in one transaction. Kind is next, wait or
+// handoff; Wait is set for wait, HandoffTo for handoff.
+type TurnCommand struct {
+	TaskID    uuid.UUID
+	AgentID   uuid.UUID
+	SessionID *string
+	TurnID    *string
+	Kind      TurnOutcomeKind
+	Wait      *TaskWait
+	HandoffTo *uuid.UUID
+	Note      string
+	// CommentBody is the server-written, human-readable comment of the turn.
+	CommentBody string
+	// RuntimeReason is the short text put on the card's runtime_state.
+	RuntimeReason string
+}
+
+// TurnCommandTask is the card as the command left it.
+type TurnCommandTask struct {
+	ID         uuid.UUID  `json:"id" db:"id"`
+	Status     string     `json:"status" db:"status"`
+	AssigneeID *uuid.UUID `json:"assignee_id" db:"assignee_id"`
+}
+
+// TurnCommandResult is the success envelope of a typed-outcome command
+// (docs/api/typed-outcomes.md §Commands).
+type TurnCommandResult struct {
+	Outcome   *TurnOutcome    `json:"outcome,omitempty"`
+	Wait      *TaskWait       `json:"wait,omitempty"`
+	CommentID uuid.UUID       `json:"comment_id"`
+	Task      TurnCommandTask `json:"task"`
+	Released  bool            `json:"released"`
+}

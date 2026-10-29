@@ -89,6 +89,16 @@ registerMeshDefaultTheme();
 
 const DEFAULT_PER_PAGE = 50;
 
+// Table sorts the server can apply before paging (task_repo.go ListByProject's
+// allowed sort columns). The page has to be cut in the order the table shows:
+// the server's own default is updated_at DESC, so a Title A→Z page 1 used to be
+// the 50 most recently updated tasks sorted among themselves. The other sorts
+// (status, assignee, custom fields) are still applied to the loaded page only.
+const SERVER_SORT_FIELDS: Partial<Record<SortField, string>> = {
+  title: "title",
+  due_date: "due_date",
+};
+
 // Sortable columns of the header and their min width; the others get a plain header.
 const SORTABLE_CLASS: Record<string, string> = {
   title: "min-w-[240px]",
@@ -178,14 +188,17 @@ export function ListViewPage() {
   const perPage = Math.max(1, Number(searchParams.get("per_page")) || DEFAULT_PER_PAGE);
 
   // Shared fetch params for every fetchTasks call below, so the human_gate
-  // filter stays in sync with pagination everywhere tasks get re-fetched.
+  // filter and the server-side sort stay in sync with pagination everywhere
+  // tasks get re-fetched.
+  const serverSortBy = SERVER_SORT_FIELDS[sortField];
   const fetchParams = useMemo(
     () => ({
       page,
       page_size: perPage,
       ...(humanGateOnly ? { human_gate: "true" } : {}),
+      ...(serverSortBy ? { sort_by: serverSortBy, sort_dir: sortDir } : {}),
     }),
-    [page, perPage, humanGateOnly],
+    [page, perPage, humanGateOnly, serverSortBy, sortDir],
   );
 
   // The rows are laid out from statuses (grouping) and custom-field definitions
@@ -337,8 +350,15 @@ export function ListViewPage() {
         setSortField(field);
         setSortDir("asc");
       }
+      // A server-side sort re-cuts the pages: page N of the old order is not
+      // page N of the new one, so start again from the top.
+      if (page !== 1 && (SERVER_SORT_FIELDS[field] || SERVER_SORT_FIELDS[sortField])) {
+        const params = new URLSearchParams(searchParams);
+        params.set("page", "1");
+        setSearchParams(params);
+      }
     },
-    [sortField],
+    [sortField, page, searchParams, setSearchParams],
   );
 
   // Derive all unique tags from loaded tasks (for the tag filter dropdown)

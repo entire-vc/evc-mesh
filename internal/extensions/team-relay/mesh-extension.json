@@ -30,26 +30,24 @@
     "project": {
       "type": "object",
       "properties": {
-        "share_id": {
+        "agent_key": {
           "type": "string",
-          "title": "Team Relay share (UUID)",
-          "title_i18n": { "ru": "Шара Team Relay (UUID)" }
+          "title": "Share agent key",
+          "title_i18n": { "ru": "Ключ агента шары" },
+          "x-secret": true,
+          "x-help": "Issued by the share owner in Team Relay. The key belongs to one share, and Mesh binds the project to it.",
+          "x-help_i18n": { "ru": "Выдаёт владелец шары в Team Relay. Ключ принадлежит одной шаре, к ней Mesh и привязывает проект." }
         },
-        "share_slug": {
+        "share_name": {
           "type": "string",
-          "title": "Share slug",
-          "title_i18n": { "ru": "Слаг шары" }
+          "title": "Team Relay share",
+          "title_i18n": { "ru": "Шара Team Relay" },
+          "readOnly": true
         },
         "subfolder": {
           "type": "string",
           "title": "Subfolder in the share",
           "title_i18n": { "ru": "Подпапка в шаре" }
-        },
-        "agent_key": {
-          "type": "string",
-          "title": "Share agent key",
-          "title_i18n": { "ru": "Ключ агента шары" },
-          "x-secret": true
         },
         "include_project_slug": {
           "type": "boolean",
@@ -88,10 +86,7 @@
           "title_i18n": { "ru": "Ключ действует до" },
           "readOnly": true
         }
-      },
-      "required": [
-        "share_id"
-      ]
+      }
     }
   },
   "schemas": {

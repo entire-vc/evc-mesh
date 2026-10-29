@@ -95,7 +95,7 @@ function ProgramBody({ entry, wsId, onChange }: { entry: CatalogEntry | undefine
   return (
     <>
       {restricted && (
-        <p className="text-sm text-muted-foreground" data-testid="my-runner-program-not-allowed">{entry.blocked ? entry.blockedReason : t("program.notAllowed")}</p>
+        <p className="text-sm text-muted-foreground" data-testid="my-runner-program-not-allowed">{entry.blocked ? entry.blockedReason || t("program.blocked") : t("program.notAllowed")}</p>
       )}
       {!entry.blocked && (entry.allowed || entry.connection) && <AddressForm entry={entry} wsId={wsId} onChange={onChange} />}
       <ProgramUpdate wsSlug={wsSlug} />

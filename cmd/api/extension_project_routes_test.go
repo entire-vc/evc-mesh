@@ -230,17 +230,27 @@ func TestProjectExtensionRoutes_Contract(t *testing.T) {
 	assert.Equal(t, "Team Relay", body["settings"].(map[string]any)["docs_mount_path"])
 	assert.NotContains(t, rec.Body.String(), key)
 
-	rec, body = call(http.MethodPut, "/team-relay", `{"enabled":true,"settings":{"share_slug":"docs2","agent_key":"***"}}`)
+	// The stored key belongs to the bound share: another share needs its own key.
+	rec, _ = call(http.MethodPut, "/team-relay", `{"enabled":true,"settings":{"share_slug":"docs2","agent_key":"***"}}`)
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "agent_key")
+
+	rec, body = call(http.MethodPut, "/team-relay", `{"enabled":true,"settings":{"share_slug":"docs","agent_key":"***","subfolder":"sub2"}}`)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	assert.Equal(t, "docs2", body["settings"].(map[string]any)["share_slug"], "PUT replaces the settings")
+	assert.Equal(t, "sub2", body["settings"].(map[string]any)["subfolder"], "PUT replaces the settings")
+	assert.Nil(t, body["settings"].(map[string]any)["docs_mount_path"], "PUT replaces the settings")
 	assert.Equal(t, key, repo.rows[rowKey(uuid.MustParse(project), "team-relay")].AgentKey, `"***" keeps the stored secret`)
 
 	rec, _ = call(http.MethodPut, "/team-relay", `{"enabled":true,"settings":{"bogus":1}}`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code, "a key outside the project schema is refused")
 	assert.Contains(t, rec.Body.String(), "bogus")
-	rec, _ = call(http.MethodPut, "/team-relay", `{"enabled":true,"settings":{"agent_key":"`+key+`"}}`)
-	assert.Equal(t, http.StatusBadRequest, rec.Code, "enabled needs a share")
-	assert.Contains(t, string(repo.rows[rowKey(uuid.MustParse(project), "team-relay")].Settings), `"share_slug":"docs2"`, "refused saves change nothing")
+	assert.Contains(t, string(repo.rows[rowKey(uuid.MustParse(project), "team-relay")].Settings), `"share_slug":"docs"`, "refused saves change nothing")
+	// The form no longer sends the share (it follows from the key); a save
+	// without one keeps the share already bound.
+	rec, body = call(http.MethodPut, "/team-relay", `{"enabled":true,"settings":{"agent_key":"`+key+`","subfolder":"other"}}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, "docs", body["settings"].(map[string]any)["share_slug"], "a save without a share keeps the bound one")
+	assert.Equal(t, "other", body["settings"].(map[string]any)["subfolder"])
 
 	// GitLab: the generic path, on the same project.
 	rec, _ = call(http.MethodGet, "/gitlab", "")

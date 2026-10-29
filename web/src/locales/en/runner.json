@@ -1,9 +1,9 @@
 {
-  "title": "My Runner",
+  "title": "Runner",
   "subtitle": {
-    "neutral": "Agents, the resources they run on and the runner leading each.",
-    "workspace": "Agents in this workspace, the runner catalog they run on and the runner leading each. Catalog changes apply to the whole workspace.",
-    "personal": "Your agents, the resources they run on and the runner leading each. Changes affect only you."
+    "neutral": "Agents, what they run on and the runners leading them.",
+    "workspace": "This workspace's agents, the accounts, pools and profiles they run on, and the runners leading them. Changes here apply to the whole workspace.",
+    "personal": "Agents you operate and the runners leading them. Your own runtime document is shown read-only."
   },
   "loadFailed": "Could not load this section.",
   "retry": "Retry",
@@ -11,12 +11,14 @@
     "label": "Runner sections",
     "overview": "Overview",
     "agents": "Agents",
-    "resources": "Resources",
+    "accounts": "Accounts",
+    "pools": "Pools",
+    "profiles": "Profiles",
     "history": "History"
   },
   "admin": {
     "title": "Runner for this workspace",
-    "offHint": "Runner is off. Turn it on once; each person then configures their own agents under My Runner.",
+    "offHint": "Runner is off. Turn it on once; agents and their settings are then managed on this screen.",
     "onHint": "Runner is on. Turning it off stops runners taking new tasks.",
     "enable": "Turn on Runner",
     "enabling": "Turning on...",
@@ -39,10 +41,10 @@
     "save": "Save",
     "saved": "Limit saved",
     "saveFailed": "Could not save the limit",
-    "manager": "Can manage My Runner",
-    "managerHint": "The agent edits your resources and limits with its own key. You can take this back at any time.",
-    "managerGranted": "{{name}} can now manage My Runner",
-    "managerRevoked": "{{name}} can no longer manage My Runner",
+    "manager": "The agent reads and edits your runner settings, limits, and the runner catalog of workspaces where you are an admin, with its own key",
+    "managerHint": "You can take this back at any time.",
+    "managerGranted": "{{name}} can now manage Runner settings",
+    "managerRevoked": "{{name}} can no longer manage Runner settings",
     "managerFailed": "Could not change the assignment",
     "noRunner": "No runner leads this agent",
     "runnerLive": "live",
@@ -59,7 +61,19 @@
     "operatorNone": "No one",
     "yes": "yes",
     "filter": "Filter agents",
-    "moreProfiles": "+{{n}} more"
+    "moreProfiles": "+{{n}} more",
+    "off": "off",
+    "edit": "Edit",
+    "editTitle": "Agent {{name}}",
+    "editHint": "What this agent may run on and how many tasks it takes at once. Saving the settings makes a new catalog revision for the whole workspace.",
+    "editHintPersonal": "How many tasks this agent takes at once and whether it may manage Runner settings.",
+    "workSection": "Work",
+    "settingsSection": "Runner settings",
+    "saveSettings": "Save settings",
+    "settingsSaved": "Agent settings saved",
+    "settingsFailed": "Could not save the agent settings",
+    "unlisted": "Runner settings for agents not in this list (another member's or removed):",
+    "close": "Close"
   },
   "runners": {
     "title": "Runners",
@@ -97,9 +111,7 @@
     "sections": {
       "accounts": "Accounts",
       "pools": "Pools",
-      "profiles": "Profiles",
-      "agents": "Agent settings",
-      "bindings": "Agent settings"
+      "profiles": "Profiles"
     },
     "empty": "Nothing here yet.",
     "name": "Name",
@@ -142,6 +154,7 @@
       "not_permitted": "Only allowed profiles can be used here"
     },
     "credentialOnRename": "A renamed account does not carry the hidden reference over: enter it again.",
+    "refusedAgents": "The runner catalog was not saved: the settings of {{names}} need fixing. Open them from the Agents tab.",
     "foreignBindings_one": "{{count}} binding that is not this workspace's is hidden here and saved unchanged.",
     "foreignBindings_other": "{{count}} bindings that are not this workspace's are hidden here and saved unchanged.",
     "excluded": {
@@ -196,6 +209,16 @@
       "bad": "not answering",
       "unknown": "not checked yet"
     },
-    "notAllowed": "Not allowed by the instance administrator."
+    "notAllowed": "Not allowed by the instance administrator.",
+    "blocked": "Blocked on this instance by its administrator."
+  },
+  "profiles": {
+    "hint": "A profile is a launch recipe: which account (subscription or API key), which tool (Claude Code or Codex), which model and in which mode. Each agent is allowed some profiles; the runner picks one of them for every task, trying the first choice first.",
+    "allowedHelp": "Profiles the runner may launch this agent with. Allow several so it can switch when one account runs out of quota.",
+    "mode": {
+      "subscription": "subscription",
+      "api": "API"
+    },
+    "defaultModel": "default model"
   }
 }

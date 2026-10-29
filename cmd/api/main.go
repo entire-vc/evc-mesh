@@ -1941,6 +1941,21 @@ func main() {
 		service.NewTypedOutcomeService(postgres.NewTaskWaitRepo(db), postgres.NewTurnOutcomeRepo(db)), taskService)
 	api.GET("/tasks/:task_id/turn-outcomes", typedOutcomeHandler.ListTurnOutcomes, wsAccess)
 	api.GET("/tasks/:task_id/wait", typedOutcomeHandler.GetActiveWait, wsAccess)
+	// Turn-ending commands: each validates its target and writes the wait/outcome,
+	// the comment and the checkout change in one transaction.
+	turnCommandHandler := handler.NewTurnCommandHandler(service.NewTurnCommandService(
+		postgres.NewTurnCommandRepo(db), vcsLinkRepo, service.TurnHooksFor(taskService),
+		func(ctx context.Context, ws uuid.UUID) (gitlabapi.MergeRequestChecker, bool) {
+			cfg, _, ok := vcsIntegrationResolver.ResolveGitLab(ctx, ws)
+			if !ok || cfg.BaseURL == "" || cfg.Token == "" {
+				return nil, false
+			}
+			return gitlabapi.NewClient(cfg.BaseURL, cfg.Token), true
+		}), taskService)
+	api.POST("/tasks/:task_id/wait", turnCommandHandler.WaitFor, wsAccess, rbac(mw.PermUpdateTask))
+	api.POST("/tasks/:task_id/next", turnCommandHandler.ContinueNext, wsAccess, rbac(mw.PermUpdateTask))
+	api.POST("/tasks/:task_id/handoff", turnCommandHandler.HandOff, wsAccess, rbac(mw.PermUpdateTask))
+	api.POST("/tasks/:task_id/notes", turnCommandHandler.AddNote, wsAccess, rbac(mw.PermAddComment))
 	api.GET("/workspaces/:ws_id/tasks", taskHandler.SearchGlobal, wsAccess)
 
 	// Dependency routes.

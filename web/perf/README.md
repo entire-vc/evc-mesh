@@ -1018,3 +1018,31 @@ the smallest 0.1 step above that. Revert: restore 723.8 / 175.1 together with re
 Main `a4c00d12` measured 721.08 against the 722.1 ceiling; with the change 722.69 locally, so the
 ceiling is the smallest 0.1 step above that. Revert: restore 722.1 together with reverting the MR.
 Lead sign-off: the product lead, requested on the card.
+
+`total_js_kb_gz` 722.7 → 724.2 (+1.5 KB gz); `login.initial_js_kb_gz` unchanged (173.2):
+
+- Two MRs that each fit the 722.7 ceiling landed one after the other, and their sum does not fit:
+  the schema-form pickers by name (722.56 on its own branch) and the My Runner binding section. Main `e144e905` measures 723.32. The perf-bundle job is skipped on main
+  pipelines, so the overrun showed up only on the next MR's merge gate.
+- Members edit dialog (the earlier change: owners/admins set a member's email, username and password) on top:
+  `workspace-settings` +0.49, `locale-ru` +0.26, `settings` +0.19 KB gz. Main `f40dab5d` measures 724.12.
+- Trimmed before raising: looked for unused ru/en locale keys (none outside the dynamic `apiErrors`
+  codes) and for dead code in the grown chunks; the growth is the two features themselves.
+
+Main `f40dab5d` measured 724.12 against the 722.7 ceiling, so the ceiling is the smallest 0.1 step
+above that. Revert: restore 722.7 after trimming ≥1.42 KB gz. Lead sign-off: the product lead, requested on the card.
+
+`total_js_kb_gz` 724.2 → 727.1 (+2.9 KB gz); `login.initial_js_kb_gz` 173.2 → 173.3 (+0.03 measured):
+
+- 724.2 is main's own ceiling (`9da16ab4b`, main `f40dab5d` measures 724.12); +2.9 is this MR, the
+  Runner screen reworked: agents edited from their row in a dialog, Accounts / Pools / Profiles as
+  separate tabs, readable profile names and the on-screen explanation of what a profile is, workspace
+  isolation of agent settings moved to the Agents tab. Per chunk against main `f40dab5d`: `my-runner`
+  +1.98, `locale-ru` +0.60, `runner` (en strings) +0.45, `index` +0.04 KB gz (the "Runner" header
+  breadcrumb, a route entry in the initial chunk).
+- Nothing left to trim without dropping accepted UI: the growth is the dialog, the tabs and the copy
+  the lead signed off; lazy loading does not help, this metric counts every chunk.
+
+CI `perf-bundle` on the branch measured 727.09 / 173.23 (local build: the same), so the ceiling is the
+smallest 0.1 step above that. Revert: restore 724.2 / 173.2 together with reverting the MR.
+Lead sign-off: the product lead, signed 2026-10-29 on the card.

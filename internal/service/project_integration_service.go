@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"strings"
 	"time"
@@ -19,6 +20,8 @@ type projectIntegrationService struct {
 	piRepo        repository.ProjectIntegrationRepository
 	relayResolver teamrelay.ConnectionResolver
 	projects      repository.ProjectRepository
+	// shareOfKey is the seam over teamrelay.ShareOfAgentKey.
+	shareOfKey func(ctx context.Context, relayURL, agentKey string) (*teamrelay.KeyShare, error)
 }
 
 type ProjectIntegrationServiceOption func(*projectIntegrationService)
@@ -33,7 +36,7 @@ func WithProjectIntegrationRelayResolver(r teamrelay.ConnectionResolver, project
 
 // NewProjectIntegrationService returns a new ProjectIntegrationService.
 func NewProjectIntegrationService(piRepo repository.ProjectIntegrationRepository, opts ...ProjectIntegrationServiceOption) ProjectIntegrationService {
-	s := &projectIntegrationService{piRepo: piRepo}
+	s := &projectIntegrationService{piRepo: piRepo, shareOfKey: teamrelay.ShareOfAgentKey}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -63,6 +66,15 @@ func (s *projectIntegrationService) UpsertTeamRelay(ctx context.Context, project
 		return nil, apierror.ValidationError(map[string]string{"agent_key": teamRelayAgentKeyHint(input.AgentKey)})
 	}
 
+	existing, err := s.piRepo.Get(ctx, projectID, "team_relay")
+	if err != nil {
+		return nil, err
+	}
+	shareName, err := s.resolveShare(ctx, projectID, existing, &input)
+	if err != nil {
+		return nil, err
+	}
+
 	// Validation: enabled=true requires share_id or share_slug.
 	if input.Enabled {
 		if input.ShareID == "" && input.ShareSlug == "" {
@@ -74,10 +86,6 @@ func (s *projectIntegrationService) UpsertTeamRelay(ctx context.Context, project
 			}
 		}
 		// On first create, agent_key is mandatory.
-		existing, err := s.piRepo.Get(ctx, projectID, "team_relay")
-		if err != nil {
-			return nil, err
-		}
 		if existing == nil && input.AgentKey == "" {
 			return nil, apierror.ValidationError(map[string]string{"agent_key": "required when enabling for the first time"})
 		}
@@ -118,6 +126,7 @@ func (s *projectIntegrationService) UpsertTeamRelay(ctx context.Context, project
 	settings := domain.TeamRelaySettings{
 		ShareID:             input.ShareID,
 		ShareSlug:           input.ShareSlug,
+		ShareName:           shareName,
 		Subfolder:           input.Subfolder,
 		IncludeProjectSlug:  input.IncludeProjectSlug,
 		DocsMountPath:       input.DocsMountPath,
@@ -261,6 +270,83 @@ func (s *projectIntegrationService) SearchTR(ctx context.Context, shareSlug, q s
 		}
 	}
 	return filtered, nil
+}
+
+// resolveShare settles which share the binding points at. A new agent key
+// decides it: the key belongs to exactly one share and the relay says which
+// (teamrelay.ShareOfAgentKey), so the form asks for the key and shows the
+// share's name, never its UUID. A share the caller names that is not the key's
+// is refused. Without a new key the stored share stays: another share needs its
+// own key. When the relay cannot answer (unreachable, a relay without the
+// route), the share the caller sent stays. Returns the share name to store.
+func (s *projectIntegrationService) resolveShare(ctx context.Context, projectID uuid.UUID, existing *domain.ProjectIntegration, input *UpsertProjectIntegrationInput) (string, error) {
+	var stored domain.TeamRelaySettings
+	if existing != nil {
+		_ = json.Unmarshal(existing.Settings, &stored)
+	}
+	// conflictsWithStored: a share field the caller sent names another share.
+	conflictsWithStored := func() bool {
+		return (input.ShareID != "" && !strings.EqualFold(input.ShareID, stored.ShareID)) || (input.ShareSlug != "" && input.ShareSlug != stored.ShareSlug)
+	}
+	if input.AgentKey != "" {
+		if share, ok, err := s.shareOfAgentKey(ctx, projectID, input.AgentKey); err != nil {
+			return "", err
+		} else if ok {
+			if input.ShareID != "" && !strings.EqualFold(input.ShareID, share.ID) {
+				return "", apierror.ValidationError(map[string]string{"agent_key": "this key belongs to another share (" + share.Name() + ")"})
+			}
+			// An unpublished share has no web slug; a slug the caller sent then
+			// names some other share, so the relay's answer replaces it.
+			input.ShareID, input.ShareSlug = share.ID, share.WebSlug
+			return share.Name(), nil
+		}
+	}
+	// Without a new key the bound share stays: every share field the caller
+	// sends must name it, and the stored ones are written back. Another share
+	// needs its own key, also for a binding that has no key or no share stored.
+	if input.AgentKey == "" && existing != nil {
+		if conflictsWithStored() {
+			return "", apierror.ValidationError(map[string]string{"agent_key": "to move the project to another share, paste that share's key"})
+		}
+		input.ShareID, input.ShareSlug = stored.ShareID, stored.ShareSlug
+		return stored.ShareName, nil
+	}
+	if input.ShareID == "" && input.ShareSlug == "" {
+		input.ShareID, input.ShareSlug = stored.ShareID, stored.ShareSlug
+		return stored.ShareName, nil
+	}
+	if !conflictsWithStored() {
+		return stored.ShareName, nil
+	}
+	return "", nil
+}
+
+// shareOfAgentKey asks the workspace's relay which share key belongs to. ok is
+// false when it cannot say: no connection, unreachable, or a relay without the
+// route. A key the relay rejects is a validation error on agent_key.
+func (s *projectIntegrationService) shareOfAgentKey(ctx context.Context, projectID uuid.UUID, key string) (*teamrelay.KeyShare, bool, error) {
+	if s.relayResolver == nil || s.projects == nil || s.shareOfKey == nil {
+		return nil, false, nil
+	}
+	project, err := s.projects.GetByID(ctx, projectID)
+	if err != nil || project == nil {
+		return nil, false, err
+	}
+	connection, enabled, err := teamrelay.ResolveConnection(ctx, s.relayResolver, project.WorkspaceID)
+	if err != nil || !enabled {
+		return nil, false, nil //nolint:nilerr // no usable connection: the share stays as sent
+	}
+	share, err := s.shareOfKey(ctx, connection.RelayURL, key)
+	switch {
+	case err == nil:
+		return share, true, nil
+	case errors.Is(err, teamrelay.ErrKeyRejected):
+		return nil, false, apierror.ValidationError(map[string]string{"agent_key": "Team Relay does not recognise this key"})
+	case errors.Is(err, teamrelay.ErrKeyExpired):
+		return nil, false, apierror.ValidationError(map[string]string{"agent_key": "this key has expired in Team Relay"})
+	default:
+		return nil, false, nil
+	}
 }
 
 // teamRelayAgentKeyPattern matches a genuine Team Relay agent key; the

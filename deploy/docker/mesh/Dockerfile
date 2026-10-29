@@ -64,6 +64,7 @@ COPY packages/mesh-theme-sdk/testing/ /packages/mesh-theme-sdk/testing/
 COPY internal/extensions/schema/manifest.v1.json /internal/extensions/schema/manifest.v1.json
 # The My Runner tests build the resource forms from the real Runner manifest (same reason).
 COPY internal/extensions/runner/mesh-extension.json /internal/extensions/runner/mesh-extension.json
+COPY internal/extensions/team-relay/mesh-extension.json /internal/extensions/team-relay/mesh-extension.json
 RUN pnpm build
 
 # Stage 3: Production image

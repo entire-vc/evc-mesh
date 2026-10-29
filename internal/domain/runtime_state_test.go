@@ -86,6 +86,24 @@ func TestResolveRuntimeState_Stale(t *testing.T) {
 	assert.True(t, expired.Stale, "until has passed")
 }
 
+// A state written from a declared wait is not refreshed by a runner; its age
+// alone must not mark it stale, only its until.
+func TestResolveRuntimeState_WaitStateAgesOnlyByUntil(t *testing.T) {
+	ref := WaitRuntimeRefPrefix + uuid.NewString()
+	until := rsNow.Add(time.Hour)
+	s := RuntimeState{Kind: RuntimeKindWaiting, Since: rsNow.Add(-2 * time.Hour), Until: &until, Ref: &ref, UpdatedAt: rsNow.Add(-2 * time.Hour)}
+	raw, err := s.Marshal()
+	require.NoError(t, err)
+	assert.False(t, ResolveRuntimeState(raw, &Task{}, rsNow).Stale, "an old wait state with until ahead is current")
+	assert.True(t, ResolveRuntimeState(raw, &Task{}, until.Add(time.Second)).Stale, "until has passed")
+
+	other := "pipeline:g/p#1"
+	s.Ref = &other
+	raw, err = s.Marshal()
+	require.NoError(t, err)
+	assert.True(t, ResolveRuntimeState(raw, &Task{}, rsNow).Stale, "a runner-written state still ages")
+}
+
 func TestResolveRuntimeState_CheckoutFallback(t *testing.T) {
 	holder := uuid.New()
 	acquired := rsNow.Add(-10 * time.Minute)

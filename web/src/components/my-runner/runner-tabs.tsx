@@ -1,16 +1,19 @@
-import { useRef, type KeyboardEvent } from "react";
+import { useEffect, useRef, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router";
 import { cn } from "@/lib/cn";
 
-export const RUNNER_TABS = ["overview", "agents", "resources", "history"] as const;
+export const RUNNER_TABS = ["overview", "agents", "accounts", "pools", "profiles", "history"] as const;
 export type RunnerTab = (typeof RUNNER_TABS)[number];
+
+/** Tabs that were merged or split: an old link still lands on the right one. */
+const TAB_ALIASES: Record<string, RunnerTab> = { resources: "accounts" };
 
 /** The open tab lives in `?tab=`, so a link opens it; anything else is the overview. */
 export function useRunnerTab(): [RunnerTab, (tab: RunnerTab) => void] {
   const [params, setParams] = useSearchParams();
-  const raw = params.get("tab");
-  const tab = (RUNNER_TABS as readonly string[]).includes(raw ?? "") ? (raw as RunnerTab) : "overview";
+  const raw = params.get("tab") ?? "";
+  const tab = (RUNNER_TABS as readonly string[]).includes(raw) ? (raw as RunnerTab) : TAB_ALIASES[raw] ?? "overview";
   const select = (next: RunnerTab) =>
     setParams((p) => {
       const out = new URLSearchParams(p);
@@ -24,6 +27,8 @@ export function useRunnerTab(): [RunnerTab, (tab: RunnerTab) => void] {
 export function RunnerTabList({ tab, onSelect }: { tab: RunnerTab; onSelect: (tab: RunnerTab) => void }) {
   const { t } = useTranslation("runner");
   const refs = useRef<Partial<Record<RunnerTab, HTMLButtonElement | null>>>({});
+  // On a narrow screen the open tab may sit past the edge of the strip (a link to History): bring it in.
+  useEffect(() => { refs.current[tab]?.scrollIntoView?.({ block: "nearest", inline: "nearest" }); }, [tab]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const i = RUNNER_TABS.indexOf(tab);
@@ -40,7 +45,7 @@ export function RunnerTabList({ tab, onSelect }: { tab: RunnerTab; onSelect: (ta
   };
 
   return (
-    // Four short labels fit 393px; a longer translation scrolls the strip, never the page.
+    // Six short labels nearly fit 393px; the rest scrolls the strip, never the page.
     <div role="tablist" aria-label={t("tabs.label")} onKeyDown={onKeyDown} className="flex overflow-x-auto border-b border-border">
       {RUNNER_TABS.map((id) => (
         <button

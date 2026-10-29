@@ -298,11 +298,16 @@ func TestExtensionProjectHandler_ChatRequiresHiddenRunner(t *testing.T) {
 
 // The Team Relay PUT is typed in Go and described in the manifest; they must
 // name the same keys, or a setting the old block had is lost on one side.
+// share_id and share_slug are accepted from API clients but are not form
+// fields: the share follows from the agent key and the form shows its name.
 func TestTeamRelayProjectSettings_MatchManifest(t *testing.T) {
+	apiOnly := map[string]bool{"share_id": true, "share_slug": true}
 	var fromStruct []string
 	rt := reflect.TypeOf(teamRelayProjectSettings{})
 	for i := 0; i < rt.NumField(); i++ {
-		fromStruct = append(fromStruct, strings.Split(rt.Field(i).Tag.Get("json"), ",")[0])
+		if k := strings.Split(rt.Field(i).Tag.Get("json"), ",")[0]; !apiOnly[k] {
+			fromStruct = append(fromStruct, k)
+		}
 	}
 	var fromManifest []string
 	for k, f := range teamrelay.New(extensions.Deps{}).Manifest().SettingFields("project") {
@@ -316,6 +321,12 @@ func TestTeamRelayProjectSettings_MatchManifest(t *testing.T) {
 	for _, k := range []string{"include_project_slug", "docs_mount_path", "excluded_paths", "sync_interval_minutes"} {
 		assert.Contains(t, fromManifest, k)
 	}
+	fields := teamrelay.New(extensions.Deps{}).Manifest().SettingFields("project")
+	for k := range apiOnly {
+		assert.NotContains(t, fields, k, "the form must not ask for the share's id or slug")
+	}
+	require.Contains(t, fields, "share_name")
+	assert.True(t, fields["share_name"].ReadOnly)
 }
 
 func TestExtensionProjectHandler_TeamRelayMountSettingsRoundTrip(t *testing.T) {

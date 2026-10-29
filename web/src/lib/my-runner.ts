@@ -4,7 +4,7 @@ import { resolveSchema } from "@/components/extensions/schema-form/resolve";
 import type { ExtensionManifest } from "@/hooks/useExtensionCatalog";
 
 /**
- * "My Runner": the signed-in user's own runtime document and the agents they
+ * The Runner screen: the signed-in user's own runtime document and the agents they
  * operate in the current workspace (for its owner or admin, also the agents the
  * workspace's runner drives). Paths follow internal/handler/user_runtime_handler.go;
  * every route is user-auth only.
@@ -14,6 +14,9 @@ export const CONFIG_SECTIONS = ["accounts", "pools", "profiles", "agents"] as co
 /** The workspace runner catalog (schema v2) keeps per-agent settings under `bindings`. */
 export const CATALOG_SECTIONS = ["accounts", "pools", "profiles", "bindings"] as const;
 export type ConfigSection = (typeof CONFIG_SECTIONS)[number] | (typeof CATALOG_SECTIONS)[number];
+/** Sections with a tab of their own; per-agent settings are edited from the agent's row. */
+export const RESOURCE_SECTIONS = ["accounts", "pools", "profiles"] as const;
+export type ResourceSection = (typeof RESOURCE_SECTIONS)[number];
 
 export type RuntimeConfig = Partial<Record<ConfigSection, Record<string, unknown>>> & Record<string, unknown>;
 
@@ -212,6 +215,61 @@ export function profilesByAgent(config: RuntimeConfig | null, wsId?: string): Re
   return out;
 }
 
+/** The catalog's per-agent settings entry (its name under `bindings`) by agent id; with `wsId`, only that workspace's. */
+export function bindingsByAgent(config: RuntimeConfig | null, wsId?: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of sectionEntries(config, "bindings")) {
+    if (wsId && isForeignBinding(value, wsId)) continue;
+    const id = (value as { binding?: { agent_id?: unknown } } | null)?.binding?.agent_id;
+    if (typeof id === "string" && !(id in out)) out[id] = name;
+  }
+  return out;
+}
+
+const HARNESS_NAMES: Record<string, string> = { claude_code: "Claude Code", "claude-code": "Claude Code", codex: "Codex" };
+
+/** `claude-sonnet-5-5` → `Sonnet 5.5`, `glm-5.3` → `GLM 5.3`; null for a `*-default` model. */
+function modelName(model: string): string | null {
+  if (/(^|-)default$/.test(model)) return null;
+  const words = model.replace(/^claude-/, "").split("-");
+  const out: string[] = [];
+  for (const w of words) {
+    // consecutive version numbers join with a dot: 5-5 → 5.5
+    const prev = out[out.length - 1];
+    if (/^\d+$/.test(w) && prev !== undefined && /^[\d.]+$/.test(prev)) out[out.length - 1] = `${prev}.${w}`;
+    else out.push(/^\d/.test(w) ? w : w.length <= 3 ? w.toUpperCase() : w[0]!.toUpperCase() + w.slice(1));
+  }
+  return out.join(" ");
+}
+
+/**
+ * A profile as people read it: tool · mode and account · model, e.g.
+ * "Claude Code · subscription beth-team · default model". `t` names the mode and
+ * the default model; the profile's key is shown next to it by the caller.
+ */
+export function profileLabel(name: string, config: RuntimeConfig | null, t: (key: string) => string): string {
+  const p = (config?.profiles?.[name] ?? null) as Record<string, unknown> | null;
+  if (!p || typeof p !== "object") return name;
+  const str = (k: string) => (typeof p[k] === "string" && p[k] ? (p[k] as string) : "");
+  const harness = str("harness");
+  const mode = str("execution_mode");
+  const account = str("account_ref");
+  // the account's provider is already said by the tool: `claude/beth-team` reads as `beth-team`
+  const accountShort = account.includes("/") ? account.slice(account.indexOf("/") + 1) : account;
+  const model = str("model");
+  const parts = [
+    HARNESS_NAMES[harness] ?? harness,
+    [mode ? t(`profiles.mode.${mode}`) : "", accountShort].filter(Boolean).join(" "),
+    model ? modelName(model) ?? t("profiles.defaultModel") : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : name;
+}
+
+/** Labels of every profile of the catalog, keyed by profile name, for the profile pickers. */
+export function profileLabels(config: RuntimeConfig | null, t: (key: string) => string): Record<string, string> {
+  return Object.fromEntries(Object.keys(config?.profiles ?? {}).map((n) => [n, `${profileLabel(n, config, t)} (${n})`]));
+}
+
 /** Catalog revisions when the workspace has a runner connection (even with none saved yet); otherwise (no connection, no rights, older server) the personal history. */
 export async function loadHistory(wsId: string | undefined, limit = 50): Promise<HistoryView> {
   if (wsId) {
@@ -285,14 +343,23 @@ export function refOptions(config: RuntimeConfig, section: ConfigSection, entry:
   };
 }
 
-/** A copy of the schema where every `x-ref` / `x-key-ref` became an `enum` of what exists now. */
-export function bindRefs(schema: FieldSchema, options: Record<string, string[]>): FieldSchema {
+/**
+ * A copy of the schema where every `x-ref` / `x-key-ref` became an `enum` of what exists now.
+ * `labels`: display names per referenced set (profiles), shown instead of the bare key.
+ */
+export function bindRefs(schema: FieldSchema, options: Record<string, string[]>, labels: Record<string, Record<string, string>> = {}): FieldSchema {
   const out: FieldSchema = { ...schema };
-  if (schema["x-ref"]) out.enum = options[schema["x-ref"]] ?? [];
+  const ref = schema["x-ref"];
+  if (ref) {
+    out.enum = options[ref] ?? [];
+    // `permitted_profiles` (first choice) names profiles too
+    const named = labels[ref === "permitted_profiles" ? "profiles" : ref];
+    if (named) out["x-options"] = { ...named, ...(schema["x-options"] ?? {}) };
+  }
   if (schema["x-key-ref"]) out.propertyNames = { ...(schema.propertyNames ?? {}), type: "string", enum: options[schema["x-key-ref"]] ?? [] };
-  if (schema.items) out.items = bindRefs(schema.items, options);
-  if (schema.additionalProperties && typeof schema.additionalProperties === "object") out.additionalProperties = bindRefs(schema.additionalProperties, options);
-  if (schema.properties) out.properties = Object.fromEntries(Object.entries(schema.properties).map(([k, f]) => [k, bindRefs(f, options)]));
+  if (schema.items) out.items = bindRefs(schema.items, options, labels);
+  if (schema.additionalProperties && typeof schema.additionalProperties === "object") out.additionalProperties = bindRefs(schema.additionalProperties, options, labels);
+  if (schema.properties) out.properties = Object.fromEntries(Object.entries(schema.properties).map(([k, f]) => [k, bindRefs(f, options, labels)]));
   return out;
 }
 
