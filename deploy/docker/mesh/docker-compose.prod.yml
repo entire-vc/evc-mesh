@@ -218,6 +218,14 @@ services:
       MESH_VAPID_PUBLIC_KEY: ${MESH_VAPID_PUBLIC_KEY:-}
       MESH_VAPID_PRIVATE_KEY: ${MESH_VAPID_PRIVATE_KEY:-}
       MESH_VAPID_SUBJECT: ${MESH_VAPID_SUBJECT:-}
+      # Keep secret store for keep: references. All four empty keeps the
+      # builtin-only store (NewKeepRouterFromEnv returns nil); a partial set is
+      # refused at startup. Not passing these through at all meant setting
+      # them in .env did nothing and POST /workspaces/*/secrets answered 503.
+      MESH_KEEP_URL: ${MESH_KEEP_URL:-}
+      MESH_KEEP_ORG_ID: ${MESH_KEEP_ORG_ID:-}
+      MESH_KEEP_WORKSPACE_ID: ${MESH_KEEP_WORKSPACE_ID:-}
+      MESH_KEEP_EVENTS_SECRET: ${MESH_KEEP_EVENTS_SECRET:-}
       # Outbound email — required for workspace invites to actually be
       # delivered. Left empty the API logs the invite link instead of sending.
       SMTP_HOST: ${SMTP_HOST:-}

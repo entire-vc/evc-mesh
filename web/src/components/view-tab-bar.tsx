@@ -346,6 +346,7 @@ export function ViewTabBar({
           >
             <DropdownMenu>
               <DropdownMenuTrigger
+                aria-haspopup="menu"
                 className={cn(
                   "flex h-7 w-7 items-center justify-center rounded hover:bg-muted hover:text-foreground",
                   overflowTabActive ? "bg-muted text-foreground" : "text-muted-foreground",

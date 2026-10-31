@@ -7,7 +7,10 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { MemoryRouter } from "react-router";
 
 const apiMock = vi.fn();
-vi.mock("@/lib/api", () => ({ api: (...a: unknown[]) => apiMock(...a) }));
+vi.mock("@/lib/api", async (orig) => ({
+  ApiRequestError: (await orig<typeof import("@/lib/api")>()).ApiRequestError,
+  api: (...a: unknown[]) => apiMock(...a),
+}));
 const toastMock = vi.hoisted(() => ({ message: vi.fn(), success: vi.fn(), error: vi.fn(), warning: vi.fn() }));
 vi.mock("@/components/ui/toast", () => ({ toast: toastMock, Toaster: () => null }));
 const navigateMock = vi.fn();
@@ -15,7 +18,8 @@ vi.mock("react-router", async (orig) => ({ ...(await orig<typeof import("react-r
 
 import { resetSlotRegistryForTests } from "@/lib/extension-slots";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { ExternalFrame, FRAME_LOAD_TIMEOUT_MS } from "../external-frame";
+import { ApiRequestError } from "@/lib/api";
+import { ExternalFrame, FRAME_LOAD_TIMEOUT_MS, REFRESH_RETRY_MS } from "../external-frame";
 
 const ORIGIN = "https://hello.example.com";
 const CTX = { token: "jwt.value.here", expires_at: "2026-10-17T12:01:00Z", frame_url: `${ORIGIN}/mesh/ui/hello`, origin: ORIGIN, title: "Hello" };
@@ -136,5 +140,171 @@ describe("ExternalFrame", () => {
       });
     }
     expect(screen.getByTestId("external-frame-unavailable")).toBeTruthy();
+  });
+
+  it("opens at the section, follows mesh.state, and tells the frame when the address moves", async () => {
+    const onSection = vi.fn();
+    const view = (section: string) => (
+      <MemoryRouter>
+        <ExternalFrame extensionId="hello" name="Hello" slot="sidebar.item" layout="screen" section={section} onSection={onSection} />
+      </MemoryRouter>
+    );
+    const { rerender } = render(view("/memory#recent"));
+    const iframe = (await screen.findByTitle("Hello", {}, { timeout: 8000 })) as HTMLIFrameElement;
+    const src = `${ORIGIN}/mesh/ui/hello/memory?token=jwt.value.here#recent`;
+    expect(iframe.getAttribute("src")).toBe(src);
+    fireEvent.load(iframe);
+    await untilListening(iframe);
+
+    post(iframe, ORIGIN, { type: "mesh.state", path: "/models" });
+    expect(onSection).toHaveBeenCalledWith("/models", false);
+    // The page echoes it into the address: nothing goes back to the frame, nothing reloads.
+    const spy = vi.spyOn(iframe.contentWindow as Window, "postMessage");
+    rerender(view("/models"));
+    expect(spy).not.toHaveBeenCalled();
+    post(iframe, ORIGIN, { type: "mesh.state", path: "/models" });
+    expect(onSection).toHaveBeenCalledTimes(1);
+
+    // Back to the earlier section: the frame is told by message, the src stays.
+    rerender(view("/memory#recent"));
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    const [payload, target] = spy.mock.calls[0] as [Record<string, unknown>, string];
+    expect(target).toBe(ORIGIN);
+    expect(payload).toMatchObject({ type: "mesh.context", path: "/memory#recent" });
+    expect(iframe.getAttribute("src")).toBe(src);
+
+    // Red control: a section that climbs out, or comes from elsewhere, is dropped.
+    post(iframe, ORIGIN, { type: "mesh.state", path: "/../admin" });
+    post(iframe, "https://evil.example", { type: "mesh.state", path: "/x" });
+    expect(onSection).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks a project.view token for its project", async () => {
+    render(
+      <MemoryRouter>
+        <ExternalFrame extensionId="hello" name="Hello" slot="project.view" projectId="proj-1" layout="screen" />
+      </MemoryRouter>,
+    );
+    await screen.findByTitle("Hello", {}, { timeout: 8000 });
+    expect(apiMock).toHaveBeenCalledWith("/api/v1/ext/hello/ui-context", {
+      method: "POST",
+      body: { workspace_id: "ws-1", slot: "project.view", project_id: "proj-1" },
+    });
+  });
+
+  it("tells the frame a refused refresh and revokes it when access is gone", async () => {
+    renderFrame();
+    const iframe = (await screen.findByTitle("Hello", {}, { timeout: 8000 })) as HTMLIFrameElement;
+    fireEvent.load(iframe);
+    const spy = vi.spyOn(iframe.contentWindow as Window, "postMessage");
+    apiMock.mockRejectedValue(new ApiRequestError("not enabled", "CONFLICT", 409));
+    await waitFor(
+      () => {
+        if (!screen.queryByTestId("external-frame-revoked")) post(iframe, ORIGIN, { type: "mesh.ready" });
+        expect(screen.getByTestId("external-frame-revoked")).toBeTruthy();
+      },
+      { timeout: 8000 },
+    );
+    const sent = spy.mock.calls.map((c) => c as [Record<string, unknown>, string]);
+    expect(sent.every(([, target]) => target === ORIGIN)).toBe(true);
+    expect(sent.map(([m]) => m)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "mesh.context.error", status: 409, reason: "conflict" }),
+        expect.objectContaining({ type: "mesh.revoked", reason: "conflict" }),
+      ]),
+    );
+    expect(screen.queryByTitle("Hello")).toBeNull();
+  });
+
+  it("red control: a transient refusal (503) is told to the frame but does not revoke it", async () => {
+    renderFrame();
+    const iframe = (await screen.findByTitle("Hello", {}, { timeout: 8000 })) as HTMLIFrameElement;
+    fireEvent.load(iframe);
+    const spy = vi.spyOn(iframe.contentWindow as Window, "postMessage");
+    apiMock.mockRejectedValue(new ApiRequestError("down", "SERVICE_UNAVAILABLE", 503));
+    await waitFor(
+      () => {
+        post(iframe, ORIGIN, { type: "mesh.ready" });
+        expect(spy.mock.calls.some(([m]) => (m as { type: string }).type === "mesh.context.error")).toBe(true);
+      },
+      { timeout: 8000 },
+    );
+    expect(spy.mock.calls.some(([m]) => (m as { type: string }).type === "mesh.revoked")).toBe(false);
+    expect(screen.queryByTestId("external-frame-revoked")).toBeNull();
+    expect(screen.getByTitle("Hello")).toBeTruthy();
+  });
+
+  it("renews the token on its own before it expires", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const exp = () => new Date(Date.now() + 60_000).toISOString();
+    apiMock.mockImplementation(() => Promise.resolve({ ...CTX, expires_at: exp() }));
+    renderFrame();
+    const iframe = (await screen.findByTitle("Hello", {}, { timeout: 8000 })) as HTMLIFrameElement;
+    fireEvent.load(iframe);
+    const spy = vi.spyOn(iframe.contentWindow as Window, "postMessage");
+    const calls = apiMock.mock.calls.length;
+    apiMock.mockImplementation(() => Promise.resolve({ ...CTX, token: "renewed.token", expires_at: exp() }));
+    // Not yet: well inside the lifetime nothing is renewed.
+    await act(async () => {
+      vi.advanceTimersByTime(30_000);
+      await Promise.resolve();
+    });
+    expect(apiMock.mock.calls.length).toBe(calls);
+    for (let i = 0; i < 50 && !spy.mock.calls.some(([m]) => (m as { token?: string }).token === "renewed.token"); i++) {
+      await act(async () => {
+        vi.advanceTimersByTime(1_000);
+        await Promise.resolve();
+      });
+    }
+    const renewed = spy.mock.calls.find(([m]) => (m as { token?: string }).token === "renewed.token");
+    expect(renewed?.[1]).toBe(ORIGIN);
+    // Renewed before the 60 s token ran out.
+    expect(apiMock.mock.calls.length).toBe(calls + 1);
+  });
+
+  it("retries a failed renewal after REFRESH_RETRY_MS and hands over the new token", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const exp = () => new Date(Date.now() + 60_000).toISOString();
+    apiMock.mockImplementation(() => Promise.resolve({ ...CTX, expires_at: exp() }));
+    renderFrame();
+    const iframe = (await screen.findByTitle("Hello", {}, { timeout: 8000 })) as HTMLIFrameElement;
+    fireEvent.load(iframe);
+    const spy = vi.spyOn(iframe.contentWindow as Window, "postMessage");
+    const sent = (type: string) => spy.mock.calls.some(([m]) => (m as { type: string }).type === type);
+    const tick = (ms: number) =>
+      act(async () => {
+        vi.advanceTimersByTime(ms);
+        await Promise.resolve();
+      });
+    apiMock.mockImplementation(() => Promise.reject(new ApiRequestError("down", "SERVICE_UNAVAILABLE", 503)));
+    // The proactive renewal fails once: the frame is told, nothing is revoked.
+    for (let i = 0; i < 60 && !sent("mesh.context.error"); i++) await tick(1_000);
+    expect(sent("mesh.context.error")).toBe(true);
+    const afterFailure = apiMock.mock.calls.length;
+    apiMock.mockImplementation(() => Promise.resolve({ ...CTX, token: "retried.token", expires_at: exp() }));
+    // Not before the retry delay...
+    await tick(REFRESH_RETRY_MS - 2_000);
+    expect(apiMock.mock.calls.length).toBe(afterFailure);
+    // ...but once it has passed, the renewal runs again and the new token reaches the frame.
+    for (let i = 0; i < 5 && !spy.mock.calls.some(([m]) => (m as { token?: string }).token === "retried.token"); i++) await tick(1_000);
+    expect(apiMock.mock.calls.length).toBe(afterFailure + 1);
+    expect(spy.mock.calls.find(([m]) => (m as { token?: string }).token === "retried.token")?.[1]).toBe(ORIGIN);
+    expect(sent("mesh.revoked")).toBe(false);
+  });
+
+  it("shows the screen's own error on mesh.app-error and marks mesh.app-ready", async () => {
+    renderFrame();
+    const iframe = (await screen.findByTitle("Hello", {}, { timeout: 8000 })) as HTMLIFrameElement;
+    fireEvent.load(iframe);
+    await untilListening(iframe);
+    post(iframe, ORIGIN, { type: "mesh.app-ready" });
+    expect(screen.getByTestId("external-frame").getAttribute("data-app-ready")).toBe("true");
+    post(iframe, "https://evil.example", { type: "mesh.app-error", message: "pwned" });
+    expect(screen.queryByTestId("external-frame-app-error")).toBeNull();
+    post(iframe, ORIGIN, { type: "mesh.app-error", message: "<b>Backend down</b>" });
+    expect(screen.getByTestId("external-frame-app-error")).toBeTruthy();
+    expect(screen.getByTestId("external-frame-app-error-message").textContent).toBe("<b>Backend down</b>");
+    fireEvent.click(screen.getByRole("button"));
+    expect(await screen.findByTitle("Hello", {}, { timeout: 8000 })).toBeTruthy();
   });
 });

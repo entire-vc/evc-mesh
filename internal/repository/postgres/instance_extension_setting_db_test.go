@@ -158,6 +158,67 @@ func TestInstanceExtensionSettingRepo_IsInstanceAdminOldestWorkspace(t *testing.
 	require.False(t, is(youngAdmin), "still younger than the next one")
 }
 
+// The oldest workspace's owner row is gone and it has no admin member (seen on
+// a partner instance): it must not hold the instance, or nobody administers it.
+func TestInstanceExtensionSettingRepo_IsInstanceAdminSkipsOrphanWorkspace(t *testing.T) {
+	db := agentDigestTestDB(t)
+	ctx := context.Background()
+	repo := NewInstanceExtensionSettingRepo(db)
+
+	sfx := uuid.NewString()[:8]
+	mkUser := func(tag string) uuid.UUID {
+		id := uuid.New()
+		_, err := db.Exec(`INSERT INTO users(id,email,password_hash,display_name,username) VALUES($1,$2,'x',$3,$4)`,
+			id, tag+sfx+"@example.test", tag, tag+sfx)
+		require.NoError(t, err)
+		return id
+	}
+	goneOwner, member, nextOwner, nextAdmin := mkUser("goneowner"), mkUser("orphanmember"), mkUser("nextowner"), mkUser("nextadmin")
+	mkWS := func(tag string, owner uuid.UUID, created string) uuid.UUID {
+		id := uuid.New()
+		_, err := db.Exec(`INSERT INTO workspaces(id,name,slug,owner_id,created_at) VALUES($1,$2,$3,$4,$5)`,
+			id, tag, tag+sfx, owner, created)
+		require.NoError(t, err)
+		return id
+	}
+	orphan := mkWS("iea-orphan", goneOwner, "3000-01-01 00:00:00+00 BC")
+	next := mkWS("iea-orphan-next", nextOwner, "3000-01-02 00:00:00+00 BC")
+	for _, m := range []struct {
+		ws, user uuid.UUID
+		role     string
+	}{{orphan, member, "member"}, {next, nextAdmin, "admin"}} {
+		_, err := db.Exec(`INSERT INTO workspace_members(id,workspace_id,user_id,role) VALUES($1,$2,$3,$4)`,
+			uuid.New(), m.ws, m.user, m.role)
+		require.NoError(t, err)
+	}
+	t.Cleanup(func() {
+		for _, ws := range []uuid.UUID{orphan, next} {
+			db.Exec(`DELETE FROM workspace_members WHERE workspace_id = $1`, ws)
+			db.Exec(`DELETE FROM workspaces WHERE id = $1`, ws)
+		}
+		for _, u := range []uuid.UUID{goneOwner, member, nextOwner, nextAdmin} {
+			db.Exec(`DELETE FROM users WHERE id = $1`, u)
+		}
+	})
+	is := func(u uuid.UUID) bool {
+		ok, err := repo.IsInstanceAdmin(ctx, u)
+		require.NoError(t, err)
+		return ok
+	}
+	require.False(t, is(nextOwner), "the orphan's owner is still alive here")
+
+	_, err := db.Exec(`DELETE FROM users WHERE id = $1`, goneOwner)
+	require.NoError(t, err)
+	require.True(t, is(nextOwner), "owner of the oldest workspace with a live administrator")
+	require.True(t, is(nextAdmin), "admin of that workspace")
+	require.False(t, is(goneOwner), "owner row is gone")
+	require.False(t, is(member), "plain member of the orphan")
+	ws, admins, err := repo.InstanceAdminTargets(ctx)
+	require.NoError(t, err)
+	require.Equal(t, next, ws, "notices go to the workspace that holds the instance")
+	require.ElementsMatch(t, []uuid.UUID{nextOwner, nextAdmin}, admins)
+}
+
 type refRecorder struct{ refs []secretstore.Ref }
 
 func (r *refRecorder) Put(_ context.Context, ref secretstore.Ref, plain string) (string, error) {

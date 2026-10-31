@@ -1,71 +1,96 @@
 package middleware
 
 import (
-	"crypto/subtle"
 	"log"
+	"net/http"
 	"os"
+	"strings"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+
+	"github.com/entire-vc/evc-mesh/internal/service"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
-// EnvSpawnToken is the environment variable holding the shared secret that
-// gates the spawn-time secret-materialization endpoint. It is deliberately
-// NOT an agent API key: any agent identity that could authenticate as
-// "an agent" would be able to decrypt every secret in its scope, which is
-// exactly the leak this whole feature exists to close. Only the two
-// spawners (mesh-dispatcher.py, fiddler.py) — trusted infra processes, not
-// agent sessions — hold this value, the same way only they and the API
-// process hold MESH_INTEGRATION_ENCRYPTION_KEY (pkg/encryption).
-const EnvSpawnToken = "MESH_SPAWN_TOKEN"
+// EnvSpawnerAgentIDs lists, comma-separated, the agent ids allowed to call
+// the materialization route with their own X-Agent-Key (see SpawnerAuth).
+// Read on every request, not cached at startup, so an operator can add or
+// drop a spawner without a redeploy. Unset or empty admits no agent.
+const EnvSpawnerAgentIDs = "MESH_SPAWNER_AGENT_IDS"
 
-// EnvSpawnTokenRequired, when truthy, makes a missing or empty EnvSpawnToken
-// a hard startup failure for the materialization route instead of a silent
-// "endpoint always 401s". Prod sets it; local dev/tests leave it unset so
-// the stack runs without spawn-materialization configured at all.
-const EnvSpawnTokenRequired = "MESH_SPAWN_TOKEN_REQUIRED"
+// spawnerAgentIDs parses EnvSpawnerAgentIDs. An entry that is not a UUID (or
+// is the nil UUID) is skipped rather than fatal: a typo in one entry must not
+// take the endpoint down for the spawners that are listed correctly, and a
+// skipped entry can only admit fewer agents, never more.
+func spawnerAgentIDs() map[uuid.UUID]struct{} {
+	ids := make(map[uuid.UUID]struct{})
+	for _, part := range strings.Split(os.Getenv(EnvSpawnerAgentIDs), ",") {
+		id, err := uuid.Parse(strings.TrimSpace(part))
+		if err != nil || id == uuid.Nil {
+			continue
+		}
+		ids[id] = struct{}{}
+	}
+	return ids
+}
 
-// SpawnTokenHeader carries the shared secret on a materialize request.
-const SpawnTokenHeader = "X-Spawn-Token"
-
-// SpawnAuth gates the internal spawn-materialization route behind a static
-// shared secret, checked in constant time, read fresh from the environment
-// on every request rather than cached at startup — the same reason
-// pkg/encryption resolves its key lazily: a value that can be rotated by an
-// operator without a redeploy must be read live, not memoized once.
+// SpawnerAuth gates the materialization route by the spawner's own agent
+// identity: an X-Agent-Key that authenticates through the ordinary agent-key
+// path AND whose agent is listed in EnvSpawnerAgentIDs. Authenticating is not
+// enough: any agent can do that, and any agent able to call this route could
+// decrypt every secret in its scope — the leak this whole feature exists to
+// close. So a valid agent outside the allowlist gets 403, and an empty
+// allowlist admits nobody (fail closed). A deleted agent or a rotated key no
+// longer authenticates and gets 401, so revoking a spawner is the ordinary
+// key revocation, not a shared-secret rotation across every spawner host.
+// A lookup that fails without judging the key (DB down, canceled context) is
+// a retryable 503, as in AgentKeyAuth, so a spawner never reads it as a
+// revoked key.
 //
-// Unconfigured means fail CLOSED, not fail open: an empty or unset
-// EnvSpawnToken refuses every request with 401, even one that also sends an
-// empty header. A misconfigured deployment must not silently accept "no
-// token required" — see EnvSpawnTokenRequired for making that misconfiguration
-// loud at startup instead of only at the first request.
-func SpawnAuth() echo.MiddlewareFunc {
+// A mot_ Bearer token is never looked at here: OAuth connector identities act
+// for a person and have no business on spawn infra, so such a request is
+// judged on its other headers alone (and, carrying none, gets 401).
+//
+// The key is the only way in. The shared spawn token this route used to
+// accept is gone: a request without X-Agent-Key gets 401 whatever
+// else it carries and however the environment is set.
+func SpawnerAuth(agentService service.AgentService) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			want := os.Getenv(EnvSpawnToken)
-			if want == "" {
-				return unauthorizedJSON(c, "spawn materialization is not configured")
+			apiKey := c.Request().Header.Get("X-Agent-Key")
+			if apiKey == "" {
+				return unauthorizedJSON(c, "spawner agent key required")
 			}
-			got := c.Request().Header.Get(SpawnTokenHeader)
-			if got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
-				return unauthorizedJSON(c, "invalid spawn token")
+			workspaceSlug, err := parseWorkspaceSlugFromKey(apiKey)
+			if err != nil {
+				return unauthorizedJSON(c, "Invalid agent API key format")
 			}
+			agent, err := agentService.Authenticate(c.Request().Context(), workspaceSlug, apiKey)
+			if err != nil && !isAgentKeyDenial(err) {
+				return authBackendUnavailableJSON(c, "SpawnerAuth", workspaceSlug, apiKey, err)
+			}
+			if err != nil || agent == nil {
+				return unauthorizedJSON(c, "Invalid agent API key")
+			}
+			if _, ok := spawnerAgentIDs()[agent.ID]; !ok {
+				return c.JSON(http.StatusForbidden, apierror.Forbidden("agent is not an authorized spawner"))
+			}
+			setAgentAuthContext(c, agent)
 			return next(c)
 		}
 	}
 }
 
-// CheckSpawnTokenConfigured logs (and, if EnvSpawnTokenRequired is set,
-// fatally exits) when EnvSpawnToken is unset at startup — the same
-// fail-loud-at-boot pattern as pkg/encryption.CheckKeyConfigured, so a
-// deploy that forgot to set the secret is caught in the startup log rather
-// than discovered the first time a lane fails to spawn with its secrets.
-func CheckSpawnTokenConfigured() {
-	if os.Getenv(EnvSpawnToken) != "" {
-		log.Printf("spawn-auth: %s configured — materialization endpoint active", EnvSpawnToken)
+// LogSpawnerAllowlist reports at startup whether the materialization route
+// can admit anyone, so a deploy without EnvSpawnerAgentIDs shows up in the
+// startup log rather than the first time a lane fails to spawn with its
+// secrets. It never exits: an empty allowlist is a closed endpoint, not a
+// broken API, and local dev/tests run without one.
+func LogSpawnerAllowlist() {
+	if n := len(spawnerAgentIDs()); n > 0 {
+		log.Printf("spawn-auth: %s lists %d agent(s) — agent-key path active", EnvSpawnerAgentIDs, n)
 		return
 	}
-	if os.Getenv(EnvSpawnTokenRequired) != "" {
-		log.Fatalf("spawn-auth: %s is required but not set", EnvSpawnToken)
-	}
-	log.Printf("spawn-auth: %s not set — materialization endpoint will refuse every request", EnvSpawnToken)
+	log.Printf("spawn-auth: %s not set — materialization endpoint will refuse every request", EnvSpawnerAgentIDs)
 }

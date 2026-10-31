@@ -488,6 +488,7 @@ func resolveProjectWorkspace(ctx context.Context, _ *sqlx.DB, projectRepo reposi
 // ExtensionInstanceAdminHandler answers 403 unless the caller is an instance
 // admin before it writes anything.
 var workspaceScopeHandlerCheckedRoutes = map[string]bool{
+	"/api/v1/ext/me/events/:delivery_id/redeliver": true, // extension-actor only: RedeliverExtensionEvent loads the delivery's subscription and answers 404 unless it belongs to the calling actor's own connection, and a connection belongs to one workspace
 	// :thread_id belongs to one user, not to a workspace: every AgentChatRepo query carries workspace_id, project_id and user_id = caller, so another user's, a deleted and a missing thread are the same 404 thread_not_found
 	"/api/v1/projects/:proj_id/chat/threads/:thread_id/messages":                                  true,
 	"/api/v1/projects/:proj_id/chat/threads/:thread_id/stop":                                      true,
@@ -525,6 +526,7 @@ var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/workspaces/:ws_id/extensions/:ext_id/enable":                                         true,
 	"/api/v1/workspaces/:ws_id/extensions/:ext_id/disable":                                        true,
 	"/api/v1/workspaces/:ws_id/extensions/:ext_id/test":                                           true,
+	"/api/v1/workspaces/:ws_id/extensions/:ext_id/project-scope":                                  true,
 	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id":                                      true,
 	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/admission":                            true,
 	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/policy":                               true,

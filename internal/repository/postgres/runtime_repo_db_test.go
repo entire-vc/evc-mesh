@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"maps"
 	"os"
 	"sync"
@@ -664,4 +666,59 @@ func TestRuntimeRepoSaveKeepsRedactedCredentialRefsAndListsRevisions(t *testing.
 	require.Len(t, limited.Revisions, 1)
 	_, err = f.repo.Revisions(ctx, f.owner, f.receiverActor, 50)
 	require.Error(t, err, "another workspace's admin cannot read the history")
+}
+
+// A controller's version is the Installed version of the runner extension, not
+// the catalog entry's: Update moves Installed, and every read of the catalog
+// follows it without a new revision. Without the extension the entry stands.
+func TestRuntimeRepoControllerVersionFollowsInstalledRunner(t *testing.T) {
+	f := seedRuntime(t)
+	ctx := context.Background()
+	clearInstalledRunner(t, f.db)
+	saved, err := f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
+	require.NoError(t, err)
+	require.Equal(t, "v2", saved.Catalog.Controllers["runner-a"].Version, "no extension: the catalog entry stands")
+
+	_, err = f.db.ExecContext(ctx, `INSERT INTO installed_extensions (extension_id,version,manifest,source,trust_level)
+		VALUES ($1,'0.1.2','{}','catalog','verified')`, domain.RunnerExtensionID)
+	require.NoError(t, err)
+	// Update 0.1.2 -> 0.1.8 through Updates touches only the installed row.
+	_, err = f.db.ExecContext(ctx, `UPDATE installed_extensions SET version='0.1.8', previous_version='0.1.2' WHERE extension_id=$1`, domain.RunnerExtensionID)
+	require.NoError(t, err)
+
+	inventory, err := f.repo.Inventory(ctx, f.owner, f.ownerActor)
+	require.NoError(t, err)
+	require.Equal(t, "0.1.8", inventory.Catalog.Controllers["runner-a"].Version)
+	require.Equal(t, saved.Revision, inventory.Revision, "no new revision is written for an update")
+	desired, err := f.repo.Desired(ctx, f.owner, "runner-a", f.reporter)
+	require.NoError(t, err)
+	require.Equal(t, "0.1.8", desired.Controller.Version)
+	resaved, err := f.repo.Save(ctx, f.owner, f.ownerActor, RuntimeSave{Enabled: f.input.Enabled, Config: f.input.Config, IfRevision: saved.Revision})
+	require.NoError(t, err)
+	require.Equal(t, "0.1.8", resaved.Catalog.Controllers["runner-a"].Version)
+}
+
+// clearInstalledRunner removes the instance-wide runner extension row for the
+// test and puts back whatever row was there before, so a DB that had the
+// extension installed keeps it.
+func clearInstalledRunner(t *testing.T, db *sqlx.DB) {
+	t.Helper()
+	ctx := context.Background()
+	var saved []byte
+	err := db.GetContext(ctx, &saved, `SELECT row_to_json(ie)::text FROM installed_extensions ie WHERE extension_id=$1`, domain.RunnerExtensionID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		require.NoError(t, err)
+	}
+	_, err = db.ExecContext(ctx, `DELETE FROM installed_extensions WHERE extension_id=$1`, domain.RunnerExtensionID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ctx := context.Background()
+		_, _ = db.ExecContext(ctx, `DELETE FROM installed_extensions WHERE extension_id=$1`, domain.RunnerExtensionID)
+		if saved != nil {
+			_, err := db.ExecContext(ctx, `INSERT INTO installed_extensions SELECT * FROM json_populate_record(NULL::installed_extensions, $1::json)`, string(saved))
+			if err != nil {
+				t.Errorf("restore installed %s: %v", domain.RunnerExtensionID, err)
+			}
+		}
+	})
 }

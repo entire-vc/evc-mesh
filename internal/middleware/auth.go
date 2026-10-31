@@ -3,6 +3,9 @@ package middleware
 import (
 	"context"
 	"errors"
+	"log"
+	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -169,6 +172,9 @@ func AgentKeyAuth(agentService service.AgentService, oauthAuth OAuthTokenAuthent
 
 			agent, err := agentService.Authenticate(c.Request().Context(), workspaceSlug, apiKey)
 			if err != nil {
+				if !isAgentKeyDenial(err) {
+					return authBackendUnavailableJSON(c, "AgentKeyAuth", workspaceSlug, apiKey, err)
+				}
 				return unauthorizedJSON(c, "Invalid agent API key")
 			}
 
@@ -231,9 +237,13 @@ func DualAuth(authService *auth.Service, agentService service.AgentService, oaut
 			// Try Agent Key.
 			if apiKey := c.Request().Header.Get("X-Agent-Key"); apiKey != "" {
 				if slug, err := parseWorkspaceSlugFromKey(apiKey); err == nil {
-					if agent, err := agentService.Authenticate(c.Request().Context(), slug, apiKey); err == nil {
+					agent, err := agentService.Authenticate(c.Request().Context(), slug, apiKey)
+					if err == nil {
 						setAgentAuthContext(c, agent)
 						return next(c)
+					}
+					if !isAgentKeyDenial(err) {
+						return authBackendUnavailableJSON(c, "DualAuth", slug, apiKey, err)
 					}
 				}
 				return unauthorizedJSON(c, "Invalid agent API key")
@@ -278,9 +288,15 @@ func OptionalAuth(authService *auth.Service, agentService service.AgentService, 
 			// Try Agent Key.
 			if apiKey := c.Request().Header.Get("X-Agent-Key"); apiKey != "" {
 				if slug, err := parseWorkspaceSlugFromKey(apiKey); err == nil {
-					if agent, err := agentService.Authenticate(c.Request().Context(), slug, apiKey); err == nil {
+					agent, err := agentService.Authenticate(c.Request().Context(), slug, apiKey)
+					if err == nil {
 						setAgentAuthContext(c, agent)
 						return next(c)
+					}
+					// A rejected key still passes through anonymously, but a
+					// failed lookup must not silently downgrade a valid caller.
+					if !isAgentKeyDenial(err) {
+						return authBackendUnavailableJSON(c, "OptionalAuth", slug, apiKey, err)
 					}
 				}
 			}
@@ -428,4 +444,66 @@ func parseWorkspaceSlugFromKey(key string) (string, error) {
 // unauthorizedJSON returns a 401 JSON response using the project's error format.
 func unauthorizedJSON(c echo.Context, message string) error {
 	return c.JSON(401, apierror.Unauthorized(message))
+}
+
+// isAgentKeyDenial reports whether an agentService.Authenticate error is a
+// verdict on the key itself (unknown, revoked, expired). Every denial in
+// Authenticate is built with apierror.Unauthorized; anything else — a dropped
+// DB connection, an exhausted pool, a canceled context — says nothing about
+// the key, and answering 401 for it makes clients treat a valid key as
+// revoked (card an internal ticket: a postgres restart produced 11 false 401s).
+func isAgentKeyDenial(err error) bool {
+	var apiErr *apierror.Error
+	return errors.As(err, &apiErr) && apiErr.Code == http.StatusUnauthorized
+}
+
+// authBackendUnavailableJSON answers a transient agent-key verification
+// failure with a retryable 503. Nothing parsed from the key is logged, not
+// even the workspace slug: the request id correlates the line with the access
+// log instead. The error text comes from repositories that may quote their
+// query arguments, so it is redacted before it reaches the log.
+func authBackendUnavailableJSON(c echo.Context, middleware, workspaceSlug, apiKey string, err error) error {
+	log.Printf("%s: agent key verification failed (request_id=%s): %s",
+		middleware, c.Response().Header().Get(echo.HeaderXRequestID),
+		redactAgentKey(err.Error(), workspaceSlug, apiKey))
+	c.Response().Header().Set("Retry-After", "2")
+	return c.JSON(http.StatusServiceUnavailable, apierror.ServiceUnavailable("authentication backend unavailable"))
+}
+
+// redactKeyPrefixLen matches the stored key prefix length (see
+// service.extractPrefix): repositories look keys up by that prefix, so it is
+// what their errors are most likely to quote.
+const redactKeyPrefixLen = 8
+
+// redactAgentKey masks apiKey as a whole, then the slug parsed from it, then
+// the secret part of it
+// (everything after "agk_<slug>_") and its stored prefix, wherever they
+// appear in msg. The whole key goes first so a quoted key leaves nothing
+// parsed from it, the slug included. Repository errors may use %q or %+q,
+// so each value's escaped forms are masked before its raw form.
+func redactAgentKey(msg, workspaceSlug, apiKey string) string {
+	if apiKey == "" {
+		return msg
+	}
+	msg = redactKeyMaterial(msg, apiKey)
+	msg = redactKeyMaterial(msg, workspaceSlug)
+	secret := strings.TrimPrefix(apiKey, "agk_"+workspaceSlug+"_")
+	if secret == "" {
+		return msg
+	}
+	msg = redactKeyMaterial(msg, secret)
+	if len(secret) > redactKeyPrefixLen {
+		msg = redactKeyMaterial(msg, secret[:redactKeyPrefixLen])
+	}
+	return msg
+}
+
+func redactKeyMaterial(msg, value string) string {
+	if value == "" {
+		return msg
+	}
+	for _, quoted := range []string{strconv.Quote(value), strconv.QuoteToASCII(value)} {
+		msg = strings.ReplaceAll(msg, quoted[1:len(quoted)-1], "[redacted]")
+	}
+	return strings.ReplaceAll(msg, value, "[redacted]")
 }

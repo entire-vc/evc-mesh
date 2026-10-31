@@ -202,10 +202,16 @@ func (h *ExtensionInstanceSettingsHandler) Put(c echo.Context) error {
 			}
 		}
 	}
-	if h.registry != nil && len(toValidate) > 0 {
+	if h.registry != nil {
 		if p, reg := h.registry.Get(extID); reg {
-			if verr := p.Validate(extensions.LevelInstance, toValidate); verr != nil {
-				return c.JSON(http.StatusUnprocessableEntity, apierror.BadRequest(verr.Error()))
+			// An external extension is checked even with nothing to save: its
+			// manifest schema may require fields, and one with no instance
+			// schema takes no instance row. Builtins keep their enable-only PUT.
+			ext, isExt := p.(interface{ IsExternal() bool })
+			if len(toValidate) > 0 || (isExt && ext.IsExternal()) {
+				if verr := p.Validate(extensions.LevelInstance, toValidate); verr != nil {
+					return c.JSON(http.StatusUnprocessableEntity, apierror.BadRequest(verr.Error()))
+				}
 			}
 		}
 	}

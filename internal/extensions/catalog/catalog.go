@@ -65,15 +65,26 @@ type Release struct {
 
 // Flatten renders the declared permissions as "<group>:<value>" strings, the
 // shape repoinstall.Capabilities uses, so an update can be compared with what
-// is installed. Anything that is not an object of string lists yields nil.
+// is installed. Only the permission groups are read: other keys Spark adds
+// (such as the "network" object) are skipped. Anything that is not an object,
+// or a permission group that is not a list of strings, yields nil. A null
+// group is an empty list: it grants nothing and must not hide the other groups.
 func (r Release) Flatten() []string {
-	var groups map[string][]string
+	var groups map[string]json.RawMessage
 	if len(r.Capabilities) == 0 || json.Unmarshal(r.Capabilities, &groups) != nil {
 		return nil
 	}
 	var out []string
 	for _, g := range []string{"api", "events", "webhooks_in", "ui", "secrets"} {
-		for _, v := range groups[g] {
+		raw, ok := groups[g]
+		if !ok {
+			continue
+		}
+		var vals []string
+		if json.Unmarshal(raw, &vals) != nil {
+			return nil
+		}
+		for _, v := range vals {
 			out = append(out, g+":"+v)
 		}
 	}
@@ -192,13 +203,17 @@ type Client struct {
 	// OnRefresh runs after a refresh with the catalog that was just accepted.
 	OnRefresh func(ctx context.Context, c *Catalog)
 
-	mu        sync.RWMutex
-	current   *Catalog
-	etag      string
-	signature string
-	body      []byte
-	fetchedAt time.Time
-	lastErr   error
+	// refreshMu serializes every refresh, regular and forced.
+	refreshMu sync.Mutex
+
+	mu         sync.RWMutex
+	notifyOwed bool // a forced refresh accepted a catalog OnRefresh has not seen
+	current    *Catalog
+	etag       string
+	signature  string
+	body       []byte
+	fetchedAt  time.Time
+	lastErr    error
 }
 
 // NewClient builds a client. baseURL and key are read on every refresh so an
@@ -238,7 +253,15 @@ func (c *Client) publicKey() (ed25519.PublicKey, error) {
 // Refresh reads the catalog once. On any failure the previous verified copy
 // stays in place and the error is returned (and logged).
 func (c *Client) Refresh(ctx context.Context, meshAPI int) error {
-	err := c.refresh(ctx, meshAPI)
+	return c.refreshAndRecord(ctx, meshAPI, true)
+}
+
+func (c *Client) refreshAndRecord(ctx context.Context, meshAPI int, notify bool) error {
+	// One refresh at a time: a slow older response must not overwrite the
+	// cache after a newer one, and an admin call cannot pile onto Spark.
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+	err := c.refresh(ctx, meshAPI, notify)
 	c.mu.Lock()
 	c.lastErr = err
 	c.mu.Unlock()
@@ -248,7 +271,7 @@ func (c *Client) Refresh(ctx context.Context, meshAPI int) error {
 	return err
 }
 
-func (c *Client) refresh(ctx context.Context, meshAPI int) error {
+func (c *Client) refresh(ctx context.Context, meshAPI int, notify bool) error {
 	base := strings.TrimRight(strings.TrimSpace(c.baseURL()), "/")
 	if base == "" {
 		return errors.New("spark url is not configured")
@@ -284,7 +307,16 @@ func (c *Client) refresh(ctx context.Context, meshAPI int) error {
 		}
 		c.mu.Lock()
 		c.fetchedAt = time.Now()
+		cur, owed := c.current, c.notifyOwed
+		if notify {
+			c.notifyOwed = false
+		}
 		c.mu.Unlock()
+		// A forced refresh accepted a catalog without telling OnRefresh; the
+		// next regular refresh delivers it even though the body is unchanged.
+		if notify && owed && c.OnRefresh != nil {
+			c.OnRefresh(ctx, cur)
+		}
 		return nil
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -310,11 +342,71 @@ func (c *Client) refresh(ctx context.Context, meshAPI int) error {
 	c.current, c.body, c.signature = cat, body, sig
 	c.etag = ETagOf(body)
 	c.fetchedAt = time.Now()
+	c.notifyOwed = !notify
 	c.mu.Unlock()
-	if c.OnRefresh != nil {
+	if notify && c.OnRefresh != nil {
 		c.OnRefresh(ctx, cat)
 	}
 	return nil
+}
+
+// ReceiptRelease is the identity of one extension's latest release as the
+// accepted catalog states it.
+type ReceiptRelease struct {
+	ID             string  `json:"id"`
+	Version        string  `json:"version"`
+	CommitSHA      string  `json:"commit_sha"`
+	ArtifactSHA256 *string `json:"artifact_sha256"`
+}
+
+// Receipt describes the verified copy the cache holds after a refresh. It is
+// read back from the cache, so it reports what Current() serves, not what the
+// upstream answered.
+type Receipt struct {
+	// FetchedAt is when the cache last accepted (or revalidated) the catalog.
+	FetchedAt time.Time `json:"fetched_at"`
+	// ContentSHA256 is the hex sha256 of the signed body.
+	ContentSHA256 string           `json:"content_sha256"`
+	Signature     string           `json:"signature"`
+	GeneratedAt   string           `json:"generated_at"`
+	Extensions    []ReceiptRelease `json:"extensions"`
+}
+
+// Receipt is the identity of the cached verified copy, or ErrNoCatalog.
+func (c *Client) Receipt() (Receipt, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.current == nil {
+		return Receipt{}, ErrNoCatalog
+	}
+	r := Receipt{
+		FetchedAt:     c.fetchedAt.UTC(),
+		ContentSHA256: strings.Trim(c.etag, `"`),
+		Signature:     c.signature,
+		GeneratedAt:   c.current.GeneratedAt,
+		Extensions:    make([]ReceiptRelease, 0, len(c.current.Extensions)),
+	}
+	for _, e := range c.current.Extensions {
+		r.Extensions = append(r.Extensions, ReceiptRelease{
+			ID: e.ID, Version: e.Latest.Version, CommitSHA: e.Latest.CommitSHA, ArtifactSHA256: e.Latest.ArtifactSHA256,
+		})
+	}
+	return r, nil
+}
+
+// RefreshNow forces one refresh and returns the receipt of the copy now in the
+// cache. It does not call OnRefresh: blocklist enforcement toggles installed
+// extensions and syncs the runtime, which an admin read must not do. The next
+// regular refresh (hourly tick) delivers the accepted catalog to OnRefresh. When the refresh fails (upstream down, bad signature) the previous
+// verified copy stays in place: the receipt then describes that last-good copy
+// and the error says why it was not replaced.
+func (c *Client) RefreshNow(ctx context.Context, meshAPI int) (Receipt, error) {
+	err := c.refreshAndRecord(ctx, meshAPI, false)
+	rc, rerr := c.Receipt()
+	if err == nil {
+		err = rerr
+	}
+	return rc, err
 }
 
 // Run refreshes immediately and then every RefreshInterval until ctx ends.

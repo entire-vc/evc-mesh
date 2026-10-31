@@ -53,3 +53,27 @@ func TestManifest_HasInstanceFields(t *testing.T) {
 		require.Equal(t, tc.want, m.HasInstanceFields(), name)
 	}
 }
+
+func TestManifest_SettingsSchema(t *testing.T) {
+	parse := func(raw string) Manifest {
+		m, err := ParseManifest([]byte(raw))
+		require.NoError(t, err)
+		return m
+	}
+	inline := parse(`{"id":"a","version":"1","runtime":"external","settings":{"instance":{"type":"object"}}}`)
+	require.JSONEq(t, `{"type":"object"}`, string(inline.SettingsSchema("instance")))
+
+	// The shared schemas block travels with the level, so nested refs resolve.
+	ref := parse(`{"id":"a","version":"1","runtime":"external","settings":{"instance":{"$ref":"#/schemas/i"}},"schemas":{"i":{"type":"object"}}}`)
+	require.JSONEq(t, `{"$ref":"#/schemas/i","schemas":{"i":{"type":"object"}}}`, string(ref.SettingsSchema("instance")))
+
+	for name, raw := range map[string]string{
+		"level-absent":  `{"id":"a","version":"1","runtime":"external","settings":{"workspace":{"type":"object"}}}`,
+		"level-null":    `{"id":"a","version":"1","runtime":"external","settings":{"instance":null}}`,
+		"no-settings":   `{"id":"a","version":"1","runtime":"external"}`,
+		"not-an-object": `{"id":"a","version":"1","runtime":"external","settings":{"instance":true}}`,
+		"bad-settings":  `{"id":"a","version":"1","runtime":"external","settings":[1]}`,
+	} {
+		require.Nil(t, parse(raw).SettingsSchema("instance"), name)
+	}
+}

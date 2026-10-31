@@ -262,7 +262,9 @@
       }
     },
     "unavailable": "{{name}} is unavailable right now.",
-    "retry": "Retry"
+    "retry": "Retry",
+    "revoked": "{{name}} was switched off or your access to it was removed.",
+    "appError": "{{name}} reported an error on this screen."
   },
   "subtasks": {
     "add": "Add subtask",

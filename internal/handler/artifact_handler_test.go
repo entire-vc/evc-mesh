@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -71,7 +72,7 @@ func TestArtifactHandler_GetByID_StripsTrAgentKey(t *testing.T) {
 
 // TestArtifactHandler_GetByID_CarriesDownloadPath proves the response carries
 // the stable machine-readable download path alongside tr_public_url, and
-// that tr_public_url itself is unchanged by this addition (task #97c60be9:
+// that tr_public_url itself is unchanged by this addition (an internal ticket:
 // tr_public_url must stay exactly as-is on shares where it already works).
 func TestArtifactHandler_GetByID_CarriesDownloadPath(t *testing.T) {
 	artifactID := uuid.New()
@@ -112,7 +113,7 @@ func TestArtifactHandler_GetByID_CarriesDownloadPath(t *testing.T) {
 		"tr_public_url must remain present and unchanged for existing consumers")
 }
 
-// --- Upload handler tests (task #82ce594a) ---
+// --- Upload handler tests ---
 
 // buildMultipartUploadRequest mirrors the exact repro from the bug report:
 // name + description + file, no artifact_type. description has no server-side
@@ -407,4 +408,208 @@ func TestArtifactHandler_List_StripsTrAgentKey(t *testing.T) {
 		assert.Equal(t, "/api/v1/artifacts/"+item.ID+"/download", item.DownloadPath,
 			"item %d: download_path must be the stable endpoint path for that artifact's own ID", i)
 	}
+}
+
+// --- Size limit ---
+
+func buildSizedMultipartRequest(t *testing.T, taskID uuid.UUID, size int, chunked bool) *http.Request {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	require.NoError(t, w.WriteField("name", "bundle.tar.gz"))
+	fw, err := w.CreateFormFile("file", "bundle.tar.gz")
+	require.NoError(t, err)
+	_, err = fw.Write(bytes.Repeat([]byte("x"), size))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	var body io.Reader = &buf
+	if chunked {
+		// Hide the length so the cap has to come from reading the body.
+		body = io.MultiReader(&buf)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/tasks/"+taskID.String()+"/artifacts", body)
+	req.Header.Set(echo.HeaderContentType, w.FormDataContentType())
+	if chunked {
+		req.ContentLength = -1
+	}
+	return req
+}
+
+func TestArtifactHandler_Upload_BodyOverLimit_413(t *testing.T) {
+	const limit = 1 << 10
+	over := limit + uploadBodySlack + 1
+
+	cases := []struct {
+		name  string
+		build func(t *testing.T, taskID uuid.UUID) *http.Request
+	}{
+		{"multipart with content-length", func(t *testing.T, taskID uuid.UUID) *http.Request {
+			return buildSizedMultipartRequest(t, taskID, over, false)
+		}},
+		{"multipart chunked", func(t *testing.T, taskID uuid.UUID) *http.Request {
+			return buildSizedMultipartRequest(t, taskID, over, true)
+		}},
+		{"json chunked", func(t *testing.T, taskID uuid.UUID) *http.Request {
+			payload, err := json.Marshal(map[string]string{
+				"name":    "bundle.tar.gz",
+				"content": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), over)),
+			})
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/tasks/"+taskID.String()+"/artifacts", io.MultiReader(bytes.NewReader(payload)))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			req.ContentLength = -1
+			return req
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			mockSvc := &MockArtifactService{
+				UploadFunc: func(_ context.Context, _ service.UploadArtifactInput) (*domain.Artifact, error) {
+					called = true
+					return &domain.Artifact{ID: uuid.New()}, nil
+				},
+			}
+			h, e := setupArtifactTest(mockSvc)
+			h.WithMaxFileBytes(limit)
+			taskID := uuid.New()
+			c, rec := newArtifactUploadContext(e, tc.build(t, taskID), taskID)
+
+			require.NoError(t, h.Upload(c))
+			assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code, "body: %s", rec.Body.String())
+			assert.Contains(t, rec.Body.String(), "1024 bytes per file")
+			assert.Contains(t, rec.Body.String(), "git or CI artifacts")
+			assert.False(t, called, "an oversized body must not reach the service")
+		})
+	}
+}
+
+func TestArtifactHandler_Upload_FileAtLimitReachesService(t *testing.T) {
+	const limit = 1 << 10
+	var gotSize int64
+	mockSvc := &MockArtifactService{
+		UploadFunc: func(_ context.Context, input service.UploadArtifactInput) (*domain.Artifact, error) {
+			gotSize = input.Size
+			return &domain.Artifact{ID: uuid.New()}, nil
+		},
+	}
+	h, e := setupArtifactTest(mockSvc)
+	h.WithMaxFileBytes(limit)
+	taskID := uuid.New()
+	c, rec := newArtifactUploadContext(e, buildSizedMultipartRequest(t, taskID, limit, true), taskID)
+
+	require.NoError(t, h.Upload(c))
+	assert.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
+	assert.EqualValues(t, limit, gotSize)
+}
+
+func TestArtifactHandler_Upload_ServiceLimitIs413(t *testing.T) {
+	mockSvc := &MockArtifactService{
+		UploadFunc: func(_ context.Context, _ service.UploadArtifactInput) (*domain.Artifact, error) {
+			return nil, service.ArtifactTooLargeError("task already holds too much", 262144000)
+		},
+	}
+	h, e := setupArtifactTest(mockSvc)
+	taskID := uuid.New()
+	c, rec := newArtifactUploadContext(e, buildMultipartUploadRequest(t, taskID, map[string]string{"name": "a.png"}), taskID)
+
+	require.NoError(t, h.Upload(c))
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"limit_bytes":262144000`)
+}
+
+// A file one byte over the limit fits inside the body cap (limit + slack), so
+// only the streamed file part can refuse it: before any service call and
+// without leaving a spooled copy behind.
+func TestArtifactHandler_Upload_FileOverLimitWithinBodyCap_413(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	const limit = 1 << 10
+	called := false
+	mockSvc := &MockArtifactService{
+		UploadFunc: func(_ context.Context, _ service.UploadArtifactInput) (*domain.Artifact, error) {
+			called = true
+			return &domain.Artifact{ID: uuid.New()}, nil
+		},
+	}
+	h, e := setupArtifactTest(mockSvc)
+	h.WithMaxFileBytes(limit)
+	taskID := uuid.New()
+	c, rec := newArtifactUploadContext(e, buildSizedMultipartRequest(t, taskID, limit+1, false), taskID)
+
+	require.NoError(t, h.Upload(c))
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code, "body: %s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "1024 bytes per file")
+	assert.False(t, called, "an over-limit file must not reach the service")
+	left, err := os.ReadDir(tmp)
+	require.NoError(t, err)
+	assert.Empty(t, left, "the spooled part must be removed")
+}
+
+// Fields may follow the file part; the streamed reader must still see them.
+func TestArtifactHandler_Upload_Multipart_FieldsAfterFile(t *testing.T) {
+	var got service.UploadArtifactInput
+	var content []byte
+	mockSvc := &MockArtifactService{
+		UploadFunc: func(_ context.Context, input service.UploadArtifactInput) (*domain.Artifact, error) {
+			got = input
+			content, _ = io.ReadAll(input.Reader)
+			return &domain.Artifact{ID: uuid.New()}, nil
+		},
+	}
+	h, e := setupArtifactTest(mockSvc)
+	taskID := uuid.New()
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	fw, err := w.CreateFormFile("file", "notes.txt")
+	require.NoError(t, err)
+	_, err = fw.Write([]byte("hello"))
+	require.NoError(t, err)
+	require.NoError(t, w.WriteField("name", "notes.txt"))
+	require.NoError(t, w.WriteField("artifact_type", "report"))
+	require.NoError(t, w.Close())
+	req := httptest.NewRequest(http.MethodPost, "/tasks/"+taskID.String()+"/artifacts", &buf)
+	req.Header.Set(echo.HeaderContentType, w.FormDataContentType())
+	c, rec := newArtifactUploadContext(e, req, taskID)
+
+	require.NoError(t, h.Upload(c))
+	assert.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
+	assert.Equal(t, "notes.txt", got.Name)
+	assert.Equal(t, domain.ArtifactTypeReport, got.ArtifactType)
+	assert.EqualValues(t, 5, got.Size)
+	assert.Equal(t, "hello", string(content))
+}
+
+func TestArtifactHandler_Upload_Multipart_MissingFileAndBadMetadata(t *testing.T) {
+	h, e := setupArtifactTest(&MockArtifactService{})
+	taskID := uuid.New()
+
+	build := func(fields map[string]string, withFile bool) *http.Request {
+		var buf bytes.Buffer
+		w := multipart.NewWriter(&buf)
+		for k, v := range fields {
+			require.NoError(t, w.WriteField(k, v))
+		}
+		if withFile {
+			fw, err := w.CreateFormFile("file", "a.txt")
+			require.NoError(t, err)
+			_, _ = fw.Write([]byte("x"))
+		}
+		require.NoError(t, w.Close())
+		req := httptest.NewRequest(http.MethodPost, "/", &buf)
+		req.Header.Set(echo.HeaderContentType, w.FormDataContentType())
+		return req
+	}
+
+	c, rec := newArtifactUploadContext(e, build(map[string]string{"name": "a.txt"}, false), taskID)
+	require.NoError(t, h.Upload(c))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "file is required")
+
+	c, rec = newArtifactUploadContext(e, build(map[string]string{"name": "a.txt", "metadata": "{"}, true), taskID)
+	require.NoError(t, h.Upload(c))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "metadata must be valid JSON")
 }

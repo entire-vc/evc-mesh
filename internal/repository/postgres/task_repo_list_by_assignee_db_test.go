@@ -139,6 +139,22 @@ func TestListByAssignee_StatusCategoryFiltersInSQL(t *testing.T) {
 	}
 }
 
+// A list of categories is one query: a task matches when its status belongs to
+// any of them, and a category with no rows does not hide the others.
+func TestListByAssignee_StatusCategoryListMatchesAny(t *testing.T) {
+	db := listByAssigneeTestDB(t)
+	fx := newAssigneeFeedFixture(t, db, 4)
+
+	tasks, total, err := NewTaskRepo(db).ListByAssignee(
+		context.Background(), fx.workspaceID, fx.assigneeID, domain.AssigneeTypeAgent,
+		repository.AssigneeTaskFilter{StatusCategories: []domain.StatusCategory{
+			domain.StatusCategoryReview, domain.StatusCategoryDone}})
+	require.NoError(t, err)
+
+	assert.Len(t, tasks, 4)
+	assert.Equal(t, 4, total)
+}
+
 func TestListByAssignee_UnusedCategoryReturnsNothing(t *testing.T) {
 	db := listByAssigneeTestDB(t)
 	fx := newAssigneeFeedFixture(t, db, 3)

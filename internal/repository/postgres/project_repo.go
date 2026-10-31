@@ -183,7 +183,7 @@ const projectDeletedSlugMaxLen = 100 - 26
 // from "a live project already has it". The suffix is the row's own id, so two
 // projects deleted from the same slug on the same day cannot collide.
 //
-// Task #ddd219f4: before this, DELETE /projects/:id was wired to Archive and
+// an internal ticket: before this, DELETE /projects/:id was wired to Archive and
 // this method was never called.
 func (r *ProjectRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	tx, err := r.db.BeginTxx(ctx, nil)
@@ -241,6 +241,13 @@ func (r *ProjectRepo) List(ctx context.Context, workspaceID uuid.UUID, filter re
 		pattern := "%" + filter.Search + "%"
 		conditions = append(conditions, fmt.Sprintf("(p.name ILIKE $%d OR p.description ILIKE $%d)", argIdx, argIdx))
 		args = append(args, pattern)
+		argIdx++
+	}
+
+	if filter.ExtensionConnectionID != nil {
+		conditions = append(conditions, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM integration_configs ic WHERE ic.id = $%d AND%s)", argIdx, extensionProjectAllowed))
+		args = append(args, *filter.ExtensionConnectionID)
 		argIdx++
 	}
 

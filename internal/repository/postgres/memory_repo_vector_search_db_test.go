@@ -388,3 +388,28 @@ func TestVectorSearchDB_EmptyWorkspaceReturnsNoResults(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, results)
 }
+
+// The dense arm serves chunk vectors from an in-process cache. A
+// cached vector must never outlive the row it was decoded from: re-chunking
+// (delete+insert, new ids) and an in-place UPDATE (same id, new xmin) must both
+// be seen by the very next search on the same repo.
+func TestVectorSearchDB_CachedVectorsFollowRewrites(t *testing.T) {
+	repo, chunkRepo, wsID := setupVectorSearchDBTest(t)
+	mem := newMemory(t, repo, wsID, "rewritten")
+
+	withChunks(t, chunkRepo, mem.ID, vecOrthogonal)
+	score, found := scoreOf(search(t, repo, wsID, 10), mem.ID)
+	require.True(t, found)
+	assert.InDelta(t, 0.0, score, 0.0001)
+
+	withChunks(t, chunkRepo, mem.ID, vecStrong)
+	score, _ = scoreOf(search(t, repo, wsID, 10), mem.ID)
+	assert.InDelta(t, 0.8, score, 0.0001, "re-chunked memory must be scored from its new chunks")
+
+	_, err := repo.db.ExecContext(context.Background(),
+		`UPDATE memory_chunks SET embedding = $1 WHERE memory_id = $2`,
+		domain.EncodeEmbedding(vecExact), mem.ID)
+	require.NoError(t, err)
+	score, _ = scoreOf(search(t, repo, wsID, 10), mem.ID)
+	assert.InDelta(t, 1.0, score, 0.0001, "an in-place rewrite must not be answered from the cache")
+}

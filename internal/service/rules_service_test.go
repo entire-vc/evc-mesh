@@ -163,7 +163,7 @@ func TestComputeAgentPermissions_NoTransitionsNoStatusesKnown(t *testing.T) {
 // TestComputeAgentPermissions_EmptyConfigAllowsAll is the primary regression test
 // for an internal ticket: a project with no workflow_rules row must report can_transition
 // populated true for every real status, not an empty map that reads as "blocked
-// from everywhere" — checkTransitionGate already treats this config as allow-all,
+// from everywhere" — evaluateTransitionGate already treats this config as allow-all,
 // my_permissions must not contradict it.
 func TestComputeAgentPermissions_EmptyConfigAllowsAll(t *testing.T) {
 	agent := makeTestAgent("lead")

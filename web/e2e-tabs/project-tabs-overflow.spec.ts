@@ -56,6 +56,12 @@ test("393: Calendar is first in the menu, opens from there, and the trigger carr
   await expect(page.getByRole("menuitem", { name: "Calendar" })).toHaveAttribute("aria-current", "page");
 });
 
+// Screen readers announce the trigger as opening a menu; the chat e2e also finds it by this attribute.
+test("393: the more-views trigger is marked as a menu button", async ({ page }) => {
+  await open(page, 393);
+  await expect(moreViews(page)).toHaveAttribute("aria-haspopup", "menu");
+});
+
 // A project with Chat turned on: Chat is the tab right after Docs, at every width. The hidden
 // measuring copy holds the full order; at 393 Chat itself may be in the menu, after Docs there too.
 const order = (page: Page) =>

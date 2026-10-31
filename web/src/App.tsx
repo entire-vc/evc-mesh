@@ -327,7 +327,7 @@ const router = createBrowserRouter(
           }
         />
         <Route
-          path="w/:wsSlug/x/:extId"
+          path="w/:wsSlug/x/:extId/*"
           element={
             <LazyPage>
               <ExtensionScreenPage />
@@ -423,7 +423,7 @@ const router = createBrowserRouter(
           }
         />
         <Route
-          path="w/:wsSlug/p/:projectSlug/x/:extId"
+          path="w/:wsSlug/p/:projectSlug/x/:extId/*"
           element={
             <LazyPage>
               <ExtensionScreenPage />

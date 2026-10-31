@@ -104,10 +104,13 @@ func ExtensionAuth(svc service.ExtensionActorService) echo.MiddlewareFunc {
 }
 
 // extensionOpenRoutes need no capability: every connected extension may ask who
-// it is and which public events exist.
+// it is and which public events exist, and read or resend the events of its own
+// subscriptions (the handler filters them by capabilities.events at read time).
 var extensionOpenRoutes = map[string]bool{
-	"GET /api/v1/ext/me":            true,
-	"GET /api/v1/extensions/events": true,
+	"GET /api/v1/ext/me":                                true,
+	"GET /api/v1/extensions/events":                     true,
+	"GET /api/v1/ext/me/events":                         true,
+	"POST /api/v1/ext/me/events/:delivery_id/redeliver": true,
 }
 
 // extensionRouteCapabilities maps "METHOD route-pattern" (exactly what

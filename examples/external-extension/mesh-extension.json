@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "id": "reference-ext",
+  "name": "Reference extension",
+  "version": "0.1.0",
+  "kind": "plugin",
+  "runtime": "external",
+  "mesh_api": ">=1 <2",
+  "publisher": "example",
+  "description": "Reference external extension: install handshake, token delivery, signed events, iframe screens",
+  "category": "development",
+  "levels": {
+    "instance": false,
+    "workspace": true,
+    "project": false
+  },
+  "settings": {
+    "workspace": {
+      "type": "object",
+      "properties": {
+        "service_url": {
+          "type": "string",
+          "format": "uri",
+          "title": "Service address"
+        }
+      },
+      "required": [
+        "service_url"
+      ]
+    }
+  },
+  "capabilities": {
+    "api": [
+      "tasks:read",
+      "comments:write"
+    ],
+    "events": [
+      "task.created",
+      "task.moved",
+      "comment.created"
+    ],
+    "network": {
+      "allowed_domains": [
+        "{settings.service_url}"
+      ]
+    },
+    "ui": [
+      "sidebar.item",
+      "task.panel"
+    ]
+  },
+  "external": {
+    "base_url_setting": "service_url",
+    "health_path": "/healthz",
+    "install_path": "/mesh/install",
+    "events_path": "/mesh/events",
+    "token_path": "/mesh/token",
+    "ui": {
+      "sidebar.item": {
+        "path": "/mesh/ui/hello",
+        "title": "Reference"
+      },
+      "task.panel": {
+        "path": "/mesh/ui/task",
+        "title": "Reference"
+      }
+    }
+  }
+}

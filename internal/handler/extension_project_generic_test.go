@@ -19,6 +19,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/extensions/agentchat"
+	"github.com/entire-vc/evc-mesh/internal/extensions/external"
 	"github.com/entire-vc/evc-mesh/internal/extensions/github"
 	"github.com/entire-vc/evc-mesh/internal/extensions/gitlab"
 	"github.com/entire-vc/evc-mesh/internal/extensions/runner"
@@ -158,6 +159,40 @@ func TestExtensionProjectHandler_GenericPutRefusals(t *testing.T) {
 		rec, _ = serveExt(h, http.MethodPut, "/projects/"+uuid.NewString()+"/extensions/"+ext, `{"enabled":true,"settings":{}}`)
 		assert.Equal(t, http.StatusNotFound, rec.Code, ext+" has no project level")
 	}
+}
+
+// An installed external extension that declares levels.project=true accepts its
+// project binding (the QA manifest: empty project schema, settings {}); one that
+// does not declare it is still refused.
+func TestExtensionProjectHandler_ExternalProjectBinding(t *testing.T) {
+	const tmpl = `{"schema":1,"id":"qa-scope","name":"QA scope","version":"0.1.0","kind":"plugin","runtime":"external",
+ "mesh_api":">=1","publisher":"example","category":"development",
+ "levels":{"instance":false,"workspace":true,"project":PROJECT},
+ "settings":{"workspace":{"type":"object","properties":{"qa_url":{"type":"string"}}},"project":{"type":"object","properties":{}}},
+ "capabilities":{"api":["tasks:read"],"events":[],"ui":[]},
+ "external":{"base_url_setting":"qa_url"}}`
+	provider := func(project string) extensions.Provider {
+		m, err := extensions.ParseManifest([]byte(strings.Replace(tmpl, "PROJECT", project, 1)))
+		require.NoError(t, err)
+		p, err := external.NewProvider(m, extensions.Deps{}, http.DefaultClient, nil)
+		require.NoError(t, err)
+		return p
+	}
+
+	store := newBindingStore()
+	h := NewExtensionProjectHandler(stubExtensionLookup{"qa-scope": provider("true")}, store.service())
+	path := "/projects/" + uuid.NewString() + "/extensions/qa-scope"
+	for _, body := range []string{`{"enabled":true,"settings":{}}`, `{"enabled":true}`} {
+		rec, out := serveExt(h, http.MethodPut, path, body)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.Equal(t, true, out["enabled"])
+	}
+	rec, _ := serveExt(h, http.MethodGet, path, "")
+	assert.Equal(t, http.StatusOK, rec.Code, "the binding was stored")
+
+	off := NewExtensionProjectHandler(stubExtensionLookup{"qa-scope": provider("false")}, newBindingStore().service())
+	rec, _ = serveExt(off, http.MethodPut, path, `{"enabled":true,"settings":{}}`)
+	assert.NotEqual(t, http.StatusOK, rec.Code, "levels.project=false stays refused")
 }
 
 // secretProvider is a project-level extension with a declared secret, to prove

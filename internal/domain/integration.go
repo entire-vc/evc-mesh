@@ -32,8 +32,28 @@ type IntegrationConfig struct {
 	Provider    IntegrationProvider `json:"provider" db:"provider"`
 	Config      json.RawMessage     `json:"config" db:"config"`
 	IsActive    bool                `json:"is_active" db:"is_active"`
-	CreatedAt   time.Time           `json:"created_at" db:"created_at"`
-	UpdatedAt   time.Time           `json:"updated_at" db:"updated_at"`
+	// ProjectScope is the reach of an extension connection's actor:
+	// ExtensionProjectScopeWorkspace or ExtensionProjectScopeBound. Empty on a
+	// row read before the column existed, which means workspace.
+	ProjectScope string    `json:"project_scope,omitempty" db:"project_scope"`
+	CreatedAt    time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at" db:"updated_at"`
+}
+
+// Project scopes of an extension connection (integration_configs.project_scope).
+const (
+	// ExtensionProjectScopeWorkspace: the extension reaches every project of the
+	// workspace it is connected to. The default, and the reach every connection
+	// had before scopes existed.
+	ExtensionProjectScopeWorkspace = "workspace"
+	// ExtensionProjectScopeBound: only projects with an enabled binding for the
+	// extension in project_integrations.
+	ExtensionProjectScopeBound = "bound"
+)
+
+// IsProjectBound reports whether the connection is limited to bound projects.
+func (c *IntegrationConfig) IsProjectBound() bool {
+	return c != nil && c.ProjectScope == ExtensionProjectScopeBound
 }
 
 // CreateIntegrationInput holds data for creating an integration config.

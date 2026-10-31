@@ -136,16 +136,29 @@ func decryptSettings(raw json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(m)
 }
 
+// instanceOwnerWorkspaceSQL selects the instance's owner workspace: the oldest
+// non-deleted workspace that still has a live administrator (an active owner
+// or an active owner/admin member). A workspace whose owner row is gone and
+// that has no admin member is skipped; otherwise the instance would be left
+// with no administrator at all and nobody could install or update extensions.
+const instanceOwnerWorkspaceSQL = `
+	SELECT w.id, w.owner_id FROM workspaces w
+	WHERE w.deleted_at IS NULL
+	  AND (EXISTS (SELECT 1 FROM users u WHERE u.id = w.owner_id AND u.is_active)
+	    OR EXISTS (SELECT 1 FROM workspace_members m JOIN users u ON u.id = m.user_id
+	               WHERE m.workspace_id = w.id AND m.role IN ('owner', 'admin') AND u.is_active))
+	ORDER BY w.created_at ASC, w.id ASC LIMIT 1`
+
 // IsInstanceAdmin reports whether userID is an owner/admin of the instance's
-// owner workspace — the oldest non-deleted workspace (the one created first
-// at install). The instance has no separate admin role today; this is the
-// decision recorded on card an internal ticket.
+// owner workspace — the oldest non-deleted workspace with a live administrator
+// (instanceOwnerWorkspaceSQL). The instance has no separate admin role today;
+// this is the decision recorded on card an internal ticket.
 func (r *InstanceExtensionSettingRepo) IsInstanceAdmin(ctx context.Context, userID uuid.UUID) (bool, error) {
 	var ok bool
 	err := r.db.GetContext(ctx, &ok, `
 		SELECT EXISTS (
 			SELECT 1 FROM workspaces w
-			WHERE w.id = (SELECT id FROM workspaces WHERE deleted_at IS NULL ORDER BY created_at ASC, id ASC LIMIT 1)
+			WHERE w.id = (SELECT o.id FROM (`+instanceOwnerWorkspaceSQL+`) o)
 			  AND (w.owner_id = $1 OR EXISTS (
 				SELECT 1 FROM workspace_members m
 				WHERE m.workspace_id = w.id AND m.user_id = $1 AND m.role IN ('owner', 'admin')))
@@ -161,7 +174,7 @@ func (r *InstanceExtensionSettingRepo) InstanceAdminTargets(ctx context.Context)
 		ID      uuid.UUID  `db:"id"`
 		OwnerID *uuid.UUID `db:"owner_id"`
 	}
-	err = r.db.GetContext(ctx, &ws, `SELECT id, owner_id FROM workspaces WHERE deleted_at IS NULL ORDER BY created_at ASC, id ASC LIMIT 1`)
+	err = r.db.GetContext(ctx, &ws, instanceOwnerWorkspaceSQL)
 	if errors.Is(err, sql.ErrNoRows) {
 		return uuid.Nil, nil, nil
 	}

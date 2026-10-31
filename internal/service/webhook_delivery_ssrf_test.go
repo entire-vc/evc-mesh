@@ -122,14 +122,14 @@ func TestWebhookDelivery_RefusesNonPublicAddress(t *testing.T) {
 	// Positive control: the same request goes through when the predicate admits
 	// loopback, so a refusal below is the guard and not a broken fixture.
 	open := &webhookService{client: newWebhookHTTPClient(func(net.IP) bool { return true })}
-	status, _, _, err := open.sendSignedWith(false, srv.URL, "s3cret", "task.created", uuid.New(), []byte(`{}`))
+	status, _, _, err := open.sendSignedWith(sigWebhook, srv.URL, "s3cret", "task.created", uuid.New(), uuid.New(), []byte(`{}`))
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, status)
 	require.EqualValues(t, 1, hits.Load())
 
 	hits.Store(0)
 	prod := NewWebhookService(&recordingWebhookRepo{}).(*webhookService)
-	_, _, _, err = prod.sendSignedWith(false, srv.URL, "s3cret", "task.created", uuid.New(), []byte(`{}`))
+	_, _, _, err = prod.sendSignedWith(sigWebhook, srv.URL, "s3cret", "task.created", uuid.New(), uuid.New(), []byte(`{}`))
 	require.Error(t, err)
 	assert.ErrorIs(t, err, errDialAddressRefused)
 	assert.True(t, isPermanentWebhookError(err))
@@ -150,7 +150,7 @@ func TestWebhookDelivery_RefusesHostnameResolvingToLoopback(t *testing.T) {
 	require.NoError(t, err)
 
 	prod := NewWebhookService(&recordingWebhookRepo{}).(*webhookService)
-	_, _, _, err = prod.sendSignedWith(false, "http://localhost:"+port+"/hook", "s3cret", "task.created", uuid.New(), []byte(`{}`))
+	_, _, _, err = prod.sendSignedWith(sigWebhook, "http://localhost:"+port+"/hook", "s3cret", "task.created", uuid.New(), uuid.New(), []byte(`{}`))
 	require.Error(t, err)
 	// Not just "permanent": NXDOMAIN is too, and would pass on a box without a
 	// localhost entry without ever exercising the guard.
@@ -178,14 +178,14 @@ func TestWebhookDelivery_RedirectNotFollowed(t *testing.T) {
 	repo := &recordingWebhookRepo{}
 	s := &webhookService{repo: repo, client: newWebhookHTTPClient(func(net.IP) bool { return true })}
 
-	status, _, _, err := s.sendSignedWith(false, outer.URL, "s3cret", "task.created", uuid.New(), []byte(`{}`))
+	status, _, _, err := s.sendSignedWith(sigWebhook, outer.URL, "s3cret", "task.created", uuid.New(), uuid.New(), []byte(`{}`))
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusTemporaryRedirect, status)
 	assert.Zero(t, innerHits.Load(), "the redirect target must never be requested")
 
 	// dispatchOne records the 307 as a failed delivery and does not retry it.
 	outerHits.Store(0)
-	s.dispatchOne(newTestWebhook(outer.URL), "task.created", []byte(`{}`))
+	s.dispatchOne(newTestWebhook(outer.URL), "task.created", uuid.New(), []byte(`{}`))
 	assert.EqualValues(t, 1, outerHits.Load(), "a 30x is not retried")
 	assert.Zero(t, innerHits.Load())
 	repo.mu.Lock()
@@ -229,7 +229,7 @@ func TestWebhookDispatchOne_GuardRefusalIsNotRetried(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		s.dispatchOne(newTestWebhook(srv.URL), "task.created", []byte(`{}`))
+		s.dispatchOne(newTestWebhook(srv.URL), "task.created", uuid.New(), []byte(`{}`))
 		close(done)
 	}()
 	select {
@@ -264,7 +264,7 @@ func TestWebhookDispatchOne_RegularDeliveryUnchanged(t *testing.T) {
 
 	repo := &recordingWebhookRepo{}
 	s := &webhookService{repo: repo, client: newWebhookHTTPClient(func(net.IP) bool { return true })}
-	s.dispatchOne(newTestWebhook(srv.URL), "task.created", []byte(`{"a":1}`))
+	s.dispatchOne(newTestWebhook(srv.URL), "task.created", uuid.New(), []byte(`{"a":1}`))
 
 	require.EqualValues(t, 1, hits.Load())
 	h := <-got

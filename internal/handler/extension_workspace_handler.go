@@ -6,7 +6,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
+	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -15,10 +18,20 @@ import (
 // ExtensionWorkspaceHandler serves /workspaces/:ws_id/extensions (docs/extensions/api.md).
 type ExtensionWorkspaceHandler struct {
 	svc *service.ExtensionWorkspaceService
+	// reg and scope serve PUT …/project-scope; nil until WithProjectScope.
+	reg   *extensions.Registry
+	scope repository.ExtensionProjectScopeRepository
 }
 
 func NewExtensionWorkspaceHandler(svc *service.ExtensionWorkspaceService) *ExtensionWorkspaceHandler {
 	return &ExtensionWorkspaceHandler{svc: svc}
+}
+
+// WithProjectScope enables PUT /workspaces/:ws_id/extensions/:ext_id/project-scope.
+func (h *ExtensionWorkspaceHandler) WithProjectScope(reg *extensions.Registry, scope repository.ExtensionProjectScopeRepository) *ExtensionWorkspaceHandler {
+	h.reg = reg
+	h.scope = scope
+	return h
 }
 
 func extWorkspaceID(c echo.Context) (uuid.UUID, *apierror.Error) {
@@ -160,4 +173,38 @@ func (h *ExtensionWorkspaceHandler) Disconnect(c echo.Context) error {
 		return h.fail(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+// SetProjectScope handles PUT /workspaces/:ws_id/extensions/:ext_id/project-scope
+// with {"project_scope": "workspace"|"bound"}. "bound" limits the extension's
+// API calls and events to the projects with an enabled binding for it (PUT
+// /projects/:proj_id/extensions/:ext_id); it needs an extension with a project
+// level, since only such an extension can be bound to a project at all.
+func (h *ExtensionWorkspaceHandler) SetProjectScope(c echo.Context) error {
+	ws, apiErr := extWorkspaceID(c)
+	if apiErr != nil {
+		return c.JSON(apiErr.StatusCode(), apiErr)
+	}
+	if h.scope == nil || h.reg == nil {
+		return c.JSON(http.StatusNotImplemented, apierror.InternalError("project scope is not configured"))
+	}
+	var req struct {
+		ProjectScope string `json:"project_scope"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+	extID := h.reg.Canonical(c.Param("ext_id"))
+	p, found := h.reg.Get(extID)
+	if !found {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("extension"))
+	}
+	if req.ProjectScope == domain.ExtensionProjectScopeBound && !p.Manifest().Levels.Project {
+		e := apierror.ValidationError(map[string]string{"project_scope": "the extension has no project level, so no project can be bound to it"})
+		return c.JSON(e.StatusCode(), e)
+	}
+	if err := h.scope.SetProjectScope(c.Request().Context(), ws, extID, req.ProjectScope); err != nil {
+		return h.fail(c, err)
+	}
+	return c.JSON(http.StatusOK, map[string]string{"extension_id": extID, "project_scope": req.ProjectScope})
 }

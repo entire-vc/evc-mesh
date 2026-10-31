@@ -722,7 +722,7 @@ func (s *rulesService) LogViolation(ctx context.Context, v *domain.RuleViolation
 // based on workflow rules policies.
 //
 // An empty cfg.Transitions means no workflow rules row exists for the project —
-// checkTransitionGate treats that as allow-all (backward-compatible). This must
+// evaluateTransitionGate treats that as allow-all (backward-compatible). This must
 // report the same thing: an empty CanTransition map reads as "blocked from every
 // status" to a caller, which is the opposite of what actually gets enforced.
 // projectStatuses lets the empty-config path populate can_transition with every

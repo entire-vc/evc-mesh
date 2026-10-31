@@ -166,6 +166,24 @@ type RuntimeSnapshot struct {
 	Controllers    []RuntimeControllerState `json:"controllers"`
 }
 
+// RunnerExtensionID is the installed extension that every catalog controller
+// runs. Its Installed version is the one version source for controllers:
+// Update moves it, and the catalog entry's own version is not consulted.
+const RunnerExtensionID = "agent-runner"
+
+// WithControllerVersion sets every controller's version to v, the Installed
+// version of the runner extension. An empty v (not installed) keeps the
+// catalog's own entries.
+func (c *RuntimeCatalog) WithControllerVersion(v string) {
+	if c == nil || v == "" {
+		return
+	}
+	for ref, ctrl := range c.Controllers {
+		ctrl.Version = v
+		c.Controllers[ref] = ctrl
+	}
+}
+
 // Redacted returns a copy of the catalog that is safe for REST responses:
 // credential references stay with the controller and are never echoed back.
 func (c *RuntimeCatalog) Redacted() *RuntimeCatalog {

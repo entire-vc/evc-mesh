@@ -36,6 +36,9 @@ type ExtensionPrincipal struct {
 	DisplayName  string
 	// Capabilities by kind, e.g. {"api": ["tasks:read"], "events": ["task.created"]}.
 	Capabilities map[string][]string
+	// ProjectBound is true when the connection's project scope is "bound": the
+	// actor reaches only projects with an enabled binding for the extension.
+	ProjectBound bool
 }
 
 // Principal returns the stable name `ext:<id>@<workspace>`.
@@ -390,6 +393,7 @@ func (s *extensionActorService) Authenticate(ctx context.Context, rawToken strin
 	return &ExtensionPrincipal{
 		ConnectionID: row.ConnectionID, WorkspaceID: row.WorkspaceID, ActorID: row.ActorID,
 		ExtensionID: row.ExtensionID, DisplayName: row.DisplayName, Capabilities: caps,
+		ProjectBound: conn.IsProjectBound(),
 	}, nil
 }
 

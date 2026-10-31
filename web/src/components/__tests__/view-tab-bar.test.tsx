@@ -241,6 +241,8 @@ describe("ViewTabBar", () => {
       renderBar("calendar");
       const trigger = screen.getByRole("button", { name: /more views/i });
       expect(trigger.className).toContain("bg-muted");
+      // The chat e2e opens this menu by `.mesh-project-tabs button[aria-haspopup]` at 393.
+      expect(trigger).toHaveAttribute("aria-haspopup", "menu");
       fireEvent.click(trigger);
       expect(
         screen.getByRole("menuitem", { name: /calendar/i }),

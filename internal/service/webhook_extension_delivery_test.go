@@ -178,6 +178,53 @@ func TestExtensionDelivery_BodyCarriesWorkspaceID(t *testing.T) {
 	assert.Equal(t, "kept", got["workspace_id"], "a workspace_id set by the event is not overwritten")
 }
 
+// A redelivered event keeps its id (docs/webhooks.md "Event id"): every attempt
+// carries the same X-Mesh-Event-Id and the same event_id in the body, so a
+// receiver that lost its answer to the first attempt dedups the retry. Two
+// different events get different ids.
+func TestExtensionDelivery_EventIDStableAcrossRetries(t *testing.T) {
+	type seen struct{ header, body string }
+	var mu sync.Mutex
+	var got []seen
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var m map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&m)
+		bodyID, _ := m["event_id"].(string)
+		mu.Lock()
+		got = append(got, seen{r.Header.Get("X-Mesh-Event-Id"), bodyID})
+		mu.Unlock()
+		if hits.Add(1) < 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	f := newExtFixture(t, srv.URL, []domain.MaterializedSecret{{Name: "ext-hook-secret", Value: "v"}})
+	f.svc.Dispatch(context.Background(), f.ws, "task.updated", map[string]any{"task_id": "t1"})
+	ds := f.waitDeliveries(t, 1)
+	require.True(t, ds[0].Success)
+
+	mu.Lock()
+	first := append([]seen(nil), got...)
+	mu.Unlock()
+	require.Len(t, first, 3)
+	id, err := uuid.Parse(first[0].header)
+	require.NoError(t, err, "X-Mesh-Event-Id is a UUID")
+	for i, s := range first {
+		assert.Equal(t, id.String(), s.header, "attempt %d header", i+1)
+		assert.Equal(t, id.String(), s.body, "attempt %d body", i+1)
+	}
+
+	f.svc.Dispatch(context.Background(), f.ws, "task.updated", map[string]any{"task_id": "t1"})
+	f.waitDeliveries(t, 2)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.NotEqual(t, id.String(), got[len(got)-1].header, "another event gets another id")
+}
+
 // 500 from the receiver is retried; webhook_deliveries ends with the delivery
 // that finally went through, at attempt 2.
 func TestExtensionDelivery_RetriesOn500(t *testing.T) {
@@ -269,4 +316,81 @@ func TestPublicEventName(t *testing.T) {
 	assert.Equal(t, "task.moved", publicEventName("task.status_changed"))
 	assert.Equal(t, "task.updated", publicEventName("task.updated"))
 	assert.Equal(t, "comment.created", publicEventName("comment.created"))
+}
+
+// The id minted for the dispatch is the event's id on every transport; an
+// event_id the payload already carries is overwritten, so the body never
+// disagrees with X-Mesh-Event-Id or the NATS envelope and two events never
+// share an identity.
+func TestWithEventID(t *testing.T) {
+	id := uuid.Must(uuid.NewV7())
+	want := `{"event_id":"` + id.String() + `","a":1}`
+
+	for _, in := range []string{
+		`{"a":1}`,
+		`{"event_id":"evt_1","a":1}`,
+		`{"event_id":"` + uuid.New().String() + `","a":1}`,
+		`{"event_id":"` + uuid.Must(uuid.NewV7()).String() + `","a":1}`,
+	} {
+		assert.JSONEq(t, want, string(withEventID([]byte(in), id)), in)
+	}
+	assert.Equal(t, `[1,2]`, string(withEventID([]byte(`[1,2]`), id)))
+}
+
+type fakeExtScope struct {
+	repository.ExtensionProjectScopeRepository
+	allowed map[uuid.UUID]bool
+}
+
+func (f *fakeExtScope) AllowsProject(_ context.Context, _, projectID uuid.UUID) (bool, error) {
+	return f.allowed[projectID], nil
+}
+
+// A project-bound connection receives the events of its bound projects only:
+// an event of another project and an event with no project are not delivered,
+// and the bound project's event is (the positive control that the filter is not
+// simply dropping everything).
+func TestExtensionDelivery_ProjectBoundConnection(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { hits.Add(1) }))
+	defer srv.Close()
+	secrets := []domain.MaterializedSecret{{Name: "ext-hook-secret", Value: "v"}}
+
+	f := newExtFixture(t, srv.URL, secrets)
+	connID := f.subsRepo.subs[0].ConnectionID
+	f.svc.ext.integrations.(*fakeExtIntegrations).conns[connID].ProjectScope = domain.ExtensionProjectScopeBound
+	bound, other := uuid.New(), uuid.New()
+
+	// Without a scope checker a bound connection gets nothing: fail closed.
+	f.svc.Dispatch(context.Background(), f.ws, "task.updated", map[string]any{"project_id": bound})
+	time.Sleep(100 * time.Millisecond)
+	assert.Zero(t, hits.Load())
+
+	f.svc.extScope = &fakeExtScope{allowed: map[uuid.UUID]bool{bound: true}}
+	f.svc.Dispatch(context.Background(), f.ws, "task.updated", map[string]any{"project_id": other})
+	f.svc.Dispatch(context.Background(), f.ws, "task.updated", map[string]any{"task_id": "no-project"})
+	time.Sleep(100 * time.Millisecond)
+	assert.Zero(t, hits.Load(), "foreign-project and project-less events are not delivered")
+
+	f.svc.Dispatch(context.Background(), f.ws, "task.updated", map[string]any{"project_id": bound})
+	ds := f.waitDeliveries(t, 1)
+	require.Len(t, ds, 1)
+	assert.Equal(t, int32(1), hits.Load())
+
+	// Unbinding (the checker now says no) stops deliveries again.
+	f.svc.extScope = &fakeExtScope{allowed: map[uuid.UUID]bool{}}
+	f.svc.Dispatch(context.Background(), f.ws, "task.updated", map[string]any{"project_id": bound})
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, int32(1), hits.Load())
+}
+
+func TestEventProjectID(t *testing.T) {
+	id := uuid.New()
+	got, ok := eventProjectID([]byte(`{"project_id":"` + id.String() + `"}`))
+	assert.True(t, ok)
+	assert.Equal(t, id, got)
+	for _, body := range []string{`{}`, `{"project_id":null}`, `{"project_id":"00000000-0000-0000-0000-000000000000"}`, `[1]`, `x`} {
+		_, ok := eventProjectID([]byte(body))
+		assert.False(t, ok, body)
+	}
 }

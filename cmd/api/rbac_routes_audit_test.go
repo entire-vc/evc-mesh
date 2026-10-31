@@ -103,8 +103,9 @@ var auditAllowList = map[string]string{
 	"POST /me/document-mentions/:dcom_id/seen":   "marks the caller's own mention row as seen; another actor's rows are not addressable",
 	"PUT /me/ui-state/:scope":                    "keyed on the session user's own id; handler refuses every non-user principal and checks project membership for the scope",
 
-	"POST /ext/me/token/rotate":     "handler refuses every principal except an extension actor (403) and acts on that actor's own connection only; route has no id, and the capability guard requires api:ext_token:self_rotate",
-	"DELETE /ext/me/token/previous": "handler refuses every principal except an extension actor (403) and acts on that actor's own connection only; route has no id, and the capability guard requires api:ext_token:self_rotate",
+	"POST /ext/me/token/rotate":                  "handler refuses every principal except an extension actor (403) and acts on that actor's own connection only; route has no id, and the capability guard requires api:ext_token:self_rotate",
+	"DELETE /ext/me/token/previous":              "handler refuses every principal except an extension actor (403) and acts on that actor's own connection only; route has no id, and the capability guard requires api:ext_token:self_rotate",
+	"POST /ext/me/events/:delivery_id/redeliver": "handler refuses every principal except an extension actor (403); the delivery must belong to a subscription of that actor's own connection (404 otherwise) and be an event it still consents to, and the call only resends the stored event to that subscription's own target",
 
 	"POST /spark/agents/:agent_id/install": "handler calls requireRegisterAgent for the target workspace; PermRegisterAgent is absent from agentPerms, so no agent identity passes",
 }
@@ -145,7 +146,7 @@ var auditPublicWrites = map[string]string{
 	"e POST /webhooks/github":                           "authenticated by the GitHub HMAC signature, not a session",
 	"e POST /api/v1/integrations/github/webhook":        "authenticated by the GitHub HMAC signature, not a session",
 	"e POST /webhooks/gitlab":                           "authenticated by the GitLab secret token header, not a session",
-	"e POST /internal/secrets/materialize":              "DirectOnly plus SpawnAuth: reachable only by the spawner, never with a bearer token",
+	"e POST /internal/secrets/materialize":              "DirectOnly plus SpawnerAuth: an allowlisted spawner agent key (MESH_SPAWNER_AGENT_IDS), never a bearer token",
 	"e POST /internal/chat-sessions/tokens":             "DirectOnly plus ChatControllerAuth: reachable only by the chat runner's controller credential; ChatSessionService re-checks user, agent and project against live state",
 	"e POST /internal/chat-sessions/:session_id/renew":  "DirectOnly plus ChatControllerAuth: runner-only; renewal copies the stored binding and re-checks it",
 	"e POST /internal/chat-sessions/:session_id/revoke": "DirectOnly plus ChatControllerAuth: runner-only; revokes every token of one chat session",

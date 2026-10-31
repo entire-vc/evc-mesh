@@ -16,6 +16,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
+	"github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/internal/service"
 )
@@ -84,16 +85,17 @@ func materializeOverRealStack(t *testing.T, h *SecretMaterializeHandler, wsID uu
 }
 
 type materializeAuditRow struct {
-	EntityType string `db:"entity_type"`
-	ActorType  string `db:"actor_type"`
-	Changes    string `db:"changes"`
+	EntityType string    `db:"entity_type"`
+	ActorType  string    `db:"actor_type"`
+	ActorID    uuid.UUID `db:"actor_id"`
+	Changes    string    `db:"changes"`
 }
 
 func materializeAuditRows(t *testing.T, db *sqlx.DB, wsID uuid.UUID) []materializeAuditRow {
 	t.Helper()
 	var rows []materializeAuditRow
 	require.NoError(t, db.Select(&rows,
-		`SELECT entity_type, actor_type::text AS actor_type, changes::text AS changes
+		`SELECT entity_type, actor_type::text AS actor_type, actor_id, changes::text AS changes
 		   FROM activity_log WHERE workspace_id = $1 AND entity_type = 'secret_materialization'
 		  ORDER BY created_at`, wsID))
 	return rows
@@ -146,4 +148,51 @@ func TestMaterializeAuditDB_IssuanceIsJournaledWithoutTheValue(t *testing.T) {
 	assert.Contains(t, rows[1].Changes, rotated.ID.String())
 	assert.NotContains(t, rows[1].Changes, created.ID.String())
 	assert.NotContains(t, rows[1].Changes, "DBAUDITCANARY")
+}
+
+// an internal ticket: a spawner that logs in with its own key through the real
+// DirectOnly -> SpawnerAuth chain and the production agent auth is the actor
+// of the journal row it causes.
+func TestMaterializeAuditDB_SpawnerKeyLoginIsTheActor(t *testing.T) {
+	db := reservedTagTestDB(t)
+	wsID := newMaterializeAuditWorkspace(t, db)
+	ctx := context.Background()
+
+	wsRepo, userRepo := postgres.NewWorkspaceRepo(db), postgres.NewUserRepo(db)
+	agentSvc := service.NewCachedAgentAuth(service.NewAgentService(postgres.NewAgentRepo(db), postgres.NewActivityLogRepo(db), wsRepo, userRepo), service.AgentAuthCacheTTL)
+	agentSvc.(service.AgentServiceConfigurable).SetAgentWorkspaceGrantRepo(postgres.NewAgentWorkspaceGrantRepo(db))
+	agentSvc.(service.AgentAPIKeyConfigurable).SetAgentAPIKeyRepo(postgres.NewAgentAPIKeyRepo(db))
+	spawner, err := agentSvc.Register(ctx, service.RegisterAgentInput{WorkspaceID: wsID, Name: "Spawner " + wsID.String()[:8], AgentType: domain.AgentTypeClaudeCode})
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM agents WHERE workspace_id = $1`, wsID) })
+	t.Setenv(middleware.EnvSpawnerAgentIDs, spawner.Agent.ID.String())
+
+	secretRepo := postgres.NewSecretRefRepo(db, &memKeep{values: map[string]string{}})
+	_, err = secretRepo.Create(ctx, domain.CreateSecretInput{
+		WorkspaceID: wsID, Scope: domain.SecretScopeWorkspace,
+		Name: "SPAWNER_AUDIT_TOKEN", Value: materializeDBCanary,
+		CreatedBy: uuid.New(), CreatedByType: domain.ActorTypeUser,
+	})
+	require.NoError(t, err)
+	h := NewSecretMaterializeHandler(
+		service.NewSecretMaterializationService(secretRepo),
+		service.NewActivityLogService(postgres.NewActivityLogRepo(db)),
+	)
+
+	e := echo.New()
+	e.POST("/internal/secrets/materialize", h.Materialize, middleware.DirectOnly(), middleware.SpawnerAuth(agentSvc))
+	req := httptest.NewRequest(http.MethodPost, "/internal/secrets/materialize",
+		bytes.NewBufferString(`{"workspace_id":"`+wsID.String()+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agent-Key", spawner.APIKey)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), materializeDBCanary, "positive control: values were issued")
+
+	rows := materializeAuditRows(t, db, wsID)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "agent", rows[0].ActorType)
+	assert.Equal(t, spawner.Agent.ID, rows[0].ActorID)
+	assert.NotContains(t, rows[0].Changes, "DBAUDITCANARY")
 }

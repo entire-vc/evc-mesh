@@ -4,8 +4,13 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"mime"
+	"mime/multipart"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -23,11 +28,32 @@ import (
 type ArtifactHandler struct {
 	artifactService service.ArtifactService
 	taskSvc         taskIDResolver
+	maxFileBytes    int64
 }
 
 // NewArtifactHandler creates a new ArtifactHandler with the given service.
 func NewArtifactHandler(as service.ArtifactService, ts taskIDResolver) *ArtifactHandler {
-	return &ArtifactHandler{artifactService: as, taskSvc: ts}
+	return &ArtifactHandler{artifactService: as, taskSvc: ts, maxFileBytes: service.DefaultArtifactMaxBytes}
+}
+
+// WithMaxFileBytes sets the per-file artifact limit the request body is capped
+// by; it must match the service's limit. A non-positive value keeps the default.
+func (h *ArtifactHandler) WithMaxFileBytes(n int64) *ArtifactHandler {
+	if n > 0 {
+		h.maxFileBytes = n
+	}
+	return h
+}
+
+// uploadBodySlack is room in the request body for everything around the file:
+// multipart boundaries and fields, the JSON envelope and metadata.
+const uploadBodySlack = 1 << 20
+
+// bodyTooLarge is the 413 for a request body cut off at its cap, before the
+// file size itself is known.
+func (h *ArtifactHandler) bodyTooLarge(c echo.Context) error {
+	return c.JSON(http.StatusRequestEntityTooLarge, service.ArtifactTooLargeError(fmt.Sprintf(
+		"request body is larger than the artifact limit of %d bytes per file", h.maxFileBytes), h.maxFileBytes))
 }
 
 // List handles GET /tasks/:task_id/artifacts
@@ -62,18 +88,132 @@ func (h *ArtifactHandler) Upload(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	// Cap the body at the file limit plus its envelope (base64 for JSON), so an
+	// oversized upload is refused without spooling all of it to a temp file.
 	ct := c.Request().Header.Get(echo.HeaderContentType)
-	if strings.HasPrefix(ct, echo.MIMEApplicationJSON) {
+	isJSON := strings.HasPrefix(ct, echo.MIMEApplicationJSON)
+	bodyCap := h.maxFileBytes + uploadBodySlack
+	if isJSON {
+		bodyCap = base64PaddedLen(h.maxFileBytes) + uploadBodySlack
+	}
+	req := c.Request()
+	if req.ContentLength > bodyCap {
+		return h.bodyTooLarge(c)
+	}
+	req.Body = http.MaxBytesReader(c.Response(), req.Body, bodyCap)
+
+	if isJSON {
 		return h.uploadJSON(c, taskID)
 	}
 	return h.uploadMultipart(c, taskID)
 }
 
+// multipartUpload is a streamed multipart upload: the form fields and the
+// file part, the latter spooled to a temp file of at most the per-file limit.
+type multipartUpload struct {
+	fields   map[string]string
+	file     *os.File
+	size     int64
+	filename string
+	mimeType string
+	tooLarge bool
+}
+
+func (u *multipartUpload) close() {
+	if u.file != nil {
+		_ = u.file.Close()
+		_ = os.Remove(u.file.Name())
+	}
+}
+
+// maxFormFieldBytes bounds one non-file form field (name, metadata, ...).
+const maxFormFieldBytes = 1 << 20
+
+// readMultipartUpload streams the form instead of ParseMultipartForm, which
+// spools a whole file part to /tmp past its memory threshold before anyone
+// can look at its size. The file part is copied through LimitReader(max+1):
+// one byte past the limit is enough to refuse it, so no more than the limit
+// is ever written to disk.
+func readMultipartUpload(r *http.Request, maxFileBytes int64) (*multipartUpload, error) {
+	mr, err := r.MultipartReader()
+	if err != nil {
+		return nil, err
+	}
+	u := &multipartUpload{fields: map[string]string{}}
+	for {
+		part, err := mr.NextPart()
+		if errors.Is(err, io.EOF) {
+			return u, nil
+		}
+		if err != nil {
+			u.close()
+			return nil, err
+		}
+		field := part.FormName()
+		if field == "file" && part.FileName() != "" && u.file == nil {
+			if spoolErr := u.spool(part, maxFileBytes); spoolErr != nil {
+				_ = part.Close()
+				u.close()
+				return nil, spoolErr
+			}
+			_ = part.Close()
+			if u.tooLarge {
+				return u, nil
+			}
+			continue
+		}
+		value, err := io.ReadAll(io.LimitReader(part, maxFormFieldBytes))
+		_ = part.Close()
+		if err != nil {
+			u.close()
+			return nil, err
+		}
+		if _, seen := u.fields[field]; !seen {
+			u.fields[field] = string(value)
+		}
+	}
+}
+
+func (u *multipartUpload) spool(part *multipart.Part, maxFileBytes int64) error {
+	f, err := os.CreateTemp("", "artifact-upload-*")
+	if err != nil {
+		return err
+	}
+	u.file = f
+	u.filename = part.FileName()
+	u.mimeType = part.Header.Get("Content-Type")
+	n, err := io.Copy(f, io.LimitReader(part, maxFileBytes+1))
+	if err != nil {
+		return err
+	}
+	if n > maxFileBytes {
+		u.tooLarge = true
+		return nil
+	}
+	u.size = n
+	_, err = f.Seek(0, io.SeekStart)
+	return err
+}
+
 func (h *ArtifactHandler) uploadMultipart(c echo.Context, taskID uuid.UUID) error {
-	// Read multipart form fields.
-	name := c.FormValue("name")
-	artifactType := c.FormValue("artifact_type")
-	metadataStr := c.FormValue("metadata")
+	form, err := readMultipartUpload(c.Request(), h.maxFileBytes)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return h.bodyTooLarge(c)
+		}
+		// A malformed or non-multipart body: report the missing field, as before.
+		form = &multipartUpload{fields: map[string]string{}}
+	}
+	defer form.close()
+	if form.tooLarge {
+		return c.JSON(http.StatusRequestEntityTooLarge, service.ArtifactTooLargeError(fmt.Sprintf(
+			"artifact is larger than the limit of %d bytes per file", h.maxFileBytes), h.maxFileBytes))
+	}
+
+	name := form.fields["name"]
+	artifactType := form.fields["artifact_type"]
+	metadataStr := form.fields["metadata"]
 
 	if name == "" {
 		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
@@ -81,17 +221,9 @@ func (h *ArtifactHandler) uploadMultipart(c echo.Context, taskID uuid.UUID) erro
 		}))
 	}
 
-	// Get uploaded file.
-	fileHeader, err := c.FormFile("file")
-	if err != nil {
+	if form.file == nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("file is required"))
 	}
-
-	file, err := fileHeader.Open()
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, apierror.InternalError("failed to open uploaded file"))
-	}
-	defer func() { _ = file.Close() }()
 
 	// Validate metadata JSON if provided.
 	if metadataStr != "" {
@@ -106,11 +238,11 @@ func (h *ArtifactHandler) uploadMultipart(c echo.Context, taskID uuid.UUID) erro
 		TaskID:         taskID,
 		Name:           name,
 		ArtifactType:   normalizeArtifactType(artifactType),
-		MimeType:       inferMimeType(fileHeader.Header.Get("Content-Type"), fileHeader.Filename),
+		MimeType:       inferMimeType(form.mimeType, form.filename),
 		UploadedBy:     uploadedBy,
 		UploadedByType: uploadedByType,
-		Reader:         file,
-		Size:           fileHeader.Size,
+		Reader:         form.file,
+		Size:           form.size,
 	}
 
 	artifact, err := h.artifactService.Upload(c.Request().Context(), input)
@@ -137,6 +269,10 @@ type uploadArtifactJSONBody struct {
 func (h *ArtifactHandler) uploadJSON(c echo.Context, taskID uuid.UUID) error {
 	var body uploadArtifactJSONBody
 	if err := json.NewDecoder(c.Request().Body).Decode(&body); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return h.bodyTooLarge(c)
+		}
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid JSON body"))
 	}
 
@@ -200,6 +336,10 @@ func (h *ArtifactHandler) uploadJSON(c echo.Context, taskID uuid.UUID) error {
 // uploaderFromContext resolves the agent/user identity attached to the
 // request by the auth middleware.
 func uploaderFromContext(c echo.Context) (uuid.UUID, domain.UploaderType) {
+	// An extension actor has neither agent_id nor user_id in the echo context.
+	if p := mw.GetExtensionPrincipal(c); p != nil {
+		return p.ActorID, domain.UploaderTypeExtension
+	}
 	if agentIDVal := c.Get("agent_id"); agentIDVal != nil {
 		if aid, ok := agentIDVal.(uuid.UUID); ok {
 			return aid, domain.UploaderTypeAgent
@@ -218,7 +358,7 @@ func uploaderFromContext(c echo.Context) (uuid.UUID, domain.UploaderType) {
 // default explicitly: the INSERT always sets the column, so the DB default
 // never fires, and an empty string is not a valid value of the artifact_type
 // enum — it was reaching Postgres as "" and failing with 22P02, surfaced to
-// the caller as the generic "invalid value for field" (task #82ce594a).
+// the caller as the generic "invalid value for field".
 func normalizeArtifactType(raw string) domain.ArtifactType {
 	if raw == "" {
 		return domain.ArtifactTypeFile

@@ -9,14 +9,14 @@ import type { ManifestCapabilities } from "@/lib/extension-capabilities";
  * `GET /workspaces/{ws}/extensions`: a connected, enabled extension whose
  * manifest `capabilities.ui` names the slot. Which component fills it is
  * decided by `components/extensions/slots/builtin-slots.ts` for built-ins; an
- * external extension fills `sidebar.item` and `task.panel` with an iframe screen
+ * external extension fills `sidebar.item`, `task.panel` and `project.view` with an iframe screen
  * (`components/extensions/external-frame.tsx`, W3.3).
  *
  * One request serves every card on the board: the registry is a module-level
  * store, so opening a task or rendering a column never waits on it and never
  * issues a second fetch.
  */
-export type SlotId = "task.panel" | "task.badge" | "task.actions" | "sidebar.item";
+export type SlotId = "task.panel" | "task.badge" | "task.actions" | "sidebar.item" | "project.view";
 
 /** An iframe screen an external extension serves for a slot (manifest `external.ui`). */
 export interface ExternalScreen {
@@ -47,9 +47,9 @@ interface WorkspaceExtensionDto {
   status?: { enabled?: boolean };
 }
 
-const SLOT_IDS: readonly SlotId[] = ["task.panel", "task.badge", "task.actions", "sidebar.item"];
+const SLOT_IDS: readonly SlotId[] = ["task.panel", "task.badge", "task.actions", "sidebar.item", "project.view"];
 /** Slots an external extension fills with an iframe screen. */
-export const FRAME_SLOTS: readonly SlotId[] = ["sidebar.item", "task.panel"];
+export const FRAME_SLOTS: readonly SlotId[] = ["sidebar.item", "task.panel", "project.view"];
 const SLOTS: ReadonlySet<string> = new Set<string>(SLOT_IDS);
 const TTL_MS = 60_000;
 
@@ -57,7 +57,7 @@ const TTL_MS = 60_000;
 const EMPTY: SlotExtension[] = [];
 
 type BySlot = Record<SlotId, SlotExtension[]>;
-const NONE: BySlot = { "task.panel": EMPTY, "task.badge": EMPTY, "task.actions": EMPTY, "sidebar.item": EMPTY };
+const NONE: BySlot = { "task.panel": EMPTY, "task.badge": EMPTY, "task.actions": EMPTY, "sidebar.item": EMPTY, "project.view": EMPTY };
 
 interface Entry {
   bySlot: BySlot;
@@ -104,7 +104,7 @@ export function parseSlotExtensions(list: WorkspaceExtensionDto[]): SlotExtensio
 }
 
 function groupBySlot(exts: SlotExtension[]): BySlot {
-  const out: BySlot = { "task.panel": [], "task.badge": [], "task.actions": [], "sidebar.item": [] };
+  const out: BySlot = { "task.panel": [], "task.badge": [], "task.actions": [], "sidebar.item": [], "project.view": [] };
   for (const e of exts) for (const s of e.slots) out[s].push(e);
   for (const s of SLOT_IDS) if (out[s].length === 0) out[s] = EMPTY;
   return out;
@@ -223,6 +223,19 @@ export function useSidebarItems(): Array<{ extensionId: string; title: string; i
         return screen
           ? [{ extensionId: e.id, title: screen.title || e.name, icon: screen.icon, ...(e.projectLevel ? { projectLevel: true } : {}) }]
           : [];
+      }),
+    [exts],
+  );
+}
+
+/** `project.view` screens of external extensions: a tab of the project strip whose token names the project. */
+export function useProjectScreens(): Array<{ extensionId: string; title: string; icon?: string }> {
+  const exts = useSlotExtensions("project.view");
+  return useMemo(
+    () =>
+      exts.flatMap((e) => {
+        const screen = e.external?.["project.view"];
+        return screen ? [{ extensionId: e.id, title: screen.title || e.name, icon: screen.icon }] : [];
       }),
     [exts],
   );

@@ -10,6 +10,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
@@ -33,7 +34,7 @@ func NewCommentHandler(cs service.CommentService, ts taskIDResolver) *CommentHan
 // Metadata is a caller-supplied JSON object stored verbatim on the comment. It exists so
 // automation can label the comments it posts (`{"source":"pr-task-driver","auto":true}`)
 // and so staleness/stall detectors can tell an auto-nudge from genuine activity. Until
-// task #13e391d2 this field was absent from the struct, so `c.Bind` discarded it and the
+// an internal ticket this field was absent from the struct, so `c.Bind` discarded it and the
 // API answered 201 while losing it — every consumer filtering on `metadata.source` was
 // filtering on a value that could never be set. The shape is validated (see
 // validateCommentMetadata); it is never silently dropped.
@@ -122,7 +123,11 @@ func (h *CommentHandler) Create(c echo.Context) error {
 	var authorID uuid.UUID
 	var authorType domain.ActorType
 
-	if agentIDVal := c.Get("agent_id"); agentIDVal != nil {
+	if p := mw.GetExtensionPrincipal(c); p != nil {
+		// An extension actor has neither agent_id nor user_id in the echo context.
+		authorID = p.ActorID
+		authorType = domain.ActorTypeExtension
+	} else if agentIDVal := c.Get("agent_id"); agentIDVal != nil {
 		if aid, ok := agentIDVal.(uuid.UUID); ok {
 			authorID = aid
 			authorType = domain.ActorTypeAgent

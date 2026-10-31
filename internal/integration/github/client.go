@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -117,4 +118,104 @@ func ParsePullRequestURL(rawURL string) (owner, repo string, number int, ok bool
 		return "", "", 0, false
 	}
 	return m[1], m[2], n, true
+}
+
+// PullRequestHead is the PR's own head commit as GitHub reports it now.
+type PullRequestHead struct {
+	Merged  bool
+	HeadSHA string
+}
+
+// ChecksSummary folds the check runs of one commit into the pipeline
+// vocabulary Mesh stores. Total==0 means GitHub reports no checks for the
+// commit; callers must not invent a status for it. RunID is the highest check
+// run id, which only grows and so orders successive runs like a pipeline id.
+type ChecksSummary struct {
+	Total  int
+	Status string // pending | running | success | failed
+	RunID  int64
+}
+
+// PullRequestEvidenceSource reads the facts the delivery-proof gate needs from
+// a PR: its head commit and the checks that ran on exactly that commit.
+// Implemented by *Client; tests substitute a fake.
+type PullRequestEvidenceSource interface {
+	GetPullRequestHead(ctx context.Context, owner, repo string, number int) (PullRequestHead, error)
+	GetCheckRunsSummary(ctx context.Context, owner, repo, sha string) (ChecksSummary, error)
+}
+
+func (c *Client) getJSON(ctx context.Context, url string, dst any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return fmt.Errorf("build github request: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("github request %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("github request %s: unexpected status %d", url, resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
+		return fmt.Errorf("decode github response %s: %w", url, err)
+	}
+	return nil
+}
+
+// GetPullRequestHead calls GET /repos/{owner}/{repo}/pulls/{number}.
+func (c *Client) GetPullRequestHead(ctx context.Context, owner, repo string, number int) (PullRequestHead, error) {
+	var body struct {
+		Merged bool `json:"merged"`
+		Head   struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
+	}
+	if err := c.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s/pulls/%d", c.baseURL, owner, repo, number), &body); err != nil {
+		return PullRequestHead{}, err
+	}
+	return PullRequestHead{Merged: body.Merged, HeadSHA: strings.ToLower(strings.TrimSpace(body.Head.SHA))}, nil
+}
+
+// GetCheckRunsSummary calls GET /repos/{owner}/{repo}/commits/{sha}/check-runs
+// and folds the runs of that exact commit into one status. filter=latest asks
+// for the newest run of each check name, so a failed attempt that was re-run
+// green does not count as a failure.
+func (c *Client) GetCheckRunsSummary(ctx context.Context, owner, repo, sha string) (ChecksSummary, error) {
+	var body struct {
+		TotalCount int `json:"total_count"`
+		CheckRuns  []struct {
+			ID         int64  `json:"id"`
+			Status     string `json:"status"`
+			Conclusion string `json:"conclusion"`
+		} `json:"check_runs"`
+	}
+	if err := c.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s/commits/%s/check-runs?filter=latest&per_page=100", c.baseURL, owner, repo, sha), &body); err != nil {
+		return ChecksSummary{}, err
+	}
+	// More than one page of runs cannot be folded from the first page alone.
+	if body.TotalCount > len(body.CheckRuns) {
+		return ChecksSummary{}, fmt.Errorf("github check-runs %s/%s@%s: %d runs exceed one page", owner, repo, sha, body.TotalCount)
+	}
+	sum := ChecksSummary{Total: len(body.CheckRuns), Status: "success"}
+	for _, r := range body.CheckRuns {
+		if r.ID > sum.RunID {
+			sum.RunID = r.ID
+		}
+		switch {
+		case r.Status != "completed":
+			if sum.Status == "success" {
+				sum.Status = "running"
+			}
+		case r.Conclusion == "success" || r.Conclusion == "neutral" || r.Conclusion == "skipped":
+		default:
+			sum.Status = "failed"
+		}
+	}
+	return sum, nil
 }

@@ -399,6 +399,24 @@ func TestProvider_ValidateAndHealth(t *testing.T) {
 	assert.Contains(t, rep.Message, "unreachable")
 }
 
+func TestProvider_ValidateProjectLevelFollowsManifest(t *testing.T) {
+	withProject := strings.Replace(manifestJSON, `"project":false`, `"project":true`, 1)
+	require.NotEqual(t, manifestJSON, withProject)
+	m, err := extensions.ParseManifest([]byte(withProject))
+	require.NoError(t, err)
+	p, err := NewProvider(m, extensions.Deps{}, http.DefaultClient, nil)
+	require.NoError(t, err)
+
+	assert.NoError(t, p.Validate(extensions.LevelProject, map[string]any{}), "levels.project=true accepts a project binding")
+	assert.Error(t, p.Validate(extensions.LevelInstance, map[string]any{}))
+
+	off, err := extensions.ParseManifest([]byte(manifestJSON))
+	require.NoError(t, err)
+	q, err := NewProvider(off, extensions.Deps{}, http.DefaultClient, nil)
+	require.NoError(t, err)
+	assert.Error(t, q.Validate(extensions.LevelProject, map[string]any{}), "levels.project=false still refuses")
+}
+
 func TestNewProvider_RejectsNonExternal(t *testing.T) {
 	m, _ := extensions.ParseManifest([]byte(`{"id":"x","version":"1","runtime":"builtin"}`))
 	_, err := NewProvider(m, extensions.Deps{}, http.DefaultClient, nil)
@@ -632,4 +650,62 @@ func TestHandshake_InstallCodeNeverLeaks(t *testing.T) {
 	}
 	assert.Contains(t, logs.String(), "install handshake", "the hook logged the failures")
 	assert.NotContains(t, logs.String(), canary)
+}
+
+// A manifest with external.signature_version=2 makes the install body announce
+// it, so the service can pin to v2; without it the field is absent. The
+// manifest choice also forces a new handshake.
+func TestHandshake_AnnouncesSignatureVersion2(t *testing.T) {
+	s := newSvc(t, "")
+	r := newRig(t, s.srv.URL)
+	ctx := context.Background()
+	require.NoError(t, r.hs.Run(ctx, r.p, r.ws, r.settings(s.srv.URL)))
+	assert.NotContains(t, string(s.lastBody), "signature_version", "v1 install body is unchanged")
+
+	r.p.ext.SignatureVersion = 2
+	r.p.Man.External = &r.p.ext
+	require.NoError(t, r.hs.Ensure(ctx, r.p, r.ws, r.settings(s.srv.URL)))
+	var in installRequest
+	require.NoError(t, json.Unmarshal(s.lastBody, &in))
+	assert.Equal(t, 2, in.SignatureVersion)
+	assert.Equal(t, 2, s.installs, "opting in repeats the handshake")
+}
+
+func TestProvider_ValidateInstanceLevelFollowsManifestSchema(t *testing.T) {
+	build := func(settings string) *Provider {
+		raw := strings.Replace(manifestJSON, `"capabilities"`, settings+`"capabilities"`, 1)
+		m, err := extensions.ParseManifest([]byte(raw))
+		require.NoError(t, err)
+		p, err := NewProvider(m, extensions.Deps{}, http.DefaultClient, nil)
+		require.NoError(t, err)
+		return p
+	}
+	good := map[string]any{"hello_url": "https://svc.example.test", "level": "store"}
+
+	inline := build(`"settings":{"instance":{"type":"object","properties":{"hello_url":{"type":"string"},"level":{"enum":["store","org"]}},"required":["hello_url"]}},`)
+	assert.NoError(t, inline.Validate(extensions.LevelInstance, good))
+	assert.Error(t, inline.Validate(extensions.LevelInstance, map[string]any{}), "required field missing")
+	assert.Error(t, inline.Validate(extensions.LevelInstance, map[string]any{"hello_url": 5}), "wrong type")
+	err := inline.Validate(extensions.LevelInstance, map[string]any{"hello_url": "https://x.example.test", "level": "no"})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "\n", "one line")
+
+	ref := build(`"settings":{"instance":{"$ref":"#/schemas/i"}},"schemas":{"i":{"type":"object","properties":{"hello_url":{"$ref":"#/schemas/u"}},"required":["hello_url"]},"u":{"type":"string","minLength":8}},`)
+	assert.NoError(t, ref.Validate(extensions.LevelInstance, good))
+	assert.Error(t, ref.Validate(extensions.LevelInstance, map[string]any{"hello_url": "x"}), "nested ref is enforced")
+
+	none := build(``)
+	err = none.Validate(extensions.LevelInstance, good)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no instance-level settings")
+
+	// A schema that cannot be compiled refuses instead of accepting anything.
+	broken := build(`"settings":{"instance":{"type":"nope"}},`)
+	assert.Error(t, broken.Validate(extensions.LevelInstance, good))
+	badRef := build(`"settings":{"instance":{"$ref":"#/schemas/missing"}},`)
+	assert.Error(t, badRef.Validate(extensions.LevelInstance, good))
+	// Settings that cannot be encoded are refused too.
+	assert.Error(t, inline.Validate(extensions.LevelInstance, map[string]any{"hello_url": func() {}}))
+
+	assert.Error(t, validateAgainstSchema(json.RawMessage(`{`), good), "not JSON")
 }

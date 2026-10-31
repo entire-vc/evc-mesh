@@ -169,14 +169,23 @@ export function ChatPage() {
     setTreeLoading(true);
     setTreeError(null);
     try {
-      const [s, a, th] = await Promise.all([
-        getChatProjectSettings(projectId),
+      const s = await getChatProjectSettings(projectId);
+      if (seq !== treeSeq.current) return;
+      setSettings(s);
+      setChatEnabled(projectId, s.enabled && s.agents.length > 0);
+      // A project with the chat off refuses the agent and thread lists: the
+      // settings alone decide the "chat is off" state.
+      if (!s.enabled) {
+        setAllAgents([]);
+        setThreads([]);
+        setCursor(null);
+        return;
+      }
+      const [a, th] = await Promise.all([
         listChatAgents(projectId),
         listChatThreads(projectId, { limit: PAGE_SIZE }),
       ]);
       if (seq !== treeSeq.current) return;
-      setSettings(s);
-      setChatEnabled(projectId, s.enabled && s.agents.length > 0);
       setAllAgents(a);
       setThreads(th.items);
       setCursor(th.has_more ? th.next_cursor : null);

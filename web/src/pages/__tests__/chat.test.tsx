@@ -69,6 +69,8 @@ function fakeApi(path: string, opts: { method?: string; body?: unknown; params?:
   if (path === `${base}/settings`) {
     return Promise.resolve({ enabled: db.enabled, agents: [AGENT_ON] });
   }
+  // Like the server: with the chat off every chat route but settings is 404.
+  if (!db.enabled) return Promise.reject(new ApiRequestError("chat is not enabled", "chat_not_enabled", 404));
   if (path === `${base}/agents`) {
     return Promise.resolve({
       items: [
@@ -243,6 +245,8 @@ describe("ChatPage — navigation", () => {
     db.enabled = false;
     renderChat();
     expect(await screen.findByTestId("chat-disabled")).toBeInTheDocument();
+    // The lists answer 404 chat_not_enabled there, so they are not asked for.
+    expect(db.calls.map((c) => c.path)).toEqual([`/api/v1/projects/${P}/chat/settings`]);
   });
 });
 

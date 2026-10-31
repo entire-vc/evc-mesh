@@ -69,11 +69,21 @@ func (f fakeProjects) GetByID(_ context.Context, id uuid.UUID) (*domain.Project,
 	return nil, errors.New("not found")
 }
 
+type fakeBindings map[uuid.UUID]bool
+
+func (f fakeBindings) GetBinding(_ context.Context, projectID uuid.UUID, _ string) (*domain.ProjectIntegration, error) {
+	if on, ok := f[projectID]; ok {
+		return &domain.ProjectIntegration{ProjectID: projectID, Enabled: on}, nil
+	}
+	return nil, errors.New("not found")
+}
+
 type uiFixture struct {
 	h              *ExtensionUIHandler
 	signer         *fakeSigner
 	user, ws       uuid.UUID
 	ownTask, other uuid.UUID
+	ownProj        uuid.UUID
 }
 
 func newUIFixture(t *testing.T, enabled bool, domains ...string) *uiFixture {
@@ -84,7 +94,10 @@ func newUIFixture(t *testing.T, enabled bool, domains ...string) *uiFixture {
 		Capabilities: extensions.Capabilities{Network: &extensions.Network{AllowedDomains: domains}},
 		External: &extensions.External{
 			BaseURLSetting: "hello_url",
-			UI:             map[string]extensions.ExternalUI{"sidebar.item": {Path: "/mesh/ui/hello", Title: "Hello"}},
+			UI: map[string]extensions.ExternalUI{
+				"sidebar.item": {Path: "/mesh/ui/hello", Title: "Hello"},
+				"project.view": {Path: "/mesh/ui/project", Title: "Hello"},
+			},
 		},
 	}
 	reg := extensions.NewRegistry()
@@ -93,6 +106,7 @@ func newUIFixture(t *testing.T, enabled bool, domains ...string) *uiFixture {
 		res:          extensions.Resolved{ExtensionID: "hello", Enabled: enabled, Settings: map[string]any{"hello_url": "https://hello.example.com"}},
 	}))
 	ownProj, otherProj := uuid.New(), uuid.New()
+	f.ownProj = ownProj
 	f.h = NewExtensionUIHandler(reg, f.signer, fakeMembers{f.user: "admin"},
 		fakeUsers{&domain.User{ID: f.user, Email: "me@example.com"}},
 		fakeTasks{f.ownTask: {ID: f.ownTask, ProjectID: ownProj}, f.other: {ID: f.other, ProjectID: otherProj}},
@@ -296,4 +310,55 @@ func TestUIContext_ServiceOnMeshOriginRefused(t *testing.T) {
 	f.h.WithSelfOrigins("https://HELLO.example.com", "")
 	rec, _ = f.callOn(t, f.user, body(f), "mesh.example.com")
 	assert.Equal(t, http.StatusConflict, rec.Code, "the configured public Mesh URL is the service host")
+}
+
+func TestUIContext_ProjectView(t *testing.T) {
+	f := newUIFixture(t, true, "hello.example.com")
+	unbound := uuid.New()
+	f.h.projects.(fakeProjects)[unbound] = &domain.Project{ID: unbound, WorkspaceID: f.ws}
+	f.h.WithProjectBindings(fakeBindings{f.ownProj: true})
+	ws := `"workspace_id":"` + f.ws.String() + `"`
+
+	rec, out := f.call(t, f.user, `{`+ws+`,"slot":"project.view","project_id":"`+f.ownProj.String()+`"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, "https://hello.example.com/mesh/ui/project", out["frame_url"])
+	require.NotNil(t, f.signer.got.ProjectID, "the project tab token names the project")
+	assert.Equal(t, f.ownProj, *f.signer.got.ProjectID)
+	assert.Nil(t, f.signer.got.TaskID)
+
+	f.signer.got = uictx.Claims{}
+	rec, _ = f.call(t, f.user, `{`+ws+`,"slot":"project.view"}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "project.view without a project")
+	assert.Nil(t, f.signer.got.ProjectID, "nothing is signed without a project")
+
+	rec, _ = f.call(t, f.user, `{`+ws+`,"slot":"project.view","task_id":"`+f.ownTask.String()+`"}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "project.view does not take its project from a task")
+	rec, _ = f.call(t, f.user, `{`+ws+`,"slot":"project.view","project_id":"`+f.ownProj.String()+`","task_id":"`+f.ownTask.String()+`"}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "project.view carries no task")
+	assert.Nil(t, f.signer.got.ProjectID, "nothing is signed for a task-shaped project.view")
+
+	rec, _ = f.call(t, f.user, `{`+ws+`,"slot":"project.view","project_id":"`+unbound.String()+`"}`)
+	assert.Equal(t, http.StatusConflict, rec.Code, "extension not enabled in this project")
+	assert.Nil(t, f.signer.got.ProjectID, "nothing is signed for an unbound project")
+
+	rec, _ = f.call(t, f.user, `{`+ws+`,"slot":"project.view","project_id":"`+uuid.NewString()+`"}`)
+	assert.Equal(t, http.StatusNotFound, rec.Code, "unknown project")
+
+	// The per-project sidebar screen stands in for project.view, so it takes the same gate and the same project.
+	f.signer.got = uictx.Claims{}
+	rec, _ = f.call(t, f.user, `{`+ws+`,"slot":"sidebar.item","project_id":"`+unbound.String()+`"}`)
+	assert.Equal(t, http.StatusConflict, rec.Code, "red control: no binding, no sidebar fallback token")
+	assert.Nil(t, f.signer.got.ProjectID, "nothing is signed for an unbound project")
+	rec, _ = f.call(t, f.user, `{`+ws+`,"slot":"sidebar.item","project_id":"`+f.ownProj.String()+`"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NotNil(t, f.signer.got.ProjectID)
+	assert.Equal(t, f.ownProj, *f.signer.got.ProjectID)
+	// A task names its project too: the same gate, so a task cannot be used to dodge the binding.
+	rec, _ = f.call(t, f.user, `{`+ws+`,"slot":"sidebar.item","task_id":"`+f.ownTask.String()+`"}`)
+	assert.Equal(t, http.StatusOK, rec.Code, "task of a bound project")
+	f.h.WithProjectBindings(fakeBindings{})
+	f.signer.got = uictx.Claims{}
+	rec, _ = f.call(t, f.user, `{`+ws+`,"slot":"sidebar.item","task_id":"`+f.ownTask.String()+`"}`)
+	assert.Equal(t, http.StatusConflict, rec.Code, "red control: task of an unbound project")
+	assert.Nil(t, f.signer.got.ProjectID, "nothing is signed for an unbound project")
 }

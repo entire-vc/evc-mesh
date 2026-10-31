@@ -7,8 +7,11 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 const bodyV1 = `{"blocklist":[{"id":"hello","reason":"Extension suspended","since":"2026-10-17T04:53:09Z"}],"extensions":[{"id":"mesh-ext-hello","name":"Hello","latest":{"version":"1.0.0","mesh_api":">=1 <3","commit_sha":"abc","artifact_sha256":"deadbeef"}}],"generated_at":"2026-10-18T14:15:05Z","schema":1}`
@@ -218,6 +221,33 @@ func TestVerify_CapabilitiesObjectDecodes(t *testing.T) {
 	}
 }
 
+// Spark's capabilities object also carries "network", an object rather than a
+// list of strings. It must not hide the permission groups next to it: an update
+// that adds an api capability has to ask for consent.
+func TestReleaseFlatten_IgnoresNonListGroups(t *testing.T) {
+	r := Release{Capabilities: []byte(`{"api":["tasks:read","ext_token:self_rotate"],"events":["task.updated"],` +
+		`"network":{"allowed_domains":[],"reasoning":"talks only to this Mesh instance"}}`)}
+	got := r.Flatten()
+	want := []string{"api:tasks:read", "api:ext_token:self_rotate", "events:task.updated"}
+	if len(got) != len(want) {
+		t.Fatalf("flatten: %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("flatten: %v, want %v", got, want)
+		}
+	}
+	if (Release{Capabilities: []byte(`{"api":"tasks:read"}`)}).Flatten() != nil {
+		t.Fatal("a permission group that is not a list of strings must flatten to nil")
+	}
+	// null is an empty group: dropping the other groups would hide a new
+	// capability from the consent check.
+	got = (Release{Capabilities: []byte(`{"api":null,"events":["task.updated"]}`)}).Flatten()
+	if len(got) != 1 || got[0] != "events:task.updated" {
+		t.Fatalf("null group: %v, want [events:task.updated]", got)
+	}
+}
+
 func TestClientDetail_MapsSparkCard(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/mesh-extensions/mesh-ext-hello" {
@@ -299,5 +329,133 @@ func TestRefresh_RealETagMismatchStillRefused(t *testing.T) {
 	c := newTestClient(bad, pub)
 	if err := c.Refresh(context.Background(), 1); err == nil {
 		t.Fatal("a wrong ETag must still be refused")
+	}
+}
+
+// RefreshNow reports the identity of the copy it holds: a newer signed body
+// replaces the cache, a forged body or an outage leaves the last-good receipt.
+func TestRefreshNow_ReceiptAndLastGood(t *testing.T) {
+	pub, priv := keypair(t)
+	_, evil := keypair(t)
+	f := &fakeSpark{body: bodyV1, sig: sign(priv, bodyV1)}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	c := newTestClient(srv, pub)
+	ctx := context.Background()
+
+	if _, err := c.Receipt(); err != ErrNoCatalog {
+		t.Fatalf("empty cache must say ErrNoCatalog, got %v", err)
+	}
+	r1, err := c.RefreshNow(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSHA := strings.Trim(ETagOf([]byte(bodyV1)), `"`)
+	if r1.ContentSHA256 != wantSHA || r1.FetchedAt.IsZero() || r1.Signature != f.sig {
+		t.Fatalf("receipt does not identify the accepted body: %+v", r1)
+	}
+	if len(r1.Extensions) != 1 || r1.Extensions[0].Version != "1.0.0" || r1.Extensions[0].CommitSHA != "abc" ||
+		r1.Extensions[0].ArtifactSHA256 == nil || *r1.Extensions[0].ArtifactSHA256 != "deadbeef" {
+		t.Fatalf("receipt versions: %+v", r1.Extensions)
+	}
+
+	// upstream moves to a newer release: the forced refresh picks it up now
+	bodyV2 := strings.Replace(bodyV1, `"1.0.0"`, `"1.1.0"`, 1)
+	f.body, f.sig = bodyV2, sign(priv, bodyV2)
+	r2, err := c.RefreshNow(ctx, 1)
+	if err != nil || r2.Extensions[0].Version != "1.1.0" || r2.ContentSHA256 == r1.ContentSHA256 {
+		t.Fatalf("newer catalog not taken: %+v %v", r2, err)
+	}
+
+	// forged body: refused, receipt is still the last-good v2
+	forged := strings.Replace(bodyV1, `"1.0.0"`, `"9.9.9"`, 1)
+	f.body, f.sig = forged, sign(evil, forged)
+	r3, err := c.RefreshNow(ctx, 1)
+	if err != ErrBadSignature {
+		t.Fatalf("forged catalog must give ErrBadSignature, got %v", err)
+	}
+	if r3.ContentSHA256 != r2.ContentSHA256 || r3.Extensions[0].Version != "1.1.0" {
+		t.Fatalf("last-good was lost on a bad signature: %+v", r3)
+	}
+
+	// outage: same
+	f.status = http.StatusBadGateway
+	r4, err := c.RefreshNow(ctx, 1)
+	if err == nil || r4.ContentSHA256 != r2.ContentSHA256 {
+		t.Fatalf("outage must keep last-good and report the error: %+v %v", r4, err)
+	}
+}
+
+// A forced refresh must not run OnRefresh (it changes installed extensions);
+// the next regular refresh still delivers the catalog it accepted.
+func TestRefreshNow_DefersOnRefreshToRegularRefresh(t *testing.T) {
+	pub, priv := keypair(t)
+	f := &fakeSpark{body: bodyV1, sig: sign(priv, bodyV1)}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	c := newTestClient(srv, pub)
+	var seen []string
+	c.OnRefresh = func(_ context.Context, cat *Catalog) { seen = append(seen, cat.Extensions[0].Latest.Version) }
+	ctx := context.Background()
+
+	if _, err := c.RefreshNow(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 0 {
+		t.Fatalf("forced refresh ran OnRefresh: %v", seen)
+	}
+	if err := c.Refresh(ctx, 1); err != nil { // 304: body unchanged
+		t.Fatal(err)
+	}
+	if len(seen) != 1 || seen[0] != "1.0.0" {
+		t.Fatalf("regular refresh must deliver the owed catalog once, got %v", seen)
+	}
+	if err := c.Refresh(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 1 {
+		t.Fatalf("catalog delivered twice: %v", seen)
+	}
+}
+
+// Regular and forced refreshes share one lock: while a forced refresh is in
+// flight a regular one waits, so a stale response cannot land after a newer one.
+func TestRefresh_ForcedAndRegularNeverOverlap(t *testing.T) {
+	pub, priv := keypair(t)
+	var inflight, maxInflight int32
+	body := bodyV1
+	sig := sign(priv, body)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&inflight, 1)
+		for {
+			m := atomic.LoadInt32(&maxInflight)
+			if n <= m || atomic.CompareAndSwapInt32(&maxInflight, m, n) {
+				break
+			}
+		}
+		time.Sleep(30 * time.Millisecond)
+		w.Header().Set("ETag", ETagOf([]byte(body)))
+		w.Header().Set(SignatureHeader, sig)
+		_, _ = w.Write([]byte(body))
+		atomic.AddInt32(&inflight, -1)
+	}))
+	defer srv.Close()
+	c := newTestClient(srv, pub)
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for i := 0; i < 6; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if i%2 == 0 {
+				_, _ = c.RefreshNow(ctx, 1)
+			} else {
+				_ = c.Refresh(ctx, 1)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if m := atomic.LoadInt32(&maxInflight); m != 1 {
+		t.Fatalf("refreshes overlapped: %d in flight at once", m)
 	}
 }

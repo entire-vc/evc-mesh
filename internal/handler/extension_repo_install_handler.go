@@ -10,6 +10,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions/catalog"
 	"github.com/entire-vc/evc-mesh/internal/extensions/repoinstall"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -20,6 +21,38 @@ type ExtensionRepoInstallHandler struct {
 	svc     *repoinstall.Service
 	admins  InstanceAdminChecker
 	catalog CatalogInstaller
+	refresh CatalogRefreshFunc
+}
+
+// CatalogRefreshFunc forces one refresh of the signed catalog cache and returns
+// the receipt of the copy it holds afterwards (the last-good one on failure).
+type CatalogRefreshFunc func(ctx context.Context) (catalog.Receipt, error)
+
+// WithCatalogRefresh enables POST /extensions/catalog/refresh.
+func (h *ExtensionRepoInstallHandler) WithCatalogRefresh(f CatalogRefreshFunc) *ExtensionRepoInstallHandler {
+	h.refresh = f
+	return h
+}
+
+// RefreshCatalog handles POST /extensions/catalog/refresh: re-reads the signed
+// catalog now instead of waiting for the hourly tick. It installs nothing.
+// A failed refresh answers 502 with the error and the last-good receipt.
+func (h *ExtensionRepoInstallHandler) RefreshCatalog(c echo.Context) error {
+	if _, denied, err := authorizeInstanceAdmin(c, h.admins); denied {
+		return err
+	}
+	if h.refresh == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "catalog is not configured")
+	}
+	rc, err := h.refresh(c.Request().Context())
+	if err != nil {
+		out := map[string]any{"refreshed": false, "error": err.Error(), "error_code": apierror.CodeServiceUnavailable}
+		if !rc.FetchedAt.IsZero() {
+			out["last_good"] = rc
+		}
+		return c.JSON(http.StatusBadGateway, out)
+	}
+	return c.JSON(http.StatusOK, map[string]any{"refreshed": true, "receipt": rc})
 }
 
 // CatalogInstaller installs an extension from the signed Spark catalog.

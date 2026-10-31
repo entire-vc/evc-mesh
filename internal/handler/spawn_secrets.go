@@ -12,6 +12,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -27,10 +28,10 @@ const (
 
 // SecretMaterializeHandler serves the ONE endpoint in this codebase that
 // returns a secret value (fetched from Keep). It must sit behind
-// middleware.SpawnAuth() only — never JWTAuth, never agent-key auth — since
-// any agent identity able to authenticate normally would be able to read
-// every secret in its own scope, which is the leak this whole feature
-// exists to close. See middleware.SpawnAuth's doc comment for the trust
+// middleware.SpawnerAuth() only — never JWTAuth, never plain agent-key auth —
+// since any agent identity able to authenticate normally would be able to
+// read every secret in its own scope, which is the leak this whole feature
+// exists to close. See middleware.SpawnerAuth's doc comment for the trust
 // model this depends on.
 type SecretMaterializeHandler struct {
 	materializationSvc service.SecretMaterializationService
@@ -97,7 +98,7 @@ func (h *SecretMaterializeHandler) Materialize(c echo.Context) error {
 	// entry closes, so "no record" must mean "no values". Same database as
 	// the secrets themselves — if this insert fails, the resolve above was
 	// already on borrowed time.
-	if err := h.writeAudit(buildMaterializationAudit(req, secrets, c.Response().Header().Get(echo.HeaderXRequestID))); err != nil {
+	if err := h.writeAudit(buildMaterializationAudit(req, secrets, c.Response().Header().Get(echo.HeaderXRequestID), spawnerAgentID(c))); err != nil {
 		log.Printf("[secrets] REFUSED materialize for workspace %s: audit write failed: %v", req.WorkspaceID, err)
 		return c.JSON(http.StatusServiceUnavailable, apierror.ServiceUnavailable(
 			"issuance could not be journaled; no secrets were returned"))
@@ -132,11 +133,27 @@ type materializationAudit struct {
 	Secrets     []materializationAuditSecret `json:"secrets"`
 }
 
+// spawnerAgentID is the agent that called the route with its own key
+// (middleware.SpawnerAuth), or nil when no agent identity is on the context.
+func spawnerAgentID(c echo.Context) *uuid.UUID {
+	if !middleware.IsAgent(c) {
+		return nil
+	}
+	id, err := middleware.GetAgentID(c)
+	if err != nil || id == uuid.Nil {
+		return nil
+	}
+	return &id
+}
+
 // buildMaterializationAudit turns one issuance into its activity_log row.
-// Actor is the agent the secrets were resolved FOR when the spawner named
-// one (that is who ends up holding them); otherwise the issuance is
-// attributed to the system — the spawn token identifies infra, not a person.
-func buildMaterializationAudit(req materializeRequest, secrets []domain.MaterializedSecret, requestID string) (*domain.ActivityLog, error) {
+// Actor is the spawner agent when it authenticated with its own key — that
+// identity is who asked, and the agent the secrets are FOR stays in the
+// payload's agent_id. Without a caller identity (not reachable through
+// SpawnerAuth, kept as a fallback) actor is the agent the secrets were
+// resolved FOR when one is named; otherwise the issuance is attributed to
+// the system.
+func buildMaterializationAudit(req materializeRequest, secrets []domain.MaterializedSecret, requestID string, spawner *uuid.UUID) (*domain.ActivityLog, error) {
 	lines := make([]materializationAuditSecret, 0, len(secrets))
 	for _, s := range secrets {
 		lines = append(lines, materializationAuditSecret{
@@ -159,7 +176,10 @@ func buildMaterializationAudit(req materializeRequest, secrets []domain.Material
 	}
 
 	actorID, actorType := uuid.Nil, domain.ActorTypeSystem
-	if req.AgentID != nil {
+	switch {
+	case spawner != nil:
+		actorID, actorType = *spawner, domain.ActorTypeAgent
+	case req.AgentID != nil:
 		actorID, actorType = *req.AgentID, domain.ActorTypeAgent
 	}
 	return &domain.ActivityLog{

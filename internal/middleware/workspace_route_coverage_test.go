@@ -282,16 +282,17 @@ var declaredBodyTenantFields = map[string]string{
 
 	// POST /internal/secrets/materialize is the one route in this codebase
 	// deliberately registered outside the `api` group (e.* not api.*, see
-	// cmd/api/main.go), gated by middleware.SpawnAuth's shared spawn-infra
-	// secret instead of a per-caller JWT/agent-key. There is no tenant
-	// identity on the request to check these fields against — the caller
-	// IS the trusted spawner, already holding the same level of trust as
-	// MESH_INTEGRATION_ENCRYPTION_KEY itself — so the ids are the scope
+	// cmd/api/main.go), gated by middleware.SpawnerAuth: an agent key listed
+	// in MESH_SPAWNER_AGENT_IDS, instead of an ordinary per-caller
+	// JWT/agent-key. The spawner's
+	// own workspace is not the tenant to check these fields against — the
+	// caller IS the trusted spawner, already holding the same level of trust
+	// as MESH_INTEGRATION_ENCRYPTION_KEY itself — so the ids are the scope
 	// resolution input, not something a workspace guard could narrow.
-	"spawn_secrets.go:materializeRequest.workspace_id":   "checked: possession of the SpawnAuth shared secret (X-Spawn-Token) IS the authorization for any workspace named in the body — the caller is trusted global spawn infra (mesh-dispatcher.py/fiddler.py), not a workspace member, by the same trust model as holding MESH_INTEGRATION_ENCRYPTION_KEY itself; see spawn_auth.go SpawnAuth doc comment",
-	"spawn_secrets.go:materializeRequest.project_id":     "benign: narrows the already-authorized workspace_id above to a sub-scope, inert reference — same SpawnAuth trust model",
-	"spawn_secrets.go:materializeRequest.agent_id":       "benign: narrows the already-authorized workspace_id above to a sub-scope, inert reference — same SpawnAuth trust model",
-	"spawn_secrets.go:materializationAudit.workspace_id": "checked: never decoded from a request — the activity_log payload the handler WRITES for each issuance; its value is materializeRequest.workspace_id, already authorized by SpawnAuth above",
+	"spawn_secrets.go:materializeRequest.workspace_id":   "checked: an allowlisted spawner key (MESH_SPAWNER_AGENT_IDS) IS the authorization for any workspace named in the body — the caller is trusted global spawn infra (mesh-dispatcher.py/fiddler.py), not a workspace member, by the same trust model as holding MESH_INTEGRATION_ENCRYPTION_KEY itself; see spawn_auth.go SpawnerAuth doc comment",
+	"spawn_secrets.go:materializeRequest.project_id":     "benign: narrows the already-authorized workspace_id above to a sub-scope, inert reference — same SpawnerAuth trust model",
+	"spawn_secrets.go:materializeRequest.agent_id":       "benign: narrows the already-authorized workspace_id above to a sub-scope, inert reference — same SpawnerAuth trust model",
+	"spawn_secrets.go:materializationAudit.workspace_id": "checked: never decoded from a request — the activity_log payload the handler WRITES for each issuance; its value is materializeRequest.workspace_id, already authorized by SpawnerAuth above",
 	"spawn_secrets.go:materializationAudit.project_id":   "benign: not read from any request — issuance journal payload, see materializationAudit.workspace_id",
 	"spawn_secrets.go:materializationAudit.agent_id":     "benign: not read from any request — issuance journal payload, see materializationAudit.workspace_id",
 }

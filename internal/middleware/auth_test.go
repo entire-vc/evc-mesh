@@ -18,6 +18,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -505,7 +506,7 @@ func TestAgentKeyAuth_ValidKey(t *testing.T) {
 func TestAgentKeyAuth_InvalidKey(t *testing.T) {
 	agentSvc := &mockAgentService{
 		AuthenticateFunc: func(_ context.Context, _, _ string) (*domain.Agent, error) {
-			return nil, assert.AnError
+			return nil, apierror.Unauthorized("invalid API key")
 		},
 	}
 

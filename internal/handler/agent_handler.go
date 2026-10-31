@@ -1073,11 +1073,19 @@ func parseAgentFeedFilter(c echo.Context) (repository.AssigneeTaskFilter, error)
 	var filter repository.AssigneeTaskFilter
 
 	if raw := c.QueryParam("status_category"); raw != "" {
-		cat := domain.StatusCategory(raw)
-		if _, ok := validStatusCategories[cat]; !ok {
-			return filter, fmt.Errorf("unknown status_category %q", raw)
+		var cats []domain.StatusCategory
+		for _, part := range strings.Split(raw, ",") {
+			cat := domain.StatusCategory(strings.TrimSpace(part))
+			if _, ok := validStatusCategories[cat]; !ok {
+				return filter, fmt.Errorf("unknown status_category %q", part)
+			}
+			cats = append(cats, cat)
 		}
-		filter.StatusCategory = &cat
+		if len(cats) == 1 {
+			filter.StatusCategory = &cats[0]
+		} else {
+			filter.StatusCategories = cats
+		}
 	}
 
 	if raw := c.QueryParam("project_id"); raw != "" {
@@ -1107,7 +1115,8 @@ func parseAgentFeedFilter(c echo.Context) (repository.AssigneeTaskFilter, error)
 // Returns tasks assigned to the current agent.
 //
 // Optional query params, all applied in SQL:
-//   - status_category — backlog|todo|in_progress|review|done|cancelled|triage
+//   - status_category — backlog|todo|in_progress|review|done|cancelled|triage,
+//     or a comma-separated list of them
 //   - project_id      — restrict to one project
 //   - limit/page_size — cap the number of rows; omit for the whole feed
 //

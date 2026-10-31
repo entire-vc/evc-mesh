@@ -67,6 +67,8 @@ type webhookDeliveryRow struct {
 	Success        bool       `db:"success"`
 	Attempt        int        `db:"attempt"`
 	CreatedAt      time.Time  `db:"created_at"`
+	RedeliveryOf   *uuid.UUID `db:"redelivery_of"`
+	EventID        *uuid.UUID `db:"event_id"`
 }
 
 func (r *webhookDeliveryRow) toDomain() domain.WebhookDelivery {
@@ -82,6 +84,8 @@ func (r *webhookDeliveryRow) toDomain() domain.WebhookDelivery {
 		Success:        r.Success,
 		Attempt:        r.Attempt,
 		CreatedAt:      r.CreatedAt,
+		RedeliveryOf:   r.RedeliveryOf,
+		EventID:        r.EventID,
 	}
 }
 
@@ -93,7 +97,7 @@ const webhookConfigSelectCols = `id, workspace_id, name, url, secret, events, is
 
 // webhookDeliverySelectCols is every column webhookDeliveryRow scans, listed
 // explicitly, for the same reason as webhookConfigSelectCols.
-const webhookDeliverySelectCols = `id, webhook_id, subscription_id, event_type, payload, response_status, response_body, duration_ms, success, attempt, created_at`
+const webhookDeliverySelectCols = `id, webhook_id, subscription_id, event_type, payload, response_status, response_body, duration_ms, success, attempt, created_at, redelivery_of, event_id`
 
 // WebhookRepo implements repository.WebhookRepository with PostgreSQL.
 type WebhookRepo struct {
@@ -261,10 +265,10 @@ func (r *WebhookRepo) CreateDelivery(ctx context.Context, delivery *domain.Webho
 	const q = `
 		INSERT INTO webhook_deliveries (
 			id, webhook_id, subscription_id, event_type, payload, response_status,
-			response_body, duration_ms, success, attempt, created_at
+			response_body, duration_ms, success, attempt, created_at, redelivery_of, event_id
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10, $11
+			$7, $8, $9, $10, $11, $12, $13
 		)
 	`
 	// A subscription delivery has no webhook_configs row: store NULL, not the
@@ -276,6 +280,7 @@ func (r *WebhookRepo) CreateDelivery(ctx context.Context, delivery *domain.Webho
 	_, err := r.db.ExecContext(ctx, q,
 		delivery.ID, webhookID, delivery.SubscriptionID, delivery.EventType, delivery.Payload, delivery.ResponseStatus,
 		delivery.ResponseBody, delivery.DurationMs, delivery.Success, delivery.Attempt, delivery.CreatedAt,
+		delivery.RedeliveryOf, delivery.EventID,
 	)
 	return err
 }
@@ -299,5 +304,59 @@ func (r *WebhookRepo) ListDeliveries(ctx context.Context, webhookID uuid.UUID, l
 	return result, nil
 }
 
+// extensionEventRow is a webhookDeliveryRow plus the delivered flag of the feed.
+type extensionEventRow struct {
+	webhookDeliveryRow
+	Delivered bool `db:"delivered"`
+}
+
+// ListConnectionDeliveries returns the original deliveries of every
+// subscription of a connection after the cursor, oldest first. A subscription
+// that was deleted took its deliveries with it (ON DELETE CASCADE), so only
+// events the connection is still subscribed to come back.
+func (r *WebhookRepo) ListConnectionDeliveries(ctx context.Context, connectionID uuid.UUID, after domain.ExtensionEventCursor, until time.Time, limit int) ([]domain.ExtensionEventRecord, error) {
+	const q = `
+		SELECT d.id, d.webhook_id, d.subscription_id, d.event_type, d.payload, d.response_status,
+		       d.response_body, d.duration_ms, d.success, d.attempt, d.created_at, d.redelivery_of,
+		       (d.success OR EXISTS (
+		           SELECT 1 FROM webhook_deliveries r
+		           WHERE r.redelivery_of = d.id AND r.success
+		       )) AS delivered
+		FROM webhook_deliveries d
+		JOIN extension_event_subscriptions s ON s.id = d.subscription_id
+		WHERE s.connection_id = $1
+		  AND d.redelivery_of IS NULL
+		  AND (d.created_at, d.id) > ($2, $3)
+		  AND d.created_at <= $4
+		ORDER BY d.created_at, d.id
+		LIMIT $5
+	`
+	var rows []extensionEventRow
+	if err := r.db.SelectContext(ctx, &rows, q, connectionID, after.CreatedAt, after.ID, until, limit); err != nil {
+		return nil, err
+	}
+	result := make([]domain.ExtensionEventRecord, len(rows))
+	for i := range rows {
+		result[i] = domain.ExtensionEventRecord{WebhookDelivery: rows[i].toDomain(), Delivered: rows[i].Delivered}
+	}
+	return result, nil
+}
+
+// GetDelivery returns one delivery row, or nil when there is none.
+func (r *WebhookRepo) GetDelivery(ctx context.Context, id uuid.UUID) (*domain.WebhookDelivery, error) {
+	const q = `SELECT ` + webhookDeliverySelectCols + ` FROM webhook_deliveries WHERE id = $1`
+	var row webhookDeliveryRow
+	if err := r.db.GetContext(ctx, &row, q, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	d := row.toDomain()
+	return &d, nil
+}
+
 // Ensure WebhookRepo satisfies the repository.WebhookRepository interface.
 var _ repository.WebhookRepository = (*WebhookRepo)(nil)
+
+var _ repository.ExtensionDeliveryLog = (*WebhookRepo)(nil)

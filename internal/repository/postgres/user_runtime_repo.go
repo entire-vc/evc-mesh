@@ -618,8 +618,11 @@ type operatorAgentRow struct {
 // a) naming the runner that drives agent a. An explicit agent_controllers row
 // with a live lease wins. Otherwise the controller is derived from the agent's
 // enabled admission plus the freshest report of that admission's integration:
-// runner = controller_ref, version from the report (the catalog entry's when
-// the runner does not send one), host from the catalog entry, and the lease
+// runner = controller_ref, or the runner_id of a live lease the same runner
+// holds in that workspace (runner_name = controller_ref, host = the catalog
+// entry's; no catalog host, no match) so one
+// process is one runner on the screen; version from the lease or report (the Installed runner extension's,
+// else the catalog entry's of the same name, when the runner does not send one), host from the catalog entry, and the lease
 // end = received_at + the catalog's heartbeat_max_age_seconds (120 s when the
 // entry is missing). An agent without an enabled admission has no derived
 // controller; a lapsed explicit row is the last resort.
@@ -634,20 +637,27 @@ const admittedBindingSQL = `adm.enabled AND (SELECT cr.config->'bindings'->adm.b
 const effectiveControllerSQL = `LEFT JOIN LATERAL (
 		SELECT u.runner_id, u.runner_name, u.host, u.version, u.lease_expires_at FROM (
 			SELECT c.runner_id::text AS runner_id, c.runner_name::text AS runner_name, c.host::text AS host,
-				c.version::text AS version, c.lease_expires_at, 0 AS pri
+				COALESCE(NULLIF(c.version::text, ''), (SELECT ie.version FROM installed_extensions ie WHERE ie.extension_id = 'agent-runner'), (SELECT cr.config->'controllers'->(c.runner_name::text)->>'version' FROM runtime_catalog_revisions cr JOIN integration_configs ic ON ic.id = cr.integration_id WHERE ic.workspace_id = a.workspace_id AND ic.provider IN ('runner','agent_runtime') ORDER BY (ic.provider='runner') DESC, cr.revision DESC LIMIT 1), '') AS version, c.lease_expires_at, 0 AS pri
 			FROM agent_controllers c WHERE c.agent_id = a.id AND c.lease_expires_at > now()
 			UNION ALL
-			(SELECT rep.controller_ref, rep.controller_ref,
-				COALESCE(cat.ctrl->>'host', ''), COALESCE(NULLIF(rep.report->>'version', ''), cat.ctrl->>'version', ''),
+			(SELECT COALESCE(lease.runner_id, rep.controller_ref), COALESCE(lease.runner_name, rep.controller_ref),
+				COALESCE(cat.ctrl->>'host', ''), COALESCE(NULLIF(rep.report->>'version', ''), (SELECT ie.version FROM installed_extensions ie WHERE ie.extension_id = 'agent-runner'), cat.ctrl->>'version', ''),
 				rep.received_at + make_interval(secs => COALESCE(NULLIF((cat.ctrl->>'heartbeat_max_age_seconds')::int, 0), 120)), 1
 			FROM runtime_binding_admissions adm
 			JOIN runtime_controller_reports rep ON rep.integration_id = adm.integration_id
 			LEFT JOIN LATERAL (SELECT config->'controllers'->rep.controller_ref AS ctrl FROM runtime_catalog_revisions
 				WHERE integration_id = rep.integration_id ORDER BY revision DESC LIMIT 1) cat ON true
+			LEFT JOIN LATERAL (SELECT lc.runner_id::text AS runner_id, lc.runner_name::text AS runner_name
+				FROM agent_controllers lc
+				JOIN agents la ON la.id = lc.agent_id AND la.deleted_at IS NULL
+				JOIN integration_configs lic ON lic.id = rep.integration_id AND lic.workspace_id = la.workspace_id
+				WHERE lc.lease_expires_at > now() AND lc.runner_name = rep.controller_ref
+					AND lc.host = NULLIF(cat.ctrl->>'host', '')
+				ORDER BY lc.lease_expires_at DESC LIMIT 1) lease ON true
 			WHERE adm.agent_id = a.id AND ` + admittedBindingSQL + `
 			ORDER BY rep.received_at DESC LIMIT 1)
 			UNION ALL
-			SELECT c.runner_id::text, c.runner_name::text, c.host::text, c.version::text, c.lease_expires_at, 2
+			SELECT c.runner_id::text, c.runner_name::text, c.host::text, COALESCE(NULLIF(c.version::text, ''), (SELECT ie.version FROM installed_extensions ie WHERE ie.extension_id = 'agent-runner'), (SELECT cr.config->'controllers'->(c.runner_name::text)->>'version' FROM runtime_catalog_revisions cr JOIN integration_configs ic ON ic.id = cr.integration_id WHERE ic.workspace_id = a.workspace_id AND ic.provider IN ('runner','agent_runtime') ORDER BY (ic.provider='runner') DESC, cr.revision DESC LIMIT 1), ''), c.lease_expires_at, 2
 			FROM agent_controllers c WHERE c.agent_id = a.id AND c.lease_expires_at <= now()
 		) u ORDER BY u.pri, u.lease_expires_at DESC LIMIT 1
 	) ctl ON true`

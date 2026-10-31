@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -178,4 +180,32 @@ func TestDocumentChunkRepoDB_ScratchProjectsAreExcludedEverywhere(t *testing.T) 
 	st, err := repo.Status(ctx, ws, nil)
 	require.NoError(t, err)
 	assert.Equal(t, domain.DocIndexStatus{LiveDocs: 0, IndexedDocs: 0, ExcludedDocs: 2}, st, "the subtraction is reported, not silent")
+}
+
+// OR fallback on a corpus where the relaxed query matches most rows (prod: 6.9k of
+// 14k chunks, 4.4s because every match was ranked). The AND arm finds nothing
+// (each chunk holds only 3 of the 6 query words), so the bounded OR arm has to answer, inside the budget.
+func TestDocumentChunkRepoDB_ORFallbackIsBoundedOnWideMatch(t *testing.T) {
+	repo, ws, proj, mkDoc := docIdxFixture(t)
+	ctx := context.Background()
+	words := []string{"runner", "deploy", "rollback", "task", "status", "review"}
+	filler := strings.Repeat("the pipeline keeps a long running record of every change that was made ", 20)
+	doc := mkDoc("wide")
+	chunks := make([]domain.DocumentChunk, 6000)
+	for i := range chunks {
+		// every chunk carries 3 of the 6 query words, exactly the ceil(6/2) threshold.
+		c := words[i%6] + " " + words[(i+2)%6] + " " + words[(i+4)%6] + " " + filler
+		chunks[i] = domain.DocumentChunk{ChunkIdx: i, Heading: "h", Content: c}
+	}
+	require.NoError(t, repo.ReplaceChunks(ctx, doc, proj, 1, chunks))
+	_, err := repo.db.ExecContext(ctx, `ANALYZE document_chunks`)
+	require.NoError(t, err)
+
+	const q = "runner deploy rollback task status review"
+	start := time.Now()
+	got, err := repo.FullTextSearch(ctx, ws, &proj, q, domain.DocViewer{AllProjects: true}, 20)
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+	assert.Len(t, got, 20, "OR arm must still fill the page from the bounded candidate set")
+	assert.Less(t, elapsed, 400*time.Millisecond, "OR fallback must rank at most docORCandidateCap rows")
 }

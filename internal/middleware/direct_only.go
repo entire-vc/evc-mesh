@@ -20,9 +20,9 @@ var forwardingHeaders = []string{
 
 // DirectOnly refuses a request that arrived through a reverse proxy, as if
 // the route did not exist (404, before any auth runs — so the edge is not a
-// spawn-token oracle either).
+// spawner-key oracle either).
 //
-// It exists for /internal/* (task #1c9f527d). That route shares the API's
+// It exists for /internal/*. That route shares the API's
 // listener with /api/*, so until now its closure rested on ONE thing: the
 // edge Caddyfile having no block that proxies it. A catch-all
 // `reverse_proxy 127.0.0.1:8005` added there for any unrelated reason would

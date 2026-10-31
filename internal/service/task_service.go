@@ -1133,9 +1133,12 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 		}
 
 		// Workflow-rules transition gate: advisory or strict enforcement from ProjectRuleConfig.
-		if enfMode, vMsg := s.applyTransitionGate(ctx, task, oldStatusID, status); vMsg != "" {
+		if enfMode, vMsg, shipDiag := s.applyTransitionGate(ctx, task, oldStatusID, status); vMsg != "" {
 			if enfMode == domain.RuleConfigEnforcementStrict {
 				s.logTransitionViolation(ctx, task, oldStatusID, status.ID, vMsg, "blocked")
+				if shipDiag != nil {
+					return shipDiag.apiError(vMsg)
+				}
 				return apierror.ForbiddenWithDetails("workflow_transition_blocked", vMsg)
 			}
 			// Advisory: record the permitted violation only after the move commits.

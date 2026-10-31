@@ -57,7 +57,8 @@ type uiStateResponse struct {
 	UpdatedAt time.Time       `json:"updated_at"`
 }
 
-// Get handles GET /me/ui-state/:scope. 404 when nothing has been stored yet.
+// Get handles GET /me/ui-state/:scope. An unset appearance is an empty object
+// (the client keeps its system/local defaults); other unset scopes return 404.
 func (h *UserUIStateHandler) Get(c echo.Context) error {
 	userID, scope, err := h.authorize(c)
 	if err != nil {
@@ -71,6 +72,11 @@ func (h *UserUIStateHandler) Get(c echo.Context) error {
 		userID, scope,
 	).Scan(&state, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
+		if scope == appearanceScope {
+			// First sign-in is normal, not a missing resource. Do not persist a
+			// default or invent an updated_at for a choice the user never made.
+			return c.JSON(http.StatusOK, map[string]any{"state": json.RawMessage(`{}`)})
+		}
 		return apierror.NotFound("ui state")
 	}
 	if err != nil {
