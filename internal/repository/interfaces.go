@@ -31,6 +31,9 @@ type ProjectFilter struct {
 	Search        string
 	MemberUserID  *uuid.UUID // Filter to projects where this user is a member.
 	MemberAgentID *uuid.UUID // Filter to projects where this agent is a member.
+	// ExtensionConnectionID filters to the projects this extension connection
+	// may reach (see ExtensionProjectScopeRepository). Nil: no such filter.
+	ExtensionConnectionID *uuid.UUID
 }
 
 // ProjectRepository manages persistence for projects.
@@ -83,6 +86,11 @@ type TaskFilter struct {
 type AssigneeTaskFilter struct {
 	// StatusCategory keeps only tasks whose status belongs to this category.
 	StatusCategory *domain.StatusCategory
+	// StatusCategories keeps tasks whose status belongs to any of these
+	// categories (?status_category=todo,review,...). Set only when the caller
+	// named two or more; a single category stays in StatusCategory. One request
+	// instead of one per category is what keeps a many-agent poller off the DB.
+	StatusCategories []domain.StatusCategory
 	// ProjectID keeps only tasks in one project.
 	ProjectID *uuid.UUID
 	// Limit caps the number of rows returned. 0 means no limit — the feed is how
@@ -497,9 +505,25 @@ type ArtifactRepository interface {
 	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.Artifact, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Artifact], error)
+	// ReserveTaskBytes atomically holds size bytes on the task for an upload in
+	// flight, only when the task's artifacts, live reservations and size stay
+	// within maxTaskBytes; it returns false and the bytes already held when
+	// they do not. The reservation stops counting after ttl.
+	ReserveTaskBytes(ctx context.Context, reservationID, taskID uuid.UUID, size, maxTaskBytes int64, ttl time.Duration) (bool, int64, error)
+	// CreateFromReservation inserts the artifact and drops its reservation
+	// atomically, only while the reservation is live; otherwise it writes
+	// nothing and returns ErrArtifactReservationExpired.
+	CreateFromReservation(ctx context.Context, reservationID uuid.UUID, artifact *domain.Artifact) error
+	// ReleaseReservation drops a reservation whose upload did not land.
+	ReleaseReservation(ctx context.Context, reservationID uuid.UUID) error
 	// UpdateMetadata overwrites the JSONB metadata column for a single artifact.
 	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) error
 }
+
+// ErrArtifactReservationExpired reports that an upload finished after its
+// reservation stopped counting against the task's limit, so the artifact was
+// not recorded: another upload may already have been granted that room.
+var ErrArtifactReservationExpired = errors.New("artifact reservation expired")
 
 // DocumentRepository manages persistence for project documents. Every read here
 // hides soft-deleted rows; only Create and Update write.
@@ -1267,6 +1291,18 @@ type WebhookRepository interface {
 	ListDeliveries(ctx context.Context, webhookID uuid.UUID, limit int) ([]domain.WebhookDelivery, error)
 }
 
+// ExtensionDeliveryLog reads the delivery log of extension subscriptions for
+// the event feed and redelivery (GET/POST /ext/me/events). The postgres
+// WebhookRepo implements it next to WebhookRepository.
+type ExtensionDeliveryLog interface {
+	// ListConnectionDeliveries returns up to limit original deliveries (not
+	// redeliveries) of every subscription of the connection, strictly after the
+	// cursor and created no later than until, oldest first.
+	ListConnectionDeliveries(ctx context.Context, connectionID uuid.UUID, after domain.ExtensionEventCursor, until time.Time, limit int) ([]domain.ExtensionEventRecord, error)
+	// GetDelivery returns one delivery row, or nil when there is none.
+	GetDelivery(ctx context.Context, id uuid.UUID) (*domain.WebhookDelivery, error)
+}
+
 // VCSLinkRepository manages persistence for VCS links.
 type VCSLinkRepository interface {
 	// Create inserts a new link, but returns apierror.Conflict (never a raw
@@ -1611,6 +1647,30 @@ type IntegrationRepository interface {
 	// owns the provider from then on, full stop — env is not consulted even
 	// though the active-only list would come back empty in both cases).
 	ListByProvider(ctx context.Context, provider domain.IntegrationProvider) ([]domain.IntegrationConfig, error)
+}
+
+// ExtensionProjectScopeRepository answers which projects an extension
+// connection may reach (integration_configs.project_scope plus the enabled
+// bindings in project_integrations). It is the one place that rule lives: the
+// API guard, event delivery, ui-context, the project list and the hierarchy
+// export all ask it.
+type ExtensionProjectScopeRepository interface {
+	// AllowsProject reports whether the connection may reach projectID: the
+	// project exists, is not deleted, belongs to the connection's workspace, the
+	// connection is active, and either its scope is workspace or the project has
+	// an enabled binding for the connection's extension.
+	AllowsProject(ctx context.Context, connectionID, projectID uuid.UUID) (bool, error)
+	// AllowsProjectFor is AllowsProject for the connection of extensionID in
+	// workspaceID. With no connection row the extension runs on its instance
+	// setting, which is never project-bound: true when the project is a live
+	// project of workspaceID.
+	AllowsProjectFor(ctx context.Context, workspaceID uuid.UUID, extensionID string, projectID uuid.UUID) (bool, error)
+	// BoundProjects returns the projects a bound connection may reach. all=true
+	// (and ids nil) for a workspace-scoped connection.
+	BoundProjects(ctx context.Context, connectionID uuid.UUID) (all bool, ids []uuid.UUID, err error)
+	// SetProjectScope changes the scope of the connection of extensionID in
+	// workspaceID. No connection row is a NotFound error.
+	SetProjectScope(ctx context.Context, workspaceID uuid.UUID, extensionID, scope string) error
 }
 
 // MemoryRepository manages persistence for agent memories (knowledge base).

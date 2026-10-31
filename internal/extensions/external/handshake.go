@@ -22,6 +22,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
+	"github.com/entire-vc/evc-mesh/internal/extensions/extsig"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -61,6 +62,10 @@ type installRequest struct {
 	Events        []string  `json:"events"`
 	EventsPath    string    `json:"events_path"`
 	InstallCode   string    `json:"install_code,omitempty"`
+	// SignatureVersion is sent only when the manifest selects v2, so a v1
+	// install body is byte-for-byte what earlier Mesh versions sent. The
+	// service pins to it and refuses any other version afterwards.
+	SignatureVersion int `json:"signature_version,omitempty"`
 }
 
 // Handshaker performs the install handshake for one workspace connection and
@@ -120,6 +125,9 @@ func fingerprint(m extensions.Manifest, base, secret, code string) string {
 	if code != "" {
 		cs := sha256.Sum256([]byte(code))
 		fp += "|" + hex.EncodeToString(cs[:])
+	}
+	if m.External != nil && m.External.SignatureVersion >= extsig.Version {
+		fp += "|sig2"
 	}
 	return fp
 }
@@ -187,6 +195,7 @@ func (h *Handshaker) Run(ctx context.Context, p *Provider, ws uuid.UUID, setting
 		if err := h.install(ctx, p, base, installRequest{
 			ExtensionID: m.ID, Version: m.Version, WorkspaceID: ws, SigningSecret: secret,
 			Events: events, EventsPath: p.ext.EventsPath, InstallCode: code,
+			SignatureVersion: installSignatureVersion(p.ext),
 		}, secret); err != nil {
 			return err
 		}
@@ -204,6 +213,15 @@ func (h *Handshaker) Run(ctx context.Context, p *Provider, ws uuid.UUID, setting
 	h.done[h.key(ws, m.ID)] = fingerprint(m, base, secret, code)
 	h.mu.Unlock()
 	return nil
+}
+
+// installSignatureVersion is the version to announce at install: 2 when the
+// manifest opts in, 0 (omitted) otherwise.
+func installSignatureVersion(e extensions.External) int {
+	if e.SignatureVersion >= extsig.Version {
+		return extsig.Version
+	}
+	return 0
 }
 
 func publicDeclared(m extensions.Manifest) []string {

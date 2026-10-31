@@ -6,7 +6,9 @@
 package external
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/entire-vc/evc-mesh/internal/extensions"
 )
@@ -87,15 +90,34 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// Validate checks the workspace settings: the service address must be present.
+// Validate checks the settings of a level the manifest declares. The instance
+// level is checked against the manifest's instance schema. The workspace
+// level carries the service address, so it must be present and well formed. The
+// project level only narrows a workspace connection: its keys are checked
+// against the manifest's project schema by the binding handler, and the service
+// address stays a workspace setting.
 func (p *Provider) Validate(level extensions.Level, settings map[string]any) error {
-	if level != extensions.LevelWorkspace || !p.Man.Levels.Workspace {
-		return fmt.Errorf("%s has no %s-level settings", p.Man.ID, level)
+	switch level {
+	case extensions.LevelWorkspace:
+		if !p.Man.Levels.Workspace {
+			break
+		}
+		if _, err := p.baseURL(settings); err != nil {
+			return fmt.Errorf("%s: %w", p.ext.BaseURLSetting, err)
+		}
+		return nil
+	case extensions.LevelProject:
+		if p.Man.Levels.Project {
+			return nil
+		}
+	case extensions.LevelInstance:
+		// The instance level exists when the manifest declares a schema for it
+		// (a catalog-installed extension's levels flag may not say so).
+		if sch := p.Man.SettingsSchema(string(extensions.LevelInstance)); sch != nil {
+			return validateAgainstSchema(sch, settings)
+		}
 	}
-	if _, err := p.baseURL(settings); err != nil {
-		return fmt.Errorf("%s: %w", p.ext.BaseURLSetting, err)
-	}
-	return nil
+	return fmt.Errorf("%s has no %s-level settings", p.Man.ID, level)
 }
 
 // Health re-runs the install handshake while it has not succeeded for this
@@ -132,4 +154,38 @@ func (p *Provider) Health(ctx context.Context, r extensions.Resolved) extensions
 		return extensions.HealthReport{Message: fmt.Sprintf("health check answered %d", resp.StatusCode)}
 	}
 	return extensions.HealthReport{OK: true}
+}
+
+// validateAgainstSchema checks settings against a manifest-declared JSON Schema.
+// The first violation is returned without the schema's own location noise.
+func validateAgainstSchema(schemaJSON json.RawMessage, settings map[string]any) error {
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(schemaJSON))
+	if err != nil {
+		return fmt.Errorf("settings schema is not valid JSON: %w", err)
+	}
+	c := jsonschema.NewCompiler()
+	c.DefaultDraft(jsonschema.Draft2020)
+	if err = c.AddResource("settings.json", doc); err != nil {
+		return fmt.Errorf("settings schema: %w", err)
+	}
+	sch, err := c.Compile("settings.json")
+	if err != nil {
+		return fmt.Errorf("settings schema: %w", err)
+	}
+	b, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("encode settings: %w", err)
+	}
+	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(b))
+	if err != nil {
+		return fmt.Errorf("decode settings: %w", err)
+	}
+	if verr := sch.Validate(inst); verr != nil {
+		msg := verr.Error()
+		if i := strings.IndexByte(msg, '\n'); i >= 0 {
+			msg = msg[:i]
+		}
+		return errors.New(msg)
+	}
+	return nil
 }

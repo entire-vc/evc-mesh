@@ -53,7 +53,7 @@ func TestAllowedActorsByTarget_Gate(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, v := checkTransitionGate("review", c.to, c.actor, task, c.links, reviewByTargetCfg())
+			_, v, _ := evaluateTransitionGate("review", c.to, c.actor, task, c.links, reviewByTargetCfg())
 			assert.Equal(t, c.blocked, v != "", "violation=%q", v)
 		})
 	}
@@ -68,7 +68,7 @@ func TestAllowedActorsByTarget_AbsentFieldChangesNothing(t *testing.T) {
 	tr.AllowedActorsByTarget = nil
 	cfg.Transitions["review"] = tr
 	for _, to := range []string{"in_progress", "todo", "done"} {
-		_, v := checkTransitionGate("review", to, transitionActor{ID: author, Type: domain.ActorTypeAgent}, task, nil, cfg)
+		_, v, _ := evaluateTransitionGate("review", to, transitionActor{ID: author, Type: domain.ActorTypeAgent}, task, nil, cfg)
 		assert.NotEmpty(t, v, to)
 	}
 }

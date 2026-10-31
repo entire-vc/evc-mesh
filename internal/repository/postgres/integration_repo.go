@@ -21,8 +21,10 @@ type integrationConfigRow struct {
 	Provider    string    `db:"provider"`
 	Config      []byte    `db:"config"`
 	IsActive    bool      `db:"is_active"`
-	CreatedAt   time.Time `db:"created_at"`
-	UpdatedAt   time.Time `db:"updated_at"`
+	// ProjectScope is never NULL in the table (NOT NULL DEFAULT 'workspace').
+	ProjectScope string    `db:"project_scope"`
+	CreatedAt    time.Time `db:"created_at"`
+	UpdatedAt    time.Time `db:"updated_at"`
 }
 
 func (r *integrationConfigRow) toDomain() domain.IntegrationConfig {
@@ -31,13 +33,14 @@ func (r *integrationConfigRow) toDomain() domain.IntegrationConfig {
 		cfg = []byte("{}")
 	}
 	return domain.IntegrationConfig{
-		ID:          r.ID,
-		WorkspaceID: r.WorkspaceID,
-		Provider:    domain.IntegrationProvider(r.Provider),
-		Config:      cfg,
-		IsActive:    r.IsActive,
-		CreatedAt:   r.CreatedAt,
-		UpdatedAt:   r.UpdatedAt,
+		ID:           r.ID,
+		WorkspaceID:  r.WorkspaceID,
+		Provider:     domain.IntegrationProvider(r.Provider),
+		Config:       cfg,
+		IsActive:     r.IsActive,
+		ProjectScope: r.ProjectScope,
+		CreatedAt:    r.CreatedAt,
+		UpdatedAt:    r.UpdatedAt,
 	}
 }
 
@@ -51,7 +54,7 @@ type IntegrationRepo struct {
 // `SELECT *` is unsafe: sqlx refuses to scan a column with no matching
 // struct field, so an additive migration to this table breaks every read
 // until redeployed.
-const integrationConfigSelectCols = `id, workspace_id, provider, config, is_active, created_at, updated_at`
+const integrationConfigSelectCols = `id, workspace_id, provider, config, is_active, project_scope, created_at, updated_at`
 
 // NewIntegrationRepo creates a new IntegrationRepo.
 func NewIntegrationRepo(db *sqlx.DB) *IntegrationRepo {

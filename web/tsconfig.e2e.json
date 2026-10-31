@@ -16,5 +16,5 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["e2e", "board-e2e/*.ts", "e2e-tabs/*.ts", "e2e-chat/**/*.ts", "playwright.config.ts", "playwright.tabs.config.ts", "perf/*.ts"]
+  "include": ["e2e", "board-e2e/*.ts", "e2e-tabs/*.ts", "e2e-chat/**/*.ts", "e2e-appearance/*.ts", "e2e-ext-diag/*.ts", "playwright.config.ts", "playwright.tabs.config.ts", "perf/*.ts"]
 }

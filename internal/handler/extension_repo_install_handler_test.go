@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -16,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions/catalog"
 	"github.com/entire-vc/evc-mesh/internal/extensions/repoinstall"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -344,4 +346,44 @@ func TestRepoInstallHandlerCatalogSource(t *testing.T) {
 	denied := newRepoFixture(t, false)
 	denied.h.WithCatalogInstall(&fakeCatalogInstaller{})
 	assert.Equal(t, http.StatusForbidden, repoCall(t, denied.h.Install, body, "", false).Code)
+}
+
+func TestRepoInstallHandlerRefreshCatalog(t *testing.T) {
+	rc := catalog.Receipt{FetchedAt: time.Date(2026, 10, 30, 18, 0, 0, 0, time.UTC), ContentSHA256: "abc123"}
+	var calls int
+	var failWith error
+	refresh := func(context.Context) (catalog.Receipt, error) { calls++; return rc, failWith }
+
+	// not an instance admin (user or agent): refused, nothing fetched
+	f := newRepoFixture(t, false)
+	f.h.WithCatalogRefresh(refresh)
+	assert.Equal(t, http.StatusForbidden, repoCall(t, f.h.RefreshCatalog, ``, "", false).Code)
+	assert.Equal(t, http.StatusForbidden, repoCall(t, f.h.RefreshCatalog, ``, "", true).Code)
+	assert.Zero(t, calls, "an unauthorized request must not reach Spark")
+
+	// admin: observable receipt
+	f = newRepoFixture(t, true)
+	f.h.WithCatalogRefresh(refresh)
+	rec := repoCall(t, f.h.RefreshCatalog, ``, "", false)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, 1, calls)
+	assert.Contains(t, rec.Body.String(), `"refreshed":true`)
+	assert.Contains(t, rec.Body.String(), `"fetched_at":"2026-10-30T18:00:00Z"`)
+	assert.Contains(t, rec.Body.String(), `"content_sha256":"abc123"`)
+
+	// failed refresh: 502 with the error and the last-good receipt
+	failWith = catalog.ErrBadSignature
+	rec = repoCall(t, f.h.RefreshCatalog, ``, "", false)
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"refreshed":false`)
+	assert.Contains(t, rec.Body.String(), catalog.ErrBadSignature.Error())
+	assert.Contains(t, rec.Body.String(), `"last_good"`)
+
+	// not configured
+	f = newRepoFixture(t, true)
+	c, _ := adminCtx(http.MethodPost, ``, "", false)
+	err := f.h.RefreshCatalog(c)
+	var he *echo.HTTPError
+	require.ErrorAs(t, err, &he)
+	assert.Equal(t, http.StatusNotFound, he.Code)
 }

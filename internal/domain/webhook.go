@@ -38,6 +38,27 @@ type WebhookDelivery struct {
 	Success        bool       `json:"success" db:"success"`
 	Attempt        int        `json:"attempt" db:"attempt"`
 	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
+	// RedeliveryOf is set on a resend of an extension event: the id of the
+	// original delivery, which is also the X-Mesh-Delivery the resend carries.
+	RedeliveryOf *uuid.UUID `json:"redelivery_of,omitempty" db:"redelivery_of"`
+	// EventID is the event's id as sent in X-Mesh-Event-Id; nil on rows from
+	// before it was recorded and on plain webhook deliveries.
+	EventID *uuid.UUID `json:"event_id,omitempty" db:"event_id"`
+}
+
+// ExtensionEventRecord is one original delivery to an extension subscription as
+// the event feed (GET /ext/me/events) lists it. Delivered is true when the
+// original or any redelivery of it was answered 2xx.
+type ExtensionEventRecord struct {
+	WebhookDelivery
+	Delivered bool `json:"delivered" db:"delivered"`
+}
+
+// ExtensionEventCursor is a position in the event feed: rows strictly after
+// (CreatedAt, ID) in that order. The zero cursor is the start of the log.
+type ExtensionEventCursor struct {
+	CreatedAt time.Time
+	ID        uuid.UUID
 }
 
 // CreateWebhookInput holds parameters for creating a webhook.

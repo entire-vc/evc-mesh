@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions/extsig"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	pkgmetrics "github.com/entire-vc/evc-mesh/pkg/metrics"
@@ -40,6 +41,18 @@ const (
 	webhookRequestTimeout = 10 * time.Second
 )
 
+// sigScheme picks how a delivery is signed.
+type sigScheme int
+
+const (
+	// sigWebhook is the webhook_configs scheme: "sha256=" + HMAC(body).
+	sigWebhook sigScheme = iota
+	// sigExtensionV1 is the documented extension scheme, HMAC("{ts}.{body}").
+	sigExtensionV1
+	// sigExtensionV2 also authenticates delivery id and event type.
+	sigExtensionV2
+)
+
 // webhookService implements WebhookService.
 type webhookService struct {
 	repo   repository.WebhookRepository
@@ -50,6 +63,9 @@ type webhookService struct {
 	// ext delivers public events to extension subscriptions; nil when the
 	// extensions feature is not wired.
 	ext *extensionDelivery
+	// extScope limits deliveries of a project-bound extension connection to
+	// its bound projects; nil leaves bound connections without project events.
+	extScope repository.ExtensionProjectScopeRepository
 }
 
 // WebhookServiceOption configures optional dependencies for webhookService.
@@ -218,11 +234,41 @@ func (s *webhookService) Dispatch(ctx context.Context, workspaceID uuid.UUID, ev
 		log.Printf("[webhook] failed to marshal payload for event %s: %v", eventType, err)
 		return
 	}
+	// One id per event, minted here and nowhere else: every subscriber, every
+	// retry and every transport (webhook body, X-Mesh-Event-Id, NATS envelope)
+	// carries the same value, so a receiver dedups on it.
+	eventID := newEventID()
+	payloadBytes = withEventID(payloadBytes, eventID)
 	for i := range webhooks {
 		wh := webhooks[i]
-		go s.dispatchOne(wh, eventType, payloadBytes)
+		go s.dispatchOne(wh, eventType, eventID, payloadBytes)
 	}
-	s.dispatchExtensions(context.WithoutCancel(ctx), workspaceID, eventType, payloadBytes)
+	s.dispatchExtensions(context.WithoutCancel(ctx), workspaceID, eventType, eventID, payloadBytes)
+}
+
+// newEventID returns a time-ordered UUID v7 for one event. v7 fails only when
+// the system random source does, which uuid.New would panic on as well.
+func newEventID() uuid.UUID {
+	return uuid.Must(uuid.NewV7())
+}
+
+// withEventID returns the payload with event_id set to id, as docs/webhooks.md
+// promises every receiver. Any event_id the payload already carries is
+// overwritten: the id is minted once per Dispatch, so body, header and NATS
+// envelope never disagree and two events never share an identity. A payload
+// that is not a JSON object is sent as is (the id still travels in
+// X-Mesh-Event-Id).
+func withEventID(payloadBytes []byte, id uuid.UUID) []byte {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(payloadBytes, &m); err != nil || m == nil {
+		return payloadBytes
+	}
+	m["event_id"], _ = json.Marshal(id)
+	out, err := json.Marshal(m)
+	if err != nil {
+		return payloadBytes
+	}
+	return out
 }
 
 // TestDelivery fetches the webhook by ID and fires a single test HTTP POST directly
@@ -244,8 +290,10 @@ func (s *webhookService) TestDelivery(ctx context.Context, webhookID uuid.UUID) 
 		log.Printf("[webhook] TestDelivery: marshal payload: %v", err)
 		return
 	}
+	eventID := newEventID()
+	payloadBytes = withEventID(payloadBytes, eventID)
 
-	go s.dispatchOne(*wh, "webhook.test", payloadBytes)
+	go s.dispatchOne(*wh, "webhook.test", eventID, payloadBytes)
 }
 
 // webhookAttempt is the outcome of one delivery: up to webhookMaxAttempts HTTP
@@ -263,7 +311,7 @@ type webhookAttempt struct {
 // It records nothing: callers own the delivery log and failure bookkeeping.
 // owner names the webhook or subscription in log lines. A wait precedes every
 // attempt after the first, so maxAttempts-1 entries of the schedule are used.
-func (s *webhookService) deliver(owner uuid.UUID, targetURL, secret, eventType string, payloadBytes []byte, maxAttempts int, documentedSig bool) webhookAttempt {
+func (s *webhookService) deliver(owner uuid.UUID, targetURL, secret, eventType string, eventID uuid.UUID, payloadBytes []byte, maxAttempts int, sig sigScheme) webhookAttempt {
 	res := webhookAttempt{deliveryID: uuid.New()}
 	backoffs := s.backoffs
 	if backoffs == nil {
@@ -276,7 +324,7 @@ func (s *webhookService) deliver(owner uuid.UUID, targetURL, secret, eventType s
 		}
 
 		res.attempts = attempt
-		status, body, duration, err := s.sendSignedWith(documentedSig, targetURL, secret, eventType, res.deliveryID, payloadBytes)
+		status, body, duration, err := s.sendSignedWith(sig, targetURL, secret, eventType, eventID, res.deliveryID, payloadBytes)
 		res.durationMs = &duration
 		if err == nil {
 			res.status = &status
@@ -302,8 +350,8 @@ func (s *webhookService) deliver(owner uuid.UUID, targetURL, secret, eventType s
 }
 
 // dispatchOne sends a single webhook delivery with up to webhookMaxAttempts retries.
-func (s *webhookService) dispatchOne(wh domain.WebhookConfig, eventType string, payloadBytes []byte) {
-	res := s.deliver(wh.ID, wh.URL, wh.Secret, eventType, payloadBytes, webhookMaxAttempts, false)
+func (s *webhookService) dispatchOne(wh domain.WebhookConfig, eventType string, eventID uuid.UUID, payloadBytes []byte) {
+	res := s.deliver(wh.ID, wh.URL, wh.Secret, eventType, eventID, payloadBytes, webhookMaxAttempts, sigWebhook)
 	deliveryID, lastStatus, lastBody, lastDuration, success, lastAttempt :=
 		res.deliveryID, res.status, res.body, res.durationMs, res.success, res.attempts
 
@@ -354,24 +402,32 @@ func (s *webhookService) dispatchOne(wh domain.WebhookConfig, eventType string, 
 // configs and extension subscriptions share it, so both get the same guarded
 // client; the signature scheme differs. Webhook
 // configs keep "sha256=" + HMAC(body) and an RFC 3339 timestamp. Extension
-// deliveries (documentedSig) follow docs/webhooks.md: X-Mesh-Timestamp is Unix
+// deliveries (sigExtensionV1) follow docs/webhooks.md: X-Mesh-Timestamp is Unix
 // seconds and X-Mesh-Signature is hex HMAC-SHA256 of "{timestamp}.{body}", so a
 // receiver written from the docs (mesh-ext-hello) verifies them and a replayed
-// body with a stale timestamp is refused.
-func (s *webhookService) sendSignedWith(documentedSig bool, targetURL, secret, eventType string, deliveryID uuid.UUID, payloadBytes []byte) (statusCode int, respBody string, durationMS int, err error) {
+// body with a stale timestamp is refused. sigExtensionV2 (opt-in per extension
+// manifest, internal/extensions/extsig) also covers the delivery id and event.
+func (s *webhookService) sendSignedWith(sig sigScheme, targetURL, secret, eventType string, eventID, deliveryID uuid.UUID, payloadBytes []byte) (statusCode int, respBody string, durationMS int, err error) {
 	start := time.Now()
 
 	timestamp := time.Now().UTC().Format(time.RFC3339)
 	mac := hmac.New(sha256.New, []byte(secret))
-	var sig string
-	if documentedSig {
+	var signature string
+	switch sig {
+	case sigExtensionV2:
+		timestamp = strconv.FormatInt(time.Now().Unix(), 10)
+		signature, err = extsig.Sign(secret, timestamp, deliveryID.String(), eventType, payloadBytes)
+		if err != nil {
+			return 0, "", 0, fmt.Errorf("sign: %w", err)
+		}
+	case sigExtensionV1:
 		timestamp = strconv.FormatInt(time.Now().Unix(), 10)
 		mac.Write([]byte(timestamp + "."))
 		mac.Write(payloadBytes)
-		sig = hex.EncodeToString(mac.Sum(nil))
-	} else {
+		signature = hex.EncodeToString(mac.Sum(nil))
+	default:
 		mac.Write(payloadBytes)
-		sig = "sha256=" + hex.EncodeToString(mac.Sum(nil))
+		signature = "sha256=" + hex.EncodeToString(mac.Sum(nil))
 	}
 
 	req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(payloadBytes))
@@ -380,8 +436,12 @@ func (s *webhookService) sendSignedWith(documentedSig bool, targetURL, secret, e
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Mesh-Signature", sig)
+	req.Header.Set("X-Mesh-Signature", signature)
+	if sig == sigExtensionV2 {
+		req.Header.Set(extsig.HeaderVersion, strconv.Itoa(extsig.Version))
+	}
 	req.Header.Set("X-Mesh-Event", eventType)
+	req.Header.Set("X-Mesh-Event-Id", eventID.String())
 	req.Header.Set("X-Mesh-Delivery", deliveryID.String())
 	req.Header.Set("X-Mesh-Timestamp", timestamp)
 	req.Header.Set("User-Agent", "evc-mesh-webhook/1.0")

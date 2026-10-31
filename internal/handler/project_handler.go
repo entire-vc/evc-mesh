@@ -62,7 +62,7 @@ type updateProjectRequest struct {
 
 	// IsArchived is decoded only so it can be refused. The archive flag is not
 	// a PATCH field: archiving has its own routes gated by PermDeleteProject,
-	// and PATCH is open to every project member. Before #ddd219f4 the field
+	// and PATCH is open to every project member. Before an internal ticket the field
 	// simply wasn't declared, so the web client's {is_archived:true} was
 	// silently dropped and answered 200 with nothing changed.
 	IsArchived *bool `json:"is_archived"`
@@ -107,7 +107,13 @@ func (h *ProjectHandler) List(c echo.Context) error {
 
 	// Workspace owners/admins see all projects; others see only their memberships.
 	wsRole, _ := c.Get(mw.ContextKeyWorkspaceRole).(string)
-	if mw.IsAgent(c) {
+	if ep := mw.GetExtensionPrincipal(c); ep != nil {
+		// An extension sees the projects its connection may reach: all of the
+		// workspace, or only the bound ones for a project-bound connection.
+		if ep.ProjectBound {
+			filter.ExtensionConnectionID = &ep.ConnectionID
+		}
+	} else if mw.IsAgent(c) {
 		// Agents always filter by membership.
 		var agentID uuid.UUID
 		if agentID, err = mw.GetAgentID(c); err == nil {
@@ -237,7 +243,7 @@ func (h *ProjectHandler) Update(c echo.Context) error {
 
 // Delete handles DELETE /projects/:proj_id — a real (soft) delete of the
 // project with its tasks and documents. It used to call Archive, so "Delete"
-// in the UI left the project in place and answered 204 (#ddd219f4).
+// in the UI left the project in place and answered 204.
 func (h *ProjectHandler) Delete(c echo.Context) error {
 	projID, err := uuid.Parse(c.Param("proj_id"))
 	if err != nil {

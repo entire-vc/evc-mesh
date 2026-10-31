@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -158,7 +160,7 @@ func TestArtifactService_Upload_RelayPublishWritesPublicURL(t *testing.T) {
 		}, 2*time.Second, 10*time.Millisecond, "tr_public_url should be persisted to metadata")
 	})
 
-	// Card #3bbd0312: a confirmed publish must also stamp tr_published=true so the
+	// an internal ticket: a confirmed publish must also stamp tr_published=true so the
 	// frontend can gate the "Open in Team Relay" button on publication being real,
 	// not on a URL the relay optimistically constructed. RED control: on the code
 	// before this change tr_public_url was written without any tr_published flag.
@@ -195,7 +197,7 @@ func TestArtifactService_Upload_RelayPublishWritesPublicURL(t *testing.T) {
 		}, 2*time.Second, 10*time.Millisecond, "confirmed publish must persist tr_public_url and tr_published=true")
 	})
 
-	// Card #3bbd0312: publish error/timeout means the publication is NOT confirmed —
+	// an internal ticket: publish error/timeout means the publication is NOT confirmed —
 	// no TR metadata may be written, not even the URL the publisher reported before
 	// failing. RED control: the pre-fix code ignored the Publish error and persisted
 	// a non-empty publicURL anyway.
@@ -543,7 +545,7 @@ func TestArtifactService_GetDownloadURL_Disposition(t *testing.T) {
 }
 
 // TestArtifactService_GetDownloadURL_HTMLNeverInlines is the regression test for
-// b2f7ba41: the artifact bucket is proxied through our own origin, so serving
+// an internal ticket: the artifact bucket is proxied through our own origin, so serving
 // text/html without Content-Disposition: attachment lets it execute as a page
 // on mesh.entire.host with the reader's session. inline=true must not bypass
 // that for any type outside the explicit safe-list, no matter what the caller
@@ -686,4 +688,270 @@ func TestArtifactService_ListByTask(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, page)
 	assert.Len(t, page.Items, 3)
+}
+
+// ---------------------------------------------------------------------------
+// TestArtifactService_Upload_SizeLimits
+// ---------------------------------------------------------------------------
+
+func sizedUpload(taskID uuid.UUID, size int) UploadArtifactInput {
+	return UploadArtifactInput{
+		TaskID:         taskID,
+		Name:           "bundle.tar.gz",
+		ArtifactType:   domain.ArtifactTypeFile,
+		MimeType:       "application/gzip",
+		UploadedBy:     uuid.New(),
+		UploadedByType: domain.UploaderTypeAgent,
+		Reader:         strings.NewReader(strings.Repeat("x", size)),
+		Size:           int64(size),
+	}
+}
+
+func requireTooLarge(t *testing.T, err error, limit int64) {
+	t.Helper()
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, apiErr.Code)
+	assert.Equal(t, limit, apiErr.Context["limit_bytes"])
+	assert.Contains(t, apiErr.Message, fmt.Sprint(limit))
+	assert.Contains(t, apiErr.Details, "git or CI artifacts")
+}
+
+func TestArtifactService_Upload_SizeLimits(t *testing.T) {
+	newSvc := func() (*artifactService, *MockStorageClient) {
+		svc, _, storage := setupArtifactService()
+		WithArtifactLimits(10, 25)(svc)
+		return svc, storage
+	}
+
+	t.Run("exactly the file limit is accepted", func(t *testing.T) {
+		svc, storage := newSvc()
+		a, err := svc.Upload(context.Background(), sizedUpload(uuid.New(), 10))
+		require.NoError(t, err)
+		assert.Contains(t, storage.objects, a.StorageKey)
+	})
+
+	t.Run("file limit plus one is refused before storage", func(t *testing.T) {
+		svc, storage := newSvc()
+		_, err := svc.Upload(context.Background(), sizedUpload(uuid.New(), 11))
+		requireTooLarge(t, err, 10)
+		assert.Empty(t, storage.objects)
+	})
+
+	t.Run("task total up to the limit is accepted, one byte more is refused", func(t *testing.T) {
+		svc, storage := newSvc()
+		taskID := uuid.New()
+		for _, size := range []int{10, 10, 5} { // 25 = the task limit
+			_, err := svc.Upload(context.Background(), sizedUpload(taskID, size))
+			require.NoError(t, err)
+		}
+		_, err := svc.Upload(context.Background(), sizedUpload(taskID, 1))
+		requireTooLarge(t, err, 25)
+		assert.Len(t, storage.objects, 3)
+
+		// Another task's quota is its own.
+		_, err = svc.Upload(context.Background(), sizedUpload(uuid.New(), 10))
+		require.NoError(t, err)
+	})
+
+	t.Run("a task filled by another upload refuses before storage", func(t *testing.T) {
+		svc, repo, storage := newSvcWithRepo()
+		taskID := uuid.New()
+		// Another upload in flight already holds the room.
+		repo.reservations[uuid.New()] = domain.Artifact{TaskID: taskID, SizeBytes: 25}
+
+		_, err := svc.Upload(context.Background(), sizedUpload(taskID, 1))
+		requireTooLarge(t, err, 25)
+		assert.Empty(t, storage.objects, "a refused upload must never reach storage")
+		assert.Empty(t, repo.items)
+		assert.Len(t, repo.reservations, 1)
+	})
+
+	t.Run("the artifact is recorded only after its object is stored", func(t *testing.T) {
+		svc, repo, storage := newSvcWithRepo()
+		taskID := uuid.New()
+		svc.storage = visibilityCheckingStorage{storage, repo, t}
+
+		a, err := svc.Upload(context.Background(), sizedUpload(taskID, 10))
+		require.NoError(t, err)
+		assert.Contains(t, repo.items, a.ID)
+		assert.Empty(t, repo.reservations, "the reservation passes to the artifact")
+	})
+
+	t.Run("options passed to the constructor apply; non-positive keeps the default", func(t *testing.T) {
+		svc := NewArtifactService(NewMockArtifactRepository(), NewMockStorageClient(), NewMockActivityLogRepository(),
+			WithArtifactLimits(7, 0)).(*artifactService)
+		assert.EqualValues(t, 7, svc.maxFileBytes)
+		assert.Equal(t, DefaultArtifactTaskMaxBytes, svc.maxTaskBytes)
+	})
+
+	t.Run("a failing reservation is returned before any upload", func(t *testing.T) {
+		svc, repo, storage := newSvcWithRepo()
+		repo.errToReturn = errors.New("db down")
+		_, err := svc.Upload(context.Background(), sizedUpload(uuid.New(), 1))
+		require.EqualError(t, err, "db down")
+		assert.Empty(t, storage.objects)
+	})
+
+	t.Run("an upload that outlived its reservation is not recorded", func(t *testing.T) {
+		svc, repo, storage := newSvcWithRepo()
+		// The reservation expires and is purged while the object is uploading.
+		svc.storage = expiringUploadStorage{storage, repo}
+
+		_, err := svc.Upload(context.Background(), sizedUpload(uuid.New(), 1))
+		var apiErr *apierror.Error
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, http.StatusInternalServerError, apiErr.Code)
+		assert.Contains(t, apiErr.Message, "longer than its reservation")
+		assert.Empty(t, repo.items, "its room may already belong to another upload")
+		assert.Empty(t, storage.objects)
+	})
+
+	t.Run("the upload is cut off when its reservation expires", func(t *testing.T) {
+		svc, _, storage := newSvcWithRepo()
+		deadlines := &deadlineRecordingStorage{MockStorageClient: storage}
+		svc.storage = deadlines
+
+		before := time.Now()
+		_, err := svc.Upload(context.Background(), sizedUpload(uuid.New(), 1))
+		require.NoError(t, err)
+		require.False(t, deadlines.deadline.IsZero(), "the upload must run under a deadline")
+		assert.WithinDuration(t, before.Add(artifactReservationTTL), deadlines.deadline, 5*time.Second)
+	})
+
+	t.Run("a storage failure is a 500 and releases the reservation", func(t *testing.T) {
+		svc, repo, storage := newSvcWithRepo()
+		storage.errToReturn = errors.New("minio down")
+		_, err := svc.Upload(context.Background(), sizedUpload(uuid.New(), 1))
+		var apiErr *apierror.Error
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, http.StatusInternalServerError, apiErr.Code)
+		assert.Empty(t, repo.items, "no artifact without its object")
+		assert.Empty(t, repo.reservations, "a failed upload must not keep its reservation")
+	})
+
+	t.Run("a canceled request still releases the reservation", func(t *testing.T) {
+		svc, repo, storage := newSvcWithRepo()
+		svc.artifactRepo = ctxCheckingReleaseArtifactRepo{repo}
+		storage.errToReturn = context.Canceled
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // the client is gone before the upload fails
+
+		_, err := svc.Upload(ctx, sizedUpload(uuid.New(), 1))
+		require.Error(t, err)
+		assert.Empty(t, repo.reservations, "a dropped upload must not keep its reservation")
+	})
+
+	t.Run("a failed release after a storage failure still returns the 500", func(t *testing.T) {
+		svc, repo, storage := newSvcWithRepo()
+		svc.artifactRepo = failingReleaseArtifactRepo{repo}
+		storage.errToReturn = errors.New("minio down")
+		_, err := svc.Upload(context.Background(), sizedUpload(uuid.New(), 1))
+		var apiErr *apierror.Error
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, http.StatusInternalServerError, apiErr.Code)
+	})
+
+	t.Run("a failed record removes the stored object and the reservation", func(t *testing.T) {
+		svc, repo, storage := newSvcWithRepo()
+		svc.artifactRepo = failingRecordArtifactRepo{repo}
+		_, err := svc.Upload(context.Background(), sizedUpload(uuid.New(), 1))
+		require.EqualError(t, err, "insert failed")
+		assert.Empty(t, storage.objects, "no object without its artifact")
+		assert.Empty(t, repo.reservations)
+	})
+
+	t.Run("a failed object delete after a failed record still returns the error", func(t *testing.T) {
+		svc, repo, storage := newSvcWithRepo()
+		svc.artifactRepo = failingRecordArtifactRepo{repo}
+		svc.storage = failingDeleteStorage{storage}
+		_, err := svc.Upload(context.Background(), sizedUpload(uuid.New(), 1))
+		require.EqualError(t, err, "insert failed")
+		assert.Empty(t, repo.reservations)
+	})
+
+	t.Run("defaults are 25 MB per file and 250 MB per task", func(t *testing.T) {
+		svc, _, _ := setupArtifactService()
+		assert.Equal(t, int64(26214400), svc.maxFileBytes)
+		assert.Equal(t, int64(262144000), svc.maxTaskBytes)
+	})
+}
+
+func newSvcWithRepo() (*artifactService, *MockArtifactRepository, *MockStorageClient) {
+	svc, repo, storage := setupArtifactService()
+	WithArtifactLimits(10, 25)(svc)
+	return svc, repo, storage
+}
+
+// failingReleaseArtifactRepo fails releasing a reservation.
+type failingReleaseArtifactRepo struct{ *MockArtifactRepository }
+
+func (failingReleaseArtifactRepo) ReleaseReservation(context.Context, uuid.UUID) error {
+	return errors.New("release failed")
+}
+
+// failingRecordArtifactRepo fails writing the artifact after its upload.
+type failingRecordArtifactRepo struct{ *MockArtifactRepository }
+
+func (failingRecordArtifactRepo) CreateFromReservation(context.Context, uuid.UUID, *domain.Artifact) error {
+	return errors.New("insert failed")
+}
+
+// ctxCheckingReleaseArtifactRepo refuses a release on a done context, as the
+// database driver does.
+type ctxCheckingReleaseArtifactRepo struct{ *MockArtifactRepository }
+
+func (r ctxCheckingReleaseArtifactRepo) ReleaseReservation(ctx context.Context, id uuid.UUID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return r.MockArtifactRepository.ReleaseReservation(ctx, id)
+}
+
+// expiringUploadStorage stores the object while every reservation lapses,
+// as the purge does for an upload slower than the reservation TTL.
+type expiringUploadStorage struct {
+	*MockStorageClient
+	repo *MockArtifactRepository
+}
+
+func (s expiringUploadStorage) Upload(ctx context.Context, key string, r io.Reader, size int64, mime string) error {
+	s.repo.mu.Lock()
+	clear(s.repo.reservations)
+	s.repo.mu.Unlock()
+	return s.MockStorageClient.Upload(ctx, key, r, size, mime)
+}
+
+// deadlineRecordingStorage records the deadline the upload ran under.
+type deadlineRecordingStorage struct {
+	*MockStorageClient
+	deadline time.Time
+}
+
+func (s *deadlineRecordingStorage) Upload(ctx context.Context, key string, r io.Reader, size int64, mime string) error {
+	s.deadline, _ = ctx.Deadline()
+	return s.MockStorageClient.Upload(ctx, key, r, size, mime)
+}
+
+// failingDeleteStorage stores objects but cannot delete them.
+type failingDeleteStorage struct{ *MockStorageClient }
+
+func (failingDeleteStorage) Delete(context.Context, string) error {
+	return errors.New("delete failed")
+}
+
+// visibilityCheckingStorage fails the test if the artifact is already
+// recorded while its object is being stored.
+type visibilityCheckingStorage struct {
+	*MockStorageClient
+	repo *MockArtifactRepository
+	t    *testing.T
+}
+
+func (s visibilityCheckingStorage) Upload(ctx context.Context, key string, r io.Reader, size int64, mime string) error {
+	s.repo.mu.RLock()
+	recorded := len(s.repo.items)
+	s.repo.mu.RUnlock()
+	assert.Zero(s.t, recorded, "artifact visible before its object is stored")
+	return s.MockStorageClient.Upload(ctx, key, r, size, mime)
 }

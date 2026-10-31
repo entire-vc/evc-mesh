@@ -1,119 +1,91 @@
 package middleware
 
 import (
+	"bytes"
+	"log"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-func withSpawnToken(t *testing.T, value string) {
-	t.Helper()
-	old, hadOld := os.LookupEnv(EnvSpawnToken)
-	if value == "" {
-		_ = os.Unsetenv(EnvSpawnToken)
-	} else {
-		_ = os.Setenv(EnvSpawnToken, value)
-	}
-	t.Cleanup(func() {
-		if hadOld {
-			_ = os.Setenv(EnvSpawnToken, old)
-		} else {
-			_ = os.Unsetenv(EnvSpawnToken)
-		}
-	})
-}
+// The shared spawn token this route accepted before an internal ticket, named here
+// only to prove it no longer opens anything.
+const (
+	legacySpawnTokenEnv    = "MESH_SPAWN_TOKEN"
+	legacySpawnTokenHeader = "X-Spawn-Token"
+)
 
-func runSpawnAuth(t *testing.T, headerValue string) *httptest.ResponseRecorder {
+// runSpawnerAuth drives SpawnerAuth with no agent service: every case here is
+// refused before a key would be looked up, so a nil service is never touched
+// (a request that did reach it would panic and fail the test).
+func runSpawnerAuth(t *testing.T, headers map[string]string) (*httptest.ResponseRecorder, bool) {
 	t.Helper()
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodPost, "/internal/secrets/materialize", http.NoBody)
-	if headerValue != "" {
-		req.Header.Set(SpawnTokenHeader, headerValue)
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
-
-	h := SpawnAuth()(func(c echo.Context) error {
+	reached := false
+	_ = SpawnerAuth(nil)(func(c echo.Context) error {
+		reached = true
 		return c.NoContent(http.StatusOK)
-	})
-	require.NoError(t, h(c))
-	return rec
+	})(c)
+	return rec, reached
 }
 
-func TestSpawnAuth_UnconfiguredRefusesEveryRequest(t *testing.T) {
-	// Fail closed: no token configured means no request gets through, not
-	// "any header value works because there's nothing to compare against".
-	withSpawnToken(t, "")
-	rec := runSpawnAuth(t, "")
-	assert.Equal(t, http.StatusUnauthorized, rec.Code)
-
-	rec2 := runSpawnAuth(t, "anything-at-all")
-	assert.Equal(t, http.StatusUnauthorized, rec2.Code)
-}
-
-func TestSpawnAuth_WrongTokenRejected(t *testing.T) {
-	withSpawnToken(t, "the-real-token")
-	rec := runSpawnAuth(t, "not-the-real-token")
-	assert.Equal(t, http.StatusUnauthorized, rec.Code)
-}
-
-func TestSpawnAuth_MissingHeaderRejected(t *testing.T) {
-	withSpawnToken(t, "the-real-token")
-	rec := runSpawnAuth(t, "")
-	assert.Equal(t, http.StatusUnauthorized, rec.Code)
-}
-
-func TestSpawnAuth_CorrectTokenPasses(t *testing.T) {
-	withSpawnToken(t, "the-real-token")
-	rec := runSpawnAuth(t, "the-real-token")
-	assert.Equal(t, http.StatusOK, rec.Code)
-}
-
-func TestSpawnAuth_EmptyConfiguredTokenNeverMatchesEmptyHeader(t *testing.T) {
-	// An operator accidentally setting MESH_SPAWN_TOKEN="" must not create a
-	// state where an empty header satisfies an "empty" secret — that's the
-	// same failure class as an unconfigured token, and both must refuse.
-	withSpawnToken(t, "")
-	rec := runSpawnAuth(t, "")
-	assert.Equal(t, http.StatusUnauthorized, rec.Code)
-}
-
-func withSpawnTokenRequired(t *testing.T, value string) {
-	t.Helper()
-	old, hadOld := os.LookupEnv(EnvSpawnTokenRequired)
-	if value == "" {
-		_ = os.Unsetenv(EnvSpawnTokenRequired)
-	} else {
-		_ = os.Setenv(EnvSpawnTokenRequired, value)
+// The old token, sent with exactly the value the old env var holds, is
+// refused: there is no token path left to match it against.
+func TestSpawnerAuth_LegacySpawnTokenRefused(t *testing.T) {
+	t.Setenv(legacySpawnTokenEnv, "the-real-token")
+	t.Setenv(EnvSpawnerAgentIDs, "2b7f0a4e-6c1d-4f43-9e55-0d3b8a1c7e90")
+	for _, v := range []string{"the-real-token", "anything-else", ""} {
+		rec, reached := runSpawnerAuth(t, map[string]string{legacySpawnTokenHeader: v})
+		assert.Equal(t, http.StatusUnauthorized, rec.Code, "token %q", v)
+		assert.False(t, reached, "token %q must not reach the handler", v)
 	}
-	t.Cleanup(func() {
-		if hadOld {
-			_ = os.Setenv(EnvSpawnTokenRequired, old)
-		} else {
-			_ = os.Unsetenv(EnvSpawnTokenRequired)
-		}
-	})
 }
 
-func TestCheckSpawnTokenConfigured_ConfiguredDoesNotExit(t *testing.T) {
-	// The configured branch just logs and returns — must not touch the
-	// EnvSpawnTokenRequired fatal path at all, configured or not.
-	withSpawnToken(t, "some-token")
-	withSpawnTokenRequired(t, "1")
-	assert.NotPanics(t, CheckSpawnTokenConfigured)
+func TestSpawnerAuth_LegacySpawnTokenRefusedWithEmptyEnv(t *testing.T) {
+	t.Setenv(legacySpawnTokenEnv, "")
+	rec, reached := runSpawnerAuth(t, map[string]string{legacySpawnTokenHeader: ""})
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.False(t, reached)
 }
 
-func TestCheckSpawnTokenConfigured_UnconfiguredAndNotRequiredWarnsOnly(t *testing.T) {
-	// Unconfigured + EnvSpawnTokenRequired unset must warn and return, not
-	// exit — this is the expected local-dev/test shape (materialization
-	// endpoint simply refuses every request per SpawnAuth's fail-closed
-	// behavior, nothing fatal about it).
-	withSpawnToken(t, "")
-	withSpawnTokenRequired(t, "")
-	assert.NotPanics(t, CheckSpawnTokenConfigured)
+func TestSpawnerAuth_MalformedKeyRejected(t *testing.T) {
+	rec, reached := runSpawnerAuth(t, map[string]string{"X-Agent-Key": "not-an-agent-key"})
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.False(t, reached)
+}
+
+// captureLog returns what fn wrote through the standard logger.
+func captureLog(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	fn()
+	return buf.String()
+}
+
+func TestLogSpawnerAllowlist_EmptySaysEndpointRefusesAll(t *testing.T) {
+	t.Setenv(EnvSpawnerAgentIDs, "")
+	out := captureLog(t, LogSpawnerAllowlist)
+	assert.Contains(t, out, EnvSpawnerAgentIDs+" not set")
+	assert.Contains(t, out, "refuse every request")
+}
+
+func TestLogSpawnerAllowlist_CountsValidAgents(t *testing.T) {
+	// The garbage entry is skipped, so the count is the two valid ids.
+	t.Setenv(EnvSpawnerAgentIDs, "2b7f0a4e-6c1d-4f43-9e55-0d3b8a1c7e90, not-a-uuid ,7d0c1e2f-3a4b-4c5d-8e6f-9a0b1c2d3e4f")
+	out := captureLog(t, LogSpawnerAllowlist)
+	assert.Contains(t, out, EnvSpawnerAgentIDs+" lists 2 agent(s)")
+	assert.Contains(t, out, "agent-key path active")
+	assert.NotContains(t, out, "refuse every request")
 }

@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"strings"
 	"time"
 
@@ -19,6 +21,17 @@ import (
 
 // presignedURLExpiry is the duration for presigned download URLs.
 const presignedURLExpiry = 1 * time.Hour
+
+// artifactReservationTTL bounds how long room held for an upload in flight
+// counts against the task's limit if the process dies before releasing it.
+// The upload itself is cut off there, and an artifact whose reservation has
+// expired is never recorded. A per-file limit of tens of MiB uploads in
+// seconds, far inside it.
+const artifactReservationTTL = 15 * time.Minute
+
+// artifactCleanupTimeout bounds the work done after the upload itself:
+// recording the artifact, or undoing the reservation and the stored object.
+const artifactCleanupTimeout = 10 * time.Second
 
 // inlineSafeMimeTypes are the only content types GetDownloadURL will ever
 // serve without a Content-Disposition: attachment header, no matter what the
@@ -60,11 +73,52 @@ type StorageClient interface {
 	Download(ctx context.Context, key string) (io.ReadCloser, error)
 }
 
+// Default artifact size limits (overridable via WithArtifactLimits, env
+// ARTIFACT_MAX_BYTES / ARTIFACT_TASK_MAX_BYTES). Normal intake is tens of MB a
+// day; the limits exist for handoff tarballs of 200+ MB that filled the
+// object-storage volume.
+const (
+	DefaultArtifactMaxBytes     int64 = 25 << 20
+	DefaultArtifactTaskMaxBytes int64 = 250 << 20
+)
+
+const artifactSizeHint = "keep large bundles in git or CI artifacts and attach a link to the task"
+
+// ArtifactTooLargeError is the 413 an upload over an artifact limit gets. The
+// message names the limit so the caller knows what fits.
+func ArtifactTooLargeError(message string, limit int64) *apierror.Error {
+	return &apierror.Error{
+		Code:      http.StatusRequestEntityTooLarge,
+		ErrorCode: apierror.CodeBadRequest,
+		Message:   message,
+		Details:   artifactSizeHint,
+		Context:   map[string]any{"limit_bytes": limit},
+	}
+}
+
+// ArtifactServiceOption configures optional artifactService settings.
+type ArtifactServiceOption func(*artifactService)
+
+// WithArtifactLimits sets the per-file and per-task size limits in bytes. A
+// non-positive value keeps the default.
+func WithArtifactLimits(maxFile, maxTask int64) ArtifactServiceOption {
+	return func(s *artifactService) {
+		if maxFile > 0 {
+			s.maxFileBytes = maxFile
+		}
+		if maxTask > 0 {
+			s.maxTaskBytes = maxTask
+		}
+	}
+}
+
 type artifactService struct {
 	artifactRepo   repository.ArtifactRepository
 	storage        StorageClient
 	activityRepo   repository.ActivityLogRepository
 	relayPublisher RelayPublisher
+	maxFileBytes   int64
+	maxTaskBytes   int64
 }
 
 // NewArtifactService returns a new ArtifactService backed by the given repositories and storage.
@@ -72,12 +126,19 @@ func NewArtifactService(
 	artifactRepo repository.ArtifactRepository,
 	storage StorageClient,
 	activityRepo repository.ActivityLogRepository,
+	opts ...ArtifactServiceOption,
 ) ArtifactService {
-	return &artifactService{
+	s := &artifactService{
 		artifactRepo: artifactRepo,
 		storage:      storage,
 		activityRepo: activityRepo,
+		maxFileBytes: DefaultArtifactMaxBytes,
+		maxTaskBytes: DefaultArtifactTaskMaxBytes,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // SetRelayPublisher wires an optional Team Relay publisher into the artifact service.
@@ -92,13 +153,12 @@ func (s *artifactService) Upload(ctx context.Context, input UploadArtifactInput)
 		return nil, apierror.ServiceUnavailable("storage backend not configured; set S3_ENDPOINT, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET")
 	}
 
+	if input.Size > s.maxFileBytes {
+		return nil, ArtifactTooLargeError(fmt.Sprintf(
+			"artifact is %d bytes, the limit is %d bytes per file", input.Size, s.maxFileBytes), s.maxFileBytes)
+	}
 	id := uuid.New()
 	storageKey := fmt.Sprintf("%s/%s/%s/%s", input.TaskID, id, input.Name, input.Name)
-
-	if err := s.storage.Upload(ctx, storageKey, input.Reader, input.Size, input.MimeType); err != nil {
-		return nil, apierror.InternalError("failed to upload artifact to storage")
-	}
-
 	artifact := &domain.Artifact{
 		ID:             id,
 		TaskID:         input.TaskID,
@@ -112,9 +172,40 @@ func (s *artifactService) Upload(ctx context.Context, input UploadArtifactInput)
 		CreatedAt:      timeNow(),
 	}
 
-	if err := s.artifactRepo.Create(ctx, artifact); err != nil {
-		// Best-effort cleanup: try to remove the uploaded file.
-		_ = s.storage.Delete(ctx, storageKey)
+	// The reservation holds the room on the task before any byte reaches
+	// storage: the check and the hold are atomic per task, so a refused upload,
+	// even one racing another upload to the same task, never touches the
+	// bucket. The artifact row is written only once the object is stored, so
+	// nothing lists or serves an artifact whose object is not there yet.
+	reserved, used, err := s.artifactRepo.ReserveTaskBytes(ctx, id, input.TaskID, input.Size, s.maxTaskBytes, artifactReservationTTL)
+	if err != nil {
+		return nil, err
+	}
+	if !reserved {
+		return nil, s.taskLimitError(used, input.Size)
+	}
+	// Cleanup runs detached from the request, which is often canceled by now
+	// (client gone), so a dropped upload does not hold the task's room until
+	// the reservation expires.
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), artifactCleanupTimeout)
+	defer cancel()
+
+	// An upload that outlives its reservation could not be recorded anyway,
+	// so it is stopped there rather than left to fill the bucket.
+	uploadCtx, cancelUpload := context.WithTimeout(ctx, artifactReservationTTL)
+	defer cancelUpload()
+	if err = s.storage.Upload(uploadCtx, storageKey, input.Reader, input.Size, input.MimeType); err != nil {
+		s.releaseReservation(cleanupCtx, id)
+		return nil, apierror.InternalError("failed to upload artifact to storage")
+	}
+	if err = s.artifactRepo.CreateFromReservation(cleanupCtx, id, artifact); err != nil {
+		if delErr := s.storage.Delete(cleanupCtx, storageKey); delErr != nil {
+			log.Printf("artifact %s: delete stored object after failed record: %v", id, delErr)
+		}
+		s.releaseReservation(cleanupCtx, id)
+		if errors.Is(err, repository.ErrArtifactReservationExpired) {
+			return nil, apierror.InternalError("artifact upload took longer than its reservation on the task; retry the upload")
+		}
 		return nil, err
 	}
 
@@ -179,6 +270,18 @@ func (s *artifactService) Upload(ctx context.Context, input UploadArtifactInput)
 	}
 
 	return artifact, nil
+}
+
+func (s *artifactService) releaseReservation(ctx context.Context, id uuid.UUID) {
+	if err := s.artifactRepo.ReleaseReservation(ctx, id); err != nil {
+		log.Printf("artifact %s: release reservation: %v", id, err)
+	}
+}
+
+func (s *artifactService) taskLimitError(used, size int64) *apierror.Error {
+	return ArtifactTooLargeError(fmt.Sprintf(
+		"task already holds %d bytes of artifacts, this %d-byte file would exceed the limit of %d bytes per task",
+		used, size, s.maxTaskBytes), s.maxTaskBytes)
 }
 
 // GetByID retrieves an artifact by its ID.

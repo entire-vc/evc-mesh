@@ -1400,6 +1400,15 @@ func (r *TaskRepo) ListByAssignee(
 		conditions = append(conditions,
 			fmt.Sprintf("status_id IN (SELECT id FROM task_statuses WHERE category = $%d)", len(args)))
 	}
+	if len(filter.StatusCategories) > 0 {
+		cats := make([]string, len(filter.StatusCategories))
+		for i, c := range filter.StatusCategories {
+			cats[i] = string(c)
+		}
+		args = append(args, pq.Array(cats))
+		conditions = append(conditions,
+			fmt.Sprintf("status_id IN (SELECT id FROM task_statuses WHERE category = ANY($%d))", len(args)))
+	}
 
 	where := "WHERE " + joinAnd(conditions)
 

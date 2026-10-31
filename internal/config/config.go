@@ -34,6 +34,12 @@ type Config struct {
 	// over soft a write succeeds with a warning, over hard it is refused.
 	DocBodySoftLimit int
 	DocBodyHardLimit int
+
+	// ArtifactMaxBytes caps one uploaded artifact; ArtifactTaskMaxBytes caps
+	// the sum of artifacts on one task. Over either the upload is
+	// refused with 413 and nothing reaches object storage.
+	ArtifactMaxBytes     int64
+	ArtifactTaskMaxBytes int64
 }
 
 // TelegramConfig holds the per-INSTANCE switch for the Telegram notification
@@ -419,8 +425,10 @@ func Load() *Config {
 			MaxMsgSize:     getEnvInt32("NATS_MAX_MSG_SIZE", 256*1024),              // 256 KB
 			Replicas:       getEnvInt("NATS_REPLICAS", 1),
 		},
-		DocBodySoftLimit: getEnvInt("DOC_BODY_SOFT_LIMIT_BYTES", 30<<10),
-		DocBodyHardLimit: getEnvInt("DOC_BODY_HARD_LIMIT_BYTES", 120<<10),
+		DocBodySoftLimit:     getEnvInt("DOC_BODY_SOFT_LIMIT_BYTES", 30<<10),
+		DocBodyHardLimit:     getEnvInt("DOC_BODY_HARD_LIMIT_BYTES", 120<<10),
+		ArtifactMaxBytes:     getEnvInt64InRange("ARTIFACT_MAX_BYTES", 25<<20, 1, maxArtifactBytesLimit),       // 25 MB
+		ArtifactTaskMaxBytes: getEnvInt64InRange("ARTIFACT_TASK_MAX_BYTES", 250<<20, 1, maxArtifactBytesLimit), // 250 MB
 		S3: S3Config{
 			Endpoint:        getEnv("S3_ENDPOINT", "localhost:9002"),
 			AccessKeyID:     getEnv("S3_ACCESS_KEY_ID", "minioadmin"),
@@ -584,6 +592,21 @@ func getEnvInt64(key string, defaultVal int64) int64 {
 		}
 	}
 	return defaultVal
+}
+
+// maxArtifactBytesLimit is the ceiling for the artifact size env vars: 1 TiB,
+// far above any real cap and low enough that "limit+1" and base64 sizing
+// arithmetic downstream cannot overflow int64.
+const maxArtifactBytesLimit int64 = 1 << 40
+
+// getEnvInt64InRange is getEnvInt64 that falls back to the default when the
+// parsed value is outside [minVal, maxVal], like any other malformed input.
+func getEnvInt64InRange(key string, defaultVal, minVal, maxVal int64) int64 {
+	v := getEnvInt64(key, defaultVal)
+	if v < minVal || v > maxVal {
+		return defaultVal
+	}
+	return v
 }
 
 // getEnvInt32 parses directly into int32's own range, unlike

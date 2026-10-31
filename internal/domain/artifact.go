@@ -21,12 +21,14 @@ const (
 	ArtifactTypeData   ArtifactType = "data"
 )
 
-// UploaderType determines whether an artifact was uploaded by a user or agent.
+// UploaderType determines whether an artifact was uploaded by a user, agent or extension.
 type UploaderType string
 
 const (
 	UploaderTypeUser  UploaderType = "user"
 	UploaderTypeAgent UploaderType = "agent"
+	// UploaderTypeExtension is the service actor of an extension connection.
+	UploaderTypeExtension UploaderType = "extension"
 )
 
 // Artifact is a file, code snippet, log, report, or link attached to a task.
@@ -78,7 +80,7 @@ var sensitiveArtifactMetadataKeys = []string{"tr_agent_key"}
 // handler, package, or future read path alike — because it is on the type,
 // not on each call site. The previous approach (a helper each handler had to
 // remember to call) missed the GET /tasks/:id/context path for months
-// (#58a0e7aa) before anyone noticed; a per-callsite guard can always be
+// before anyone noticed; a per-callsite guard can always be
 // forgotten again by the next one. This can't be.
 func (a Artifact) MarshalJSON() ([]byte, error) {
 	type alias Artifact // same fields/tags, no MarshalJSON — avoids recursion

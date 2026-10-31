@@ -227,10 +227,56 @@ func TestUserUIState_ScopeAndBodyValidation(t *testing.T) {
 func TestUserUIState_Appearance_PerUserAndHumanOnly(t *testing.T) {
 	f := newUIStateFixture(t)
 	// Needs no project: a user who belongs to none can still keep a colour mode.
-	require.Equal(t, http.StatusNotFound, f.do(http.MethodGet, "appearance", f.stranger.String(), "").Code)
+	unset := f.do(http.MethodGet, "appearance", f.stranger.String(), "")
+	require.Equal(t, http.StatusOK, unset.Code)
+	require.JSONEq(t, `{"state":{}}`, unset.Body.String())
 	require.Equal(t, http.StatusOK, f.do(http.MethodPut, "appearance", f.stranger.String(), `{"state":{"mode":"dark"}}`).Code)
 	require.Contains(t, f.do(http.MethodGet, "appearance", f.stranger.String(), "").Body.String(), `"dark"`)
 	// Another user's row is untouched, and an agent key never reaches it.
-	require.Equal(t, http.StatusNotFound, f.do(http.MethodGet, "appearance", f.member.String(), "").Code)
+	other := f.do(http.MethodGet, "appearance", f.member.String(), "")
+	require.Equal(t, http.StatusOK, other.Code)
+	require.JSONEq(t, `{"state":{}}`, other.Body.String())
 	require.NotEqual(t, http.StatusOK, f.do(http.MethodGet, "appearance", f.stranger.String(), "", "X-Test-Agent", "1").Code)
+}
+
+func TestUserUIState_Appearance_DefaultIsReadOnlyAndSavedStateWins(t *testing.T) {
+	f := newUIStateFixture(t)
+	for range 3 {
+		rec := f.do(http.MethodGet, "appearance", f.member.String(), "")
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.JSONEq(t, `{"state":{}}`, rec.Body.String())
+	}
+	var rows int
+	require.NoError(t, f.db.Get(&rows, `SELECT count(*) FROM user_ui_state WHERE user_id = $1 AND scope = 'appearance'`, f.member))
+	require.Zero(t, rows, "GET must not create a default that overwrites a later local choice")
+
+	saved := f.do(http.MethodPut, "appearance", f.member.String(), `{"state":{"mode":"dark","density":"compact"}}`)
+	require.Equal(t, http.StatusOK, saved.Code)
+	for range 3 {
+		rec := f.do(http.MethodGet, "appearance", f.member.String(), "")
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.JSONEq(t, saved.Body.String(), rec.Body.String())
+	}
+	// The new default is limited to missing rows, never authentication errors.
+	require.Equal(t, http.StatusUnauthorized, f.do(http.MethodGet, "appearance", "", "").Code)
+}
+
+func TestUserUIState_Appearance_StorageFailureIsNotDefault(t *testing.T) {
+	// A real, closed pool returns a storage error without borrowing or closing
+	// the database fixture used by the persistence checks.
+	db, err := sqlx.Open("postgres", "")
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	e := echo.New()
+	e.HTTPErrorHandler = NewHTTPErrorHandler(e.DefaultHTTPErrorHandler)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(httptest.NewRequest(http.MethodGet, "/api/v1/me/ui-state/appearance", http.NoBody), rec)
+	c.SetParamNames("scope")
+	c.SetParamValues("appearance")
+	c.Set(mw.ContextKeyUserID, uuid.New())
+	c.Set(mw.ContextKeyAuthType, mw.AuthTypeUser)
+	err = NewUserUIStateHandler(db).Get(c)
+	require.Error(t, err)
+	e.HTTPErrorHandler(err, c)
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
 }

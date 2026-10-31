@@ -5,12 +5,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
@@ -23,9 +25,13 @@ const docChunkImportance float32 = 0.5
 // DocumentChunkRepo implements repository.DocumentChunkRepository.
 type DocumentChunkRepo struct {
 	db *sqlx.DB
+	// vectors caches decoded document_chunks embeddings for VectorSearch.
+	vectors *vectorCache
 }
 
-func NewDocumentChunkRepo(db *sqlx.DB) *DocumentChunkRepo { return &DocumentChunkRepo{db: db} }
+func NewDocumentChunkRepo(db *sqlx.DB) *DocumentChunkRepo {
+	return &DocumentChunkRepo{db: db, vectors: newVectorCache(defaultVectorCacheFloats)}
+}
 
 func (r *DocumentChunkRepo) ReplaceChunks(ctx context.Context, documentID, projectID uuid.UUID, version int, chunks []domain.DocumentChunk) error {
 	tx, err := r.db.BeginTxx(ctx, nil)
@@ -196,8 +202,12 @@ func (r *DocumentChunkRepo) FullTextSearch(ctx context.Context, wsID uuid.UUID, 
 		return nil, fmt.Errorf("doc chunks fts: %w", err)
 	}
 	if len(rows) < minFTSHits {
-		// Same relaxation memories' BM25 arm applies: AND → OR of the tokens.
-		if orRows, err2 := run(`to_tsquery('english', regexp_replace(plainto_tsquery('english', $2)::text, ' & ', ' | ', 'g'))`); err2 == nil {
+		// Same relaxation memories' BM25 arm applies: AND → OR of the tokens, but
+		// bounded: ranking every OR match cost 4.4s in production (half the corpus matched).
+		orRows, err2 := r.orSearch(ctx, wsID, projID, query, viewer, limit)
+		if err2 != nil {
+			log.Printf("WARN: doc chunks fts: OR fallback skipped, serving AND results: %v", err2)
+		} else {
 			rows = orRows
 		}
 	}
@@ -206,6 +216,73 @@ func (r *DocumentChunkRepo) FullTextSearch(ctx context.Context, wsID uuid.UUID, 
 		out[i] = h.toScored(wsID)
 	}
 	return out, nil
+}
+
+// docORCandidateCap bounds how many OR matches are ranked; docORTimeout bounds the whole branch.
+const (
+	docORCandidateCap = 500
+	docORTimeout      = "800ms"
+)
+
+// orSearch is the relaxed arm of FullTextSearch. Candidates are the rows matching at
+// least ceil(n/2) of the query's n lexemes (cheap, no ranking), capped at
+// docORCandidateCap by matched-lexeme count; only those are ranked with ts_rank_cd.
+// It runs in a transaction with a local statement_timeout so a pathological query
+// degrades to the AND results instead of an error or a long-running scan.
+func (r *DocumentChunkRepo) orSearch(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, viewer domain.DocViewer, limit int) ([]docChunkHit, error) {
+	tx, err := r.db.BeginTxx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck // read-only
+	if _, err := tx.ExecContext(ctx, "SET LOCAL statement_timeout = '"+docORTimeout+"'"); err != nil {
+		return nil, err
+	}
+	var lexemes pq.StringArray
+	if err := tx.GetContext(ctx, &lexemes, `SELECT tsvector_to_array(to_tsvector('english', $1))`, query); err != nil {
+		return nil, err
+	}
+	if len(lexemes) == 0 {
+		return nil, nil
+	}
+	args := []interface{}{wsID, query}
+	// Matches are counted per lexeme through the GIN index (one single-term scan each),
+	// never by evaluating the tsquery on the rows: that detoasts the whole search_vector
+	// of every OR match (~5.7k rows, 1-3s in production).
+	perLexeme := make([]string, len(lexemes))
+	for i, l := range lexemes {
+		args = append(args, "'"+strings.ReplaceAll(l, "'", "''")+"'")
+		perLexeme[i] = fmt.Sprintf("SELECT id FROM document_chunks WHERE search_vector @@ $%d::tsquery", len(args))
+	}
+	where := "TRUE"
+	if projID != nil {
+		args = append(args, *projID)
+		where += fmt.Sprintf(" AND c.project_id = $%d", len(args))
+	}
+	var vc string
+	vc, args = docViewerCond(viewer, args)
+	if vc != "" {
+		where += " AND " + vc
+	}
+	minMatch := (len(lexemes) + 1) / 2
+	args = append(args, limit)
+	orq := `to_tsquery('english', regexp_replace(plainto_tsquery('english', $2)::text, ' & ', ' | ', 'g'))`
+	q := fmt.Sprintf(`WITH m AS MATERIALIZED (
+		SELECT id, count(*) AS matched FROM (%s) u GROUP BY id HAVING count(*) >= %d
+	), cand AS MATERIALIZED (
+		SELECT c.id %s JOIN m ON m.id = c.id WHERE %s ORDER BY m.matched DESC LIMIT %d
+	)
+	SELECT %s, ts_rank_cd(c.search_vector, %s) AS score
+	FROM cand JOIN document_chunks c ON c.id = cand.id
+	JOIN documents d ON d.id = c.document_id
+	ORDER BY score DESC LIMIT $%d`,
+		strings.Join(perLexeme, " UNION ALL "), minMatch, docChunkFrom, where, docORCandidateCap,
+		docChunkSelect, orq, len(args))
+	var rows []docChunkHit
+	if err := tx.SelectContext(ctx, &rows, q, args...); err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 func (r *DocumentChunkRepo) VectorSearch(ctx context.Context, queryVec []float32, wsID uuid.UUID, projID *uuid.UUID, viewer domain.DocViewer, limit int) ([]domain.ScoredMemory, error) {
@@ -223,25 +300,35 @@ func (r *DocumentChunkRepo) VectorSearch(ctx context.Context, queryVec []float32
 	if vc != "" {
 		where += " AND " + vc
 	}
-	var emb []struct {
-		ID        uuid.UUID `db:"id"`
-		Embedding string    `db:"embedding"`
+	// Keys only; the embedding text is read through the cache once per row
+	// version rather than for the whole workspace on every call.
+	var keyRows []struct {
+		ID   uuid.UUID `db:"id"`
+		Xmin int64     `db:"xmin"`
 	}
-	q := fmt.Sprintf(`SELECT c.id, c.embedding %s WHERE %s`, docChunkFrom, where)
-	if err := r.db.SelectContext(ctx, &emb, q, args...); err != nil {
+	q := fmt.Sprintf(`SELECT c.id, c.xmin::text::bigint AS xmin %s WHERE %s`, docChunkFrom, where)
+	if err := r.db.SelectContext(ctx, &keyRows, q, args...); err != nil {
 		return nil, fmt.Errorf("doc chunks vector: candidates: %w", err)
+	}
+	keys := make([]vectorKey, len(keyRows))
+	for i, k := range keyRows {
+		keys[i] = vectorKey{id: k.ID, xmin: k.Xmin}
+	}
+	vecs, err := r.vectors.vectors(ctx, keys, r.loadVectors)
+	if err != nil {
+		return nil, err
 	}
 	type sc struct {
 		id    uuid.UUID
 		score float64
 	}
-	scores := make([]sc, 0, len(emb))
-	for _, e := range emb {
-		vec, err := domain.DecodeEmbedding(e.Embedding)
-		if err != nil || len(vec) != len(queryVec) {
+	scores := make([]sc, 0, len(keyRows))
+	for _, k := range keyRows {
+		vec, ok := vecs[k.ID]
+		if !ok || len(vec) != len(queryVec) {
 			continue
 		}
-		scores = append(scores, sc{e.ID, cosineSimilarity(queryVec, vec)})
+		scores = append(scores, sc{k.ID, cosineSimilarity(queryVec, vec)})
 	}
 	slices.SortFunc(scores, func(a, b sc) int {
 		switch {
@@ -283,6 +370,19 @@ func (r *DocumentChunkRepo) VectorSearch(ctx context.Context, queryVec []float32
 		}
 	}
 	return out, nil
+}
+
+// loadVectors is the vector cache's loader: the embedding text of the given
+// document_chunks rows, at their current version.
+func (r *DocumentChunkRepo) loadVectors(ctx context.Context, ids []uuid.UUID) ([]vectorRow, error) {
+	var rows []vectorRow
+	if err := r.db.SelectContext(ctx, &rows,
+		`SELECT id, xmin::text::bigint AS xmin, embedding FROM document_chunks WHERE id = ANY($1)`,
+		pq.Array(ids),
+	); err != nil {
+		return nil, fmt.Errorf("doc chunks vector: load vectors: %w", err)
+	}
+	return rows, nil
 }
 
 func (r *DocumentChunkRepo) ListStale(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, limit int) ([]domain.Document, error) {

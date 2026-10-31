@@ -295,3 +295,78 @@ func TestOperatorAgents_ReassignedBindingNotRevived(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, agentIDs(t, d.repo, d.actor.UserID, d.owner), "restoring the old catalog does not revive the old admission")
 }
+
+// One runner process holds leases for most agents (runner_id = its own id) and
+// reports to the catalog as controller runner-a. An agent it leads only through
+// the report joins the leased runner's row instead of a second one named after
+// the controller_ref; without a live lease the row stays keyed by controller_ref.
+func TestOperatorRunners_ReportJoinsLeaseOfSameController(t *testing.T) {
+	d := seedDerived(t)
+	ctx := context.Background()
+	d.admitted(true)
+	host := d.catalog.Controllers["runner-a"].Host
+	leased := seedGrantAgent(t, d.db, d.owner)
+	_, err := d.db.ExecContext(ctx, `UPDATE agents SET operator_user_id=$2 WHERE id=$1`, leased.ID, d.actor.UserID)
+	require.NoError(t, err)
+	runnerID := uuid.NewString()
+	_, err = d.db.ExecContext(ctx, `INSERT INTO agent_controllers(agent_id,runner_id,runner_name,host,version,lease_expires_at)
+		VALUES($1,$2,'runner-a',$3,'0.1.8', now() + interval '1 minute')`, leased.ID, runnerID, host)
+	require.NoError(t, err)
+
+	runners, err := d.repo.OperatorRunners(ctx, d.actor, d.owner)
+	require.NoError(t, err)
+	require.Len(t, runners, 1, "one host, one runner row")
+	require.Equal(t, runnerID, runners[0].RunnerID)
+	require.Equal(t, "runner-a", runners[0].Name)
+	require.True(t, runners[0].Live)
+	require.ElementsMatch(t, []uuid.UUID{d.agent, leased.ID}, []uuid.UUID{runners[0].Agents[0].AgentID, runners[0].Agents[1].AgentID})
+
+	// a lease of another runner name or another host is not the same controller
+	_, err = d.db.ExecContext(ctx, `UPDATE agent_controllers SET host='elsewhere' WHERE agent_id=$1`, leased.ID)
+	require.NoError(t, err)
+	runners, err = d.repo.OperatorRunners(ctx, d.actor, d.owner)
+	require.NoError(t, err)
+	require.Len(t, runners, 2, "a lease on another host stays a separate runner")
+
+	_, err = d.db.ExecContext(ctx, `UPDATE agent_controllers SET host=$2, lease_expires_at = now() - interval '1 minute' WHERE agent_id=$1`, leased.ID, host)
+	require.NoError(t, err)
+	require.Equal(t, "runner-a", d.agentRow(t).Controller.RunnerID, "no live lease: keyed by controller_ref")
+}
+
+// A runner that sends no version of its own, by lease or by report, shows the
+// Installed version of the runner extension, not the catalog entry's.
+func TestOperatorRunners_UnreportedVersionIsInstalled(t *testing.T) {
+	d := seedDerived(t)
+	ctx := context.Background()
+	d.admitted(true)
+	clearInstalledRunner(t, d.db)
+	_, err := d.db.ExecContext(ctx, `INSERT INTO installed_extensions (extension_id,version,manifest,source,trust_level)
+		VALUES ($1,'0.1.8','{}','catalog','verified')`, domain.RunnerExtensionID)
+	require.NoError(t, err)
+	require.Equal(t, "0.1.8", d.agentRow(t).Controller.Version, "derived, no report version")
+	_, err = d.db.ExecContext(ctx, `INSERT INTO agent_controllers(agent_id,runner_id,runner_name,host,version,lease_expires_at)
+		VALUES($1,'lease-a','runner-a','h','', now() + interval '1 minute')`, d.agent)
+	require.NoError(t, err)
+	require.Equal(t, "0.1.8", d.agentRow(t).Controller.Version, "live lease of a catalog controller, no version")
+	_, err = d.db.ExecContext(ctx, `DELETE FROM installed_extensions WHERE extension_id=$1`, domain.RunnerExtensionID)
+	require.NoError(t, err)
+	require.Equal(t, d.catalog.Controllers["runner-a"].Version, d.agentRow(t).Controller.Version, "no extension: the catalog entry stands")
+	_, err = d.db.ExecContext(ctx, `DELETE FROM agent_controllers WHERE agent_id=$1`, d.agent)
+	require.NoError(t, err)
+	_, err = d.db.ExecContext(ctx, `INSERT INTO installed_extensions (extension_id,version,manifest,source,trust_level)
+		VALUES ($1,'0.1.8','{}','catalog','verified')`, domain.RunnerExtensionID)
+	require.NoError(t, err)
+
+	_, err = d.db.ExecContext(ctx, `INSERT INTO agent_controllers(agent_id,runner_id,runner_name,host,version,lease_expires_at)
+		VALUES($1,'leased-runner','leased-runner','h','', now() + interval '1 minute')`, d.agent)
+	require.NoError(t, err)
+	runners, err := d.repo.OperatorRunners(ctx, d.actor, d.owner)
+	require.NoError(t, err)
+	require.Len(t, runners, 1)
+	require.Equal(t, "leased-runner", runners[0].RunnerID)
+	require.Equal(t, "0.1.8", runners[0].Version, "live lease without a version")
+
+	_, err = d.db.ExecContext(ctx, `UPDATE agent_controllers SET version='0.1.7' WHERE agent_id=$1`, d.agent)
+	require.NoError(t, err)
+	require.Equal(t, "0.1.7", d.agentRow(t).Controller.Version, "a version the runner sends wins")
+}

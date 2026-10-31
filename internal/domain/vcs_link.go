@@ -388,22 +388,54 @@ func (l VCSLink) PipelineSHA() string { return l.metaString(VCSLinkMetaPipelineS
 // ShipSHA is the head commit an independent SHIP was given for, "" when none.
 func (l VCSLink) ShipSHA() string { return l.metaString(VCSLinkMetaShipSHA) }
 
+// Reasons a delivery MR link fails IsMergedShippedGreen. Stable machine values:
+// clients and the move/finish error payload quote them verbatim.
+const (
+	ShipGapNotMR            = "not_a_pr_link"
+	ShipGapMRNotMerged      = "mr_not_merged"
+	ShipGapMissingHeadSHA   = "missing_head_sha"
+	ShipGapMissingShipSHA   = "missing_ship_sha"
+	ShipGapStaleShipSHA     = "stale_ship_sha"
+	ShipGapPipelineSHA      = "pipeline_sha_mismatch"
+	ShipGapPipelineNotGreen = "pipeline_not_success"
+)
+
+// ShipEvidenceGaps lists every fact missing for this link to prove delivery;
+// empty means it does. Order is stable. IsMergedShippedGreen is exactly
+// "no gaps", so the diagnosis can never disagree with the gate.
+func (l VCSLink) ShipEvidenceGaps() []string {
+	if l.LinkType != VCSLinkTypePR {
+		return []string{ShipGapNotMR}
+	}
+	var gaps []string
+	if l.Status != VCSLinkStatusMerged {
+		gaps = append(gaps, ShipGapMRNotMerged)
+	}
+	head, ship := l.HeadSHA(), l.ShipSHA()
+	if ship == "" {
+		gaps = append(gaps, ShipGapMissingShipSHA)
+	}
+	if head == "" {
+		gaps = append(gaps, ShipGapMissingHeadSHA)
+	}
+	if head != "" && ship != "" && head != ship {
+		gaps = append(gaps, ShipGapStaleShipSHA)
+	}
+	// The green pipeline must have run on that same head, not on an earlier one.
+	if head != "" && l.PipelineSHA() != head {
+		gaps = append(gaps, ShipGapPipelineSHA)
+	}
+	if l.PipelineStatus == nil || *l.PipelineStatus != "success" {
+		gaps = append(gaps, ShipGapPipelineNotGreen)
+	}
+	return gaps
+}
+
 // IsMergedShippedGreen reports whether this MR link proves delivery: merged,
 // an independent SHIP bound to the current head, and a green pipeline on that head. Any
 // missing fact is a "no" (fail-closed); comment text is never consulted.
 func (l VCSLink) IsMergedShippedGreen() bool {
-	if l.LinkType != VCSLinkTypePR || l.Status != VCSLinkStatusMerged {
-		return false
-	}
-	head, ship := l.HeadSHA(), l.ShipSHA()
-	if head == "" || ship == "" || head != ship {
-		return false
-	}
-	// The green pipeline must have run on that same head, not on an earlier one.
-	if l.PipelineSHA() != head {
-		return false
-	}
-	return l.PipelineStatus != nil && *l.PipelineStatus == "success"
+	return len(l.ShipEvidenceGaps()) == 0
 }
 
 var changeRequestURLRe = regexp.MustCompile(`https?://[^\s)>\]"'<]+?/(?:-/merge_requests|pull)/\d+`)

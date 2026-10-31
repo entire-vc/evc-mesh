@@ -15,6 +15,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/extensions/external"
 	"github.com/entire-vc/evc-mesh/internal/extensions/uictx"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -40,6 +41,11 @@ type extUIProjects interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Project, error)
 }
 
+// extUIBindings reads the binding of an extension to a project (project_integrations).
+type extUIBindings interface {
+	GetBinding(ctx context.Context, projectID uuid.UUID, extensionID string) (*domain.ProjectIntegration, error)
+}
+
 // ExtensionUIHandler serves the Mesh side of iframe screens of external
 // extensions: the JWKS and the context token (docs/extensions/ui-iframe.md).
 type ExtensionUIHandler struct {
@@ -49,12 +55,24 @@ type ExtensionUIHandler struct {
 	users    extUIUsers
 	tasks    extUITasks
 	projects extUIProjects
+	// bindings, when set, gate project.view on an enabled binding to the project.
+	bindings extUIBindings
+	// scope refuses a token for a project the extension's connection is not
+	// bound to; nil skips the check (no project-bound connections exist then).
+	scope repository.ExtensionProjectScopeRepository
 	// selfHosts are lower-cased hostnames the Mesh UI is served from (configured URLs).
 	selfHosts []string
 }
 
 func NewExtensionUIHandler(reg *extensions.Registry, signer UIContextSigner, members extUIMembers, users extUIUsers, tasks extUITasks, projects extUIProjects) *ExtensionUIHandler {
 	return &ExtensionUIHandler{reg: reg, signer: signer, members: members, users: users, tasks: tasks, projects: projects}
+}
+
+// WithProjectScope makes ui-context refuse a project or task the extension's
+// connection is not bound to (integration_configs.project_scope = 'bound').
+func (h *ExtensionUIHandler) WithProjectScope(scope repository.ExtensionProjectScopeRepository) *ExtensionUIHandler {
+	h.scope = scope
+	return h
 }
 
 // WithSelfOrigins registers the configured public URLs of this Mesh instance (MESH_BASE_URL, CORS origins).
@@ -65,6 +83,26 @@ func (h *ExtensionUIHandler) WithSelfOrigins(origins ...string) *ExtensionUIHand
 		}
 	}
 	return h
+}
+
+// WithProjectBindings makes a project.view context require the extension to be
+// enabled in that project, as the project strip shows its tab only then.
+func (h *ExtensionUIHandler) WithProjectBindings(b extUIBindings) *ExtensionUIHandler {
+	h.bindings = b
+	return h
+}
+
+// projectAllowed reports whether a screen of extID may be opened in projectID.
+// It is the one place a project-level gate for extension screens goes: today the
+// project binding, for project.view and for sidebar.item, however its project was named
+// (explicitly, or through a task: a token carries the project either way); a per-connection allow-list of
+// projects plugs in here too.
+func (h *ExtensionUIHandler) projectAllowed(ctx context.Context, slot, extID string, projectID uuid.UUID) bool {
+	if h.bindings == nil || (slot != external.SlotProjectView && slot != external.SlotSidebarItem) {
+		return true
+	}
+	b, err := h.bindings.GetBinding(ctx, projectID, extID)
+	return err == nil && b != nil && b.Enabled
 }
 
 // hostnameOf returns the lower-cased hostname of a URL, an origin or a bare host[:port] ("" if none).
@@ -145,7 +183,11 @@ func (h *ExtensionUIHandler) UIContext(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("workspace_id and slot are required"))
 	}
 	if !external.IsFrameSlot(req.Slot) {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("slot must be sidebar.item or task.panel"))
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("slot must be sidebar.item, task.panel or project.view"))
+	}
+	// A project tab is about its project only: named explicitly, never derived from a task.
+	if req.Slot == external.SlotProjectView && (req.ProjectID == nil || req.TaskID != nil) {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("project.view takes project_id and no task_id"))
 	}
 	role, err := h.members.GetRole(ctx, req.WorkspaceID, uid)
 	if err != nil || role == "" {
@@ -190,6 +232,19 @@ func (h *ExtensionUIHandler) UIContext(c echo.Context) error {
 		pr, perr := h.projects.GetByID(ctx, *projectID)
 		if perr != nil || pr == nil || pr.WorkspaceID != req.WorkspaceID {
 			return c.JSON(http.StatusNotFound, apierror.NotFound("project"))
+		}
+	}
+	if projectID != nil && !h.projectAllowed(ctx, req.Slot, extID, *projectID) {
+		return c.JSON(http.StatusConflict, apierror.Conflict("the extension is not enabled in this project"))
+	}
+
+	if projectID != nil && h.scope != nil {
+		allowed, serr := h.scope.AllowsProjectFor(ctx, req.WorkspaceID, h.reg.Canonical(extID), *projectID)
+		if serr != nil {
+			return handleError(c, serr)
+		}
+		if !allowed {
+			return c.JSON(http.StatusForbidden, apierror.Forbidden("this project is not available to the extension"))
 		}
 	}
 

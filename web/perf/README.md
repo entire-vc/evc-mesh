@@ -1081,3 +1081,37 @@ this change. Lead sign-off: the product lead, signed 2026-10-29 on the card.
 
 CI `perf-bundle` on the branch measured 727.21 / 173.24 against main at 727.1 (+0.11), so the raise is the smallest 0.1 step above
 that. Revert: lower by 0.2 together with reverting the MR. Lead sign-off: the product lead, signed 2026-10-29 on the card for +0.2 on main's ceiling at merge (if another raise lands first, rebase and recount from main).
+
+`total_js_kb_gz` 727.6 → 728.2 (+0.76 KB gz measured), the earlier change; `login.initial_js_kb_gz` unchanged (173.28 against 173.29 on main):
+
+- Lifecycle of external extension iframe screens: Mesh tells the screen about a refused token renewal
+  (`mesh.context.error`), revokes it on 403/404/409 (`mesh.revoked`), renews the token at 80% of its
+  lifetime, and accepts optional `mesh.app-ready` / `mesh.app-error` with an error screen. The code is in
+  `components/extensions/external-frame.tsx`, `lib/extension-frame-protocol.ts` and two strings per locale,
+  all in lazy chunks.
+- Nothing to trim without dropping a criterion of the change: the growth is the renewal, revocation and
+  app-error paths themselves.
+
+CI `perf-bundle` measured 727.40 on main `0461cafe` (job 477809) and 728.16 on the branch `745d7f43` (job 478099),
+so the ceiling is the smallest 0.1 step above that. Revert: restore 727.6 together with reverting the MR.
+Lead sign-off: the product lead, signed 2026-10-29 on the card (if main raises its ceiling first through another signed MR,
+take main's ceiling plus 0.6).
+
+`total_js_kb_gz` 728.2 → 729.3 (+1.0 KB gz measured on top of the earlier change) and `login.initial_js_kb_gz` 173.3 → 173.5 (+0.11 KB gz measured):
+
+- Extension screens get deep links and a project-scoped external screen: the section protocol
+  (`normalizeSection`, `frameSrc` with a section, `mesh.state`) and the screen page live in the lazy
+  extension-screen chunk; that is most of the total.
+- The initial chunk carries what the shell needs to draw the project strip and the left menu before
+  any lazy chunk loads: the `project.view` slot in the slot registry (`useProjectScreens`), the merged
+  project-tab candidates, the active-tab match for a section path in the header and the sidebar, and
+  the `loaded` flag of the project store (an unknown project is "unavailable", not a spinner).
+- Nothing to trim without moving the strip itself out of the shell.
+
+CI `perf-bundle` on the branch measured 728.4 / 173.41 against ceilings 727.6 / 173.3. After the previous change landed first
+(main ceiling 728.2) the branch was re-measured on the merged tree (local build, same script): 729.14 / 173.44
+(the review fixes, hash validation and the sidebar fallback, cost 0.06 KB); the last one, encoded separators refused in
+the hash too, brought the total to 729.21. The ceilings are the smallest 0.1 step above that: 729.3 / 173.5
+(main's ceiling + 1.1, the signed maximum).
+Revert: lower both together with reverting the MR. Lead sign-off: the product lead, 2026-10-29 on the card, on the condition
+to recount from the merged tree if the earlier change lands first.

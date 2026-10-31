@@ -158,6 +158,9 @@ test.describe("agent-chat S01 enable", () => {
 
     await step("S01-workspace", "C", async () => {
       // Workspace settings → Extensions → Installed → Chat with Agent → on.
+      // The Extensions page asks the instance API whether the viewer is the instance administrator
+      // (extensions.tsx, useIsInstanceAdmin); C is a workspace admin only, so that probe answers 403.
+      C.f1.expect({ method: "GET", path: /^\/api\/v1\/extensions\/instance\/overview$/, status: 403 });
       await C.page.goto(`/w/${x.wsSlug}`);
       await C.page.locator(`a[href="/w/${x.wsSlug}/extensions"]`).first().click({ timeout: 30_000 });
       await C.page.locator("#extensions-tab-installed").click({ timeout: 30_000 });
@@ -230,14 +233,23 @@ test.describe("agent-chat S01 enable", () => {
       // Frames of the strip with Chat after Docs at 1440 and 393; at 393 Chat may sit in the "…" menu, opened for the shot.
       const menuIfHidden = async () => {
         if (await A.page.locator('button[data-tab-id="chat"]').isVisible()) return;
-        await A.page.locator(".mesh-project-tabs button[aria-haspopup]").filter({ visible: true }).first().click();
-        await expect(A.page.locator('[role="menuitem"][data-tab-id="chat"]')).toBeVisible();
+        // Opened by keyboard, not a pointer click: with no action timeout a click on a covered or
+        // clipped trigger retried until the test timeout at 393.
+        await A.page.locator(".mesh-project-tabs button[aria-haspopup]").filter({ visible: true }).first().focus({ timeout: 15_000 });
+        await A.page.keyboard.press("Enter");
+        await expect(A.page.locator('[role="menuitem"][data-tab-id="chat"]'), "Chat in the overflow menu").toBeVisible({ timeout: 15_000 });
       };
-      await snap(A, "s01-chat-tab", menuIfHidden, async () => { await A.page.keyboard.press("Escape"); }, [], async (where) => {
-        assertTabAfter(await tabOrder(A.page), "docs", "chat");
-        const shown = A.page.locator('button[data-tab-id="chat"], [role="menuitem"][data-tab-id="chat"]').filter({ visible: true });
-        if ((await shown.count()) === 0) throw new Error(`${where}: the Chat tab is not visible in the strip or the menu`);
-      });
+      // Every action of the frames is bounded, so a stall names its step instead of eating the test timeout.
+      A.page.setDefaultTimeout(60_000);
+      try {
+        await snap(A, "s01-chat-tab", menuIfHidden, async () => { await A.page.keyboard.press("Escape"); }, [], async (where) => {
+          assertTabAfter(await tabOrder(A.page), "docs", "chat");
+          const shown = A.page.locator('button[data-tab-id="chat"], [role="menuitem"][data-tab-id="chat"]').filter({ visible: true });
+          if ((await shown.count()) === 0) throw new Error(`${where}: the Chat tab is not visible in the strip or the menu`);
+        });
+      } finally {
+        A.page.setDefaultTimeout(0);
+      }
     });
 
     await step("S01-off-project", "A", async () => {

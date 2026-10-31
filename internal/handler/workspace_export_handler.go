@@ -28,6 +28,22 @@ type HierarchyReader interface {
 // the check that nothing was missed.
 type WorkspaceExportHandler struct {
 	reader HierarchyReader
+	// scope narrows the projects of a project-bound extension connection; nil
+	// refuses the export to such a connection instead of returning everything.
+	scope ExtensionBoundProjects
+}
+
+// ExtensionBoundProjects lists the projects an extension connection may reach
+// (repository.ExtensionProjectScopeRepository implements it).
+type ExtensionBoundProjects interface {
+	BoundProjects(ctx context.Context, connectionID uuid.UUID) (all bool, ids []uuid.UUID, err error)
+}
+
+// WithProjectScope narrows the export of a project-bound extension to its
+// bound projects.
+func (h *WorkspaceExportHandler) WithProjectScope(scope ExtensionBoundProjects) *WorkspaceExportHandler {
+	h.scope = scope
+	return h
 }
 
 // NewWorkspaceExportHandler creates a new WorkspaceExportHandler.
@@ -69,6 +85,18 @@ func (h *WorkspaceExportHandler) Hierarchy(c echo.Context) error {
 	}
 	if !ok {
 		return c.JSON(http.StatusNotFound, apierror.NotFound("Workspace"))
+	}
+	if p := middleware.GetExtensionPrincipal(c); p != nil && p.ProjectBound {
+		if h.scope == nil {
+			return c.JSON(http.StatusForbidden, apierror.Forbidden("the hierarchy export is not available to a project-bound extension"))
+		}
+		all, ids, serr := h.scope.BoundProjects(c.Request().Context(), p.ConnectionID)
+		if serr != nil {
+			return handleError(c, serr)
+		}
+		if !all {
+			snap.Projects = boundProjectsOnly(snap.Projects, ids)
+		}
 	}
 
 	raw, err := json.Marshal(snap)
@@ -113,4 +141,19 @@ func etagMatches(header, etag string) bool {
 		}
 	}
 	return false
+}
+
+// boundProjectsOnly keeps the projects whose id is in ids, in their order.
+func boundProjectsOnly(projects []domain.HierarchyProject, ids []uuid.UUID) []domain.HierarchyProject {
+	keep := make(map[uuid.UUID]bool, len(ids))
+	for _, id := range ids {
+		keep[id] = true
+	}
+	out := make([]domain.HierarchyProject, 0, len(ids))
+	for _, pr := range projects {
+		if keep[pr.ID] {
+			out = append(out, pr)
+		}
+	}
+	return out
 }

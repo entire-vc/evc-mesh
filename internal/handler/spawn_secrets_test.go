@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/middleware"
 )
 
 type mockMaterializationService struct {
@@ -247,6 +248,38 @@ func TestMaterializeAudit_NoAgentIsAttributedToSystem(t *testing.T) {
 	require.Len(t, act.entries, 1, "an issuance of zero secrets is still an issuance")
 	assert.Equal(t, domain.ActorTypeSystem, act.entries[0].ActorType)
 	assert.Equal(t, uuid.Nil, act.entries[0].ActorID)
+}
+
+// A spawner that came in on its own key (middleware.SpawnerAuth) is the
+// actor; the agent the secrets are FOR stays in the payload.
+func TestMaterializeAudit_SpawnerKeyIsTheActor(t *testing.T) {
+	wsID, spawnerID, forAgentID := uuid.New(), uuid.New(), uuid.New()
+	svc := &mockMaterializationService{
+		resolve: func(context.Context, uuid.UUID, *uuid.UUID, *uuid.UUID) ([]domain.MaterializedSecret, error) {
+			return nil, nil
+		},
+	}
+	act := &recordingActivityLog{}
+	h := NewSecretMaterializeHandler(svc, act)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/internal/secrets/materialize",
+		bytes.NewBufferString(`{"workspace_id":"`+wsID.String()+`","agent_id":"`+forAgentID.String()+`"}`))
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	// What SpawnerAuth leaves on the context after an allowlisted key.
+	c.Set(middleware.ContextKeyAuthType, middleware.AuthTypeAgent)
+	c.Set(middleware.ContextKeyAgentID, spawnerID)
+	require.NoError(t, h.Materialize(c))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, act.entries, 1)
+	assert.Equal(t, domain.ActorTypeAgent, act.entries[0].ActorType)
+	assert.Equal(t, spawnerID, act.entries[0].ActorID)
+	var got materializationAudit
+	require.NoError(t, json.Unmarshal(act.entries[0].Changes, &got))
+	require.NotNil(t, got.AgentID)
+	assert.Equal(t, forAgentID, *got.AgentID)
 }
 
 // No journal, no values: an issuance nobody can account for is the gap.

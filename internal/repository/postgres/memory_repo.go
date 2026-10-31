@@ -22,11 +22,13 @@ import (
 // MemoryRepo implements persistent storage for agent memory entries.
 type MemoryRepo struct {
 	db *sqlx.DB
+	// chunkVectors caches decoded memory_chunks embeddings for VectorSearch.
+	chunkVectors *vectorCache
 }
 
 // NewMemoryRepo creates a new MemoryRepo.
 func NewMemoryRepo(db *sqlx.DB) *MemoryRepo {
-	return &MemoryRepo{db: db}
+	return &MemoryRepo{db: db, chunkVectors: newVectorCache(defaultVectorCacheFloats)}
 }
 
 // memoryRow is the DB row representation for the memories table.
@@ -338,7 +340,7 @@ func (r *MemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory,
 //
 // The `status != 'superseded' AND archived = false` predicate and the
 // `ORDER BY updated_at DESC LIMIT 1` are both load-bearing, not cosmetic
-// (task #2c0154db, finding F1). Before them, this query had no status filter
+// (an internal ticket, finding F1). Before them, this query had no status filter
 // at all: after a collapse (cmd/collapse-memories) leaves a winner `active`
 // and losers `superseded` under the SAME natural key, the predicate-less
 // query matched every one of them and sqlx.GetContext silently took whatever
@@ -594,7 +596,7 @@ func (r *MemoryRepo) ftsORFallback(
 // to_tsquery OR-fragment (roughly proportional to how many distinct terms matched). Sorting
 // raw AND scores next to raw-but-discounted OR scores compares numbers with different units.
 //
-// Measured live (task f13865d5, fixture from recency_control.py): a row matching ALL FOUR
+// Measured live (fixture from recency_control.py): a row matching ALL FOUR
 // query terms scored 0.025 on the AND (cover-density) scale while four PARTIAL matches
 // scored 0.08-0.24 on the discounted OR scale — the exact match ranked dead last, the
 // opposite of the "exact AND matches always outrank partial ones" invariant this function's
@@ -959,7 +961,7 @@ func (r *MemoryRepo) List(ctx context.Context, filter domain.MemoryListFilter) (
 	var orderExpr string
 	// Normalised so that a bare key and its suffixed form cannot mean different
 	// things here than they do in the recall service's decay predicate — the two
-	// used to disagree about `decayed_relevance` (#655c6d12).
+	// used to disagree about `decayed_relevance`.
 	switch domain.CanonicalOrderBy(filter.OrderBy) {
 	case domain.OrderByRelevanceDesc:
 		orderExpr = "relevance DESC"
@@ -1173,7 +1175,7 @@ func (r *MemoryRepo) VectorSearch(ctx context.Context, queryVec []float32, works
 // vector recall entirely — the exact opposite of what vector search is for. We
 // therefore pull a recency-ordered cap large enough to cover the whole corpus
 // today. If the corpus ever outgrows the cap, the oldest memories degrade out
-// gracefully (and that is the trigger to adopt pgvector/ANN — see #2285c9be).
+// gracefully (and that is the trigger to adopt pgvector/ANN — see an internal ticket).
 func (r *MemoryRepo) vectorCandidateIDs(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, filter domain.MemorySearchFilter) ([]uuid.UUID, error) {
 	args := []interface{}{workspaceID} // $1
 	conditions := []string{
@@ -1233,26 +1235,39 @@ func (r *MemoryRepo) vectorCandidateIDs(ctx context.Context, workspaceID uuid.UU
 // alongside the chunks would let the truncated vector outrank the memory's own
 // best chunk.
 func (r *MemoryRepo) scoreCandidateVectors(ctx context.Context, candidateIDs []uuid.UUID, queryVec []float32) ([]chunkScore, error) {
+	// Keys only: the embedding text comes from chunkVectors, which reads it from
+	// Postgres once per row version instead of on every recall.
 	const chunkQ = `
-		SELECT memory_id, chunk_idx, embedding
+		SELECT id, xmin::text::bigint AS xmin, memory_id, chunk_idx
 		FROM memory_chunks
 		WHERE memory_id = ANY($1)`
 
 	var chunkRows []struct {
-		MemoryID  uuid.UUID `db:"memory_id"`
-		ChunkIdx  int       `db:"chunk_idx"`
-		Embedding string    `db:"embedding"`
+		ID       uuid.UUID `db:"id"`
+		Xmin     int64     `db:"xmin"`
+		MemoryID uuid.UUID `db:"memory_id"`
+		ChunkIdx int       `db:"chunk_idx"`
 	}
 	if err := r.db.SelectContext(ctx, &chunkRows, chunkQ, pq.Array(candidateIDs)); err != nil {
-		return nil, fmt.Errorf("vector search: select chunk vectors: %w", err)
+		return nil, fmt.Errorf("vector search: select chunk keys: %w", err)
+	}
+
+	keys := make([]vectorKey, len(chunkRows))
+	for i, row := range chunkRows {
+		keys[i] = vectorKey{id: row.ID, xmin: row.Xmin}
+	}
+	// A chunk that fails to decode is left out by the cache, as the
+	// pre-chunking path skipped corrupted embeddings: one unreadable chunk must
+	// not fail a whole recall.
+	vecs, err := r.chunkVectors.vectors(ctx, keys, r.loadChunkVectors)
+	if err != nil {
+		return nil, err
 	}
 
 	scores := make([]chunkScore, 0, len(chunkRows)+len(candidateIDs))
 	for _, row := range chunkRows {
-		vec, err := domain.DecodeEmbedding(row.Embedding)
-		if err != nil {
-			// Skip corrupted embeddings silently, as the pre-chunking path did:
-			// one unreadable chunk must not fail a whole recall.
+		vec, ok := vecs[row.ID]
+		if !ok {
 			continue
 		}
 		scores = append(scores, chunkScore{
@@ -1297,6 +1312,19 @@ func (r *MemoryRepo) scoreCandidateVectors(ctx context.Context, candidateIDs []u
 	}
 
 	return scores, nil
+}
+
+// loadChunkVectors is chunkVectors' loader: the embedding text of the given
+// memory_chunks rows, at their current version.
+func (r *MemoryRepo) loadChunkVectors(ctx context.Context, ids []uuid.UUID) ([]vectorRow, error) {
+	var rows []vectorRow
+	if err := r.db.SelectContext(ctx, &rows,
+		`SELECT id, xmin::text::bigint AS xmin, embedding FROM memory_chunks WHERE id = ANY($1)`,
+		pq.Array(ids),
+	); err != nil {
+		return nil, fmt.Errorf("vector search: load chunk vectors: %w", err)
+	}
+	return rows, nil
 }
 
 // hydrateScoredMemories loads the full memory rows for an already-ranked list and
@@ -1432,7 +1460,7 @@ func (r *MemoryRepo) CleanExpired(ctx context.Context) (int64, error) {
 
 // ArchiveStaleWorkspaceCheckpoints sets archived=true for workspace-scoped session-checkpoint
 // memories older than olderThan with importance_score < maxImportance.
-// Entries tagged canonical/pavel-decision/kind:decision/kind:incident are never touched.
+// Entries tagged canonical/alex-decision/kind:decision/kind:incident are never touched.
 func (r *MemoryRepo) ArchiveStaleWorkspaceCheckpoints(ctx context.Context, olderThan time.Duration, maxImportance float64) (int64, error) {
 	cutoff := time.Now().Add(-olderThan)
 	result, err := r.db.ExecContext(ctx, `
@@ -1583,7 +1611,7 @@ func (r *MemoryRepo) ListCreatedSince(ctx context.Context, since time.Time, limi
 // currently configured model. Excluded (does NOT need embedding) when EITHER holds for the
 // given model: memories.embedding is populated with a matching embedding_model, OR the
 // memory already has a memory_chunks row with a matching embedding_model. The chunk check is
-// independent of the embedding column on purpose (#84b0694d/#7cf0f3be, live regression):
+// independent of the embedding column on purpose (an internal ticket/an internal ticket, live regression):
 // an earlier revision relied on embedding_model alone as a watermark while leaving
 // memories.embedding NULL, and the embedding-column disjunct below matched it forever —
 // reindex re-embedded the same rows every run without ever converging. Checking chunk
@@ -1657,10 +1685,10 @@ func (r *MemoryRepo) ListNotYetChunked(ctx context.Context, workspaceID uuid.UUI
 // #494 that text was the composite `key + " " + content + " " + tags`; since #494 it is
 // content alone. So `max(chunk_end) <> octet_length(content)` reads the physical trace of
 // which string the write path fed the chunker, rather than trusting a column the write path
-// set about itself — the failure mode of #84b0694d, where embedding_model was stamped as a
+// set about itself — the failure mode of an internal ticket, where embedding_model was stamped as a
 // watermark while memories.embedding stayed NULL and the row was never actually repaired.
 // Measured against prod before this shipped: 3254 of 3260 chunked memories matched the
-// composite length EXACTLY (99.82%, the same reconstruction rate #38bb958c measured), 0
+// composite length EXACTLY (99.82%, the same reconstruction rate an internal ticket measured), 0
 // matched content length, and the 6 that matched neither had content or tags edited after
 // their last embed — stale offsets, correctly in the population.
 //
@@ -1695,7 +1723,7 @@ const chunkOffsetsStalePredicate = `
 // ORDER BY updated_at DESC matches its sibling queries. Convergence does not depend on the
 // order: the population is CLOSED — every write path since #494 chunks content alone, so no
 // new row can enter it — which is what makes "returned < limit ⇒ drained" reachable here,
-// unlike the churning-population case in #b052cdda where fixtures kept jumping the queue.
+// unlike the churning-population case in an internal ticket where fixtures kept jumping the queue.
 func (r *MemoryRepo) ListNeedingRechunk(ctx context.Context, workspaceID uuid.UUID, limit int) ([]domain.Memory, error) {
 	if limit <= 0 {
 		limit = 100
@@ -1831,7 +1859,7 @@ func (r *MemoryRepo) FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, p
 		}
 	}
 
-	// NOTE: last_accessed_at is deliberately NOT touched here (task #c5b5fb48). `rows` at
+	// NOTE: last_accessed_at is deliberately NOT touched here. `rows` at
 	// this point is this arm's own local AND/OR-fallback merge, still ahead of RecallWithStats'
 	// RRF fusion with the vector arm, its extended filters, and its trim to the caller's
 	// requested limit — most of these candidates never reach the caller. Touching here counted

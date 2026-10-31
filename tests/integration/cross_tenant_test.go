@@ -92,6 +92,7 @@ var wsScopedRoutes = []wsRoute{
 	{http.MethodPost, "/extensions/" + dummyUUID + "/enable", map[string]string{}},
 	{http.MethodPost, "/extensions/" + dummyUUID + "/disable", map[string]string{}},
 	{http.MethodPost, "/extensions/" + dummyUUID + "/test", map[string]string{}},
+	{http.MethodPut, "/extensions/" + dummyUUID + "/project-scope", map[string]string{"project_scope": "bound"}},
 	{http.MethodDelete, "/extensions/" + dummyUUID, nil},
 	{http.MethodGet, "/chat/settings", nil},
 	{http.MethodPut, "/chat/settings", map[string]string{}},

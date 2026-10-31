@@ -15,7 +15,7 @@ import (
 
 // manifestV1SHA256 is the digest of manifest.v1.json fixed by the extensions
 // manifest ADR. The Spark side pins the same value.
-const manifestV1SHA256 = "708c31daa8c341c9e5e420a8f532884ef0c5d90d1eab5bc25df65d34a01d4638"
+const manifestV1SHA256 = "06c20b0b703a9fa12d09008d19d8c8881ad0335285a46fa1b34c74a72587aad4"
 
 const schemaFile = "manifest.v1.json"
 
@@ -169,4 +169,12 @@ func TestManifestV1_ExternalTokenPath(t *testing.T) {
 	require.NoError(t, externalField(t, sch, "token_path", "/mesh/token"))
 	require.Error(t, externalField(t, sch, "token_path", "mesh/token"), "a path starts with /")
 	require.Error(t, externalField(t, sch, "token_paths", "/mesh/token"), "control: unknown keys are still refused")
+}
+
+func TestManifestV1_ExternalSignatureVersion(t *testing.T) {
+	sch := compileSchema(t)
+	require.NoError(t, externalField(t, sch, "signature_version", 2))
+	require.NoError(t, externalField(t, sch, "signature_version", 1))
+	require.Error(t, externalField(t, sch, "signature_version", 3), "only known versions")
+	require.Error(t, externalField(t, sch, "signature_version", "2"), "a number, not a string")
 }

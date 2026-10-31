@@ -10,6 +10,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/eventbus"
+	"github.com/entire-vc/evc-mesh/internal/extensions/extsig"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 )
 
@@ -41,6 +42,9 @@ type extensionDelivery struct {
 	// subscriptions are skipped.
 	nats       ExtensionEventPublisher
 	workspaces repository.WorkspaceRepository
+	// signatureVersion returns the signature version an extension's manifest
+	// selects (external.signature_version); nil or <2 keeps v1.
+	signatureVersion func(extensionID string) int
 }
 
 // ExtensionEventPublisher puts one serialised event on an extension
@@ -76,10 +80,81 @@ func WithExtensionDelivery(
 	}
 }
 
+// WithExtensionSignatureVersion lets an extension opt in to the v2 signature
+// (internal/extensions/extsig) through its manifest. Without it every
+// extension delivery stays v1.
+func WithExtensionSignatureVersion(version func(extensionID string) int) WebhookServiceOption {
+	return func(s *webhookService) {
+		if s.ext != nil {
+			s.ext.signatureVersion = version
+		}
+	}
+}
+
+// scheme is the signature scheme for deliveries to connection conn.
+func (e *extensionDelivery) scheme(conn *domain.IntegrationConfig) sigScheme {
+	if conn == nil {
+		return sigExtensionV1
+	}
+	return e.schemeFor(string(conn.Provider))
+}
+
+// schemeFor is the signature scheme for deliveries to extensionID.
+func (e *extensionDelivery) schemeFor(extensionID string) sigScheme {
+	if e.signatureVersion != nil && e.signatureVersion(extensionID) >= extsig.Version {
+		return sigExtensionV2
+	}
+	return sigExtensionV1
+}
+
+// WithExtensionProjectScope lets a project-bound extension connection receive
+// the events of its bound projects. Without it such a connection receives none:
+// its scope cannot be checked, and the check fails closed.
+func WithExtensionProjectScope(scope repository.ExtensionProjectScopeRepository) WebhookServiceOption {
+	return func(s *webhookService) {
+		s.extScope = scope
+	}
+}
+
+// eventProjectID returns the top-level project_id of an event payload, the
+// field every project event carries. ok=false when there is none.
+func eventProjectID(payloadBytes []byte) (uuid.UUID, bool) {
+	var m struct {
+		ProjectID *uuid.UUID `json:"project_id"`
+	}
+	if err := json.Unmarshal(payloadBytes, &m); err != nil || m.ProjectID == nil || *m.ProjectID == uuid.Nil {
+		return uuid.Nil, false
+	}
+	return *m.ProjectID, true
+}
+
+// connectionReceives reports whether connection conn of workspaceID gets an
+// event: it must be active and in that workspace, and a project-bound
+// connection gets only events of a project bound to it. An event with no
+// project (workspace members, agent keys) is not one of them.
+func (s *webhookService) connectionReceives(ctx context.Context, conn *domain.IntegrationConfig, workspaceID uuid.UUID, payloadBytes []byte) bool {
+	if conn == nil || !conn.IsActive || conn.WorkspaceID != workspaceID {
+		return false
+	}
+	if !conn.IsProjectBound() {
+		return true
+	}
+	pid, ok := eventProjectID(payloadBytes)
+	if !ok || s.extScope == nil {
+		return false
+	}
+	allowed, err := s.extScope.AllowsProject(ctx, conn.ID, pid)
+	if err != nil {
+		log.Printf("[webhook] extension project scope check for connection %s: %v", conn.ID, err)
+		return false
+	}
+	return allowed
+}
+
 // dispatchExtensions delivers the event to every webhook or nats subscription of an
 // active connection in workspaceID. One goroutine per subscription; a failure of
 // one never affects another.
-func (s *webhookService) dispatchExtensions(ctx context.Context, workspaceID uuid.UUID, eventType string, payloadBytes []byte) {
+func (s *webhookService) dispatchExtensions(ctx context.Context, workspaceID uuid.UUID, eventType string, eventID uuid.UUID, payloadBytes []byte) {
 	if s.ext == nil {
 		return
 	}
@@ -90,8 +165,10 @@ func (s *webhookService) dispatchExtensions(ctx context.Context, workspaceID uui
 		log.Printf("[webhook] failed to list extension subscriptions for event %s: %v", event, err)
 		return
 	}
-	// ListByEvent spans every workspace; a connection belongs to exactly one.
+	// ListByEvent spans every workspace; a connection belongs to exactly one,
+	// and a project-bound one also only to its bound projects.
 	inWorkspace := map[uuid.UUID]bool{}
+	schemes := map[uuid.UUID]sigScheme{}
 	for i := range subs {
 		sub := subs[i]
 		if sub.Delivery != domain.ExtensionDeliveryWebhook && sub.Delivery != domain.ExtensionDeliveryNATS {
@@ -100,16 +177,17 @@ func (s *webhookService) dispatchExtensions(ctx context.Context, workspaceID uui
 		ok, seen := inWorkspace[sub.ConnectionID]
 		if !seen {
 			conn, err := s.ext.integrations.GetByID(ctx, sub.ConnectionID)
-			ok = err == nil && conn != nil && conn.IsActive && conn.WorkspaceID == workspaceID
+			ok = err == nil && s.connectionReceives(ctx, conn, workspaceID, payloadBytes)
 			inWorkspace[sub.ConnectionID] = ok
+			schemes[sub.ConnectionID] = s.ext.scheme(conn)
 		}
 		if !ok {
 			continue
 		}
 		if sub.Delivery == domain.ExtensionDeliveryNATS {
-			go s.publishToSubscription(workspaceID, sub, event, payloadBytes)
+			go s.publishToSubscription(workspaceID, sub, event, eventID, payloadBytes)
 		} else {
-			go s.deliverToSubscription(workspaceID, sub, event, payloadBytes)
+			go s.deliverToSubscription(workspaceID, sub, event, eventID, payloadBytes, schemes[sub.ConnectionID])
 		}
 	}
 }
@@ -138,7 +216,7 @@ func withWorkspaceID(payloadBytes []byte, workspaceID uuid.UUID) []byte {
 // deliverToSubscription signs and sends one event and records the outcome in
 // webhook_deliveries (subscription_id set, webhook_id empty). An unresolvable
 // secret is recorded as a failed delivery rather than dropped silently.
-func (s *webhookService) deliverToSubscription(workspaceID uuid.UUID, sub domain.ExtensionEventSubscription, event string, payloadBytes []byte) {
+func (s *webhookService) deliverToSubscription(workspaceID uuid.UUID, sub domain.ExtensionEventSubscription, event string, eventID uuid.UUID, payloadBytes []byte, sig sigScheme) {
 	bgCtx := context.Background()
 	subID := sub.ID
 
@@ -147,7 +225,7 @@ func (s *webhookService) deliverToSubscription(workspaceID uuid.UUID, sub domain
 		failure := reason
 		d := &domain.WebhookDelivery{
 			ID: uuid.New(), SubscriptionID: &subID, EventType: event, Payload: payloadBytes,
-			ResponseBody: &failure, Success: false, Attempt: 1, CreatedAt: time.Now(),
+			ResponseBody: &failure, Success: false, Attempt: 1, CreatedAt: time.Now(), EventID: &eventID,
 		}
 		if err := s.repo.CreateDelivery(bgCtx, d); err != nil {
 			log.Printf("[webhook] failed to record delivery for subscription %s: %v", sub.ID, err)
@@ -157,11 +235,11 @@ func (s *webhookService) deliverToSubscription(workspaceID uuid.UUID, sub domain
 
 	// Extension receivers get the full 1s/5s/25s schedule: first try plus three
 	// retries.
-	res := s.deliver(sub.ID, sub.Target, secret, event, payloadBytes, extensionMaxAttempts, true)
+	res := s.deliver(sub.ID, sub.Target, secret, event, eventID, payloadBytes, extensionMaxAttempts, sig)
 	d := &domain.WebhookDelivery{
 		ID: res.deliveryID, SubscriptionID: &subID, EventType: event, Payload: payloadBytes,
 		ResponseStatus: res.status, ResponseBody: res.body, DurationMs: res.durationMs,
-		Success: res.success, Attempt: res.attempts, CreatedAt: time.Now(),
+		Success: res.success, Attempt: res.attempts, CreatedAt: time.Now(), EventID: &eventID,
 	}
 	if err := s.repo.CreateDelivery(bgCtx, d); err != nil {
 		log.Printf("[webhook] failed to record delivery for subscription %s: %v", sub.ID, err)
@@ -189,6 +267,7 @@ func (e *extensionDelivery) resolveSecret(ctx context.Context, workspaceID uuid.
 
 // extensionNATSEnvelope is the body published to an extension's subject.
 type extensionNATSEnvelope struct {
+	EventID        uuid.UUID       `json:"event_id"`
 	Event          string          `json:"event"`
 	SubscriptionID uuid.UUID       `json:"subscription_id"`
 	WorkspaceID    uuid.UUID       `json:"workspace_id"`
@@ -200,7 +279,7 @@ type extensionNATSEnvelope struct {
 // (eventbus.ExtensionSubject). Other connections and the workspace's regular
 // event subjects never see it. A failure is logged, not retried: JetStream
 // owns durability once the publish is acknowledged.
-func (s *webhookService) publishToSubscription(workspaceID uuid.UUID, sub domain.ExtensionEventSubscription, event string, payloadBytes []byte) {
+func (s *webhookService) publishToSubscription(workspaceID uuid.UUID, sub domain.ExtensionEventSubscription, event string, eventID uuid.UUID, payloadBytes []byte) {
 	if s.ext.nats == nil || s.ext.workspaces == nil {
 		return
 	}
@@ -211,9 +290,8 @@ func (s *webhookService) publishToSubscription(workspaceID uuid.UUID, sub domain
 		log.Printf("[webhook] nats delivery for subscription %s: workspace lookup failed", sub.ID)
 		return
 	}
-	id := uuid.New()
 	body, err := json.Marshal(extensionNATSEnvelope{
-		Event: event, SubscriptionID: sub.ID, WorkspaceID: workspaceID,
+		EventID: eventID, Event: event, SubscriptionID: sub.ID, WorkspaceID: workspaceID,
 		Payload: payloadBytes, CreatedAt: time.Now().UTC(),
 	})
 	if err != nil {
@@ -221,7 +299,9 @@ func (s *webhookService) publishToSubscription(workspaceID uuid.UUID, sub domain
 		return
 	}
 	subject := eventbus.ExtensionSubject(ws.Slug, sub.ConnectionID, event)
-	if err := s.ext.nats.PublishExtensionEvent(ctx, subject, body, id.String()); err != nil {
+	// The JetStream dedup id is per event and subscription: a republish of the
+	// same event to the same connection is dropped, another connection's copy is not.
+	if err := s.ext.nats.PublishExtensionEvent(ctx, subject, body, eventID.String()+":"+sub.ID.String()); err != nil {
 		log.Printf("[webhook] nats delivery for subscription %s failed: %v", sub.ID, err)
 	}
 }

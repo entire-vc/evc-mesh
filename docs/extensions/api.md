@@ -182,10 +182,34 @@ and `settings_managed_elsewhere` (generic connect/settings/remove refuse; Runner
 | `POST /workspaces/{ws}/extensions/{id}/disable` | `{ "confirm": true }` | `200 WorkspaceExtension`. When `status.source` is `instance` the extension is on for the whole instance and `confirm` must be `true`; without it `409 confirmation_required` and nothing changes |
 | `POST /workspaces/{ws}/extensions/{id}/test` | – | `200 { "ok": true, "message": "", "status": ExtensionStatus }` — fresh health check |
 | `DELETE /workspaces/{ws}/extensions/{id}?data=keep\|delete` | – | `204`. `keep` (default) removes the connection and keeps the extension's data; `delete` removes the data too |
+| `PUT /workspaces/{ws}/extensions/{id}/project-scope` | `{ "project_scope": "workspace" \| "bound" }` | `200 { "extension_id", "project_scope" }`. See "Project scope" below. `bound` on an extension without `levels.project`: `400 validation_failed`; no connection: `404` |
 
 Errors common to all: `404 not_found` (unknown extension id or no connection
 where one is required), `403 forbidden`, `400 validation_failed` (settings do
 not match the manifest schema; `details` carries the field messages).
+
+### Project scope
+
+A connection's `project_scope` decides which projects its extension actor
+(`ext_` token) reaches:
+
+- `workspace` (default, and every connection made before scopes existed): the
+  whole workspace it is connected to.
+- `bound`: only projects with an enabled binding for the extension
+  (`PUT /projects/{p}/extensions/{id}` with `"enabled": true`).
+
+For a `bound` connection every API route that addresses a project — by
+`{proj_id}`, `{task_id}` (full or short id), `by-short-id/{short}`,
+`{doc_id}`, `{artifact_id}`, `{event_id}` or `{link_id}` — answers `403` when
+that project is not bound (a missing id answers the same), and the refusal is
+counted in the connection's violations. `GET /workspaces/{ws}/projects` and
+`GET /workspaces/{ws}/export/hierarchy` list only the bound projects. Routes
+that address projects through their body (`PATCH /vcs-links/ship-sha`) or
+create one (`POST /workspaces/{ws}/projects`) are refused. Event deliveries
+(webhook and NATS) carry only events whose `project_id` is bound; events with
+no project (workspace members, agent keys) are not delivered. `POST
+/ext/{id}/ui-context` refuses a project or task that is not bound. Disabling or
+removing a binding stops both API access and events for that project at once.
 
 ## Project routes
 
@@ -275,6 +299,10 @@ An action answers only on its own method; any other method, an unknown action
 or another extension's action is `404`. `check` exists for every extension with a
 project level. The old `GET /tr/search`, `GET /projects/{p}/tr/search` and
 `POST /projects/{p}/tr/mount` keep working unchanged.
+
+## Event delivery signature
+
+Events reach an extension's webhook with a signed request. The manifest field `external.signature_version` selects the scheme: absent or `1` is the `{timestamp}.{body}` HMAC, `2` also authenticates `X-Mesh-Delivery` and `X-Mesh-Event`. Version negotiation, canonical bytes, a verification example, migration and rollback are in [docs/webhooks.md](../webhooks.md#extension-signature-v2).
 
 ## Deprecated aliases
 

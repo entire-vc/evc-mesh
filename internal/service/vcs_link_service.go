@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	githubapi "github.com/entire-vc/evc-mesh/internal/integration/github"
 	gitlabapi "github.com/entire-vc/evc-mesh/internal/integration/gitlab"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
@@ -42,6 +43,17 @@ type vcsLinkService struct {
 	// depResolver is told when a deploy is recorded so dependents waiting on a
 	// "deployed" edge leave backlog now; nil skips that.
 	depResolver DependencyResolver
+	// githubEvidence resolves a per-workspace GitHub client to read a merged
+	// PR's head commit and checks; nil disables that sync.
+	githubEvidence func(ctx context.Context, workspaceID uuid.UUID) (githubapi.PullRequestEvidenceSource, bool)
+}
+
+// WithVCSGitHubEvidenceSource lets the PR-merged webhook store the PR's head
+// commit and check result on its links, the GitHub counterpart of
+// WithVCSMRPipelineSource, so the delivery-proof gate does not depend on a
+// GitLab-only pipeline hook.
+func WithVCSGitHubEvidenceSource(f func(ctx context.Context, workspaceID uuid.UUID) (githubapi.PullRequestEvidenceSource, bool)) VCSLinkServiceOption {
+	return func(s *vcsLinkService) { s.githubEvidence = f }
 }
 
 // vcsLinkCreateLiveCheckTimeout bounds the GitLab round trip Create makes to
@@ -688,6 +700,9 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 	if ev.Action != "closed" {
 		return PRHandleResult{TaskID: taskID, Reason: "not_closed"}, nil
 	}
+	if ev.PRMerged && !foreign {
+		s.syncMergedGitHubEvidence(ctx, ev, taskID)
+	}
 
 	if foreign {
 		res := s.finishForeignMention(ctx, taskID, ev.PRMerged, fmt.Sprintf("PR #%d", ev.PRNumber), shortSHA(ev.MergeSHA), mrRepoName(ev.Repository, ev.PRHTMLURL), "github-webhook")
@@ -936,6 +951,25 @@ func (s *vcsLinkService) syncExistingLinksOnAmbiguousRef(ctx context.Context, wo
 		synced++
 	}
 	return synced, nil
+}
+
+// syncMergedGitHubEvidence stores the merged PR's head commit and check result
+// on the task's link to it. Best effort, like syncMergedPipeline: a GitHub
+// failure is logged and the delivery-proof gate stays closed.
+func (s *vcsLinkService) syncMergedGitHubEvidence(ctx context.Context, ev GitHubWebhookEvent, taskID uuid.UUID) {
+	if s.githubEvidence == nil {
+		return
+	}
+	src, ok := s.githubEvidence(ctx, ev.WorkspaceID)
+	if !ok {
+		return
+	}
+	links, err := s.repo.ListByTask(ctx, taskID)
+	if err != nil {
+		log.Printf("[vcs-webhook] pr=%s#%d list links for github sync: %v", ev.Repository, ev.PRNumber, err)
+		return
+	}
+	_, _ = syncGitHubLinks(ctx, s.repo, src, filterLinksByURL(links, ev.PRHTMLURL), true)
 }
 
 // syncMergedPipeline stores the MR's head pipeline on its links at merge time.

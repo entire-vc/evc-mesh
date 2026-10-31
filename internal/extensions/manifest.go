@@ -58,6 +58,11 @@ type External struct {
 	// itself (signed POST at install and on rotate-token), so the token never
 	// passes through a person. Empty keeps the token in the rotate response.
 	TokenPath string `json:"token_path,omitempty"`
+	// SignatureVersion selects the signature of event deliveries to this
+	// service: 0 or 1 is the documented "{timestamp}.{body}" HMAC, 2 also
+	// authenticates delivery id and event type (internal/extensions/extsig).
+	// Mesh tells the service at install; opt-in, v1 stays the default.
+	SignatureVersion int `json:"signature_version,omitempty"`
 	// UI maps a slot (sidebar.item, task.panel) to the screen the service serves
 	// for it; the screen is shown in an iframe on the service's own origin.
 	UI map[string]ExternalUI `json:"ui,omitempty"`
@@ -162,6 +167,34 @@ func (m Manifest) SettingFields(levelName string) map[string]SettingField {
 	out := make(map[string]SettingField, len(lv.Properties))
 	for k, f := range lv.Properties {
 		out[k] = SettingField(f)
+	}
+	return out
+}
+
+// SettingsSchema returns the JSON Schema the manifest declares for one settings
+// level ("instance", "workspace" or "project"), nil when the level is not
+// declared. The manifest's shared "schemas" block travels with it, so a
+// "#/schemas/<name>" ref, at the level or nested inside, resolves when the
+// result is compiled as a root document.
+func (m Manifest) SettingsSchema(levelName string) json.RawMessage {
+	var settings map[string]json.RawMessage
+	if len(m.Settings) == 0 || json.Unmarshal(m.Settings, &settings) != nil {
+		return nil
+	}
+	raw := settings[levelName]
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var root map[string]json.RawMessage
+	if json.Unmarshal(raw, &root) != nil {
+		return nil
+	}
+	if len(m.Schemas) > 0 && string(m.Schemas) != "null" {
+		root["schemas"] = m.Schemas
+	}
+	out, err := json.Marshal(root)
+	if err != nil {
+		return nil
 	}
 	return out
 }

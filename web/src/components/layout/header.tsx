@@ -443,8 +443,9 @@ interface HeaderProps {
 function useCurrentView(): ProjectViewTab | null {
   const location = useLocation();
   const path = location.pathname;
-  // Before the suffix checks: an extension id like "calendar" ends the same way.
-  const ext = /\/p\/[^/]+\/x\/([^/]+)\/?$/.exec(path);
+  // Before the suffix checks: an extension id like "calendar", or a section of
+  // its screen like ".../x/acme/calendar", ends the same way.
+  const ext = /\/p\/[^/]+\/x\/([^/]+)(\/.*)?$/.exec(path);
   if (ext) return `ext:${ext[1]}`;
   const suffix = /\/(list|timeline|calendar|updates)\/?$/.exec(path);
   if (suffix) return suffix[1] as ProjectViewTab;

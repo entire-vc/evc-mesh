@@ -46,6 +46,7 @@ import (
 	telegramext "github.com/entire-vc/evc-mesh/internal/extensions/telegram"
 	"github.com/entire-vc/evc-mesh/internal/extensions/uictx"
 	"github.com/entire-vc/evc-mesh/internal/handler"
+	githubapi "github.com/entire-vc/evc-mesh/internal/integration/github"
 	gitlabapi "github.com/entire-vc/evc-mesh/internal/integration/gitlab"
 	"github.com/entire-vc/evc-mesh/internal/integration/teamrelay"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
@@ -371,12 +372,24 @@ func main() {
 	// Workspace secrets live in Keep only: secretRepo holds the
 	// Keep provider of the process store, nil when Keep is not configured.
 	secretRepo := postgres.NewSecretRefRepo(db, secretRouter.Keep)
+	// Project scope of extension connections: one repo answers it for the API
+	// guard, event delivery, ui-context, the project list and the export.
+	extensionProjectScopeRepo := postgres.NewExtensionProjectScopeRepo(db)
 	webhookService := service.NewWebhookService(webhookRepo,
 		service.WithExtensionDelivery(
 			postgres.NewExtensionEventSubscriptionRepo(db),
 			postgres.NewIntegrationRepo(db),
 			secretRepo,
-		))
+		),
+		service.WithExtensionSignatureVersion(func(id string) int {
+			if p, ok := extensionRegistry.Get(id); ok {
+				if ext := p.Manifest().External; ext != nil {
+					return ext.SignatureVersion
+				}
+			}
+			return 1
+		}),
+		service.WithExtensionProjectScope(extensionProjectScopeRepo))
 
 	projectIntegrationRepo := postgres.NewProjectIntegrationRepo(db)
 
@@ -385,7 +398,7 @@ func main() {
 	// secretMaterializationService can, and reaches exactly one route.
 	secretService := service.NewSecretService(secretRepo)
 	secretMaterializationService := service.NewSecretMaterializationService(secretRepo)
-	mw.CheckSpawnTokenConfigured()
+	mw.LogSpawnerAllowlist()
 
 	agentActLogRepo := postgres.NewAgentActivityLogRepo(db)
 	// agent_workspace_grants (migration 20260909001, task U1) — the login
@@ -419,7 +432,7 @@ func main() {
 	// Hierarchy export + agents.sponsor_user_id (W3.5), plus the project and member
 	// events extensions subscribe to.
 	workspaceExportRepo := postgres.NewWorkspaceExportRepo(db)
-	workspaceExportHandler := handler.NewWorkspaceExportHandler(workspaceExportRepo)
+	workspaceExportHandler := handler.NewWorkspaceExportHandler(workspaceExportRepo).WithProjectScope(extensionProjectScopeRepo)
 	if r, ok := agentService.(service.AgentSponsorConfigurable); ok {
 		r.SetAgentSponsorRecorder(workspaceExportRepo)
 	}
@@ -796,6 +809,13 @@ func main() {
 			}
 			return gitlabapi.NewClient(cfg.BaseURL, cfg.Token), true
 		}), // stores the head pipeline when an MR merges, for the delivery-proof gate
+		service.WithVCSGitHubEvidenceSource(func(ctx context.Context, ws uuid.UUID) (githubapi.PullRequestEvidenceSource, bool) {
+			cfg, _, ok := vcsIntegrationResolver.ResolveGitHub(ctx, ws)
+			if !ok || cfg.Token == "" {
+				return nil, false
+			}
+			return githubapi.NewClient(cfg.Token), true
+		}), // stores the merged PR's head commit and check result for the delivery-proof gate
 		service.WithVCSMRStateSource(func(ctx context.Context, ws uuid.UUID) (gitlabapi.MergeRequestChecker, bool) {
 			cfg, _, ok := vcsIntegrationResolver.ResolveGitLab(ctx, ws)
 			if !ok || cfg.BaseURL == "" || cfg.Token == "" {
@@ -856,7 +876,8 @@ func main() {
 		log.Printf("WARNING: S3 storage unavailable, artifact uploads will fail: %v", s3Err)
 		// Use a nil-storage artifact service that will return errors on upload.
 		// This is intentional: we no longer use a stub that silently discards uploads.
-		artifactService = service.NewArtifactService(artifactRepo, nil, activityLogRepo)
+		artifactService = service.NewArtifactService(artifactRepo, nil, activityLogRepo,
+			service.WithArtifactLimits(cfg.ArtifactMaxBytes, cfg.ArtifactTaskMaxBytes))
 	} else {
 		if cfg.S3.PublicURL != "" {
 			s3Client.SetPublicURL(cfg.S3.PublicURL)
@@ -886,7 +907,8 @@ func main() {
 			log.Printf("Object storage ready: bucket %q on %s", s3Client.Bucket(), s3Client.Endpoint())
 		}
 
-		artifactService = service.NewArtifactService(artifactRepo, s3Client, activityLogRepo)
+		artifactService = service.NewArtifactService(artifactRepo, s3Client, activityLogRepo,
+			service.WithArtifactLimits(cfg.ArtifactMaxBytes, cfg.ArtifactTaskMaxBytes))
 		documentStore = s3Client
 		attachmentStore = s3Client
 		chatAttachmentStore = s3Client
@@ -1036,7 +1058,7 @@ func main() {
 	statusHandler := handler.NewTaskStatusHandler(taskStatusService)
 	commentHandler := handler.NewCommentHandler(commentService, taskService)
 	humanGateDecisionHandler := handler.NewHumanGateDecisionHandler(commentService, taskService)
-	artifactHandler := handler.NewArtifactHandler(artifactService, taskService)
+	artifactHandler := handler.NewArtifactHandler(artifactService, taskService).WithMaxFileBytes(cfg.ArtifactMaxBytes)
 	documentHandler := handler.NewDocumentHandler(documentService)
 	documentExportHandler := handler.NewDocumentExportHandler(documentExportService)
 	documentAttachmentHandler := handler.NewDocumentAttachmentHandler(documentAttachmentService)
@@ -1095,12 +1117,15 @@ func main() {
 			WithAllowList(extensionPolicyRepo).
 			WithVCSActivity(vcsLinkRepo).
 			WithExternalHook(&external.Hook{Reg: extensionRegistry, Conns: integrationRepo, HS: externalHandshaker}).
-			WithSaveHook("telegram", service.NewTelegramSaveHook(telegramClient, telegramBotManager, telegramGate)))
+			WithSaveHook("telegram", service.NewTelegramSaveHook(telegramClient, telegramBotManager, telegramGate))).
+		WithProjectScope(extensionRegistry, extensionProjectScopeRepo)
 	// Mesh as the identity provider of external-extension iframe screens: instance
 	// signing key (rotates with an overlap), JWKS and the context token.
 	uiContextService := uictx.New(postgres.NewSigningKeyRepo(db), cfg.Email.BaseURL)
 	extensionUIHandler := handler.NewExtensionUIHandler(extensionRegistry, uiContextService, workspaceMemberRepo, userRepo, taskRepo, projectRepo).
-		WithSelfOrigins(append([]string{cfg.Email.BaseURL}, cfg.CORS.AllowOrigins...)...)
+		WithSelfOrigins(append([]string{cfg.Email.BaseURL}, cfg.CORS.AllowOrigins...)...).
+		WithProjectBindings(projectIntegrationService).
+		WithProjectScope(extensionProjectScopeRepo)
 	runtimeHandler := handler.NewRuntimeHandler(runtimeRepo)
 	userRuntimeHandler := handler.NewUserRuntimeHandler(postgres.NewUserRuntimeRepo(db))
 	chatAgentPickerHandler := handler.NewChatAgentPickerHandler(postgres.NewChatAgentPickerRepo(db))
@@ -1221,6 +1246,10 @@ func main() {
 	// Prometheus metrics — registered early so every request is counted.
 	e.Use(mw.Metrics())
 
+	// Deletes upload temp files that net/http misses once auth has swapped
+	// the request for a WithContext copy.
+	e.Use(mw.MultipartCleanup())
+
 	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
 		LogURI:     true,
 		LogStatus:  true,
@@ -1258,7 +1287,8 @@ func main() {
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins:     cfg.CORS.AllowOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Authorization", "Content-Type", "X-Agent-Key", "X-Request-ID"},
+		AllowHeaders:     []string{"Authorization", "Content-Type", "X-Agent-Key", "X-Request-ID", "Idempotency-Key"},
+		ExposeHeaders:    []string{"Idempotent-Replayed", "Retry-After"},
 		AllowCredentials: true,
 	}))
 
@@ -1661,6 +1691,9 @@ func main() {
 	// Deny-by-default route -> capability check for extension actors; inert for
 	// every other principal.
 	api.Use(mw.ExtensionCapabilityGuard(extensionActorService))
+	// A project-bound extension connection reaches only its bound projects;
+	// inert for workspace-scoped connections and every other principal.
+	api.Use(mw.ExtensionProjectScopeGuard(db, extensionProjectScopeRepo, extensionActorService))
 	api.Use(activityTracker.Middleware())
 	api.Use(toolBreakdownTracker.Middleware())
 	api.Use(mw.WorkspaceRLS(db, projectRepo))
@@ -1818,6 +1851,10 @@ func main() {
 
 	// Workspace membership guard — enforces the caller is a member of the requested workspace.
 	wsAccess := mw.RequireWorkspaceMember(db)
+	// Idempotency-Key on retried creates (docs/idempotency.md); mounted last on a
+	// route so the scope sees the authenticated actor.
+	idempotencyRepo := postgres.NewIdempotencyRepo(db)
+	idempotent := mw.Idempotency(idempotencyRepo, 16<<20)
 
 	// Project-scoped routes — RequireProjectMember enforces membership for :proj_id routes.
 	projAccess := mw.RequireProjectMember(db)
@@ -1948,7 +1985,7 @@ func main() {
 	if cmds, ok := taskService.(service.TypedOutcomeCommands); ok {
 		typedCommandHandler := handler.NewTypedOutcomeCommandHandler(cmds, taskService)
 		api.POST("/tasks/:task_id/decision-requests", typedCommandHandler.AskAgent, wsAccess, rbac(mw.PermUpdateTask))
-		api.POST("/tasks/:task_id/finish", typedCommandHandler.FinishTask, wsAccess, rbac(mw.PermUpdateTask))
+		api.POST("/tasks/:task_id/finish", typedCommandHandler.FinishTask, wsAccess, rbac(mw.PermUpdateTask), idempotent)
 		api.POST("/decision-requests/:decision_request_id/answer", typedCommandHandler.AnswerDecision, wsAccess, rbac(mw.PermAddComment))
 	}
 	// Turn-ending commands: each validates its target and writes the wait/outcome,
@@ -1977,7 +2014,7 @@ func main() {
 
 	// Comment routes.
 	api.GET("/tasks/:task_id/comments", commentHandler.List, wsAccess)
-	api.POST("/tasks/:task_id/comments", commentHandler.Create, wsAccess, rbac(mw.PermAddComment))
+	api.POST("/tasks/:task_id/comments", commentHandler.Create, wsAccess, rbac(mw.PermAddComment), idempotent)
 	api.PATCH("/comments/:comment_id", commentHandler.Update, rbac(mw.PermAddComment))
 	api.DELETE("/comments/:comment_id", commentHandler.Delete, rbac(mw.PermAddComment))
 
@@ -1991,7 +2028,8 @@ func main() {
 
 	// Artifact routes.
 	api.GET("/tasks/:task_id/artifacts", artifactHandler.List, wsAccess)
-	api.POST("/tasks/:task_id/artifacts", artifactHandler.Upload, wsAccess, rbac(mw.PermUploadArtifact))
+	api.POST("/tasks/:task_id/artifacts", artifactHandler.Upload, wsAccess, rbac(mw.PermUploadArtifact),
+		mw.Idempotency(idempotencyRepo, artifactIdempotencyBodyLimit(cfg.ArtifactMaxBytes)))
 	api.GET("/artifacts/:artifact_id", artifactHandler.GetByID, wsAccess)
 	api.GET("/artifacts/:artifact_id/download", artifactHandler.Download, wsAccess)
 	api.GET("/tasks/:task_id/artifacts/:artifact_id/download", artifactHandler.Download, wsAccess)
@@ -2240,11 +2278,12 @@ func main() {
 	// Secret materialization — deliberately OUTSIDE the `api` group. DualAuth
 	// there accepts a user JWT or ANY agent's API key; this route must accept
 	// neither, since either would let something wielding an ordinary agent
-	// identity read secret values (served from Keep). Gated by mw.SpawnAuth() — see its doc
-	// comment for the trust model — behind mw.DirectOnly(), which 404s
-	// anything that came through a reverse proxy, so the route's closure no
-	// longer rests on the edge Caddyfile alone.
-	e.POST("/internal/secrets/materialize", secretMaterializeHandler.Materialize, mw.DirectOnly(), mw.SpawnAuth())
+	// identity read secret values (served from Keep). Gated by mw.SpawnerAuth() — an
+	// allowlisted spawner's own agent key; see its doc comment for the trust
+	// model — behind mw.DirectOnly(),
+	// which 404s anything that came through a reverse proxy, so the route's
+	// closure no longer rests on the edge Caddyfile alone.
+	e.POST("/internal/secrets/materialize", secretMaterializeHandler.Materialize, mw.DirectOnly(), mw.SpawnerAuth(agentService))
 
 	// Chat-session token control (E4.4): issue, renew, revoke. Runner-only, like
 	// materialization: outside the `api` group so no user JWT or agent key reaches
@@ -2376,11 +2415,14 @@ func main() {
 			}
 		},
 	}
-	extensionRepoInstallHandler := handler.NewExtensionRepoInstallHandler(repoInstallSvc, instanceSettingRepo).WithCatalogInstall(catalogInstaller)
+	extensionRepoInstallHandler := handler.NewExtensionRepoInstallHandler(repoInstallSvc, instanceSettingRepo).WithCatalogInstall(catalogInstaller).WithCatalogRefresh(func(ctx context.Context) (catalog.Receipt, error) {
+		return extensionCatalog.RefreshNow(ctx, extensions.ExtensionsAPIVersion)
+	})
 	api.POST("/extensions/install", extensionRepoInstallHandler.Install, mw.RequireUserAuth())
 	api.POST("/extensions/repo/refs", extensionRepoInstallHandler.Refs, mw.RequireUserAuth())
 	api.POST("/extensions/repo/preview", extensionRepoInstallHandler.Preview, mw.RequireUserAuth())
 	api.GET("/extensions/updates", extensionRepoInstallHandler.Updates, mw.RequireUserAuth())
+	api.POST("/extensions/catalog/refresh", extensionRepoInstallHandler.RefreshCatalog, mw.RequireUserAuth())
 	api.POST("/extensions/update-all", extensionRepoInstallHandler.UpdateAll, mw.RequireUserAuth())
 	api.POST("/extensions/:ext_id/update", extensionRepoInstallHandler.Update, mw.RequireUserAuth())
 	api.POST("/extensions/:ext_id/rollback", extensionRepoInstallHandler.Rollback, mw.RequireUserAuth())
@@ -2397,11 +2439,16 @@ func main() {
 	api.POST("/workspaces/:ws_id/extensions/:ext_id/enable", extensionWorkspaceHandler.Enable, rbac(mw.PermManageWebhooks))
 	api.POST("/workspaces/:ws_id/extensions/:ext_id/disable", extensionWorkspaceHandler.Disable, rbac(mw.PermManageWebhooks))
 	api.POST("/workspaces/:ws_id/extensions/:ext_id/test", extensionWorkspaceHandler.Test, rbac(mw.PermManageWebhooks))
+	api.PUT("/workspaces/:ws_id/extensions/:ext_id/project-scope", extensionWorkspaceHandler.SetProjectScope, rbac(mw.PermManageWebhooks))
 	api.DELETE("/workspaces/:ws_id/extensions/:ext_id", extensionWorkspaceHandler.Disconnect, rbac(mw.PermManageWebhooks))
 	api.POST("/integrations/:int_id/rotate-token", extensionActorHandler.RotateToken, rbac(mw.PermManageWebhooks))
 	api.GET("/ext/me", extensionActorHandler.Me)
 	api.POST("/ext/me/token/rotate", extensionActorHandler.SelfRotate)
 	api.DELETE("/ext/me/token/previous", extensionActorHandler.SelfRevokePrevious)
+	extensionEventReplayer, _ := webhookService.(service.ExtensionEventReplayer)
+	extensionEventReplayHandler := handler.NewExtensionEventReplayHandler(extensionEventReplayer)
+	api.GET("/ext/me/events", extensionEventReplayHandler.List)
+	api.POST("/ext/me/events/:delivery_id/redeliver", extensionEventReplayHandler.Redeliver)
 	api.PATCH("/integrations/:int_id", integrationHandler.Update, handler.DeprecatedAlias("/api/v1/workspaces/{ws}/extensions/{id}/settings"), rbac(mw.PermManageWebhooks))
 	api.DELETE("/integrations/:int_id", integrationHandler.Delete, handler.DeprecatedAlias("/api/v1/workspaces/{ws}/extensions/{id}"), rbac(mw.PermManageWebhooks))
 
@@ -3314,4 +3361,23 @@ func accessLogLines(method, uri string, status int, latency time.Duration) []str
 			method, uri, status, ms, slowRequestThreshold))
 	}
 	return lines
+}
+
+// maxArtifactBodyBytes bounds the artifact size fed into the idempotency body
+// limit; far above any real upload cap, small enough that the base64 math
+// below cannot overflow int64.
+const maxArtifactBodyBytes int64 = 1 << 40
+
+// artifactIdempotencyBodyLimit returns the body size the idempotency
+// middleware may buffer for an artifact upload: the base64-encoded payload
+// plus 2 MiB of envelope. It stays in int64 so a large ARTIFACT_MAX_BYTES
+// cannot be truncated by an int conversion on a 32-bit build.
+func artifactIdempotencyBodyLimit(maxBytes int64) int64 {
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	if maxBytes > maxArtifactBodyBytes {
+		maxBytes = maxArtifactBodyBytes
+	}
+	return (maxBytes+2)/3*4 + (2 << 20)
 }

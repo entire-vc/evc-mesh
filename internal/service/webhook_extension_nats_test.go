@@ -27,12 +27,13 @@ type fakeExtPublisher struct {
 type publishedExtMsg struct {
 	subject string
 	body    []byte
+	msgID   string
 }
 
-func (f *fakeExtPublisher) PublishExtensionEvent(_ context.Context, subject string, data []byte, _ string) error {
+func (f *fakeExtPublisher) PublishExtensionEvent(_ context.Context, subject string, data []byte, msgID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.msgs = append(f.msgs, publishedExtMsg{subject, data})
+	f.msgs = append(f.msgs, publishedExtMsg{subject, data, msgID})
 	return nil
 }
 
@@ -117,11 +118,19 @@ func TestExtensionNATS_TaskUpdatedOnOwnSubject(t *testing.T) {
 	require.Contains(t, got, subjB)
 	assert.Equal(t, "events.acme._ext."+f.connA.String()+".task.updated", subjA)
 
-	var env extensionNATSEnvelope
+	var env, envB extensionNATSEnvelope
 	require.NoError(t, json.Unmarshal(got[subjA].body, &env))
+	require.NoError(t, json.Unmarshal(got[subjB].body, &envB))
 	assert.Equal(t, "task.updated", env.Event)
 	assert.Equal(t, f.ws, env.WorkspaceID)
-	assert.JSONEq(t, `{"task_id":"t1","workspace_id":"`+f.ws.String()+`"}`, string(env.Payload))
+	// One event, one id: both connections and the payload itself carry it.
+	require.NotEqual(t, uuid.Nil, env.EventID)
+	assert.Equal(t, env.EventID, envB.EventID)
+	assert.JSONEq(t, `{"task_id":"t1","workspace_id":"`+f.ws.String()+`","event_id":"`+env.EventID.String()+`"}`, string(env.Payload))
+	// The JetStream dedup id is per event and connection, so the two copies are
+	// not collapsed into one.
+	assert.Equal(t, env.EventID.String()+":"+env.SubscriptionID.String(), got[subjA].msgID)
+	assert.NotEqual(t, got[subjA].msgID, got[subjB].msgID)
 }
 
 // An event the connection did not subscribe to is not delivered, and another
@@ -186,14 +195,14 @@ func TestExtensionNATS_FailuresPublishNothing(t *testing.T) {
 	t.Run("payload is not valid json", func(t *testing.T) {
 		f := newNATSFixture()
 		sub := f.subsRepo.subs[0]
-		f.svc.publishToSubscription(f.ws, sub, "task.updated", []byte("{not json"))
+		f.svc.publishToSubscription(f.ws, sub, "task.updated", uuid.New(), []byte("{not json"))
 		assert.Empty(t, f.pub.snapshot())
 	})
 	t.Run("publish fails", func(t *testing.T) {
 		f := newNATSFixture()
 		f.svc.SetExtensionNATS(errExtPublisher{}, &fakeWorkspaces{slug: "acme"})
 		// returns after logging; nothing to assert but that it completes
-		f.svc.publishToSubscription(f.ws, f.subsRepo.subs[0], "task.updated", []byte(`{}`))
+		f.svc.publishToSubscription(f.ws, f.subsRepo.subs[0], "task.updated", uuid.New(), []byte(`{}`))
 		assert.Empty(t, f.pub.snapshot())
 	})
 }

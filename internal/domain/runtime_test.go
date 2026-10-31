@@ -183,3 +183,19 @@ func TestValidRuntimeVersion(t *testing.T) {
 		require.False(t, ValidRuntimeVersion(v), v)
 	}
 }
+
+func TestRuntimeCatalogWithControllerVersion(t *testing.T) {
+	c := &RuntimeCatalog{Controllers: map[string]RuntimeController{"a": {Version: "0.1.2"}, "b": {Version: "0.1.2"}}}
+	c.WithControllerVersion("")
+	if c.Controllers["a"].Version != "0.1.2" {
+		t.Fatalf("an empty Installed version must keep the entry, got %q", c.Controllers["a"].Version)
+	}
+	c.WithControllerVersion("0.1.8")
+	for ref, ctrl := range c.Controllers {
+		if ctrl.Version != "0.1.8" {
+			t.Fatalf("%s: got %q, want the Installed 0.1.8", ref, ctrl.Version)
+		}
+	}
+	var none *RuntimeCatalog
+	none.WithControllerVersion("0.1.8")
+}

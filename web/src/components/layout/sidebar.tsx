@@ -187,7 +187,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         icon: "Puzzle",
         label: item.title,
         href,
-        active: path === href,
+        // A section of the screen (/x/<ext>/memory) keeps its item lit.
+        active: path === href || path.startsWith(`${href}/`),
         origin: "extension",
         inRail: true,
       });

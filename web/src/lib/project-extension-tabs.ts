@@ -2,12 +2,13 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { api } from "@/lib/api";
 // Type only: the module itself belongs to the lazy settings screens, not the header's chunk.
 import type { ProjectBinding } from "@/lib/extension-settings";
-import { useSidebarItems } from "@/lib/extension-slots";
+import { useProjectScreens, useSidebarItems } from "@/lib/extension-slots";
 
 /**
- * Extension tabs of a project's header strip. `sidebar.item` is a workspace
- * navigation entry (left menu); it becomes a project tab only for an extension
- * that works per project (`levels.project`) and is bound to this project.
+ * Extension tabs of a project's header strip. A `project.view` screen is a
+ * project tab by itself. `sidebar.item` is a workspace navigation entry (left
+ * menu); it becomes a project tab only for an extension that works per project
+ * (`levels.project`). Either way only where the extension is bound to this project.
  * Until the bindings are known, or if they fail to load, there are no extension
  * tabs: fail-closed, so a workspace-only extension never flashes into the strip.
  */
@@ -85,7 +86,15 @@ export function useProjectExtensionTabs(
   projectId: string | undefined,
 ): Array<{ extensionId: string; title: string }> {
   const items = useSidebarItems();
-  const candidates = useMemo(() => items.filter((i) => i.projectLevel), [items]);
+  const screens = useProjectScreens();
+  // One tab per extension: its project.view screen where it has one, else its per-project sidebar screen.
+  const candidates = useMemo(() => {
+    const own = new Set(screens.map((s) => s.extensionId));
+    return [
+      ...screens.map(({ extensionId, title }) => ({ extensionId, title })),
+      ...items.filter((i) => i.projectLevel && !own.has(i.extensionId)).map(({ extensionId, title }) => ({ extensionId, title })),
+    ].sort((a, b) => a.title.localeCompare(b.title));
+  }, [items, screens]);
   // No project-level screen in the workspace: nothing to ask the project about.
   const needed = Boolean(projectId) && candidates.length > 0;
   useEffect(() => {

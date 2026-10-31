@@ -79,7 +79,12 @@ when absent. Controller apply reports contain the exact revision and digest:
 future, mismatched and stale reports cannot mark the current revision applied.
 A report may carry the controller's own build `version` (optional, at most 64
 characters of `0-9A-Za-z.+_-`); the Runner screen shows it in place of the
-catalog entry's `version` and marks a catalog entry that says otherwise. Saving
+catalog entry's `version` and marks a catalog entry that says otherwise.
+While the `agent-runner` extension is installed, every read of the catalog
+(inventory, save response, desired) gives each controller the Installed
+version of that extension as its `version`: Update moves it, so the catalog
+never lags behind an update. The stored entry's `version` is kept only for
+an instance without the extension and in revision history. Saving
 a catalog without a binding disables that binding's receiving admission.
 Heartbeat is separate from apply success. Controller rejection/capability mismatch
 and stale heartbeat remain visible. Local emergency pause survives synchronization.

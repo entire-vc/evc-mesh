@@ -12,10 +12,14 @@ import (
 const (
 	SlotSidebarItem = "sidebar.item"
 	SlotTaskPanel   = "task.panel"
+	// SlotProjectView is a tab of the project strip; its token always names the project.
+	SlotProjectView = "project.view"
 )
 
 // IsFrameSlot reports whether slot can hold an iframe screen.
-func IsFrameSlot(slot string) bool { return slot == SlotSidebarItem || slot == SlotTaskPanel }
+func IsFrameSlot(slot string) bool {
+	return slot == SlotSidebarItem || slot == SlotTaskPanel || slot == SlotProjectView
+}
 
 // ErrNoScreen means the manifest declares no screen for the slot.
 var ErrNoScreen = errors.New("the extension has no screen for this slot")

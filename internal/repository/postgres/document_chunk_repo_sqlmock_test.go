@@ -113,6 +113,21 @@ func TestDocChunkRepo_DeleteAndPurge(t *testing.T) {
 	require.Error(t, err)
 }
 
+// expectOR scripts the bounded OR arm: a read-only tx, the local timeout, the lexeme
+// lookup, then the candidate+rank query returning rows (nil rows → the query errors).
+func expectOR(mock sqlmock.Sqlmock, rows *sqlmock.Rows) {
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL statement_timeout").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("tsvector_to_array").WillReturnRows(sqlmock.NewRows([]string{"a"}).AddRow("{fleet,gate}"))
+	q := mock.ExpectQuery("regexp_replace")
+	if rows == nil {
+		q.WillReturnError(errors.New("canceling statement due to statement timeout"))
+	} else {
+		q.WillReturnRows(rows)
+	}
+	mock.ExpectRollback()
+}
+
 var hitCols = []string{"id", "document_id", "project_id", "slug", "title", "heading", "content", "doc_version", "updated_at", "score"}
 
 func TestDocChunkRepo_FullTextSearch_ShapesHitsAndFallsBackToOR(t *testing.T) {
@@ -122,7 +137,7 @@ func TestDocChunkRepo_FullTextSearch_ShapesHitsAndFallsBackToOR(t *testing.T) {
 	now := time.Now()
 	// AND query returns < minFTSHits rows, so the OR relaxation must run and replace it.
 	mock.ExpectQuery("plainto_tsquery\\('english', \\$2\\)").WillReturnRows(sqlmock.NewRows(hitCols))
-	mock.ExpectQuery("regexp_replace").WillReturnRows(sqlmock.NewRows(hitCols).
+	expectOR(mock, sqlmock.NewRows(hitCols).
 		AddRow(cid, did, proj, "audit", "Audit", "3.5 Gate", "text", 1, now, 0.4).
 		AddRow(uuid.New(), did, proj, "audit", "Audit", "", "more", 1, now, 0.2))
 	got, err := repo.FullTextSearch(context.Background(), ws, &proj, "fleet gate", domain.DocViewer{AllProjects: true}, 0)
@@ -136,6 +151,18 @@ func TestDocChunkRepo_FullTextSearch_ShapesHitsAndFallsBackToOR(t *testing.T) {
 	assert.InDelta(t, 0.4, got[0].Score, 1e-9)
 }
 
+func TestDocChunkRepo_FullTextSearch_ORTimeoutServesANDResults(t *testing.T) {
+	repo, mock := newDocChunkMock(t)
+	ws, proj, did := uuid.New(), uuid.New(), uuid.New()
+	mock.ExpectQuery("plainto_tsquery\\('english', \\$2\\)").WillReturnRows(sqlmock.NewRows(hitCols).
+		AddRow(uuid.New(), did, proj, "audit", "Audit", "", "text", 1, time.Now(), 0.4))
+	expectOR(mock, nil)
+	got, err := repo.FullTextSearch(context.Background(), ws, &proj, "fleet gate", domain.DocViewer{AllProjects: true}, 10)
+	require.NoError(t, err, "an OR-arm timeout must not fail recall")
+	require.Len(t, got, 1, "the AND result stays")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestDocChunkRepo_FullTextSearch_Error(t *testing.T) {
 	repo, mock := newDocChunkMock(t)
 	mock.ExpectQuery("plainto_tsquery").WillReturnError(errors.New("boom"))
@@ -146,14 +173,17 @@ func TestDocChunkRepo_FullTextSearch_Error(t *testing.T) {
 func TestDocChunkRepo_VectorSearch_RanksByCosineAndCapsToLimit(t *testing.T) {
 	repo, mock := newDocChunkMock(t)
 	ws, proj := uuid.New(), uuid.New()
-	near, far, badDim := uuid.New(), uuid.New(), uuid.New()
+	near, far, badDim, corrupt := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	doc := uuid.New()
 	now := time.Now()
-	mock.ExpectQuery("SELECT c.id, c.embedding").WillReturnRows(sqlmock.NewRows([]string{"id", "embedding"}).
-		AddRow(far, domain.EncodeEmbedding([]float32{0, 1})).
-		AddRow(near, domain.EncodeEmbedding([]float32{1, 0})).
-		AddRow(badDim, domain.EncodeEmbedding([]float32{1, 0, 0})).
-		AddRow(uuid.New(), "not-base64!!"))
+	mock.ExpectQuery("SELECT c.id, c.xmin").WillReturnRows(sqlmock.NewRows([]string{"id", "xmin"}).
+		AddRow(far, 1).AddRow(near, 1).AddRow(badDim, 1).AddRow(corrupt, 1))
+	mock.ExpectQuery("SELECT id, xmin::text::bigint AS xmin, embedding FROM document_chunks").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "xmin", "embedding"}).
+			AddRow(far, 1, domain.EncodeEmbedding([]float32{0, 1})).
+			AddRow(near, 1, domain.EncodeEmbedding([]float32{1, 0})).
+			AddRow(badDim, 1, domain.EncodeEmbedding([]float32{1, 0, 0})).
+			AddRow(corrupt, 1, "not-base64!!"))
 	mock.ExpectQuery("FROM document_chunks c").WillReturnRows(sqlmock.NewRows(hitCols).
 		AddRow(near, doc, proj, "s", "T", "H", "c1", 1, now, 0).
 		AddRow(far, doc, proj, "s", "T", "H2", "c2", 1, now, 0))
@@ -162,21 +192,41 @@ func TestDocChunkRepo_VectorSearch_RanksByCosineAndCapsToLimit(t *testing.T) {
 	require.Len(t, got, 2)
 	assert.Equal(t, near, got[0].ID, "the parallel vector must rank first")
 	assert.Greater(t, got[0].Score, got[1].Score)
+
+	// Second call at the same row versions: keys and hydrate only. No vector
+	// load is expected, so sqlmock fails the test if the embeddings are re-read.
+	mock.ExpectQuery("SELECT c.id, c.xmin").WillReturnRows(sqlmock.NewRows([]string{"id", "xmin"}).
+		AddRow(far, 1).AddRow(near, 1).AddRow(badDim, 1).AddRow(corrupt, 1))
+	mock.ExpectQuery("FROM document_chunks c").WillReturnRows(sqlmock.NewRows(hitCols).
+		AddRow(near, doc, proj, "s", "T", "H", "c1", 1, now, 0).
+		AddRow(far, doc, proj, "s", "T", "H2", "c2", 1, now, 0))
+	got, err = repo.VectorSearch(context.Background(), []float32{1, 0}, ws, &proj, domain.DocViewer{AllProjects: true}, 2)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, near, got[0].ID)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestDocChunkRepo_VectorSearch_EmptyAndErrors(t *testing.T) {
 	repo, mock := newDocChunkMock(t)
-	mock.ExpectQuery("SELECT c.id, c.embedding").WillReturnRows(sqlmock.NewRows([]string{"id", "embedding"}))
+	mock.ExpectQuery("SELECT c.id, c.xmin").WillReturnRows(sqlmock.NewRows([]string{"id", "xmin"}))
 	got, err := repo.VectorSearch(context.Background(), []float32{1}, uuid.New(), nil, domain.DocViewer{AllProjects: true}, 0)
 	require.NoError(t, err)
 	assert.Empty(t, got)
 
-	mock.ExpectQuery("SELECT c.id, c.embedding").WillReturnError(errors.New("x"))
+	mock.ExpectQuery("SELECT c.id, c.xmin").WillReturnError(errors.New("x"))
 	_, err = repo.VectorSearch(context.Background(), []float32{1}, uuid.New(), nil, domain.DocViewer{AllProjects: true}, 3)
 	require.Error(t, err)
 
-	mock.ExpectQuery("SELECT c.id, c.embedding").WillReturnRows(sqlmock.NewRows([]string{"id", "embedding"}).
-		AddRow(uuid.New(), domain.EncodeEmbedding([]float32{1})))
+	id := uuid.New()
+	mock.ExpectQuery("SELECT c.id, c.xmin").WillReturnRows(sqlmock.NewRows([]string{"id", "xmin"}).AddRow(id, 7))
+	mock.ExpectQuery("embedding FROM document_chunks").WillReturnError(errors.New("load"))
+	_, err = repo.VectorSearch(context.Background(), []float32{1}, uuid.New(), nil, domain.DocViewer{AllProjects: true}, 3)
+	require.Error(t, err)
+
+	mock.ExpectQuery("SELECT c.id, c.xmin").WillReturnRows(sqlmock.NewRows([]string{"id", "xmin"}).AddRow(id, 7))
+	mock.ExpectQuery("embedding FROM document_chunks").WillReturnRows(sqlmock.NewRows([]string{"id", "xmin", "embedding"}).
+		AddRow(id, 7, domain.EncodeEmbedding([]float32{1})))
 	mock.ExpectQuery("FROM document_chunks c").WillReturnError(errors.New("hydrate"))
 	_, err = repo.VectorSearch(context.Background(), []float32{1}, uuid.New(), nil, domain.DocViewer{AllProjects: true}, 3)
 	require.Error(t, err)
@@ -247,7 +297,7 @@ func TestDocChunkRepo_SearchAppliesViewerPredicateInSQL(t *testing.T) {
 	// after truncation.
 	mock.ExpectQuery("EXISTS \\(SELECT 1 FROM project_members pm").WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), agent, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows(hitCols))
-	mock.ExpectQuery("EXISTS \\(SELECT 1 FROM project_members pm").WillReturnRows(sqlmock.NewRows(hitCols))
+	expectOR(mock, sqlmock.NewRows(hitCols))
 	_, err := repo.FullTextSearch(context.Background(), uuid.New(), nil, "q", domain.DocViewer{AgentID: &agent}, 5)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())

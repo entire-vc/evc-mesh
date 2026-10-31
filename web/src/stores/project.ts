@@ -31,6 +31,8 @@ interface ProjectState {
   currentProject: Project | null;
   statuses: TaskStatus[];
   isLoading: boolean;
+  /** A project list has been answered (possibly empty, possibly with an error): "not found" is final. */
+  loaded: boolean;
   error: string | null;
 
   fetchProjects: (workspaceId: string) => Promise<void>;
@@ -70,6 +72,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   currentProject: null,
   statuses: [],
   isLoading: false,
+  loaded: false,
   error: null,
 
   fetchProjects: async (workspaceId: string) => {
@@ -78,12 +81,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const page = await api<PaginatedResponse<Project>>(
         `/api/v1/workspaces/${workspaceId}/projects`,
       );
-      set({ projects: page.items ?? [], isLoading: false, error: null });
+      set({ projects: page.items ?? [], isLoading: false, loaded: true, error: null });
     } catch (error) {
       set({
         projects: [],
         currentProject: null,
         isLoading: false,
+        loaded: true,
         error: getErrorMessage(error),
       });
     }
@@ -138,7 +142,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }));
   },
 
-  // Archive state has its own routes — PATCH refuses is_archived (#ddd219f4).
+  // Archive state has its own routes — PATCH refuses is_archived.
   // The project stays in `projects` (lookups by id must still resolve its
   // name); the sidebar is what splits live from archived.
   archiveProject: async (id: string) => {

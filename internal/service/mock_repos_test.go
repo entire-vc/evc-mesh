@@ -1575,13 +1575,16 @@ type MockArtifactRepository struct {
 	// workspaceOf maps artifact ID → workspace ID for GetByIDInWorkspace checks.
 	// If an entry is absent the mock skips workspace filtering (permissive default).
 	workspaceOf map[uuid.UUID]uuid.UUID
-	errToReturn error
+	// reservations holds room for uploads in flight: id → the task and size.
+	reservations map[uuid.UUID]domain.Artifact
+	errToReturn  error
 }
 
 func NewMockArtifactRepository() *MockArtifactRepository {
 	return &MockArtifactRepository{
-		items:       make(map[uuid.UUID]*domain.Artifact),
-		workspaceOf: make(map[uuid.UUID]uuid.UUID),
+		items:        make(map[uuid.UUID]*domain.Artifact),
+		workspaceOf:  make(map[uuid.UUID]uuid.UUID),
+		reservations: make(map[uuid.UUID]domain.Artifact),
 	}
 }
 
@@ -1682,6 +1685,53 @@ func (m *MockArtifactRepository) ListByTask(_ context.Context, taskID uuid.UUID,
 		}
 	}
 	return pagination.NewPage(all, len(all), pg), nil
+}
+
+func (m *MockArtifactRepository) ReserveTaskBytes(_ context.Context, reservationID, taskID uuid.UUID, size, maxTaskBytes int64, _ time.Duration) (reserved bool, used int64, err error) {
+	if m.errToReturn != nil {
+		return false, 0, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.items {
+		if existing.TaskID == taskID {
+			used += existing.SizeBytes
+		}
+	}
+	for _, held := range m.reservations {
+		if held.TaskID == taskID {
+			used += held.SizeBytes
+		}
+	}
+	if used+size > maxTaskBytes {
+		return false, used, nil
+	}
+	m.reservations[reservationID] = domain.Artifact{TaskID: taskID, SizeBytes: size}
+	return true, used, nil
+}
+
+func (m *MockArtifactRepository) CreateFromReservation(_ context.Context, reservationID uuid.UUID, a *domain.Artifact) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, live := m.reservations[reservationID]; !live {
+		return repository.ErrArtifactReservationExpired
+	}
+	m.items[a.ID] = a
+	delete(m.reservations, reservationID)
+	return nil
+}
+
+func (m *MockArtifactRepository) ReleaseReservation(_ context.Context, reservationID uuid.UUID) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.reservations, reservationID)
+	return nil
 }
 
 // ---------------------------------------------------------------------------

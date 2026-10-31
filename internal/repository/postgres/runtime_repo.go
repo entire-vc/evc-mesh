@@ -264,6 +264,17 @@ func runtimeRevision(ctx context.Context, q sqlx.QueryerContext, id uuid.UUID) (
 	return row.Revision, row.Digest, err
 }
 
+// installedRunnerVersion is the Installed version of the runner extension, or
+// "" when it is not installed: what every controller of a catalog runs.
+func installedRunnerVersion(ctx context.Context, q sqlx.QueryerContext) (string, error) {
+	var v string
+	err := sqlx.GetContext(ctx, q, &v, `SELECT version FROM installed_extensions WHERE extension_id=$1`, domain.RunnerExtensionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return v, err
+}
+
 func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor, input RuntimeSave) (*domain.RuntimeSnapshot, error) {
 	if input.IfRevision < 0 {
 		return nil, apierror.BadRequest("if_revision is required")
@@ -425,10 +436,17 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 	if err != nil {
 		return nil, err
 	}
+	// Read before the commit: a failed read after it would report a saved
+	// revision as an error.
+	installed, err := installedRunnerVersion(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
 	err = tx.Commit()
 	if err != nil {
 		return nil, err
 	}
+	catalog.WithControllerVersion(installed)
 	return &domain.RuntimeSnapshot{Mode: "managed", Revision: revision, Digest: digest, Enabled: connection.IsActive, DrainRequested: !connection.IsActive, Catalog: catalog.Redacted(), Controllers: []domain.RuntimeControllerState{}}, nil
 }
 
@@ -702,6 +720,11 @@ func (r *RuntimeRepo) Inventory(ctx context.Context, ws uuid.UUID, actor Runtime
 	if err != nil {
 		return nil, err
 	}
+	installed, err := installedRunnerVersion(ctx, r.db)
+	if err != nil {
+		return nil, err
+	}
+	catalog.WithControllerVersion(installed)
 	return &domain.RuntimeSnapshot{Mode: "managed", Revision: revision, Digest: digest, Enabled: connection.IsActive, DrainRequested: !connection.IsActive, Catalog: catalog.Redacted(), Controllers: states}, nil
 }
 
@@ -787,6 +810,12 @@ func (r *RuntimeRepo) Desired(ctx context.Context, ws uuid.UUID, ref string, act
 	if _, err = runtimeGrant(ctx, r.db, domain.RuntimeIdentity{AgentID: actor.AgentID, WorkspaceID: ws, GrantID: controller.ReporterGrantID}); err != nil {
 		return nil, err
 	}
+	installed, err := installedRunnerVersion(ctx, r.db)
+	if err != nil {
+		return nil, err
+	}
+	catalog.WithControllerVersion(installed)
+	controller = catalog.Controllers[ref]
 	slice, _ := catalog.DesiredFor(ref)
 	excluded, err := r.runtimeExclusions(ctx, r.db, ws, slice.Bindings)
 	if err != nil {

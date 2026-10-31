@@ -186,3 +186,25 @@ func TestPollTasks_RejectsABadFilterBeforeParking(t *testing.T) {
 		"a client-side filter error must be reported immediately, not two minutes later "+
 			"as an empty timeout")
 }
+
+func TestAgentFeed_StatusCategoryListReachesTheRepository(t *testing.T) {
+	h, got := feedHandler([]domain.Task{}, 0)
+	rec := feedRequest(t, h, "status_category=todo,in_progress,review")
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Nil(t, got.StatusCategory, "a list goes in StatusCategories, not the single-value field")
+	assert.Equal(t, []domain.StatusCategory{
+		domain.StatusCategoryTodo, domain.StatusCategoryInProgress, domain.StatusCategoryReview,
+	}, got.StatusCategories)
+}
+
+func TestAgentFeed_StatusCategoryListRejectsUnknownMember(t *testing.T) {
+	h, _ := feedHandler([]domain.Task{}, 0)
+	e := echo.New()
+	rec := httptest.NewRecorder()
+	c := e.NewContext(httptest.NewRequest(http.MethodGet, "/?status_category=todo,bogus", http.NoBody), rec)
+	c.Set(mw.ContextKeyAgentID, uuid.New())
+	c.Set(mw.ContextKeyWorkspaceID, uuid.New())
+	require.NoError(t, h.GetMyTasks(c))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}

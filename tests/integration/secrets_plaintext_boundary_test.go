@@ -147,9 +147,9 @@ func TestSecretsPlaintextNeverCrossesTheBoundary(t *testing.T) {
 	assert.Equal(t, 0, storedPlaintextCount, "secret_refs must never hold a secret's value")
 
 	// 7. The one legitimate plaintext-returning endpoint must refuse a normal
-	// authenticated user. env.Post sends this user's Bearer JWT; SpawnAuth
-	// looks only at X-Spawn-Token + MESH_INTEGRATION_ENCRYPTION_KEY-adjacent
-	// env config, so a valid JWT must never be sufficient on its own.
+	// authenticated user. env.Post sends this user's Bearer JWT; SpawnerAuth
+	// looks only at an allowlisted spawner's X-Agent-Key, so a valid JWT must
+	// never be sufficient on its own.
 	resp = env.Post(t, "/internal/secrets/materialize", map[string]any{"workspace_id": wsID})
 	raw = env.ReadBody(t, resp)
 	assert.NotEqual(t, http.StatusOK, resp.StatusCode,

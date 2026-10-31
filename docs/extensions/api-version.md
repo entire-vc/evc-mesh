@@ -30,3 +30,11 @@ and the matching handler test so the change is deliberate and reviewable.
 The `/api/v1/agents/me/*` surface used by external runners is pinned by contract
 tests (`go test ./internal/handler -run Contract`); what counts as breaking is in
 `agents-me-contract.md`.
+
+## External extension contract
+
+The calls Mesh makes to an external service, the extension actor routes and
+the public event bodies are pinned by contract tests against the reference
+extension in `examples/external-extension`
+(`go test ./internal/... -run 'Contract|RefExt'`); what counts as breaking is
+in `extension-actor-contract.md`.

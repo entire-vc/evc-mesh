@@ -267,6 +267,27 @@ func TestUpdate_NewPermissionsNeedConsentOnThatCommit(t *testing.T) {
 	assert.Equal(t, "updated", string(res.Outcome))
 }
 
+// Spark's capabilities carry a "network" object next to the permission lists.
+// It must not swallow the added permissions: the update still waits for consent.
+func TestUpdate_NetworkObjectStillNeedsConsent(t *testing.T) {
+	f := newInstallFixture(t, func(e *Entry, _ *Catalog) {
+		e.Latest.Capabilities = []byte(`{"api":["ext_token:self_rotate"],"events":[],` +
+			`"network":{"allowed_domains":[],"reasoning":"talks only to this Mesh instance"}}`)
+	})
+	f.installedAt("0.0.9", false)
+
+	list, err := f.inst.Updates(context.Background())
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.True(t, list[0].NeedsConsent)
+	assert.Equal(t, []string{"api:ext_token:self_rotate"}, list[0].NewCapabilities)
+
+	res, err := f.inst.Update(context.Background(), nil, f.id(), "")
+	require.NoError(t, err)
+	assert.Equal(t, "pending_consent", string(res.Outcome))
+	assert.Equal(t, "0.0.9", f.store.rows[f.id()].Version, "nothing moved without consent")
+}
+
 // Red control: tampered artifact bytes leave the installed version untouched.
 func TestUpdate_DigestMismatchChangesNothing(t *testing.T) {
 	f := newInstallFixture(t, nil)

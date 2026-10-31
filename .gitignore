@@ -80,6 +80,9 @@ web/perf/test-results/
 __pycache__/
 *.pyc
 web/e2e-tabs/results/
+web/e2e-appearance/results/
+web/e2e-appearance/junit.xml
 web/e2e-tabs/shots/
 web/e2e-tabs/view-tab-bar.before.tsx
 web/agent-chat-e2e/
+extension-authorship-logs/
