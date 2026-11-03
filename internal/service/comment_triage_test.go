@@ -49,7 +49,7 @@ func TestHasBlockingMarker(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// blockingMarkerClassForSlug (contract §5, task #4dc9467b)
+// blockingMarkerClassForSlug (contract §5, an internal ticket)
 // ---------------------------------------------------------------------------
 
 func TestBlockingMarkerClassForSlug(t *testing.T) {
@@ -142,7 +142,7 @@ func setupTriageEnvWithOptions(t *testing.T, withTriageColumn bool, extra ...Com
 		}
 	}
 
-	// Pavel is a human user; agents (e.g. @linus) are intentionally NOT registered here.
+	// Alex is a human user; agents (e.g. @liam) are intentionally NOT registered here.
 	userRepo.AddUser(wsID, &domain.User{ID: uuid.New(), Username: "pavel", Name: "Pavel"})
 	userRepo.AddUser(wsID, &domain.User{ID: uuid.New(), Username: "alex", Name: "Alex"})
 
@@ -174,7 +174,7 @@ func (env triageTestEnv) systemComments() []domain.Comment {
 }
 
 // releaseComments returns only the system comments that ANNOUNCE a human_gate
-// release. Split out 2026-08-20 (#17829fcf) because the withdrawal-miss notice
+// release. Split out 2026-08-20 because the withdrawal-miss notice
 // added by that task is also a system comment: an `assert.Empty(systemComments())`
 // negative control would now pass or fail for reasons unrelated to whether the
 // gate was released. Every such control below asserts on THIS list instead, so it
@@ -192,7 +192,7 @@ func (env triageTestEnv) releaseComments() []domain.Comment {
 }
 
 // withdrawalMissNotices returns the system comments posted by reportWithdrawalMiss
-// (#17829fcf AC2) — the trace that a withdrawal-shaped comment did NOT count.
+// (an internal ticket AC2) — the trace that a withdrawal-shaped comment did NOT count.
 func (env triageTestEnv) withdrawalMissNotices() []domain.Comment {
 	var out []domain.Comment
 	for _, c := range env.systemComments() {
@@ -204,7 +204,7 @@ func (env triageTestEnv) withdrawalMissNotices() []domain.Comment {
 }
 
 // withdrawalMarkerConflictNotices returns the system comments posted by
-// reportWithdrawalMarkerConflict (#081f1354) — the trace that a comment carrying
+// reportWithdrawalMarkerConflict — the trace that a comment carrying
 // BOTH a withdrawal negator AND a fresh Blocking marker was refused as
 // ambiguous, distinct from withdrawalMissNotices (a negator that plain didn't
 // count) even though both share the "human_gate is still raised" opener.
@@ -265,7 +265,7 @@ func TestEnforceBlockingTriage_BlockingHuman_MovesToTriage(t *testing.T) {
 	assert.Contains(t, sys[0].Body, "@pavel")
 }
 
-// TestEnforceBlockingTriage_SoftTag_SetsClassSoft is AC1 (contract §5, task #4dc9467b):
+// TestEnforceBlockingTriage_SoftTag_SetsClassSoft is AC1 (contract §5, an internal ticket):
 // the ONLY input this task adds — a "[soft]" tag on the marker's own line — must reach
 // SetHumanGateClass as domain.HumanGateClassSoft.
 func TestEnforceBlockingTriage_SoftTag_SetsClassSoft(t *testing.T) {
@@ -441,7 +441,7 @@ func TestEnforceBlockingTriage_AgentMentionOnly_NoTriage(t *testing.T) {
 	env := setupTriageEnv(t, true)
 	taskID := env.seedTask(env.inProgressID)
 
-	// @linus is an agent (never registered as a user) → human-gate blocks the move.
+	// @liam is an agent (never registered as a user) → human-gate blocks the move.
 	comment := &domain.Comment{
 		TaskID:     taskID,
 		AuthorID:   uuid.New(),
@@ -458,12 +458,12 @@ func TestEnforceBlockingTriage_AgentMentionOnly_NoTriage(t *testing.T) {
 // names a slug that does not resolve to any user — typo, unregistered account, or an
 // agent slug all land here. This is a safe no-op: no triage move, no human_gate, no
 // system comment. (It now also emits a [comment-triage] WARNING log for observability —
-// task #2b600b3f — but the no-op behavior itself is unchanged and intentional.)
+// an internal ticket — but the no-op behavior itself is unchanged and intentional.)
 func TestEnforceBlockingTriage_TypoSlug_NoOp(t *testing.T) {
 	env := setupTriageEnv(t, true)
 	taskID := env.seedTask(env.inProgressID)
 
-	// "pavvel" is a typo of the registered "pavel" user — never resolves.
+	// "pavvel" is a typo of the registered "alex" user — never resolves.
 	comment := &domain.Comment{
 		TaskID:     taskID,
 		AuthorID:   uuid.New(),
@@ -478,7 +478,7 @@ func TestEnforceBlockingTriage_TypoSlug_NoOp(t *testing.T) {
 }
 
 // TestEnforceBlockingTriage_UnrelatedEarlierMention_DoesNotMisattribute is the regression
-// test for #2b600b3f: before the fix, the human-gate check scanned ALL @-mentions
+// test for an internal ticket: before the fix, the human-gate check scanned ALL @-mentions
 // anywhere in the comment body (in order) and used the first one that resolved to a
 // user — NOT specifically the slug the "Blocking" marker names. A comment that cc's a
 // real, registered user earlier in the text while the actual Blocking target is an
@@ -487,7 +487,7 @@ func TestEnforceBlockingTriage_UnrelatedEarlierMention_DoesNotMisattribute(t *te
 	env := setupTriageEnv(t, true)
 	taskID := env.seedTask(env.inProgressID)
 
-	// @pavel is a registered human mentioned BEFORE the marker, purely as a cc — the
+	// @alex is a registered human mentioned BEFORE the marker, purely as a cc — the
 	// actual Blocking target "unregistered-slug" never resolves.
 	comment := &domain.Comment{
 		TaskID:     taskID,
@@ -688,7 +688,7 @@ func blockingTriageCalls(notifySvc *MockNotificationService) []domain.Notificati
 }
 
 // TestEnforceBlockingTriage_AutoMode_StillNotifiesTargetUser pins the fix for
-// #4e1d249f: before it, the "task.blocking_triage" notify lived downstream of
+// an internal ticket: before it, the "task.blocking_triage" notify lived downstream of
 // the triage MOVE, which auto-mode tasks skip — so a live ask on an auto task
 // armed human_gate (freezing the card) but never told the named human anything.
 // Measured live on prod 2026-09-06: 103 of 107 currently-armed human_gate tasks
@@ -816,7 +816,7 @@ func (env triageTestEnv) seedGatedTask(statusID uuid.UUID) uuid.UUID {
 	return taskID
 }
 
-// seedBlockingComment pre-inserts a "❓ Blocking @pavel" comment on taskID so that
+// seedBlockingComment pre-inserts a "❓ Blocking @alex" comment on taskID so that
 // releaseHumanGate finds a prior blocking signal when a user comment arrives.
 func (env triageTestEnv) seedBlockingComment(taskID uuid.UUID) {
 	cid := uuid.New()
@@ -877,7 +877,7 @@ func TestReleaseHumanGate_NoPriorBlockingComment_NoOp(t *testing.T) {
 
 	assert.Empty(t, env.taskMover.humanGateCalls(), "must not release when no prior blocking comment")
 	assert.Empty(t, env.releaseComments())
-	assert.Len(t, env.endpointGateHints(), 1, "the only system comment is the endpoint-gate hint (#fc63d720)")
+	assert.Len(t, env.endpointGateHints(), 1, "the only system comment is the endpoint-gate hint")
 }
 
 func TestReleaseHumanGate_AgentComment_NoOp(t *testing.T) {
@@ -922,15 +922,15 @@ func TestReleaseHumanGate_TaskNotGated_NoOp(t *testing.T) {
 
 // TestEnforceBlockingTriage_AssigneeCompletionReport_NoTriage verifies that when
 // the task's own assignee writes a completion summary that incidentally contains a
-// "❓ Blocking @pavel" marker (e.g. "Done. ❓ Blocking @pavel: please close"), the
+// "❓ Blocking @alex" marker (e.g. "Done. ❓ Blocking @alex: please close"), the
 // task is NOT moved to triage.
-// Regression: task #0a46e636 was re-triaged when Garfield wrote the final summary.
+// Regression: an internal ticket was re-triaged when Gary wrote the final summary.
 //
-// AMENDED 2026-08-14 (task #a84b443c): this test also asserted that human_gate was
+// AMENDED 2026-08-14: this test also asserted that human_gate was
 // NOT armed, and that half is now inverted. The regression it was written for is the
 // unwanted triage MOVE — that assertion is unchanged and still carries the test. But
 // suppressing the ARMING made the ask undeliverable, and this body is the clearest
-// case that it should be delivered: the marker asks Pavel to close a supervised task
+// case that it should be delivered: the marker asks Alex to close a supervised task
 // by hand, which is precisely an ask no agent can satisfy. Two live losses of the same
 // shape are in comment_triage_tailmarker_test.go.
 func TestEnforceBlockingTriage_AssigneeCompletionReport_NoTriage(t *testing.T) {
@@ -1027,12 +1027,12 @@ func TestEnforceBlockingTriage_AssigneeBlockerNoCompletion_Triages(t *testing.T)
 }
 
 // TestEnforceBlockingTriage_UnrelatedCompletionWordFarFromMarker_ArmsGate is the
-// regression for task #69fbb698: the server-side human_gate flag never got armed
-// on task #e8b2c765 because the completion-report heuristic scanned the ENTIRE
+// regression for an internal ticket: the server-side human_gate flag never got armed
+// on an internal ticket because the completion-report heuristic scanned the ENTIRE
 // comment body for keywords like "завершен", and this assignee's long analytical
 // comment happened to mention an unrelated "Helsinki-миграция ... завершена"
 // (infra migration complete) thousands of characters before its genuinely live
-// "❓ Blocking @pavel" question. That false match suppressed enforceBlockingTriage
+// "❓ Blocking @alex" question. That false match suppressed enforceBlockingTriage
 // before it ever reached SetHumanGate, leaving the cheap human_gate.is_human_gated
 // path fleet-wide blind to this task. Fix: only scan a bounded window immediately
 // preceding the marker (completionKeywordSearchWindow).
@@ -1070,15 +1070,15 @@ func TestEnforceBlockingTriage_UnrelatedCompletionWordFarFromMarker_ArmsGate(t *
 }
 
 // TestEnforceBlockingTriage_NegatedCompletionKeyword_ArmsGate is the
-// regression for task #3948173f (live case #90750c66, found by Bill during a
+// regression for an internal ticket (live case an internal ticket, found by Beth during a
 // sweep): isAssigneeCompletionReport used a bare strings.Contains for
 // "выполнен" (done) — which is also a substring of "не выполнен" (NOT done).
-// Riker's real comment on #90750c66 formally states its own AC is unmet
+// Robin's real comment on an internal ticket formally states its own AC is unmet
 // ("Но формально пункт AC не выполнен") right before a genuinely live
-// "❓ Blocking @pavel" question, and the old heuristic misread the negated
+// "❓ Blocking @alex" question, and the old heuristic misread the negated
 // keyword as a completion report, silently suppressing SetHumanGate — the
 // exact class of bug this ticket exists to close. Body is the EXACT comment
-// from #90750c66 (Riker, 2026-08-02T04:34:44Z), not a paraphrase.
+// from an internal ticket (Robin, 2026-08-02T04:34:44Z), not a paraphrase.
 func TestEnforceBlockingTriage_NegatedCompletionKeyword_ArmsGate(t *testing.T) {
 	env := setupTriageEnv(t, true)
 	assigneeID := uuid.New()
@@ -1135,7 +1135,7 @@ func TestEnforceBlockingTriage_NegatedCompletionKeyword_ArmsGate(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Bug fix: Pavel's response must move the task from triage → in_progress
+// Bug fix: Alex's response must move the task from triage → in_progress
 // ---------------------------------------------------------------------------
 
 // TestReleaseHumanGate_TriageTask_CommentLayerDoesNotMoveToInProgress pins the comment
@@ -1177,7 +1177,7 @@ func TestReleaseHumanGate_TriageTask_CommentLayerDoesNotMoveToInProgress(t *test
 }
 
 // TestReleaseHumanGate_InProgressTask_NoStatusMove verifies that when a human-gated
-// task is already in in_progress (not in triage), Pavel's response clears the gate
+// task is already in in_progress (not in triage), Alex's response clears the gate
 // flag but does NOT trigger any MoveTask call.
 func TestReleaseHumanGate_InProgressTask_NoStatusMove(t *testing.T) {
 	env := setupTriageEnv(t, true)
@@ -1484,10 +1484,10 @@ func TestEnforceTriageExit_TaskNotInTriage_NoOp(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// releaseHumanGateOnWithdrawal (via Create) — task #c375905c
+// releaseHumanGateOnWithdrawal (via Create) — an internal ticket
 // ---------------------------------------------------------------------------
 
-// seedAgentBlockingComment inserts a "❓ Blocking @pavel" comment authored by
+// seedAgentBlockingComment inserts a "❓ Blocking @alex" comment authored by
 // authorID, so ownership of the live ask can be pinned to a specific agent.
 func (env triageTestEnv) seedAgentBlockingComment(taskID, authorID uuid.UUID) {
 	cid := uuid.New()
@@ -1537,7 +1537,7 @@ func TestReleaseHumanGateOnWithdrawal_SameAgentNegates_ReleasesFlag(t *testing.T
 // TestReleaseHumanGateOnWithdrawal_DifferentAgent_NoOp is the core negative
 // control from the task's own AC2: an agent OTHER than the one who raised the
 // ask cannot silence it, even with a negator phrase — otherwise the fleet
-// learns to bypass its own Pavel gate, which is worse than the original bug.
+// learns to bypass its own Alex gate, which is worse than the original bug.
 func TestReleaseHumanGateOnWithdrawal_DifferentAgent_NoOp(t *testing.T) {
 	env := setupTriageEnv(t, true)
 	taskID := env.seedGatedTask(env.inProgressID)
@@ -1615,7 +1615,7 @@ func TestReleaseHumanGateOnWithdrawal_ReaffirmedByOtherAgent_NoOp(t *testing.T) 
 }
 
 // TestReleaseHumanGateOnWithdrawal_MarkerWithUnrelatedNegatorProse_NotSelfNegated
-// reproduces the live incident found by Riker on #7f646f08 (2026-07-30): a
+// reproduces the live incident found by Robin on an internal ticket (2026-07-30): a
 // comment that raises a FRESH marker as its final line, but ALSO discusses a
 // DIFFERENT, already-resolved ask earlier in the same body using a negator
 // word ("снят"), must still be recognised as a live, un-negated marker — the
@@ -1623,7 +1623,7 @@ func TestReleaseHumanGateOnWithdrawal_ReaffirmedByOtherAgent_NoOp(t *testing.T) 
 // Before the fix, hasNegatorInScope's whole-body predecessor found "снят"
 // anywhere in agent B's comment and skipped it as "already negated", so
 // ownership of the live ask silently stayed with agent A — exactly what
-// stranded #7f646f08 after Riker's real withdrawal comment.
+// stranded an internal ticket after Robin's real withdrawal comment.
 func TestReleaseHumanGateOnWithdrawal_MarkerWithUnrelatedNegatorProse_NotSelfNegated(t *testing.T) {
 	env := setupTriageEnv(t, true)
 	taskID := env.seedGatedTask(env.inProgressID)
@@ -1633,7 +1633,7 @@ func TestReleaseHumanGateOnWithdrawal_MarkerWithUnrelatedNegatorProse_NotSelfNeg
 
 	// B's comment: analysis discussing an OLD, unrelated ask being "снят" (an
 	// SSH-access ask that resolved itself), THEN a brand-new marker as the
-	// operative final line. This is the actual shape of Riker's 00:12 comment.
+	// operative final line. This is the actual shape of Robin's 00:12 comment.
 	cid := uuid.New()
 	env.commentRepo.items[cid] = &domain.Comment{
 		ID:         cid,
@@ -1823,10 +1823,10 @@ func TestIsAutoGeneratedComment(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// stripQuotedSpans / hasNegatorInScope quoting — task #5c69b4e5
+// stripQuotedSpans / hasNegatorInScope quoting — an internal ticket
 //
 // A comment that QUOTES the negator vocabulary while explaining the mechanism
-// used to perform a withdrawal: live probe #a073a896 released a real human_gate
+// used to perform a withdrawal: live probe an internal ticket released a real human_gate
 // 11 ms after a summary comment whose only "не нужен" sat in backticks inside a
 // blockquote, and the genuine withdrawal 1.75 s later became a no-op.
 // ---------------------------------------------------------------------------
@@ -1859,7 +1859,7 @@ func TestStripQuotedSpans(t *testing.T) {
 }
 
 // liveProbeSummaryBody is the shape of the comment that actually disarmed a live
-// gate in probe #a073a896: a blockquoted, backticked citation of the vocabulary
+// gate in probe an internal ticket: a blockquoted, backticked citation of the vocabulary
 // inside a post-mortem that intended to withdraw nothing.
 const liveProbeSummaryBody = "Сводка механизма:\n\n" +
 	"> «негатор того же автора 02:58:05.226Z (`не нужен`) → системный коммент…»\n\n" +
@@ -1891,7 +1891,7 @@ func TestHasNegatorInScope_QuotedVocabulary(t *testing.T) {
 }
 
 // TestHasBlockingMarker_QuotedFormsDoNotArm covers the symmetric arm-side leak:
-// documenting the marker template must not raise a one-way Pavel gate. The `> `
+// documenting the marker template must not raise a one-way Alex gate. The `> `
 // case already worked by accident (the regex is line-anchored); the fenced and
 // inline-code cases did not.
 func TestHasBlockingMarker_QuotedFormsDoNotArm(t *testing.T) {
@@ -1921,7 +1921,7 @@ func TestReleaseHumanGateOnWithdrawal_QuotedNegatorOnly_KeepsGate(t *testing.T) 
 	cases := []struct {
 		name string
 		body string
-		// wantNotice: whether #17829fcf's withdrawal-miss notice fires. It does
+		// wantNotice: whether an internal ticket's withdrawal-miss notice fires. It does
 		// ONLY where the citation sits in the region an ASSERTED negator would
 		// have counted — "right words, right place, formatted as a quote". A
 		// negator quoted elsewhere is overwhelmingly a paste (triageExitNegators
@@ -1933,7 +1933,7 @@ func TestReleaseHumanGateOnWithdrawal_QuotedNegatorOnly_KeepsGate(t *testing.T) 
 		{"inline code", "Механизм: негатор (`не нужен`) того же автора снимает флаг.", true},
 		{"fenced block", "Словарь негаторов:\n```\nне нужен\nснят\nresolved\n```\nЭто справка.", true},
 		{"blockquote", "Цитирую тред:\n> ask не нужен, снят\n\nПросто фиксирую.", false},
-		{"the live probe #a073a896 body", liveProbeSummaryBody, false},
+		{"the live probe an internal ticket body", liveProbeSummaryBody, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1955,9 +1955,9 @@ func TestReleaseHumanGateOnWithdrawal_QuotedNegatorOnly_KeepsGate(t *testing.T) 
 				"a QUOTED negator is not a withdrawal — the gate must stay armed")
 			assert.Empty(t, env.releaseComments(),
 				"and nothing may announce a release that did not happen")
-			// #17829fcf: the no-op is no longer SILENT. The author owns the live
+			// an internal ticket: the no-op is no longer SILENT. The author owns the live
 			// marker here, so they are told why their words did not count —
-			// this is the one difference from the pre-#17829fcf expectation of
+			// this is the one difference from the pre expectation of
 			// zero system comments, and it must be a notice, never a release.
 			if tc.wantNotice {
 				require.Len(t, env.withdrawalMissNotices(), 1)
@@ -1973,7 +1973,7 @@ func TestReleaseHumanGateOnWithdrawal_QuotedNegatorOnly_KeepsGate(t *testing.T) 
 // TestReleaseHumanGateOnWithdrawal_SummaryThenRealWithdrawal reproduces the live
 // incident end to end and carries AC2's positive control in the SAME run: the
 // documenting comment must be a no-op, and the intentional withdrawal that follows
-// it must still work. In probe #a073a896 these were inverted — the summary released
+// it must still work. In probe an internal ticket these were inverted — the summary released
 // the gate and the real withdrawal 1.75 s later did nothing.
 func TestReleaseHumanGateOnWithdrawal_SummaryThenRealWithdrawal(t *testing.T) {
 	env := setupTriageEnv(t, true)
@@ -2002,7 +2002,7 @@ func TestReleaseHumanGateOnWithdrawal_SummaryThenRealWithdrawal(t *testing.T) {
 	require.Len(t, env.releaseComments(), 1,
 		"exactly one release announcement — from the real withdrawal, not from the summary")
 	assert.Contains(t, env.releaseComments()[0].Body, "human_gate cleared")
-	// The summary earned a miss notice (#17829fcf); the withdrawal that worked
+	// The summary earned a miss notice; the withdrawal that worked
 	// must NOT also earn one — a comment cannot both release and be reported
 	// as not having released.
 	assert.Empty(t, env.withdrawalMissNotices(),
@@ -2011,7 +2011,7 @@ func TestReleaseHumanGateOnWithdrawal_SummaryThenRealWithdrawal(t *testing.T) {
 }
 
 // TestReleaseHumanGateOnWithdrawal_MarkerQuotingNegators_KeepsOwnership covers the
-// sibling trap of the same root cause (#7f646f08): the OWNERSHIP scan also matched
+// sibling trap of the same root cause: the OWNERSHIP scan also matched
 // negators over the whole body, so a marker comment that discussed earlier asks
 // self-negated — ownership of the live ask silently fell back to an older marker by
 // a different agent, and the real author's own withdrawal was refused by the
@@ -2068,9 +2068,9 @@ func TestReleaseHumanGateOnWithdrawal_QuotedNegatorFromBystander_StillNoOp(t *te
 
 // ---------------------------------------------------------------------------
 // hasNegatorInScope: no-marker whole-body scan over a long, multi-topic report
-// — task #1e5be182, live incident on #f46d5589 (Bill, 2026-07-30 13:18Z).
+// — an internal ticket, live incident on an internal ticket (Beth, 2026-07-30 13:18Z).
 //
-// Bill's real comment carried NO blocking marker (it was a status report, not
+// Beth's real comment carried NO blocking marker (it was a status report, not
 // itself a fresh ask), so the pre-fix code scoped the ENTIRE ~90-line body.
 // Three literal matches fired: "не нужно" inside the unrelated word "мне нужно"
 // (a plain cross-word substring accident), "снят" describing the OBSIDIAN
@@ -2078,16 +2078,16 @@ func TestReleaseHumanGateOnWithdrawal_QuotedNegatorFromBystander_StillNoOp(t *te
 // and "не нужен" revising away one stale framing of the SAME still-live ask —
 // while the comment's own LAST paragraph reaffirmed that ask as the sole
 // remaining option. The whole-body scan read any one of these as a withdrawal
-// and auto-cleared task #f46d5589's human_gate.
+// and auto-cleared an internal ticket's human_gate.
 // ---------------------------------------------------------------------------
 
-// billLongStatusReportBody is byte-for-byte the real comment (task #f46d5589,
-// author Bill, 2026-07-30T13:18:11Z) that disarmed a live human_gate. Kept
+// billLongStatusReportBody is byte-for-byte the real comment (an internal ticket,
+// author Beth, 2026-07-30T13:18:11Z) that disarmed a live human_gate. Kept
 // verbatim rather than trimmed down, because the defect was specifically about
 // scanning a body this shape and this long — a shortened fixture would risk
 // "fixing" a test that no longer reproduces the incident.
-const billLongStatusReportBody = "## Развилка закрыта: **A невозможен** (моя рекомендация была неверной), **C** для Obsidian. Но карточка не закрывается — и ask к Pavel'ю стал обоснованнее, чем был.\n\n" +
-	"@deadalus ответил на `#91070c00` за 11 минут и заодно **опроверг мой же вариант A замером**. Признаю прямо: я рекомендовал «DataForSEO как фолбэк, локация Russia» — и локацию не проверил.\n\n" +
+const billLongStatusReportBody = "## Развилка закрыта: **A невозможен** (моя рекомендация была неверной), **C** для Obsidian. Но карточка не закрывается — и ask к Alex'ю стал обоснованнее, чем был.\n\n" +
+	"@deadalus ответил на an internal ticket за 11 минут и заодно **опроверг мой же вариант A замером**. Признаю прямо: я рекомендовал «DataForSEO как фолбэк, локация Russia» — и локацию не проверил.\n\n" +
 	"### A мёртв, доказано контрольным тестом (его вывод)\n\n" +
 	"```\n" +
 	"POST /v3/keywords_data/google_ads/search_volume/live\n" +
@@ -2147,7 +2147,7 @@ func TestLastParagraph(t *testing.T) {
 		{"multiple blank lines between paragraphs", "Первое.\n\n\n\nВторое.", "Второе."},
 		{"trailing whitespace trimmed", "Первое.\n\nВторое.  \n\n", "Второе."},
 		{"empty", "", ""},
-		// Fixed 2026-08-24 (#62560d6d, live incident #68df3b62): a trailing
+		// Fixed 2026-08-24 (an internal ticket, live incident an internal ticket): a trailing
 		// "— Name" sign-off is not the comment's operative last word.
 		{"em-dash signature skipped, negator paragraph found", "Гейт снят — вопрос отвечен.\n\n— Robert", "Гейт снят — вопрос отвечен."},
 		{"hyphen signature skipped", "Гейт снят.\n\n- Howard", "Гейт снят."},
@@ -2164,7 +2164,7 @@ func TestLastParagraph(t *testing.T) {
 }
 
 // TestReleaseHumanGateOnWithdrawal_LongStatusReport_LeavesGateIntact is AC1 of
-// task #1e5be182: reproduce the real incident end-to-end. The SAME agent who
+// an internal ticket: reproduce the real incident end-to-end. The SAME agent who
 // owns the live ask posts the real long report as a plain (marker-less)
 // comment — it must NOT release the gate, because the report's own final
 // paragraph reaffirms the ask rather than withdrawing it.
@@ -2186,8 +2186,8 @@ func TestReleaseHumanGateOnWithdrawal_LongStatusReport_LeavesGateIntact(t *testi
 	assert.Empty(t, env.taskMover.humanGateCalls(),
 		"the report's mid-body negators are about a different topic / a superseded framing — the live ask must stay gated")
 	assert.Empty(t, env.releaseComments(),
-		"#17829fcf must not have widened the scope: this body still releases nothing")
-	// #17829fcf explicitly declined to widen the scope, so this control is
+		"an internal ticket must not have widened the scope: this body still releases nothing")
+	// an internal ticket explicitly declined to widen the scope, so this control is
 	// unchanged in the only way that matters. What IS new: the report now says
 	// out loud that the gate stayed up and which region the server read. The
 	// notice is deliberately NOT phrased as "your withdrawal was rejected" —
@@ -2249,8 +2249,8 @@ func TestReleaseHumanGateOnWithdrawal_LongStatusReportFromBystander_StillNoOp(t 
 }
 
 // ---------------------------------------------------------------------------
-// releaseHumanGateOnWithdrawal: two-comment ownership hijack — task #9959f201,
-// live finding by Bill on prod-sha b2a8068 (2026-07-31), following #c375905c.
+// releaseHumanGateOnWithdrawal: two-comment ownership hijack — an internal ticket,
+// live finding by Beth on (2026-07-31), following an internal ticket.
 //
 // The existing "last non-negated marker" ownership scan is, on its own, correct
 // and required (TestReleaseHumanGateOnWithdrawal_MarkerWithUnrelatedNegatorProse_NotSelfNegated
@@ -2262,7 +2262,7 @@ func TestReleaseHumanGateOnWithdrawal_LongStatusReportFromBystander_StillNoOp(t 
 // ---------------------------------------------------------------------------
 
 // TestReleaseHumanGateOnWithdrawal_TwoCommentHijack_Blocked is the task's AC1:
-// reproduces Bill's live repro exactly. agentB, a bystander to agentA's live
+// reproduces Beth's live repro exactly. agentB, a bystander to agentA's live
 // ask, posts their OWN marker (legitimately becomes the live owner per the
 // existing reaffirm rule) and IMMEDIATELY — same instant under the frozen test
 // clock, matching a real same-turn two-comment sequence — posts their own
@@ -2331,7 +2331,7 @@ func TestReleaseHumanGateOnWithdrawal_TwoCommentHijack_AllowedAfterRealGap(t *te
 
 // TestReleaseHumanGateOnWithdrawal_SoleOwner_NoGapRequired confirms AC2's (a)
 // half is unaffected: the gate's ORIGINAL and ONLY-ever marker author still
-// self-clears immediately, zero gap, exactly AC1 of #c375905c. This is the
+// self-clears immediately, zero gap, exactly AC1 of an internal ticket. This is the
 // same fixture as TestReleaseHumanGateOnWithdrawal_SameAgentNegates_ReleasesFlag
 // but named to make explicit that it is what THIS task's soleMarkerAuthor
 // carve-out protects.
@@ -2364,16 +2364,16 @@ func TestReleaseHumanGateOnWithdrawal_SoleOwner_NoGapRequired(t *testing.T) {
 }
 
 // TestReleaseHumanGateOnWithdrawal_RepeatPingNotNeeded_DoesNotRelease is the
-// regression for task #3948173f (live case #0f4bd758, a money-critical PSP
-// activation card, found by Bill during a sweep): CLAUDE-workflow.md §0b
-// tells agents not to re-ping Pavel about a state he has already seen, so a
+// regression for an internal ticket (live case an internal ticket, a money-critical PSP
+// activation card, found by Beth during a sweep): the team workflow guide §0b
+// tells agents not to re-ping Alex about a state he has already seen, so a
 // compliant agent's withdrawal comment said "повторный ask здесь не нужен"
 // (no need to repeat the ask) — and the OLD hasNegatorInScope read the bare
 // "не нужен" substring as "the ask itself is no longer needed", silently
 // releasing a live gate on a still-open blocker, even though the SAME
 // comment opens by asserting the blocker is "не закрыт и не забыт" (not
-// closed and not forgotten). Body is the EXACT comment from #0f4bd758
-// (Wally, 2026-08-09T01:53:28Z), not a paraphrase.
+// closed and not forgotten). Body is the EXACT comment from an internal ticket
+// (Wade, 2026-08-09T01:53:28Z), not a paraphrase.
 func TestReleaseHumanGateOnWithdrawal_RepeatPingNotNeeded_DoesNotRelease(t *testing.T) {
 	env := setupTriageEnv(t, true)
 	taskID := env.seedGatedTask(env.inProgressID)
@@ -2405,7 +2405,7 @@ func TestReleaseHumanGateOnWithdrawal_RepeatPingNotNeeded_DoesNotRelease(t *test
 // directly, simulating a human_gate that went false→true with no "❓ Blocking
 // @user" comment involved at all — see hasRawArmMarker.
 //
-// Fixed 2026-07-31 (task #15694816): this used to construct the marker with
+// Fixed 2026-07-31: this used to construct the marker with
 // AuthorType: domain.ActorTypeAgent — matching what task_handler.go's Update
 // handler ACTUALLY posted before that same task's fix, and thereby directly
 // demonstrating the forgery hole rather than a real system comment. Corrected
@@ -2427,7 +2427,7 @@ func (env triageTestEnv) seedRawArmMarker(taskID uuid.UUID, at time.Time) {
 // seedForgedRawArmMarker inserts an ORDINARY agent-authored comment carrying
 // the exact same substring hasRawArmMarker looks for — what any real agent
 // COULD post through the public comment API before this fix. Distinct from
-// seedRawArmMarker precisely in AuthorType, which is what task #15694816
+// seedRawArmMarker precisely in AuthorType, which is what an internal ticket
 // closes the gap on.
 func (env triageTestEnv) seedForgedRawArmMarker(taskID, authorID uuid.UUID, at time.Time) {
 	cid := uuid.New()
@@ -2442,12 +2442,12 @@ func (env triageTestEnv) seedForgedRawArmMarker(taskID, authorID uuid.UUID, at t
 }
 
 // TestReleaseHumanGateOnWithdrawal_GateArmedWithoutMarker_BystanderBlocked is
-// task #a2e2ac72's own repro (Bill's live proof on #ed8b4af6, prod-sha
+// an internal ticket's own repro (Beth's live proof on an internal ticket, prod-sha
 // 871fb04): the gate was armed via a raw PATCH/UI call with NO marker comment
 // in the thread at all. A bystander agent then posts their own marker and
 // immediately negates it. Before this fix, soleMarkerAuthor was trivially
 // true (there is still only ONE marker author ever — the bystander's own
-// fabricated one), so #9959f201's fast path released the gate anyway —
+// fabricated one), so an internal ticket's fast path released the gate anyway —
 // exactly as easily as the original two-comment hijack it was meant to close,
 // just needing one identity instead of two. This must stay gated: the raw-arm
 // marker predates the bystander's own marker, so rawArmPrecedesMarker forces
@@ -2531,7 +2531,7 @@ func TestReleaseHumanGateOnWithdrawal_RawArmAfterMarker_SoleOwnerStillNoGapRequi
 }
 
 // TestReleaseHumanGateOnWithdrawal_ForgedRawArmMarker_DoesNotBlockSoleOwner is
-// task #15694816 (found in cross-verification of #486): hasRawArmMarker used
+// an internal ticket (found in cross-verification of #486): hasRawArmMarker used
 // to match on body substring alone, with no author check. Any agent could
 // post an ORDINARY comment carrying task_handler.go's exact raw-arm text —
 // nothing stopped it, since AuthorType is derived from the poster's own
@@ -2574,7 +2574,7 @@ func TestReleaseHumanGateOnWithdrawal_ForgedRawArmMarker_DoesNotBlockSoleOwner(t
 }
 
 // TestHasRawArmMarker_RequiresSystemAuthorType is the direct unit-level probe
-// for task #15694816: identical body, different AuthorType — only the system
+// for an internal ticket: identical body, different AuthorType — only the system
 // one counts.
 func TestHasRawArmMarker_RequiresSystemAuthorType(t *testing.T) {
 	body := "🔒 Auto: human_gate взведён напрямую (PATCH/UI), без маркерного коммента — actor: x"
@@ -2584,12 +2584,12 @@ func TestHasRawArmMarker_RequiresSystemAuthorType(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// GetHumanGateOwner (task #040cddcf) — read-only exposure of ownership
+// GetHumanGateOwner — read-only exposure of ownership
 // ---------------------------------------------------------------------------
 
 // TestGetHumanGateOwner_SoleOwner_ClearableNow is the common case: a single
 // agent raised the still-live ask and nobody else ever touched it — exactly
-// the population #040cddcf measured at 46/47 open gated tasks. Reported
+// the population an internal ticket measured at 46/47 open gated tasks. Reported
 // owner must match the marker author, and ClearableByOwner must be true with
 // zero gap required — mirrors TestReleaseHumanGateOnWithdrawal_SoleOwner_NoGapRequired.
 func TestGetHumanGateOwner_SoleOwner_ClearableNow(t *testing.T) {
@@ -2610,7 +2610,7 @@ func TestGetHumanGateOwner_SoleOwner_ClearableNow(t *testing.T) {
 	require.NotNil(t, info.MarkerCreatedAt)
 }
 
-// TestGetHumanGateOwner_NoLiveMarker_ReasonNoLiveMarker is #040cddcf's own
+// TestGetHumanGateOwner_NoLiveMarker_ReasonNoLiveMarker is an internal ticket's own
 // negative control: a gate with no marker comment in the thread at all (the
 // class the task's own live measurement found exactly ONE of 47 open gated
 // tasks belongs to) must report no owner, not a fabricated one.
@@ -2630,7 +2630,7 @@ func TestGetHumanGateOwner_NoLiveMarker_ReasonNoLiveMarker(t *testing.T) {
 	assert.Equal(t, "no_live_marker", info.ReasonIfNot)
 }
 
-// TestGetHumanGateOwner_RawArmed_NotYetClearable is #a2e2ac72's raw-arm case
+// TestGetHumanGateOwner_RawArmed_NotYetClearable is an internal ticket's raw-arm case
 // (same fixture as TestReleaseHumanGateOnWithdrawal_GateArmedWithoutMarker_BystanderBlocked):
 // there IS a reported owner (the bystander's marker), but ClearableByOwner
 // must be false with ReasonIfNot="raw_armed" — the API must not tell that
@@ -2709,7 +2709,7 @@ func TestGetHumanGateOwner_ReaffirmPending_NotYetClearable(t *testing.T) {
 	assert.Equal(t, "reaffirm_pending", info.ReasonIfNot)
 }
 
-// TestGetHumanGateOwner_PredictionMatchesActualWithdrawal is #040cddcf's own
+// TestGetHumanGateOwner_PredictionMatchesActualWithdrawal is an internal ticket's own
 // AC3 in spirit: the SAME shared scan must back both the read path and the
 // clearing path, so what GetHumanGateOwner predicts and what
 // releaseHumanGateOnWithdrawal actually does can never disagree. Proven here
@@ -2832,17 +2832,17 @@ func TestCompletionKeywordSearchWindow_AnchorsToRealMarker(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// scanHumanGateOwnership vs enforceBlockingTriage disagreement — task #5d3d2402
+// scanHumanGateOwnership vs enforceBlockingTriage disagreement — an internal ticket
 //
 // enforceBlockingTriage arms human_gate on hasBlockingMarker alone; it has
 // never looked at negators. Before this fix, scanHumanGateOwnership (which
 // backs both GetHumanGateOwner and releaseHumanGateOnWithdrawal) skipped a
 // marker-bearing comment whenever hasNegatorInScope found a negator AFTER the
-// marker WITHIN THAT SAME COMMENT — e.g. "❓ Blocking @pavel: … отвечать не
+// marker WITHIN THAT SAME COMMENT — e.g. "❓ Blocking @alex: … отвечать не
 // нужно, отзову сам". A comment shaped exactly like that armed the gate and
 // simultaneously had no recognised owner: ReasonIfNot="no_live_marker",
 // ClearableByOwner=false for everyone, including the marker's own author.
-// Live census (task #649c966b's own probe #7badb727): 2 of 46 gated cards
+// Live census (an internal ticket's own probe an internal ticket): 2 of 46 gated cards
 // were stuck exactly this way.
 // ---------------------------------------------------------------------------
 
@@ -2950,7 +2950,7 @@ func TestGetHumanGateOwner_RawArmedNoMarker_StillNoLiveMarker(t *testing.T) {
 	assert.Equal(t, "no_live_marker", info.ReasonIfNot)
 }
 
-// Task #fc63d720. The real CommentRepo returns a thread oldest-first and ignores
+// an internal ticket. The real CommentRepo returns a thread oldest-first and ignores
 // SortDir, so releaseHumanGate's old single PageSize-100 read saw only the first
 // 100 comments. A marker sitting PAST comment 100 is the shape that fell off the
 // end of that read — here the marker is comment #121 of 130.

@@ -41,7 +41,7 @@ export function describeCapabilities(caps: ManifestCapabilities | undefined | nu
   const out: CapabilityLine[] = [];
   for (const raw of caps.api ?? []) {
     const [res = "", mode] = raw.split(":");
-    if (API_KEYS.has(res) && (mode === "read" || mode === "write")) {
+    if (API_KEYS.has(res) && (mode === "read" || mode === "write" || (res === "members" && mode === "authorize"))) {
       out.push({ group: "api", key: `capabilities.api.${res}.${mode}`, raw });
     } else {
       out.push({ group: "api", key: "capabilities.api.unknown", values: { name: raw }, raw });

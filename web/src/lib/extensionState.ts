@@ -1,7 +1,7 @@
 import type { ExtensionStatusDto } from "@/hooks/useExtensionCatalog";
 
 /** The five states an extension shows anywhere in the product: Catalog, Installed, its page, the instance admin. */
-export type ExtensionStateName = "not_allowed" | "available" | "enabled" | "error" | "blocked";
+export type ExtensionStateName = "not_installed" | "not_allowed" | "available" | "enabled" | "error" | "blocked";
 
 /** Whose keys an enabled extension runs on: the instance admin's or the workspace's own connection. */
 export type KeysFrom = "instance" | "workspace";
@@ -9,6 +9,8 @@ export type KeysFrom = "instance" | "workspace";
 export interface ExtensionStateInput {
   kind?: string;
   allowed: boolean;
+  /** Present on this instance. Only `false` matters: absent is "not installed", not "denied". */
+  installed?: boolean;
   blocked: boolean;
   blockedReason?: string;
   /** From `GET /workspaces/{ws}/extensions`: the one source of health and last error. */
@@ -40,6 +42,8 @@ export interface ExtensionState {
  */
 export function extensionState(e: ExtensionStateInput): ExtensionState {
   if (e.blocked) return { state: "blocked", blockedReason: e.blockedReason ?? "" };
+  // Absent from the instance is its own state: a theme may be allowed by default and still not installed.
+  if (e.installed === false && (!e.allowed || e.kind === "theme")) return { state: "not_installed" };
   if (!e.allowed) return { state: "not_allowed" };
   const s = e.status;
   if (e.kind === "theme") {
@@ -56,6 +60,7 @@ export function extensionState(e: ExtensionStateInput): ExtensionState {
 
 /** i18n key (namespace `integrations`) of a state's label. */
 export const EXTENSION_STATE_KEY: Record<ExtensionStateName, string> = {
+  not_installed: "extensionState.notInstalled",
   not_allowed: "extensionState.notAllowed",
   available: "extensionState.available",
   enabled: "extensionState.enabled",

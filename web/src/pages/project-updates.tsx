@@ -1,3 +1,4 @@
+import { isValid, parseISO } from "date-fns";
 import * as i18nFmt from "@/i18n/format";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router";
@@ -73,25 +74,42 @@ function BulletList({ items }: { items: { text: string }[] }) {
   );
 }
 
+// Publication timestamp = created_at. Time is shown only when the value really carries one
+// (ISO date-time); date-only or invalid legacy values show no invented 00:00.
+const HAS_TIME = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
+
+export function formatPublished(raw: string | null | undefined): { date: string; time: string | null } | null {
+  // Validate with the same parser the shared formatter uses (parseISO): `new Date("2026-02-30")`
+  // normalizes an impossible date, parseISO rejects it and Intl would then throw at render.
+  if (!raw || !isValid(parseISO(raw))) return null;
+  return {
+    date: i18nFmt.formatDate(raw, { month: "short", day: "numeric", year: "numeric" }),
+    time: HAS_TIME.test(raw) ? i18nFmt.formatTime(raw) : null,
+  };
+}
+
 function UpdateCard({ update }: { update: ProjectUpdate }) {
   const { t } = useTranslation("settings");
   const [expanded, setExpanded] = useState(false);
-  const date = i18nFmt.formatDate(update.created_at, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  const published = formatPublished(update.created_at);
+  const date = published?.date ?? null;
+  const time = published?.time ?? null;
 
   return (
     <Card>
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between gap-3">
-          <div className="flex-1">
-            <div className="flex items-center gap-2 mb-1">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1">
               <StatusBadge status={update.status} />
-              <span className="text-xs text-muted-foreground">{date}</span>
+              {date && (
+                <time dateTime={update.created_at} className="text-xs text-muted-foreground">
+                  {date}
+                  {time && <span data-testid="update-time"> · {time}</span>}
+                </time>
+              )}
             </div>
-            <CardTitle className="text-base">{update.title}</CardTitle>
+            <CardTitle className="text-base break-words">{update.title}</CardTitle>
           </div>
           <Button
             variant="ghost"

@@ -45,7 +45,18 @@ export function AgentDetailDialog({
   const { t } = useTranslation("integrations");
   const { agents, updateAgent, updateAgentProfile, deleteAgent, regenerateKey } = useAgentStore();
   const { currentWorkspace } = useWorkspaceStore();
-  const { workspaceMembers, fetchWorkspaceMembers } = useMemberStore();
+  const { workspaceMembers, fetchWorkspaceMembers, myRole, myRoleLoaded, myRoleError, myRoleWorkspaceId } = useMemberStore();
+  // The server grants both the agent's workspace list and the runtime catalog to
+  // owner/admin only. Asking as a member/viewer is a guaranteed 403, which the
+  // browser logs as console.error, so the role is checked first. While the role
+  // is still loading nothing is requested; a failed role lookup falls back to asking.
+  const roleSettled = myRoleLoaded && myRoleWorkspaceId === currentWorkspace?.id;
+  // The error belongs to the settled lookup only: one left over from another workspace says nothing here.
+  const privilegedRead: boolean | null = !roleSettled
+    ? null
+    : myRoleError
+      ? true
+      : myRole === "owner" || myRole === "admin";
   const {
     agentWorkspaces,
     isLoadingAgentWorkspaces,
@@ -60,14 +71,14 @@ export function AgentDetailDialog({
   }, [open, currentWorkspace, fetchWorkspaceMembers]);
 
   useEffect(() => {
-    if (open && agent) {
+    if (open && agent && privilegedRead) {
       void fetchAgentWorkspaces(agent.id);
     }
     // Keyed on agent?.id rather than the whole agent object: agent comes from
     // a list that gets a new array/object identity on every unrelated field
     // update (heartbeat, status), which would otherwise refetch on every poll.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, agent?.id, fetchAgentWorkspaces]);
+  }, [open, agent?.id, fetchAgentWorkspaces, privilegedRead]);
 
   const [shortTagDraft, setShortTagDraft] = useState(agent?.short_tag ?? "");
   const [isSavingShortTag, setIsSavingShortTag] = useState(false);
@@ -542,6 +553,7 @@ export function AgentDetailDialog({
         <AgentRuntimeTabs
           agent={agent}
           workspaceId={currentWorkspace?.id ?? null}
+          canReadRuntime={privilegedRead}
           profile={
         <div className="space-y-5">
           {/* Status */}
@@ -1084,6 +1096,7 @@ export function AgentDetailDialog({
               HOME workspace hitting 403 here is the expected case, not a
               failure to report. */}
           {!agentWorkspacesForbidden &&
+            privilegedRead !== false &&
             (isLoadingAgentWorkspaces || agentWorkspaces.length > 0) && (
               <div>
                 <p className="mb-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">

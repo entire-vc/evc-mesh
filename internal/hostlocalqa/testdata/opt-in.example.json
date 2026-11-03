@@ -1,0 +1,12 @@
+{
+  "actual_producer": null,
+  "actual_target": null,
+  "capability": "host_local_qa_assignment_v1",
+  "consumer_ledger_root": null,
+  "enabled": false,
+  "fresh_admission": null,
+  "note": "NOT runner config; no real identity/admission, do not load into legacy parser. Canonical implementation supplies strict released format.",
+  "own_credential_ref": null,
+  "policy_sha256": "8bfef84ce6a570ed99d8f24eac32d836a2fd78ab12b459b6c24917aa754652ad",
+  "source_task_id": "33333333-3333-4333-8333-333333333333"
+}

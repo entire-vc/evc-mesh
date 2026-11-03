@@ -120,7 +120,7 @@ func (r *fakeVCSLinkRepo) Upsert(_ context.Context, l *domain.VCSLink) (bool, er
 		existing := r.links[existingID]
 		existing.Status = l.Status
 		existing.Title = l.Title
-		existing.Metadata = l.Metadata
+		existing.Metadata = mergeFakeMetadata(existing.Metadata, l.Metadata)
 		existing.URL = l.URL
 		// Mirrors real Postgres: id/created_at are never touched by the
 		// update branch — reflect the row's actual values back into l, same
@@ -1525,4 +1525,21 @@ func TestHandleMR_RedeliveryAfterTransitionFailure_TransitionsOnceOneComment(t *
 	links, _ := h.repo.ListByTask(context.Background(), task.ID)
 	require.Len(t, links, 1)
 	assert.Equal(t, domain.VCSLinkStatusMerged, links[0].Status)
+}
+
+// mergeFakeMetadata mirrors the Postgres upsert's `metadata || patch`: keys of
+// the patch overwrite, every other stored key survives.
+func mergeFakeMetadata(stored, patch []byte) []byte {
+	var a, b map[string]any
+	if json.Unmarshal(stored, &a) != nil || a == nil {
+		return patch
+	}
+	if json.Unmarshal(patch, &b) != nil {
+		return patch
+	}
+	for k, v := range b {
+		a[k] = v
+	}
+	out, _ := json.Marshal(a)
+	return out
 }

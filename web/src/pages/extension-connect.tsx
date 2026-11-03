@@ -108,10 +108,11 @@ function PermissionsStep({ entry, consented, consentError, onConsent, onNext }: 
 
 function SettingsStep({ entry, fromInstance, isAdmin, wsSlug, onBack, onConnect, onSkip }: {
   entry: CatalogEntry; fromInstance: boolean; isAdmin: boolean; wsSlug: string;
-  onBack: () => void; onConnect: (settings: Values) => Promise<void | false>; onSkip: () => void;
+  onBack: () => void; onConnect: (settings: Values) => Promise<void | false>; onSkip: () => Promise<void | false>;
 }) {
   const { t } = useTranslation("integrations");
   const navigate = useNavigate();
+  const [inheritError, setInheritError] = useState("");
   const declared: FieldSchema | undefined = entry.manifest.settings?.workspace;
   // the workspace level is usually a `$ref` into the manifest's `schemas`: resolve before asking for fields
   const schema = declared ? resolveSchema(declared, entry.manifest) : undefined;
@@ -150,8 +151,13 @@ function SettingsStep({ entry, fromInstance, isAdmin, wsSlug, onBack, onConnect,
       )}
       <div className="flex gap-2">
         <Button variant="outline" onClick={onBack}>{t("connect.back")}</Button>
-        {fromInstance && <Button onClick={onSkip}>{t("connect.next")}</Button>}
+        {fromInstance && (
+          <Button onClick={() => { setInheritError(""); onSkip().catch((e: unknown) => setInheritError(apiErrorMessage(e, t("connect.settings.failed")))); }}>
+            {t("connect.next")}
+          </Button>
+        )}
       </div>
+      {inheritError && <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm">{inheritError}</div>}
     </section>
   );
 }
@@ -413,7 +419,7 @@ export function ExtensionConnectPage() {
               wsSlug={wsSlug}
               onBack={() => setStep("permissions")}
               onConnect={connect}
-              onSkip={() => setStep("test")}
+              onSkip={() => (entry.runtime === "external" ? connect({}) : Promise.resolve(setStep("test")))}
             />
           </div>
         )}

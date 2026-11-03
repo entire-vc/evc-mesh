@@ -200,13 +200,39 @@ func TestPatchShipSHAByURL_ResolvesLinkWithoutCardID(t *testing.T) {
 	svc := NewVCSLinkService(repo).(*vcsLinkService)
 	ship := strings.Repeat("b", 40)
 
-	got, err := svc.PatchShipSHAByURL(context.Background(), uuid.Nil, mine.URL+"/", ship)
+	got, err := svc.PatchShipSHAByURL(context.Background(), uuid.Nil, mine.URL+"/", ship, nil)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, mine.ID, got[0].ID)
 	assert.Contains(t, string(repo.links[mine.ID].Metadata), ship)
 	assert.Contains(t, string(repo.links[mine.ID].Metadata), strings.Repeat("a", 40), "head_sha must survive")
 	assert.NotContains(t, string(repo.links[other.ID].Metadata), ship, "same number in another project must not match")
+}
+
+// A link on a task the caller may not reach is not written and answers like a
+// missing link; the reachable one is still written.
+func TestPatchShipSHAByURL_SkipsUnreachableTasks(t *testing.T) {
+	const mrURL = "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/1400"
+	repo := newFakeVCSLinkRepo()
+	reachable := &domain.VCSLink{ID: uuid.New(), TaskID: uuid.New(), Provider: domain.VCSProviderGitLab,
+		LinkType: domain.VCSLinkTypePR, ExternalID: "1400", URL: mrURL}
+	foreign := &domain.VCSLink{ID: uuid.New(), TaskID: uuid.New(), Provider: domain.VCSProviderGitLab,
+		LinkType: domain.VCSLinkTypePR, ExternalID: "1400", URL: mrURL}
+	repo.links[reachable.ID], repo.links[foreign.ID] = reachable, foreign
+	svc := NewVCSLinkService(repo)
+	ship := strings.Repeat("c", 40)
+
+	got, err := svc.PatchShipSHAByURL(context.Background(), uuid.Nil, mrURL, ship,
+		func(id uuid.UUID) bool { return id == reachable.TaskID })
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, reachable.ID, got[0].ID)
+	assert.NotContains(t, string(repo.links[foreign.ID].Metadata), ship, "a link outside the caller's projects was written")
+
+	_, err = svc.PatchShipSHAByURL(context.Background(), uuid.Nil, mrURL, ship, func(uuid.UUID) bool { return false })
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusNotFound, apiErr.Code)
 }
 
 func TestPatchShipSHAByURL_RejectsBadInput(t *testing.T) {
@@ -223,7 +249,7 @@ func TestPatchShipSHAByURL_RejectsBadInput(t *testing.T) {
 		"relative url": {"/merge_requests/9", ok, http.StatusBadRequest},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := svc.PatchShipSHAByURL(ctx, uuid.Nil, c.url, c.sha)
+			_, err := svc.PatchShipSHAByURL(ctx, uuid.Nil, c.url, c.sha, nil)
 			var apiErr *apierror.Error
 			require.ErrorAs(t, err, &apiErr)
 			assert.Equal(t, c.code, apiErr.Code)
@@ -247,14 +273,14 @@ func TestPatchShipSHAByURL_RepoErrorsSurface(t *testing.T) {
 	mrURL := "https://gitlab.example.invalid/a/b/-/merge_requests/9"
 	ship := strings.Repeat("b", 40)
 
-	_, err := NewVCSLinkService(listErrVCSRepo{newFakeVCSLinkRepo()}).PatchShipSHAByURL(context.Background(), uuid.Nil, mrURL, ship)
+	_, err := NewVCSLinkService(listErrVCSRepo{newFakeVCSLinkRepo()}).PatchShipSHAByURL(context.Background(), uuid.Nil, mrURL, ship, nil)
 	require.Error(t, err)
 
 	base := newFakeVCSLinkRepo()
 	l := &domain.VCSLink{ID: uuid.New(), TaskID: uuid.New(), Provider: domain.VCSProviderGitLab,
 		LinkType: domain.VCSLinkTypePR, ExternalID: "9", URL: mrURL}
 	base.links[l.ID] = l
-	_, err = NewVCSLinkService(mergeErrVCSRepo{base}).PatchShipSHAByURL(context.Background(), uuid.Nil, mrURL, ship)
+	_, err = NewVCSLinkService(mergeErrVCSRepo{base}).PatchShipSHAByURL(context.Background(), uuid.Nil, mrURL, ship, nil)
 	require.Error(t, err)
 }
 
@@ -269,11 +295,11 @@ func TestPatchShipSHAByURL_SameSHAIsNoWriteNewSHAOverwrites(t *testing.T) {
 		Metadata: json.RawMessage(`{"ship_sha":"` + old + `"}`)}
 	base.links[l.ID] = l
 
-	got, err := NewVCSLinkService(mergeErrVCSRepo{base}).PatchShipSHAByURL(context.Background(), uuid.Nil, mrURL, old)
+	got, err := NewVCSLinkService(mergeErrVCSRepo{base}).PatchShipSHAByURL(context.Background(), uuid.Nil, mrURL, old, nil)
 	require.NoError(t, err, "same sha must not reach MergeMetadata")
 	require.Len(t, got, 1)
 
-	got, err = NewVCSLinkService(base).PatchShipSHAByURL(context.Background(), uuid.Nil, mrURL, fresh)
+	got, err = NewVCSLinkService(base).PatchShipSHAByURL(context.Background(), uuid.Nil, mrURL, fresh, nil)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Contains(t, string(base.links[l.ID].Metadata), fresh)

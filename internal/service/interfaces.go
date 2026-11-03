@@ -1148,7 +1148,10 @@ type VCSLinkService interface {
 	// that names exactly this MR/PR url, so a caller that knows only the MR
 	// (not the card id, which public MR text must not carry) can publish the
 	// SHIP. Returns the updated links; NotFound when no link names the url.
-	PatchShipSHAByURL(ctx context.Context, workspaceID uuid.UUID, mrURL, shipSHA string) ([]domain.VCSLink, error)
+	// mayAccessTask, when non-nil, drops links on tasks the caller may not
+	// reach (project membership), so the url cannot be used to write into a
+	// project the caller is not in; nil applies no such filter.
+	PatchShipSHAByURL(ctx context.Context, workspaceID uuid.UUID, mrURL, shipSHA string, mayAccessTask func(taskID uuid.UUID) bool) ([]domain.VCSLink, error)
 	// HandleGitHubPullRequestEvent resolves a GitHub PR webhook payload to a
 	// task, upserts the corresponding vcs_link, and on action=closed applies
 	// the auto transition policy: in_progress → review, review → done. When

@@ -1115,3 +1115,39 @@ the hash too, brought the total to 729.21. The ceilings are the smallest 0.1 ste
 (main's ceiling + 1.1, the signed maximum).
 Revert: lower both together with reverting the MR. Lead sign-off: the product lead, 2026-10-29 on the card, on the condition
 to recount from the merged tree if the earlier change lands first.
+
+`total_js_kb_gz` 729.3 → 735.9 (**+6.6 KB gz**): configured route and observed attempts in the org chart and
+agent detail — `agent-executions-panel`, `agent-execution-summary`, the projection model (`lib/agent-executions.ts`),
+its hook and the en/ru `integrations` strings. Main sat at 729.2 against the 729.3 ceiling, so there was no headroom;
+`login.initial_js_kb_gz` is unchanged. CI `perf-bundle` measured 735.83 on the branch; the ceiling is the smallest 0.1
+step above it. Revert: lower the ceiling together with reverting the MR. Lead sign-off: the product lead, signed on the card 2026-10-31 (perf-bundle measured 735.83; login 173.43 within 173.5).
+
+`total_js_kb_gz` 735.9 → 736.0 (**+0.1 KB gz**, reference-ext receipt MR the earlier change): the earlier change (workspace connection created from
+instance settings, its error handling, external vs. internal in the catalog) took main from 735.83 to 735.95, 0.05 KB
+over the 735.9 ceiling. CI `perf-bundle` on the earlier change (app inputs identical to the default branch)
+measured 735.95 / login 173.43; the previous measurement was 735.83. The ceiling is the smallest 0.1 step
+above 735.95; `login.initial_js_kb_gz` (173.5) and the other limits are unchanged. Revert: lower the ceiling back to
+735.9 together with removing the growth or reverting the matching change; a further raise above 736.0 is not covered by
+this sign-off. Lead sign-off: the product lead, 2026-10-31, on the card thread.
+
+`total_js_kb_gz` 736.0 → 736.3 (**+0.3 KB gz**, installing a built-in theme from the extension detail page, the theme-install change): the page now
+installs a missing built-in theme through the existing theme-install call, lifts an explicit deny with a separate Allow, and
+shows "Not installed" as its own state (`extensionState`, `extension-detail`, en/ru `integrations` strings). Main sat at 735.95
+against the 736.0 ceiling, so there was no headroom; local build of the branch measured 736.28 (the canonical bundle check failed on the same arithmetic, over by 0.25). The ceiling is the smallest 0.1 step above 736.28; `login.initial_js_kb_gz`
+and the other limits are unchanged, the two install handlers were merged into one helper to keep the growth minimal. Revert: lower
+the ceiling back to 736.0 together with reverting the MR. A further raise above 736.3 is not covered by this sign-off.
+Lead sign-off: the product lead, requested on the card thread.
+
+`login.initial_js_kb_gz` 173.5 → 173.6 and `total_js_kb_gz` 736.3 → 736.4 (**+0.09 KB gz each**, Spark nav link by effective workspace availability, the sidebar availability change): the sidebar
+now asks `/api/v1/workspaces/:id/integrations` for the `effective` Spark status and prefers it over the instance-level
+`/api/version` flag (a workspace with Spark enabled lost the link when the instance flag was off). The sidebar lives in
+the initial chunk, so both metrics move. Clean local builds (`rm -rf dist && pnpm build`, same `check-bundle-budget.mjs`) on the same base:
+main 173.43 / 736.28 against ceilings 173.5 / 736.3 (no headroom), the branch 173.52 / 736.37. The first version of the code cost
+173.58 / 736.42 and was trimmed (no `is_active` fallback, no keyed state object); nothing left to trim without dropping the per-workspace answer.
+The ceilings are the smallest 0.1 step above the branch measurement.
+Revert: restore 173.5 / 736.3 together with reverting the MR. Lead sign-off: the product lead (login ceiling signed on the delivery card; the total ceiling is requested there separately).
+
+`total_js_kb_gz` 736.4 → 736.6 (**+0.19 KB gz**, publication time in the project updates card, the publication-time change): `formatPublished` validates the
+`created_at` timestamp with `parseISO` and renders the time next to the date; `login.initial_js_kb_gz` is unchanged. Main sat at 736.4
+against the 736.4 ceiling (no headroom); the canonical bundle check measured 736.59 on the branch. The ceiling is the smallest 0.1 step above it.
+Revert: restore 736.4 together with reverting the MR. Lead sign-off: the product lead, 2026-11-03 (signed on the delivery thread); does not cover growth above 736.6.

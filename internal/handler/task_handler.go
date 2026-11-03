@@ -279,6 +279,10 @@ func (h *TaskHandler) Create(c echo.Context) error {
 	if apiErr := bindStrictJSON(c, &req); apiErr != nil {
 		return c.JSON(apiErr.StatusCode(), apiErr)
 	}
+	// A parent named in the body is out of the route guard's sight.
+	if req.ParentTaskID != nil && !mw.MayAccessTask(c, *req.ParentTaskID) {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("Task"))
+	}
 
 	if req.Title == "" {
 		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
@@ -815,6 +819,9 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	if req.ParentTaskID.wasSet {
 		if req.ParentTaskID.ID != nil && *req.ParentTaskID.ID == task.ID {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("parent_task_id cannot be the task's own id"))
+		}
+		if req.ParentTaskID.ID != nil && !mw.MayAccessTask(c, *req.ParentTaskID.ID) {
+			return c.JSON(http.StatusNotFound, apierror.NotFound("Task"))
 		}
 		task.ParentTaskID = req.ParentTaskID.ID
 	}
@@ -1592,6 +1599,10 @@ func (h *TaskHandler) MoveToProject(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
 	}
+	// The target project comes from the body; the guard only saw the source task.
+	if !mw.MayAccessProject(c, projectID) {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("not a member of this project"))
+	}
 
 	task, err := h.taskService.MoveToProject(c.Request().Context(), taskID, projectID)
 	if err != nil {
@@ -1644,6 +1655,16 @@ func (h *TaskHandler) MoveToProjectBatch(c echo.Context) error {
 			return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{"status_mapping": "keys and values must be status UUIDs"}))
 		}
 		in.StatusMapping[src] = dst
+	}
+	// The route names no task, so the project guard on task paths never saw
+	// these: a task the caller may not reach answers like a missing one.
+	if !mw.MayAccessProject(c, projectID) {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("not a member of this project"))
+	}
+	for _, id := range in.TaskIDs {
+		if !mw.MayAccessTask(c, id) {
+			return c.JSON(http.StatusNotFound, apierror.NotFound("Task"))
+		}
 	}
 	res, err := h.taskService.MoveToProjectBatch(c.Request().Context(), in)
 	if err != nil {
@@ -1796,6 +1817,15 @@ func handleError(c echo.Context, err error) error {
 		// 5xx alerts and the ERROR log.
 		return c.NoContent(statusClientClosedRequest)
 	}
+	var doneGuardErr *pq.Error
+	if errors.As(err, &doneGuardErr) && strings.HasPrefix(doneGuardErr.Message, "product_done_receipt_required") {
+		// The database guard of an enforce_done project refused a direct write to done.
+		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
+			"code":       "product_done_receipt_required",
+			"error_code": "product_done_receipt_required",
+			"message":    "this project only accepts done through POST /tasks/:id/transitions/product-done with an acceptance intent",
+		})
+	}
 	var evidenceErr *service.ReviewEvidenceError
 	if errors.As(err, &evidenceErr) {
 		msg := "Task cannot be moved to review without evidence. Add at least one of: a PR/VCS link (use add_dependency or the vcs field), an artifact upload, or a comment with command output/proof (see §1c). To flag a human blocker, add a ❓ Blocking @alex comment first, then retry move→review."
@@ -1846,8 +1876,8 @@ func handleError(c echo.Context, err error) error {
 			"message": fmt.Sprintf(
 				"A mention does not wake an agent: @%s has no delivery path. "+
 					"Use assign_task + move_task(\"todo\"), or create_subtask — "+
-					"or, if this is just FYI with no handoff, repeat it with the prefix \"fyi: @%s\".",
-				strings.Join(mentionHandoffErr.Slugs, ", @"), mentionHandoffErr.Slugs[0]),
+					"or, if this is just FYI with no handoff, repeat it with the prefix %s.",
+				strings.Join(mentionHandoffErr.Slugs, ", @"), strconv.Quote("fyi: @"+mentionHandoffErr.Slugs[0])),
 			"slugs": mentionHandoffErr.Slugs,
 		})
 	}

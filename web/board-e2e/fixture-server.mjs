@@ -112,6 +112,63 @@ const gitlabExt = {
 let installed = [graphite, forge, meshDefault], instTheme = { theme_id: null, settings: {}, version: 1, contrast_warnings: [] };
 let role = "owner", wsTheme = { theme_id: null, settings: {}, version: 1, contrast_warnings: [] };
 let broadcastMoves = false, mode = "normal", ordered = initialOrder, taskCalls = [], writes = [];
+// Agent executions (org chart + agent detail "Route & runs"): the scenario is picked per spec through /__fixture {exec}.
+const execAgent = {
+  id: "exec-agent", name: "Taylor", slug: "taylor", status: "online", agent_type: "claude_code", model: "opus", role: "frontend",
+  capabilities: [], responsibility_zone: "", escalation_to: null, accepts_from: [], max_concurrent_tasks: 2, working_hours: "",
+  profile_description: "", current_tasks: 1, projects: ["contenthub"], children: [],
+  created_at: "2026-09-01T10:00:00Z", updated_at: "2026-10-01T10:00:00Z", last_heartbeat: null, workspace_id: workspace.id,
+};
+const execAgo = (min) => new Date(Date.now() - min * 60_000).toISOString();
+const execLongId = `attempt-${"0123456789abcdef".repeat(6)}`;
+const execRoute = (over = {}) => ({ binding_ref: "lane-a", controller_ref: "controller-a", profile_ref: "sol-high", harness: "codex", model: "gpt-6.1-sol", effort: null, order: 0, ...over });
+const execAttempt = (over = {}) => ({
+  attempt_id: "att-1", turn_id: "turn-1", task_id: "fixture-task-0", binding_ref: "lane-a", controller_ref: "controller-a", instance_id: "inst-1",
+  generation: 3, sequence: 12, state: "running", freshness: "current", policy_matches: true,
+  resolved_route: { source: "runtime_policy", revision: 17, profile_ref: "sol-high", harness: "codex", model: "gpt-6.1-sol", effort: null },
+  observed: { harness: "codex", model: "gpt-6.1-sol", effort: "high", source: "adapter", observed_at: execAgo(2) },
+  heartbeat_at: execAgo(1), received_at: execAgo(1), ...over,
+});
+const execView = (projectId, over = {}) => ({
+  workspace_id: workspace.id, project_id: projectId, agent_id: execAgent.id, managed: true, enabled: true, management_source: "runtime_policy",
+  configured: { source: "runtime_policy", revision: 17, digest: "d17", routes: [execRoute()] }, attempts: [execAttempt()],
+  profile: { source: "agent_profile", harness: "claude", model: "sonnet" }, freshness: "current", ...over,
+});
+const opusAttempt = (over = {}) => execAttempt({
+  attempt_id: "att-2", turn_id: "turn-9", resolved_route: { source: "runtime_policy", revision: 17, profile_ref: "opus", harness: "claude", model: "opus-5", effort: null },
+  observed: { harness: "claude", model: "opus-5", effort: null, source: "adapter", observed_at: execAgo(5) }, ...over,
+});
+// A scenario is the list of per-project views the API would return for the agent.
+const execScenarios = {
+  main: () => [
+    execView(project.id, { attempts: [execAttempt(), opusAttempt()] }),
+    execView(otherProject.id, { configured: { source: "runtime_policy", revision: 18, digest: "d18", routes: [execRoute({ model: "gpt-6.2" })] }, attempts: [execAttempt({ attempt_id: "att-3", turn_id: "turn-3", policy_matches: false, state: "waiting" })] }),
+  ],
+  unknown: () => [
+    execView(project.id, { attempts: [execAttempt({ observed: { harness: "codex", model: null, effort: null, source: "adapter", observed_at: execAgo(3) }, freshness: "unknown" })], freshness: "unknown" }),
+    execView(otherProject.id, { attempts: [], freshness: "unknown" }),
+  ],
+  stale: () => [
+    execView(project.id, { attempts: [execAttempt({ freshness: "stale" })], freshness: "stale" }),
+    execView(otherProject.id, { attempts: [execAttempt({ attempt_id: "att-4", freshness: "offline" })], freshness: "offline" }),
+  ],
+  unmanaged: () => [
+    execView(project.id, { managed: false, management_source: null, configured: null, attempts: [], freshness: "unknown" }),
+    execView(otherProject.id, { enabled: false, attempts: [], freshness: "unknown" }),
+  ],
+  many: () => [
+    execView(project.id, {
+      attempts: Array.from({ length: 25 }, (_, i) => execAttempt({
+        attempt_id: i === 0 ? execLongId : `att-many-${String(i).padStart(2, "0")}`, turn_id: `turn-${i}`, state: i < 3 ? "running" : "completed",
+        sequence: 100 - i, received_at: execAgo(i + 1),
+        observed: { harness: "codex", model: i % 2 ? "gpt-6.1-sol" : "opus-5", effort: "high", source: "adapter", observed_at: execAgo(i + 1) },
+      })),
+    }),
+  ],
+  nousage: () => [execView(project.id, { attempts: [], freshness: "unknown" }), execView(otherProject.id, { attempts: [], freshness: "unknown" })],
+  error: () => null,
+};
+let execScenario = "main", execOn = false;
 const HOST = "127.0.0.1";
 const sockets = new Set();
 const server = http.createServer(async (req, res) => {
@@ -128,6 +185,7 @@ const server = http.createServer(async (req, res) => {
       const next = JSON.parse(raw);
       mode = next.mode ?? "normal"; taskCalls = []; writes = []; broadcastMoves = next.broadcastMoves === true;
       role = next.role ?? "owner";
+      execScenario = next.exec ?? "main"; execOn = next.exec != null;
       if (next.resetTheme) {
         wsTheme = { theme_id: null, settings: {}, version: 1, contrast_warnings: [] };
         instTheme = { ...wsTheme }; installed = [graphite, forge, meshDefault]; adminAllowed = {}; adminAuto = false; themePuts = 0; failThemes = 0; themesDelay = 0; iconUrl = null;
@@ -182,7 +240,15 @@ const server = http.createServer(async (req, res) => {
         total_count: rows.length, has_more: page * size < rows.length, list_revision: 47 };
     }
   } else if (url.pathname.endsWith("/documents")) body = { items: docs, total_count: docs.length, page: 1, page_size: 200, has_more: false };
-  else if (url.pathname.endsWith("/team")) body = { agents: [], humans: [] };
+  else if (url.pathname.endsWith("/team")) body = { workspace: workspace.name, agent_tree: execOn ? [execAgent] : [], humans: [], agents: [] };
+  else if (url.pathname.endsWith("/agent-executions")) {
+    const views = execScenarios[execScenario]?.();
+    if (!views) { status = 503; body = { error: "runner unavailable" }; }
+    else {
+      const only = url.searchParams.get("project_id");
+      body = { schema_version: 1, generated_at: new Date().toISOString(), items: only ? views.filter((v) => v.project_id === only) : views, next_cursor: null };
+    }
+  }
   else if (url.pathname.startsWith("/api/v1/me/ui-state/")) body = { state: { expanded: [] } };
   else if (/^\/api\/v1\/documents\/[^/]+\/(watch|comments|attachments)/.test(url.pathname)) body = url.pathname.endsWith("/watch") ? { watching: false } : [];
   else if (url.pathname.startsWith("/api/v1/documents/")) body = docs.find((d) => d.id === url.pathname.split("/").at(-1)) ?? {};
@@ -274,7 +340,7 @@ const server = http.createServer(async (req, res) => {
   }
   else if (url.pathname.endsWith("/members/me")) body = { role };
   else if (url.pathname.endsWith("/members")) body = { members: [], count: 0 };
-  else if (url.pathname.endsWith("/agents")) body = { items: [] };
+  else if (url.pathname.endsWith("/agents")) body = { items: execOn ? [execAgent] : [] };
   else if (url.pathname.endsWith("/views")) body = { views: [], count: 0 };
   else if (url.pathname === "/api/v1/notifications") body = { items: [], unread_count: 0 };
   else if (/^\/api\/v1\/tasks\/[^/]+\/move$/.test(url.pathname) && req.method === "POST") {

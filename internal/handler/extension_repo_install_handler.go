@@ -61,6 +61,7 @@ type CatalogInstaller interface {
 	Updates(ctx context.Context) ([]repoinstall.UpdateInfo, error)
 	Update(ctx context.Context, actor *uuid.UUID, id, consentSHA string) (*repoinstall.UpdateResult, error)
 	UpdateAll(ctx context.Context, actor *uuid.UUID) ([]repoinstall.UpdateResult, error)
+	Rollback(ctx context.Context, actor *uuid.UUID, id string) (*domain.InstalledExtension, error)
 }
 
 // isNotFound reports an apierror 404: the id belongs to the other install source.
@@ -244,10 +245,14 @@ func (h *ExtensionRepoInstallHandler) Rollback(c echo.Context) error {
 		return err
 	}
 	row, err := h.svc.Rollback(c.Request().Context(), &uid, c.Param("ext_id"))
+	if err != nil && h.catalog != nil && isNotFound(err) {
+		row, err = h.catalog.Rollback(c.Request().Context(), &uid, c.Param("ext_id"))
+	}
 	if err != nil {
 		return handleError(c, err)
 	}
-	return c.JSON(http.StatusOK, map[string]any{"extension_id": row.ExtensionID, "version": row.Version, "commit_sha": row.CommitSHA, "repo_ref": row.RepoRef})
+	return c.JSON(http.StatusOK, map[string]any{"extension_id": row.ExtensionID, "version": row.Version, "commit_sha": row.CommitSHA, "repo_ref": row.RepoRef,
+		"source": row.Source, "trust_level": row.TrustLevel, "artifact_sha256": row.ArtifactSHA256})
 }
 
 func (h *ExtensionRepoInstallHandler) installFromCatalog(c echo.Context, uid uuid.UUID, b repoBody) error {

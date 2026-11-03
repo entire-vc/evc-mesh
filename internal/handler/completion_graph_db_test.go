@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -72,6 +73,7 @@ func (f *completionHTTPFixture) post(t *testing.T, from, to uuid.UUID, kind stri
 	c.SetPath("/tasks/:task_id/dependencies")
 	c.SetParamNames("task_id")
 	c.SetParamValues(from.String())
+	mw.SetProjectAccess(c, openAccess)
 	require.NoError(t, f.handler.Create(c))
 	return rec
 }

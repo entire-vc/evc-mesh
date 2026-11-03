@@ -1133,7 +1133,15 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 		}
 
 		// Workflow-rules transition gate: advisory or strict enforcement from ProjectRuleConfig.
-		if enfMode, vMsg, shipDiag := s.applyTransitionGate(ctx, task, oldStatusID, status); vMsg != "" {
+		enfMode, vMsg, shipDiag, gateWrites := s.applyTransitionGate(ctx, task, oldStatusID, status)
+		// The gate may write vcs_links (GitHub evidence sync); the vcs_task_snapshot
+		// trigger then advances tasks.version under us, once per row written.
+		// Re-base on exactly that many bumps, so the CAS below still rejects
+		// any other concurrent write, a child-table one included.
+		if gateWrites > 0 {
+			oldVersion = s.rebaseVersionAfterChildWrite(ctx, task, oldVersion, gateWrites)
+		}
+		if vMsg != "" {
 			if enfMode == domain.RuleConfigEnforcementStrict {
 				s.logTransitionViolation(ctx, task, oldStatusID, status.ID, vMsg, "blocked")
 				if shipDiag != nil {
@@ -2386,6 +2394,24 @@ func (s *taskService) dispatchUserNotification(ctx context.Context, task *domain
 // expected_updated_at precondition does not match the current task state.
 // Callers should re-read the task using the returned fields and retry.
 type CASConflictError = domain.TaskConflict
+
+// rebaseVersionAfterChildWrite returns the version the transition's CAS must
+// expect after the gate's own vcs_links writes. Each such write bumps
+// tasks.version by one without touching the row's own fields, so the newer
+// version is adopted only when it is exactly version+ownWrites and status,
+// assignee and updated_at still match what this call read. Any further bump
+// (a concurrent comment, artifact or link write) keeps the original version
+// and lets the CAS refuse.
+func (s *taskService) rebaseVersionAfterChildWrite(ctx context.Context, read *domain.Task, version, ownWrites int64) int64 {
+	fresh, err := s.taskRepo.GetByID(ctx, read.ID)
+	if err != nil || fresh == nil || fresh.Version != version+ownWrites {
+		return version
+	}
+	if fresh.StatusID == read.StatusID && fresh.UpdatedAt.Equal(read.UpdatedAt) && sameAssigneeID(fresh.AssigneeID, read.AssigneeID) {
+		return fresh.Version
+	}
+	return version
+}
 
 func taskConflictOf(task *domain.Task) *CASConflictError {
 	return &CASConflictError{CurrentVersion: task.Version, CurrentStatusID: task.StatusID, CurrentUpdatedAt: task.UpdatedAt, CurrentAssigneeID: task.AssigneeID}

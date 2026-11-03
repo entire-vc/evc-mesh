@@ -70,8 +70,22 @@ func (h *DependencyHandler) List(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+	// Edges may cross projects. The edge itself belongs to this task, but what
+	// it says about the far task is only for a caller who may open that task.
+	for i := range outgoing {
+		hideUnreachableRelatedTask(c, &outgoing[i], outgoing[i].DependsOnTaskID)
+	}
+	for i := range incoming {
+		hideUnreachableRelatedTask(c, &incoming[i], incoming[i].TaskID)
+	}
 
 	return c.JSON(http.StatusOK, dependencyListResponse{Outgoing: outgoing, Incoming: incoming})
+}
+
+func hideUnreachableRelatedTask(c echo.Context, dep *domain.EnrichedTaskDependency, related uuid.UUID) {
+	if !middleware.MayAccessTask(c, related) {
+		dep.RelatedTaskTitle, dep.RelatedTaskStatusID = nil, nil
+	}
 }
 
 // Create handles POST /tasks/:task_id/dependencies
@@ -91,6 +105,13 @@ func (h *DependencyHandler) Create(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
 			"depends_on_task_id": "depends_on_task_id is required",
 		}))
+	}
+
+	// The far end is named in the body, out of the route guard's sight. Edges
+	// may cross projects, but only to a task the caller may open; any other
+	// answers like a task that does not exist.
+	if !middleware.MayAccessTask(c, req.DependsOnTaskID) {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("Task"))
 	}
 
 	depType := req.DependencyType

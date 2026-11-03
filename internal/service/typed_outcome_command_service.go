@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	githubapi "github.com/entire-vc/evc-mesh/internal/integration/github"
 	gitlabapi "github.com/entire-vc/evc-mesh/internal/integration/gitlab"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -45,6 +46,9 @@ type TurnHooks interface {
 // GitLabCheckerSource returns the GitLab client of a workspace.
 type GitLabCheckerSource func(ctx context.Context, workspaceID uuid.UUID) (gitlabapi.MergeRequestChecker, bool)
 
+// GitHubCheckerSource returns the GitHub client of a workspace.
+type GitHubCheckerSource func(ctx context.Context, workspaceID uuid.UUID) (githubapi.PullRequestChecker, bool)
+
 // TurnCommon is carried by every task command.
 type TurnCommon struct {
 	SessionID *string
@@ -78,6 +82,7 @@ type TurnCommandService struct {
 	links  TurnVCSLinks
 	hooks  TurnHooks
 	gitlab GitLabCheckerSource
+	github GitHubCheckerSource
 	now    func() time.Time
 }
 
@@ -86,6 +91,13 @@ type TurnCommandService struct {
 // and is refused; without hooks no assignee policy or notification runs.
 func NewTurnCommandService(store TurnCommandStore, links TurnVCSLinks, hooks TurnHooks, gitlab GitLabCheckerSource) *TurnCommandService {
 	return &TurnCommandService{store: store, links: links, hooks: hooks, gitlab: gitlab, now: time.Now}
+}
+
+// WithGitHub lets a wait on a GitHub PR be confirmed live; without it the
+// card's own link is the only evidence.
+func (s *TurnCommandService) WithGitHub(src GitHubCheckerSource) *TurnCommandService {
+	s.github = src
+	return s
 }
 
 func trimmed(v *string) *string {
@@ -294,11 +306,21 @@ func (s *TurnCommandService) fillFromLink(ctx context.Context, w *domain.TaskWai
 	return nil
 }
 
+// mrCoordinates names the project and number a PR/MR link points at, by the
+// link's own provider: a GitHub PR is "owner/repo" + number, never looked up
+// as a GitLab project.
 func mrCoordinates(link *domain.VCSLink) (projectPath string, iid int, ok bool) {
-	if link.Provider != domain.VCSProviderGitLab {
-		return "", 0, false
+	switch link.Provider {
+	case domain.VCSProviderGitLab:
+		return gitlabapi.ParseMergeRequestURL(link.URL)
+	case domain.VCSProviderGitHub:
+		owner, repo, number, ok := githubapi.ParsePullRequestURL(link.URL)
+		if !ok {
+			return "", 0, false
+		}
+		return owner + "/" + repo, number, true
 	}
-	return gitlabapi.ParseMergeRequestURL(link.URL)
+	return "", 0, false
 }
 
 // checkMR confirms the MR exists and is still open: live from GitLab when the
@@ -323,6 +345,9 @@ func (s *TurnCommandService) checkMR(ctx context.Context, workspaceID uuid.UUID,
 	if link != nil && w.VCSLinkID == nil {
 		w.VCSLinkID = &link.ID
 	}
+	if *w.Provider == string(domain.VCSProviderGitHub) {
+		return s.checkPullRequest(ctx, workspaceID, w, link)
+	}
 	target := fmt.Sprintf("MR %s!%d", *w.ProjectPath, *w.MRIID)
 	if *w.Provider == string(domain.VCSProviderGitLab) && s.gitlab != nil {
 		if checker, ok := s.gitlab(ctx, workspaceID); ok {
@@ -338,6 +363,34 @@ func (s *TurnCommandService) checkMR(ctx context.Context, workspaceID uuid.UUID,
 	}
 	if link == nil {
 		return refuse(domain.CodeInvalidTarget, target+" is neither linked to this card nor visible on GitLab")
+	}
+	if link.Status == domain.VCSLinkStatusMerged || link.Status == domain.VCSLinkStatusClosed {
+		return refuse(domain.CodeAlreadyMet, target+" is already "+string(link.Status))
+	}
+	return nil
+}
+
+// checkPullRequest confirms a GitHub PR exists and is still open: live from
+// GitHub when the workspace has a client, else from a link of this card. A
+// GitHub PR is never asked of GitLab.
+func (s *TurnCommandService) checkPullRequest(ctx context.Context, workspaceID uuid.UUID, w *domain.TaskWait, link *domain.VCSLink) error {
+	target := fmt.Sprintf("PR %s#%d", *w.ProjectPath, *w.MRIID)
+	if s.github != nil {
+		if checker, ok := s.github(ctx, workspaceID); ok {
+			if owner, repo, found := strings.Cut(*w.ProjectPath, "/"); found {
+				state, err := checker.GetPullRequestState(ctx, owner, repo, *w.MRIID)
+				if err != nil {
+					return refuse(domain.CodeInvalidTarget, target+" was not found on GitHub")
+				}
+				if state.Merged || state.State == "closed" {
+					return refuse(domain.CodeAlreadyMet, target+" is already "+state.State)
+				}
+				return nil
+			}
+		}
+	}
+	if link == nil {
+		return refuse(domain.CodeInvalidTarget, target+" is neither linked to this card nor visible on GitHub")
 	}
 	if link.Status == domain.VCSLinkStatusMerged || link.Status == domain.VCSLinkStatusClosed {
 		return refuse(domain.CodeAlreadyMet, target+" is already "+string(link.Status))

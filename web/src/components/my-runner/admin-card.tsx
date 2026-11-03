@@ -19,7 +19,7 @@ export const RUNNER_EXTENSION_ID = RUNNER_SERVER_ID;
  * route also writes the catalog's enabled flag, which is what the controllers
  * drain on. Shown to workspace owners and admins only.
  */
-export function RunnerAdminCard() {
+export function RunnerAdminCard({ onChanged }: { onChanged: () => void }) {
   const { t } = useTranslation("runner");
   const { currentWorkspace } = useWorkspaceStore();
   const catalog = useExtensionCatalog();
@@ -41,6 +41,9 @@ export function RunnerAdminCard() {
       toast.success(t(next ? "admin.enabled" : "admin.disabled"));
       setConfirmOff(false);
       catalog.refresh();
+      // The page's runtime (workspace catalog or personal document) was read before the switch:
+      // reread it, or the Accounts/Pools/Profiles forms stay on the personal read-only view.
+      onChanged();
     } catch (e) {
       toast.error(apiErrorMessage(e, t(next ? "admin.failed" : "admin.disableFailed")));
     } finally {

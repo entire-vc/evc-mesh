@@ -206,6 +206,11 @@ var extensionRouteCapabilities = map[string]string{
 	"POST /api/v1/ext/me/token/rotate":     "ext_token:self_rotate",
 	"DELETE /api/v1/ext/me/token/previous": "ext_token:self_rotate",
 
+	// user authorization check for an external service: allow/deny for one
+	// user of the extension's own workspace, answered from current membership
+	// and roles (the handler pins the workspace and never lists users)
+	"POST /api/v1/ext/me/authorize": "members:authorize",
+
 	// agent keys (Keep's rotator): one narrow right for exactly these three calls
 	"GET /api/v1/agents/:agent_id/keys":            "agent_key:rotate",
 	"POST /api/v1/agents/:agent_id/keys":           "agent_key:rotate",

@@ -50,6 +50,36 @@ func NewProvider(m extensions.Manifest, d extensions.Deps, client *http.Client, 
 // IsExternal tells the workspace service to use the shared external save hook.
 func (p *Provider) IsExternal() bool { return true }
 
+// InheritInstance fills the service address of a new workspace connection from
+// the instance-level setting when the caller sent none, so connecting an
+// extension the administrator already configured needs no workspace
+// credentials. A value the caller sent is never replaced, and nothing else is
+// copied: the instance level holds no workspace secrets.
+func (p *Provider) InheritInstance(ctx context.Context, settings map[string]any) error {
+	key := p.ext.BaseURLSetting
+	// Only an absent, null or blank address is inherited; any other submitted
+	// value (a number, an object, a real string) stays as sent for validation to judge.
+	if sent, present := settings[key]; present && sent != nil {
+		if str, isStr := sent.(string); !isStr || strings.TrimSpace(str) != "" {
+			return nil
+		}
+	}
+	if p.Inst == nil {
+		return nil
+	}
+	inst, err := p.Inst.InstanceSetting(ctx, p.Man.ID)
+	if err != nil {
+		return fmt.Errorf("read instance setting: %w", err)
+	}
+	if inst == nil || !inst.Enabled {
+		return nil
+	}
+	if v, ok := inst.Settings[key].(string); ok && v != "" {
+		settings[key] = v
+	}
+	return nil
+}
+
 // baseURL reads the service address out of resolved settings.
 func (p *Provider) baseURL(settings map[string]any) (string, error) {
 	raw, _ := settings[p.ext.BaseURLSetting].(string)

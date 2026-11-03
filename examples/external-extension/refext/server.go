@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -22,6 +23,8 @@ const (
 	PathEvents  = "/mesh/events"
 	PathUIHello = "/mesh/ui/hello"
 	PathUITask  = "/mesh/ui/task"
+	// PathUIProject is the project.view screen; sections live under it.
+	PathUIProject = "/mesh/ui/project"
 )
 
 // maxBody bounds every request body Mesh sends; real ones are a few KB.
@@ -192,11 +195,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.receiveToken(w, r)
 	case r.URL.Path == PathEvents && r.Method == http.MethodPost:
 		s.receiveEvent(w, r)
-	case (r.URL.Path == PathUIHello || r.URL.Path == PathUITask) && r.Method == http.MethodGet && s.UI != nil:
+	case isUIPath(r.URL.Path) && r.Method == http.MethodGet && s.UI != nil:
 		s.screen(w, r)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// isUIPath reports whether path is a screen; every section path under the
+// project.view screen answers the same page.
+func isUIPath(path string) bool {
+	return path == PathUIHello || path == PathUITask ||
+		path == PathUIProject || strings.HasPrefix(path, PathUIProject+"/")
 }
 
 func readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {

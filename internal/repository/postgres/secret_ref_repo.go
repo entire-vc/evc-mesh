@@ -495,3 +495,55 @@ func isSecretsUniqueViolation(err error) bool {
 
 var _ repository.SecretRepository = (*SecretRefRepo)(nil)
 var _ repository.SecretMaterializer = (*SecretRefRepo)(nil)
+
+// ErrKeepMetadataNotFound is every reason a secret has no metadata probe: the
+// row is absent, belongs to another workspace, is not a current workspace-scoped
+// row (project/agent scope, rotated, expired), or its keep_ref is not a Keep
+// reference of the closed alphabet. The caller must not be able to tell these
+// apart, so there is one error.
+var ErrKeepMetadataNotFound = repository.ErrKeepMetadataNotFound
+
+// KeepMetadataRef returns the Keep reference stored for the current
+// workspace-scoped secret secretID of workspaceID, without the "keep:" prefix.
+//
+// It is the only read of the metadata probe: one scoped SELECT of the columns
+// the probe needs (never a value, and no Keep call). The workspace is part of
+// the WHERE, so another tenant's secret is indistinguishable from an absent
+// one. Scope, project/agent binding, rotation and expiry are checked here on
+// the row that was read, not trusted to the caller.
+func (r *SecretRefRepo) KeepMetadataRef(ctx context.Context, workspaceID, secretID uuid.UUID) (string, error) {
+	var row struct {
+		ID          uuid.UUID  `db:"id"`
+		WorkspaceID uuid.UUID  `db:"workspace_id"`
+		Scope       string     `db:"scope"`
+		ProjectID   *uuid.UUID `db:"project_id"`
+		AgentID     *uuid.UUID `db:"agent_id"`
+		KeepRef     string     `db:"keep_ref"`
+		ValueLength int        `db:"value_length"`
+		RotatedAt   *time.Time `db:"rotated_at"`
+		ExpiresAt   *time.Time `db:"expires_at"`
+	}
+	err := r.db.GetContext(ctx, &row, `
+		SELECT id, workspace_id, scope, project_id, agent_id, keep_ref, value_length, rotated_at, expires_at
+		FROM secret_refs
+		WHERE workspace_id = $1 AND id = $2`, workspaceID, secretID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrKeepMetadataNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("select secret keep ref: %w", err)
+	}
+	if row.WorkspaceID != workspaceID || row.ID != secretID ||
+		row.Scope != string(domain.SecretScopeWorkspace) || row.ProjectID != nil || row.AgentID != nil ||
+		row.RotatedAt != nil || (row.ExpiresAt != nil && !row.ExpiresAt.After(time.Now())) {
+		return "", ErrKeepMetadataNotFound
+	}
+	ref := strings.TrimPrefix(row.KeepRef, secretstore.KeepPrefix)
+	if ref == row.KeepRef || !keepMetadataRefRE.MatchString(ref) || strings.Contains(ref, "..") {
+		return "", ErrKeepMetadataNotFound
+	}
+	return ref, nil
+}
+
+// keepMetadataRefRE is Keep's closed ref alphabet (keepRefRe in secretstore).
+var keepMetadataRefRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)

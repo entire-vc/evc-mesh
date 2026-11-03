@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -9,6 +10,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	githubapi "github.com/entire-vc/evc-mesh/internal/integration/github"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -20,18 +22,18 @@ import (
 // shipDiag is non-nil only when the refusal came from the author_if_merged_shipped
 // pattern: it names which delivery facts are missing so the caller can repair
 // them instead of guessing at "actor not permitted".
-func (s *taskService) applyTransitionGate(ctx context.Context, task *domain.Task, oldStatusID uuid.UUID, newStatus *domain.TaskStatus) (enfMode, violation string, shipDiag *ShipEvidenceDiagnosis) {
+func (s *taskService) applyTransitionGate(ctx context.Context, task *domain.Task, oldStatusID uuid.UUID, newStatus *domain.TaskStatus) (enfMode, violation string, shipDiag *ShipEvidenceDiagnosis, syncWrites int64) {
 	if s.rulesConfigSvc == nil {
-		return domain.RuleConfigEnforcementAdvisory, "", nil
+		return domain.RuleConfigEnforcementAdvisory, "", nil, 0
 	}
 	wfResp, err := s.rulesConfigSvc.GetProjectWorkflowRules(ctx, task.ProjectID, nil)
 	if err != nil || wfResp == nil || len(wfResp.Transitions) == 0 {
-		return domain.RuleConfigEnforcementAdvisory, "", nil
+		return domain.RuleConfigEnforcementAdvisory, "", nil, 0
 	}
 
 	oldStatus, err := s.statusRepo.GetByID(ctx, oldStatusID)
 	if err != nil || oldStatus == nil {
-		return domain.RuleConfigEnforcementAdvisory, "", nil
+		return domain.RuleConfigEnforcementAdvisory, "", nil, 0
 	}
 
 	actorID, actorType := actorctx.FromContext(ctx)
@@ -41,10 +43,11 @@ func (s *taskService) applyTransitionGate(ctx context.Context, task *domain.Task
 	if tr, ok := wfResp.Transitions[oldStatus.Slug]; ok && hasActorPattern(tr.ActorsFor(newStatus.Slug), actorPatternAuthorIfMergedShipped) && s.vcsLinkRepo != nil {
 		if ls, lerr := s.vcsLinkRepo.ListByTask(ctx, task.ID); lerr == nil {
 			links = ls
-			links = s.syncGitHubEvidenceForGate(ctx, task, links)
+			links, syncWrites = s.syncGitHubEvidenceWrote(ctx, task, links)
 		}
 	}
-	return evaluateTransitionGate(oldStatus.Slug, newStatus.Slug, transitionActor{ID: actorID, Type: actorType}, task, links, wfResp.WorkflowRulesConfig)
+	enfMode, violation, shipDiag = evaluateTransitionGate(oldStatus.Slug, newStatus.Slug, transitionActor{ID: actorID, Type: actorType}, task, links, wfResp.WorkflowRulesConfig)
+	return enfMode, violation, shipDiag, syncWrites
 }
 
 // ShipEvidenceDiagnosis explains an author_if_merged_shipped refusal.
@@ -331,12 +334,45 @@ func validateAllowedActorsByTarget(cfg domain.WorkflowRulesConfig, knownStatuses
 // and CI facts stay empty for ever. The gate still judges the stored facts
 // only: nothing is written unless GitHub reports them for the PR's own head.
 func (s *taskService) syncGitHubEvidenceForGate(ctx context.Context, task *domain.Task, links []domain.VCSLink) []domain.VCSLink {
+	out, _ := s.syncGitHubEvidenceWrote(ctx, task, links)
+	return out
+}
+
+// countingVCSLinkRepo counts the vcs_links rows the gate's own sync writes.
+// Each such write fires the vcs_task_snapshot trigger, which advances
+// tasks.version by exactly one.
+type countingVCSLinkRepo struct {
+	repository.VCSLinkRepository
+	writes int64
+}
+
+func (c *countingVCSLinkRepo) MergeMetadata(ctx context.Context, taskID, id uuid.UUID, patch json.RawMessage) (*domain.VCSLink, error) {
+	l, err := c.VCSLinkRepository.MergeMetadata(ctx, taskID, id, patch)
+	// (nil, nil) means the UPDATE matched no row: no trigger fired, no bump.
+	if err == nil && l != nil {
+		c.writes++
+	}
+	return l, err
+}
+
+func (c *countingVCSLinkRepo) SetPipelineStatus(ctx context.Context, id uuid.UUID, pipelineID int64, status, sha string) (bool, error) {
+	written, err := c.VCSLinkRepository.SetPipelineStatus(ctx, id, pipelineID, status, sha)
+	if err == nil && written {
+		c.writes++
+	}
+	return written, err
+}
+
+// syncGitHubEvidenceWrote is syncGitHubEvidenceForGate that also reports how
+// many vcs_links rows the sync wrote, i.e. by how much the gate itself advanced
+// tasks.version through the vcs_task_snapshot trigger.
+func (s *taskService) syncGitHubEvidenceWrote(ctx context.Context, task *domain.Task, links []domain.VCSLink) (synced []domain.VCSLink, writes int64) {
 	need := false
 	for _, l := range links {
 		need = need || githubLinkIsDelivery(l)
 	}
 	if !need {
-		return links
+		return links, 0
 	}
 	workspaceID, _ := s.resolveProjectWorkspace(ctx, task.ProjectID)
 	var src githubapi.PullRequestEvidenceSource
@@ -345,12 +381,13 @@ func (s *taskService) syncGitHubEvidenceForGate(ctx context.Context, task *domai
 	}
 	var changed bool
 	unconfirmed := map[uuid.UUID]bool{}
+	repo := &countingVCSLinkRepo{VCSLinkRepository: s.vcsLinkRepo}
 	if src != nil {
-		changed, unconfirmed = syncGitHubLinks(ctx, s.vcsLinkRepo, src, links, true)
+		changed, unconfirmed = syncGitHubLinks(ctx, repo, src, links, true)
 	} else {
 		// GitHub cannot be asked (integration removed, no token): fail closed,
 		// a cached green that nothing can confirm does not prove delivery.
-		changed = unbindGitHubCachedGreen(ctx, s.vcsLinkRepo, links)
+		changed = unbindGitHubCachedGreen(ctx, repo, links)
 		for _, l := range links {
 			if githubLinkIsDelivery(l) {
 				unconfirmed[l.ID] = true
@@ -364,5 +401,5 @@ func (s *taskService) syncGitHubEvidenceForGate(ctx context.Context, task *domai
 	}
 	// Whatever the store holds, a link GitHub could not confirm never keeps a
 	// cached green binding in the gate's view (a failed unbind write included).
-	return withoutCachedGreen(links, unconfirmed)
+	return withoutCachedGreen(links, unconfirmed), repo.writes
 }

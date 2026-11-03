@@ -225,6 +225,38 @@ describe("connect wizard", () => {
     expect(api).not.toHaveBeenCalled();
   });
 
+  it("instance-configured external extension: Next creates the workspace connection with consent", async () => {
+    api.mockResolvedValue({});
+    mount(mergeCatalog(
+      [sum("gitlab", { runtime: "external", source: "catalog", trust_level: "official" })],
+      [ws("gitlab", { enabled: true, source: "instance" })],
+    ));
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(next());
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await screen.findByRole("button", { name: "Check connection" });
+    const connects = api.mock.calls.filter(([path]) => String(path).endsWith("/extensions/gitlab/connect"));
+    expect(connects).toHaveLength(1);
+    const [path, opts] = connects[0] as [string, { method: string; body: { settings: unknown; consent: { capabilities: string[] } } }];
+    expect(path).toBe("/api/v1/workspaces/ws-1/extensions/gitlab/connect");
+    expect(opts.method).toBe("POST");
+    expect(opts.body.settings).toEqual({});
+    expect(opts.body.consent.capabilities).toEqual(consentTokens(manifest.capabilities as never));
+  });
+
+  it("instance-configured external extension: a refused connect stays on the step and shows the error", async () => {
+    api.mockRejectedValue(new Error("boom"));
+    mount(mergeCatalog(
+      [sum("gitlab", { runtime: "external", source: "catalog", trust_level: "official" })],
+      [ws("gitlab", { enabled: true, source: "instance" })],
+    ));
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(next());
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("boom");
+    expect(screen.queryByRole("button", { name: "Check connection" })).toBeNull();
+  });
+
   it("a consent 400 keeps what was typed on the settings step", async () => {
     api.mockRejectedValue(Object.assign(new Error("Validation failed"), { code: "validation_failed", status: 400, details: { consent: "consent must cover [x]" } }));
     mount(mergeCatalog([sum("gitlab")], [ws("gitlab")]));

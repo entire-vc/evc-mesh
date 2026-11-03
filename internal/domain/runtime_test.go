@@ -199,3 +199,22 @@ func TestRuntimeCatalogWithControllerVersion(t *testing.T) {
 	var none *RuntimeCatalog
 	none.WithControllerVersion("0.1.8")
 }
+
+func TestNormalizeRuntimeConfig(t *testing.T) {
+	if _, err := ParseRuntimeCatalog([]byte(`{}`)); err == nil {
+		t.Fatal("control: a bare {} is not a valid catalog")
+	}
+	for _, in := range []string{``, `{}`, " {}\n"} {
+		if _, err := ParseRuntimeCatalog(NormalizeRuntimeConfig([]byte(in))); err != nil {
+			t.Fatalf("%q must normalize to a valid empty catalog: %v", in, err)
+		}
+	}
+	existing := runtimeExample(t)
+	if got := NormalizeRuntimeConfig(existing); string(got) != string(existing) {
+		t.Fatal("an existing catalog must be returned unchanged")
+	}
+	broken := []byte(`{"schema_version":3}`)
+	if got := NormalizeRuntimeConfig(broken); string(got) != string(broken) {
+		t.Fatal("a corrupted catalog must not be replaced")
+	}
+}

@@ -99,7 +99,12 @@ func NewWebhookService(repo repository.WebhookRepository, opts ...WebhookService
 // NewExtensionHTTPClient is the SSRF-guarded client for calls to an external
 // extension's service (health, install handshake): same dial guard and no
 // redirects as webhook deliveries.
-func NewExtensionHTTPClient() *http.Client { return newWebhookHTTPClient(isPubliclyRoutable) }
+func NewExtensionHTTPClient() *http.Client { return newWebhookHTTPClient(extensionDialAllow) }
+
+// extensionDialAllow is the address policy of NewExtensionHTTPClient. It is
+// isPubliclyRoutable in every normal build; only the e2eloopback build tag (the
+// disposable e2e-connect stack, never a release) swaps it.
+var extensionDialAllow = isPubliclyRoutable
 
 func newWebhookHTTPClient(allow func(net.IP) bool) *http.Client {
 	return &http.Client{

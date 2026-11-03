@@ -465,11 +465,64 @@
       "registerHelp": "Register an agent in <link>Agents</link> to get an API key, then use it in <code>MESH_AGENT_KEY</code>. MCP provides 34 tools: task management, comments, events, artifacts, and more."
     }
   },
+  "executions": {
+    "project": "Project",
+    "allProjects": "All projects",
+    "configured": "Configured",
+    "revision": "r{{n}}",
+    "effortNotSet": "effort not set",
+    "noActive": "No active runs",
+    "modelUnknown": "Model unknown",
+    "runs": "{{count}} runs",
+    "offline": "Offline",
+    "stale": "stale",
+    "driftsFromPolicy": "differs from current policy",
+    "unmanaged": "Unmanaged",
+    "disabled": "Disabled",
+    "profileLabel": "profile",
+    "profileFrom": "profile {{value}} ({{source}})",
+    "profileNone": "no profile model ({{source}})",
+    "loading": "Loading runs",
+    "error": "Run data unavailable",
+    "forbidden": "Run data is not visible to your role.",
+    "retry": "Retry",
+    "partial": "Partial data: some runs could not be loaded or were rejected.",
+    "unmanagedHint": "Not managed by a Runner in this project. The profile below is a setting, not a record of what ran.",
+    "disabledHint": "Runner is connected but disabled for this project. The profile below is a setting, not a record of what ran.",
+    "profileEditNote": "Editing the profile does not change a managed route. Managed execution is changed in the Runner settings.",
+    "panel": {
+      "configuredHeading": "Configured policy",
+      "attemptsHeading": "Runs",
+      "activeHeading": "Active",
+      "historyHeading": "History",
+      "noViews": "No Runner data for this agent.",
+      "noAttempts": "No runs reported for this project yet. Model stays unknown until a run is observed.",
+      "noMatch": "No runs match the filters.",
+      "scope": "Show",
+      "scopes": { "all": "All runs", "active": "Active", "history": "History" },
+      "search": "Search by run, task, controller or model",
+      "showMore": "Show {{count}} more",
+      "routeOrder": "{{order}}. {{profile}}",
+      "policyRevision": "Policy {{rev}}",
+      "digest": "digest {{digest}}",
+      "mismatch": "This run selected policy {{run}}; the current policy is {{current}}.",
+      "observed": "Observed {{when}} by {{source}}",
+      "notObserved": "Model not observed for this turn",
+      "notObservedSource": "Model not observed for this turn (source {{source}})",
+      "heartbeat": "heartbeat {{when}}",
+      "copy": "Copy {{label}}",
+      "copied": "Copied",
+      "ids": { "attempt": "run", "turn": "turn", "task": "task", "controller": "controller", "instance": "instance" },
+      "states": { "starting": "Starting", "running": "Running", "waiting": "Waiting", "stopped": "Stopped", "completed": "Completed", "failed": "Failed" },
+      "freshness": { "unknown": "unknown", "current": "current", "stale": "stale", "offline": "offline" }
+    }
+  },
   "runtimeTabs": {
     "sectionsLabel": "Agent sections",
     "tabs": {
       "profile": "Profile",
       "access": "Workspace access",
+      "route": "Route & runs",
       "execution": "Execution & routes",
       "state": "Observed state"
     },
@@ -779,6 +832,7 @@
       "installed": "{{name}} installed to this instance.",
       "allow": "Allow",
       "blocked": "Blocked",
+      "allowed": "{{name}} allowed on this instance.",
       "askAdmin": "Not installed on this instance. Ask the instance administrator to install it.",
       "notAllowed": "The instance administrator has not allowed this extension.",
       "enableTheme": "Enable in workspace",
@@ -892,7 +946,8 @@
       },
       "members": {
         "read": "Read members",
-        "write": "Create and change members"
+        "write": "Create and change members",
+        "authorize": "Check member access"
       },
       "agents": {
         "read": "Read agents",
@@ -1313,6 +1368,7 @@
     "instanceNote": "Set up by the instance admin. Secrets are kept at instance level and are never shown."
   },
   "extensionState": {
+    "notInstalled": "Not installed",
     "notAllowed": "Not allowed",
     "available": "Available",
     "enabled": "Enabled in workspace",

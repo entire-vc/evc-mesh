@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { AgentDetailDialog } from "@/components/agent-detail-dialog";
 import { useAgentWorkspaceGrantStore } from "@/stores/agent-workspace-grant";
-import type { Agent } from "@/types";
+import { useMemberStore } from "@/stores/member";
+import { useWorkspaceStore } from "@/stores/workspace";
+import type { Agent, Workspace } from "@/types";
 
 vi.mock("@/lib/api", () => ({
   api: vi.fn(),
@@ -28,9 +30,10 @@ const baseAgent: Agent = {
   updated_at: "2026-08-01T00:00:00Z",
 };
 
-describe("AgentDetailDialog — profile fields (task #85714565)", () => {
+describe("AgentDetailDialog — profile fields", () => {
   beforeEach(() => {
     vi.mocked(api).mockReset();
+    setRole("admin");
   });
 
   it("edits responsibility zone through PUT /agents/:id/profile, then refetches the agent", async () => {
@@ -69,7 +72,7 @@ describe("AgentDetailDialog — profile fields (task #85714565)", () => {
   });
 
   it("clearing accepts_from on an existing agent sends an explicit star, not an empty list", async () => {
-    const agentWithAccepts = { ...baseAgent, accepts_from: ["Garfield"] };
+    const agentWithAccepts = { ...baseAgent, accepts_from: ["the product lead"] };
     vi.mocked(api).mockImplementation((path: string, opts?: { method?: string }) => {
       if (path === "/api/v1/agents/agent-1/profile" && opts?.method === "PUT") {
         return Promise.resolve(undefined);
@@ -85,7 +88,7 @@ describe("AgentDetailDialog — profile fields (task #85714565)", () => {
     );
 
     fireEvent.click(screen.getByTitle("Edit Accepts from"));
-    const editInput = screen.getByDisplayValue("Garfield");
+    const editInput = screen.getByDisplayValue("the product lead");
     fireEvent.change(editInput, { target: { value: "" } });
     fireEvent.keyDown(editInput, { key: "Enter" });
 
@@ -143,7 +146,7 @@ describe("AgentDetailDialog — profile fields (task #85714565)", () => {
         return Promise.resolve(undefined);
       }
       if (path === "/api/v1/agents/agent-1") {
-        return Promise.resolve({ ...baseAgent, escalation_to: "Garfield" });
+        return Promise.resolve({ ...baseAgent, escalation_to: "the product lead" });
       }
       return Promise.reject(new Error(`unexpected call: ${path}`));
     });
@@ -152,7 +155,7 @@ describe("AgentDetailDialog — profile fields (task #85714565)", () => {
 
     fireEvent.click(screen.getByTitle("Edit Escalation contact"));
     const editInput = screen.getByLabelText("Escalation contact");
-    fireEvent.change(editInput, { target: { value: "Garfield" } });
+    fireEvent.change(editInput, { target: { value: "the product lead" } });
     fireEvent.keyDown(editInput, { key: "Enter" });
 
     await waitFor(() => {
@@ -166,11 +169,11 @@ describe("AgentDetailDialog — profile fields (task #85714565)", () => {
       ([p]) => p === "/api/v1/agents/agent-1/profile",
     )!;
     const body = (putCall[1] as { body: Record<string, unknown> }).body;
-    // A single string ("Garfield"), matching the MCP tool and the YAML
-    // team-config contract — NOT ["Garfield"]. Regression for the type
+    // A single string ("Gary"), matching the MCP tool and the YAML
+    // team-config contract — NOT ["Gary"]. Regression for the type
     // mismatch code review found (rules_service.go ExportConfig silently
     // dropped array-shaped escalation_to on YAML export).
-    expect(body.escalation_to).toBe("Garfield");
+    expect(body.escalation_to).toBe("the product lead");
   });
 
   it("refuses to save an invalid max concurrent tasks draft instead of silently committing 0 — Save is disabled, no request is sent", async () => {
@@ -241,13 +244,62 @@ describe("AgentDetailDialog — profile fields (task #85714565)", () => {
   });
 });
 
+function setRole(role: "admin" | "viewer" | null) {
+  useWorkspaceStore.setState({ currentWorkspace: { id: "ws-1" } as Workspace });
+  useMemberStore.setState({
+    myRole: role,
+    myRoleLoaded: role !== null,
+    myRoleError: null,
+    myRoleWorkspaceId: "ws-1",
+  });
+}
+
 describe("AgentDetailDialog — Workspaces section (task U4)", () => {
   beforeEach(() => {
     vi.mocked(api).mockReset();
+    setRole("admin");
     useAgentWorkspaceGrantStore.setState({
       agentWorkspaces: [],
       isLoadingAgentWorkspaces: false,
       agentWorkspacesForbidden: false,
+    });
+  });
+
+  it("a viewer makes no privileged requests: no /workspaces, no /runtime (zero console 403s)", async () => {
+    setRole("viewer");
+    vi.mocked(api).mockImplementation((path: string) =>
+      Promise.reject(new Error(`unexpected call: ${path}`)),
+    );
+
+    render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={baseAgent} />);
+
+    await waitFor(() => expect(screen.getByText("Status")).toBeInTheDocument());
+    const paths = vi.mocked(api).mock.calls.map(([p]) => String(p));
+    expect(paths.filter((p) => /\/agents\/agent-1\/workspaces$|\/runtime$/.test(p))).toEqual([]);
+    expect(screen.queryByText("Workspaces")).not.toBeInTheDocument();
+  });
+
+  it("a role error left over from another workspace does not open the gate", async () => {
+    setRole("viewer");
+    useMemberStore.setState({ myRole: null, myRoleLoaded: false, myRoleError: "stale", myRoleWorkspaceId: "ws-old" });
+    vi.mocked(api).mockImplementation((path: string) =>
+      Promise.reject(new Error(`unexpected call: ${path}`)),
+    );
+
+    render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={baseAgent} />);
+
+    await waitFor(() => expect(screen.getByText("Status")).toBeInTheDocument());
+    const paths = vi.mocked(api).mock.calls.map(([p]) => String(p));
+    expect(paths.filter((p) => /\/agents\/agent-1\/workspaces$|\/runtime$/.test(p))).toEqual([]);
+  });
+
+  it("an admin still reads both the agent's workspaces and the runtime catalog", async () => {
+    vi.mocked(api).mockImplementation(() => Promise.reject(new Error("x")));
+    render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={baseAgent} />);
+    await waitFor(() => {
+      const paths = vi.mocked(api).mock.calls.map(([p]) => String(p));
+      expect(paths).toContain("/api/v1/agents/agent-1/workspaces");
+      expect(paths).toContain("/api/v1/workspaces/ws-1/runtime");
     });
   });
 
@@ -321,7 +373,7 @@ describe("AgentDetailDialog — Workspaces section (task U4)", () => {
 // Shape of the real ApiError (code + status), so apiErrorMessage uses the fallback text.
 const apiError502 = () => Object.assign(new Error("Server error (502)"), { code: "server_error", status: 502 });
 
-describe("AgentDetailDialog — harness and model (task #5548367d)", () => {
+describe("AgentDetailDialog — harness and model", () => {
   beforeEach(() => {
     vi.mocked(api).mockReset();
   });
@@ -424,10 +476,10 @@ describe("AgentDetailDialog — home runtime tabs stay (invited dialog regressio
     vi.mocked(api).mockImplementation(() => Promise.reject(Object.assign(new Error("x"), { code: "e", status: 500 })));
   });
 
-  it("still renders the same four tabs", () => {
+  it("keeps the existing tabs and adds Route & runs", () => {
     render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={baseAgent} />);
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
-      "Profile", "Workspace access", "Execution & routes", "Observed state",
+      "Profile", "Route & runs", "Workspace access", "Execution & routes", "Observed state",
     ]);
   });
 });

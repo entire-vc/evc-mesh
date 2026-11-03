@@ -43,6 +43,11 @@ const (
 	CodeBlocked      = "extension_blocked"
 	CodeDigest       = "extension_artifact_digest_mismatch"
 	CodeSparkDown    = "extension_catalog_unavailable"
+	// Rollback refusals.
+	CodeRollbackUnavailable = "extension_rollback_unavailable"
+	CodeSnapshotCorrupt     = "extension_snapshot_corrupt"
+	CodeRollbackStale       = "extension_rollback_stale"
+	CodeReleaseRevoked      = "extension_release_revoked"
 )
 
 func apiErr(status int, code, msg string) *apierror.Error {
@@ -56,7 +61,14 @@ type InstallStore interface {
 	InsertCatalog(ctx context.Context, ext *domain.InstalledExtension) error
 	// UpdateCatalog moves a source=catalog row to a new release, keeping the
 	// old version in previous_version.
-	UpdateCatalog(ctx context.Context, ext *domain.InstalledExtension) error
+	UpdateCatalog(ctx context.Context, ext *domain.InstalledExtension, guard domain.CatalogUpdateGuard) error
+	// GetCatalogSnapshot is the sealed snapshot UpdateCatalog left; nil when none.
+	GetCatalogSnapshot(ctx context.Context, extensionID string) (*domain.CatalogSnapshot, error)
+	// SkippedCommit is the commit an admin rolled back from; "" when none.
+	SkippedCommit(ctx context.Context, extensionID string) (string, error)
+	// RollbackCatalog restores snap over the row and writes journal atomically,
+	// only while the row still matches guard; apierror.Conflict otherwise.
+	RollbackCatalog(ctx context.Context, extensionID string, guard domain.CatalogRollbackGuard, snap domain.CatalogSnapshot, journal *domain.InstanceExtensionJournalEntry) error
 }
 
 // Installer installs an extension from the verified catalog: the trust anchor

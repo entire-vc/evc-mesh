@@ -19,6 +19,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	gitlabapi "github.com/entire-vc/evc-mesh/internal/integration/gitlab"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
@@ -129,6 +130,7 @@ func newTurnFixture(t *testing.T) *turnFixture {
 			if err == nil {
 				c.SetRequest(c.Request().WithContext(actorctx.WithActor(c.Request().Context(), id, domain.ActorTypeAgent)))
 			}
+			mw.SetProjectAccess(c, openAccess)
 			return next(c)
 		}
 	})

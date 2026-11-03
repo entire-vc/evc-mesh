@@ -162,6 +162,25 @@ func (h *MemoryHandler) Remember(c echo.Context) error {
 	}
 	req.WorkspaceID = wsID
 
+	// The workspace check above does not cover a project or task named in the
+	// body: MemoryService infers the memory's project from source_task_id. A
+	// user token carries no workspace of its own, so the one just admitted from
+	// the body is what those ids are held to.
+	c.Set(mw.ContextKeyWorkspaceID, wsID)
+	if !mw.IsAgent(c) {
+		if userID, uerr := mw.GetUserID(c); uerr == nil {
+			if role, rerr := h.members.GetRole(c.Request().Context(), wsID, userID); rerr == nil {
+				c.Set(mw.ContextKeyWorkspaceRole, role)
+			}
+		}
+	}
+	if req.ProjectID != nil && !mw.MayAccessProject(c, *req.ProjectID) {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("Project"))
+	}
+	if req.SourceTaskID != nil && !mw.MayAccessTask(c, *req.SourceTaskID) {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("Task"))
+	}
+
 	// Determine actor from context.
 	var agentID *uuid.UUID
 	if agentIDVal := c.Get("agent_id"); agentIDVal != nil {
@@ -664,7 +683,7 @@ func (h *MemoryHandler) GetByID(c echo.Context) error {
 // 20260821005), NOT off the live `memories` row via GetByID. The live row is
 // exactly what a `forget` removes, so a GetByID-based check 404s precisely for
 // the memories this endpoint exists to serve history for — the audit trail was
-// written and had no reader (b043153b). Every revision row, past or future,
+// written and had no reader. Every revision row, past or future,
 // carries the workspace it belongs to independently of whether the memory it
 // describes still exists.
 func (h *MemoryHandler) Revisions(c echo.Context) error {
@@ -948,7 +967,7 @@ func (h *MemoryHandler) Reindex(c echo.Context) error {
 
 // BackfillChunks handles POST /api/v1/memories/backfill-chunks
 // Processes up to `limit` (default 100) memories in the workspace that have no memory_chunks
-// rows yet through the chunked embed path (ADR-0002, #b052cdda). Idempotent and resumable:
+// rows yet through the chunked embed path (ADR-0002). Idempotent and resumable:
 // call repeatedly until the response's "chunked" count is 0 — a memory chunked by an earlier
 // call is excluded from the next call's selection automatically.
 //
@@ -1224,7 +1243,7 @@ func (h *MemoryHandler) requireWorkspaceID(c echo.Context, raw string) (uuid.UUI
 	return requested, nil
 }
 
-// SetDocumentIndexer wires the Mesh Docs recall index (#154450b1).
+// SetDocumentIndexer wires the Mesh Docs recall index.
 func (h *MemoryHandler) SetDocumentIndexer(x *service.DocumentIndexer) { h.docIndexer = x }
 
 func (h *MemoryHandler) docIndexScope(c echo.Context, rawWS, rawProj string) (wsID uuid.UUID, projID *uuid.UUID, err error) {

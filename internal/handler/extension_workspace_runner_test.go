@@ -108,7 +108,11 @@ func TestExtensionWorkspaceHandler_RunnerEnableCreatesMissingRow(t *testing.T) {
 		row := integ.Find(ws, "runner")
 		require.NotNil(t, row)
 		assert.True(t, row.IsActive)
-		assert.JSONEq(t, `{}`, string(row.Config))
+		// First enable stores the valid empty catalog (schema v2), not `{}`, which the strict
+		// parser rejects and so kept the forms from opening.
+		assert.JSONEq(t, string(domain.EmptyRuntimeCatalog), string(row.Config))
+		_, err := domain.ParseRuntimeCatalog(row.Config)
+		require.NoError(t, err)
 	}
 }
 

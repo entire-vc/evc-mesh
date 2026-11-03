@@ -54,12 +54,12 @@ describe("AgentRuntimeTabs", () => {
     vi.mocked(api).mockReset();
   });
 
-  it("shows profile by default and exposes all four tabs", () => {
+  it("shows profile by default and exposes all five tabs", () => {
     vi.mocked(api).mockResolvedValue(envelope());
     renderTabs();
     expect(screen.getByText("profile-content")).toBeInTheDocument();
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
-      "Profile", "Workspace access", "Execution & routes", "Observed state",
+      "Profile", "Route & runs", "Workspace access", "Execution & routes", "Observed state",
     ]);
   });
 
@@ -226,15 +226,16 @@ describe("AgentRuntimeTabs", () => {
   it("keyboard: arrows move focus and selection and wrap", async () => {
     vi.mocked(api).mockResolvedValue(envelope());
     renderTabs();
-    const [t0, t1, , t3] = screen.getAllByRole("tab") as [HTMLElement, HTMLElement, HTMLElement, HTMLElement];
+    const tabs = screen.getAllByRole("tab") as HTMLElement[];
+    const [t0, t1] = tabs as [HTMLElement, HTMLElement];
+    const last = tabs[tabs.length - 1]!;
     t0.focus();
     fireEvent.keyDown(t0, { key: "ArrowRight" });
     await waitFor(() => expect(t1).toHaveAttribute("aria-selected", "true"));
     expect(document.activeElement).toBe(t1);
-    fireEvent.keyDown(t1, { key: "ArrowRight" });
-    fireEvent.keyDown(t1.nextElementSibling as HTMLElement, { key: "ArrowRight" });
-    await waitFor(() => expect(t3).toHaveAttribute("aria-selected", "true"));
-    fireEvent.keyDown(t3, { key: "ArrowRight" });
+    for (let i = 1; i < tabs.length - 1; i++) fireEvent.keyDown(tabs[i]!, { key: "ArrowRight" });
+    await waitFor(() => expect(last).toHaveAttribute("aria-selected", "true"));
+    fireEvent.keyDown(last, { key: "ArrowRight" });
     await waitFor(() => expect(t0).toHaveAttribute("aria-selected", "true"));
     expect(t1).toHaveAttribute("tabindex", "-1");
   });

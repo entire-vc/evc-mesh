@@ -37,11 +37,16 @@ logger = logging.getLogger(__name__)
 
 # mesh-mcp stdio launch (matches ~/ClaudeCowork/<ops-repo>/.mcp.json evc-mesh entry,
 # minus the mcp-wrap stderr-logging shim which we don't need here).
-MESH_MCP_COMMAND = os.path.expanduser("~/bin/mesh-mcp")
+# CI cross-compiles the client and points MESH_MCP_BIN at it (same convention as
+# scripts/memory-bench/mesh_client_stdio.py); unset = the installed ~/bin binary.
+MESH_MCP_COMMAND = os.environ.get("MESH_MCP_BIN") or os.path.expanduser("~/bin/mesh-mcp")
 MESH_MCP_ARGS = ["--transport", "stdio"]
 
 STORE_SCOPE = "workspace"           # workspace scope + per-question tag = isolation
-SHARED_TAG = "lme-bench"            # umbrella tag on every store, for cleanup
+# umbrella tag on every store, for cleanup. The server refuses the reserved
+# `lme-bench` tag outside an is_bench workspace, so a throwaway CI workspace
+# (ci_bootstrap.py) sets BENCH_SHARED_TAG to its own slug.
+SHARED_TAG = os.environ.get("BENCH_SHARED_TAG", "lme-bench")
 TEMPORAL_INDEX_TAG = "temporal-index"  # marks the compact chronological index
 INIT_TIMEOUT = 60.0
 STORE_CONCURRENCY = 1               # sequential — reliable under #304-rebuilt mesh-mcp
@@ -229,6 +234,43 @@ def _build_temporal_index(sessions: list, dates: list) -> str:
         lines.append(f"{date} (session-{idx}): {snippet}")
 
     return "\n".join(lines)
+
+
+# ── Embed backlog drain (CI only) ─────────────────────────────────────────────
+# remember() embeds asynchronously and a recall's own query-embed queues behind every
+# pending write embed. The installed stack's TEI clears ~49 sessions in well under the
+# MCP HTTP timeout; the CPU embedder of the CI job does not, so a recall would be
+# cancelled (499) and fail open to BM25-only with an empty result. When
+# LME_EMBED_DRAIN_URL (API base URL) is set, wait until mesh_memory_embed_inflight
+# reaches 0 before searching. Timing only: the recall call itself is unchanged.
+_INFLIGHT_RE = re.compile(r"^mesh_memory_embed_inflight\s+([0-9eE+\-.]+)\s*$", re.MULTILINE)
+
+
+def _embed_inflight(base_url: str) -> float | None:
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(base_url.rstrip("/") + "/metrics", timeout=5) as r:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- loopback URL from the job's own env
+            m = _INFLIGHT_RE.search(r.read().decode("utf-8", "replace"))
+        return float(m.group(1)) if m else None
+    except Exception:  # noqa: BLE001 — unobservable == nothing to wait for, logged by caller
+        return None
+
+
+async def _drain_embed_backlog() -> None:
+    base = os.environ.get("LME_EMBED_DRAIN_URL")
+    if not base:
+        return
+    deadline = asyncio.get_event_loop().time() + float(os.environ.get("LME_EMBED_DRAIN_MAX_SECS", "900"))
+    while asyncio.get_event_loop().time() < deadline:
+        n = _embed_inflight(base)
+        if n is None:
+            logger.warning("embed drain: mesh_memory_embed_inflight not observable at %s", base)
+            return
+        if n <= 0:
+            return
+        await asyncio.sleep(1.0)
+    logger.error("embed drain: backlog still non-zero after the wait budget")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -439,7 +481,7 @@ class MeshMemoryClient:
             # Log HERE, not just raise: the real message does not survive the
             # ClientSession/stdio_client __aexit__ unwind (anyio TaskGroup collapses
             # it into "unhandled errors in a TaskGroup (1 sub-exception)" with no
-            # detail — same defect class as #4045f449/#dea7a367). This is the only
+            # detail — same defect class as an internal ticket/an internal ticket). This is the only
             # place the actual payload["error"] is still known.
             logger.error(
                 "remember failed for %s-s%d (qid=%s): %s",
@@ -495,6 +537,12 @@ class MeshMemoryClient:
         if isinstance(mem, dict):
             _log_store_id(mem.get("id", ""), self.qid, mem.get("key", ""))
             return mem.get("id")
+        guard = _content_guard_name(payload)
+        if guard:
+            # Fixed-format line the fixture audit reads as direct evidence of a policy rejection.
+            logger.warning("temporal index rejected by content policy (qid=%s): guard=%s", self.qid, guard)
+            return None
+        logger.warning("temporal index not stored for %s: %s", self.qid, str(payload)[:200])
         return None
 
     def _diag(self, query, items, mine, selected):
@@ -519,6 +567,7 @@ class MeshMemoryClient:
                     "n_items_returned": len(items),   # what the server sent back
                     "n_mine": len(mine),              # after this question's tag filter
                     "n_selected": len(selected),      # what the LLM actually got
+                    "selected_chars": [len(rec.get("content") or "") for rec in selected],
                     "sessions_selected": sorted(
                         int(t.split("-")[1]) for rec in selected for t in tags(rec)
                         if t.split("-")[1].isdigit()
@@ -528,6 +577,7 @@ class MeshMemoryClient:
             log.warning("diag write failed: %s", e)
 
     async def _search(self, session, query, top_k):
+        await _drain_embed_backlog()
         args = {
             "query": query,
             "tags_any": [self.bench_tag],      # server-side filter (verified 2026-07-04)
@@ -536,6 +586,10 @@ class MeshMemoryClient:
             "order_by": RECALL_ORDER_BY,
             "min_importance": 0,
         }
+        if os.environ.get("LME_RECALL_FULL") == "1":
+            # mesh-mcp >= the compact-recall change cuts each item at ~300 chars unless
+            # full=true; the September harness got whole sessions. Transport only.
+            args["full"] = True
         result = await session.call_tool("recall", args)
         payload = _parse_tool_payload(result)
         if isinstance(payload, dict) and payload.get("error"):

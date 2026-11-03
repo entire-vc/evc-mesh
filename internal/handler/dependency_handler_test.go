@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -48,6 +49,7 @@ func TestDependencyHandler_Create_Success(t *testing.T) {
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
+	middleware.SetProjectAccess(c, openAccess)
 	c.SetPath("/tasks/:task_id/dependencies")
 	c.SetParamNames("task_id")
 	c.SetParamValues(taskID.String())
@@ -122,6 +124,7 @@ func TestDependencyHandler_Create_ServiceError(t *testing.T) {
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
+	middleware.SetProjectAccess(c, openAccess)
 	c.SetPath("/tasks/:task_id/dependencies")
 	c.SetParamNames("task_id")
 	c.SetParamValues(taskID.String())
@@ -157,6 +160,7 @@ func TestDependencyHandler_List_Success(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
+	middleware.SetProjectAccess(c, openAccess)
 	c.SetPath("/tasks/:task_id/dependencies")
 	c.SetParamNames("task_id")
 	c.SetParamValues(taskID.String())
@@ -377,4 +381,59 @@ func TestDependencyGraph_ActorAndInputGuards(t *testing.T) {
 		require.NoError(t, h.DependencyGraph(c))
 		require.True(t, rec.Code == 400 || rec.Code == 403)
 	}
+}
+
+// Edges may cross projects. Creating one to a task the caller may not open
+// answers like a missing task, and listing an existing one does not tell the
+// caller what the far task is called or where it stands.
+func TestDependencyHandler_ProjectAccessOnFarTask(t *testing.T) {
+	taskID, mine, foreign := uuid.New(), uuid.New(), uuid.New()
+	onlyMine := middleware.ProjectAccessCheck{Task: func(id uuid.UUID) bool { return id == mine || id == taskID }}
+
+	created := false
+	mockSvc := &MockTaskDependencyService{
+		CreateFunc: func(context.Context, *domain.TaskDependency) error { created = true; return nil },
+	}
+	h, e := setupDependencyTest(mockSvc)
+	for name, access := range map[string][]middleware.ProjectAccessCheck{"foreign": {onlyMine}, "no check on the request": nil} {
+		t.Run(name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"depends_on_task_id":%q}`, foreign)
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetParamNames("task_id")
+			c.SetParamValues(taskID.String())
+			for _, a := range access {
+				middleware.SetProjectAccess(c, a)
+			}
+			require.NoError(t, h.Create(c))
+			assert.Equal(t, http.StatusNotFound, rec.Code)
+		})
+	}
+	assert.False(t, created, "an edge to an unreachable task was written")
+
+	title, status := "Foreign task", uuid.New()
+	mineTitle := "My task"
+	blocking := []domain.EnrichedTaskDependency{
+		{TaskDependency: domain.TaskDependency{ID: uuid.New(), TaskID: taskID, DependsOnTaskID: foreign}, RelatedTaskTitle: &title, RelatedTaskStatusID: &status},
+		{TaskDependency: domain.TaskDependency{ID: uuid.New(), TaskID: taskID, DependsOnTaskID: mine}, RelatedTaskTitle: &mineTitle},
+	}
+	blockedBy := []domain.EnrichedTaskDependency{
+		{TaskDependency: domain.TaskDependency{ID: uuid.New(), TaskID: foreign, DependsOnTaskID: taskID}, RelatedTaskTitle: &title},
+	}
+	mockSvc.ListByTaskBothDirectionsFunc = func(context.Context, uuid.UUID) ([]domain.EnrichedTaskDependency, []domain.EnrichedTaskDependency, error) {
+		return blocking, blockedBy, nil
+	}
+	rec := httptest.NewRecorder()
+	c := e.NewContext(httptest.NewRequest(http.MethodGet, "/", http.NoBody), rec)
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+	middleware.SetProjectAccess(c, onlyMine)
+	require.NoError(t, h.List(c))
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.NotContains(t, rec.Body.String(), title)
+	assert.NotContains(t, rec.Body.String(), status.String())
+	assert.Contains(t, rec.Body.String(), mineTitle)
+	assert.Contains(t, rec.Body.String(), foreign.String(), "the edge itself stays visible")
 }

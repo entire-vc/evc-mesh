@@ -381,6 +381,13 @@ func (s *ExtensionWorkspaceService) Connect(ctx context.Context, ws uuid.UUID, i
 	if settings == nil {
 		settings = map[string]any{}
 	}
+	if inh, ok := p.(interface {
+		InheritInstance(ctx context.Context, settings map[string]any) error
+	}); ok {
+		if ierr := inh.InheritInstance(ctx, settings); ierr != nil {
+			return nil, ierr
+		}
+	}
 	if err = p.Validate(extensions.LevelWorkspace, settings); err != nil {
 		return nil, apierror.ValidationError(map[string]string{"settings": err.Error()})
 	}
@@ -490,7 +497,7 @@ func (s *ExtensionWorkspaceService) SetEnabled(ctx context.Context, ws uuid.UUID
 			}
 			now := time.Now()
 			rowID := uuid.New()
-			created, err := s.integ.InsertIfAbsent(ctx, &domain.IntegrationConfig{ID: rowID, WorkspaceID: ws, Provider: domain.IntegrationProvider(id), Config: []byte("{}"), IsActive: true, CreatedAt: now, UpdatedAt: now})
+			created, err := s.integ.InsertIfAbsent(ctx, &domain.IntegrationConfig{ID: rowID, WorkspaceID: ws, Provider: domain.IntegrationProvider(id), Config: initialConfig(id), IsActive: true, CreatedAt: now, UpdatedAt: now})
 			if err != nil {
 				return nil, err
 			}
@@ -792,4 +799,13 @@ func RepoViews(rows []repository.VCSRepoActivity) []ExtensionRepoView {
 		out = append(out, ExtensionRepoView{Repo: r.Repo, Host: r.Host, Links: r.Links, LastEventAt: r.LastEventAt})
 	}
 	return out
+}
+
+// initialConfig is the config a connection starts with: Runner keeps a catalog
+// (schema v2), so its empty row is the valid empty catalog rather than `{}`.
+func initialConfig(id string) []byte {
+	if id == "runner" {
+		return domain.EmptyRuntimeCatalog
+	}
+	return []byte("{}")
 }

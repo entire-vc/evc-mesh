@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	githubapi "github.com/entire-vc/evc-mesh/internal/integration/github"
 	gitlabapi "github.com/entire-vc/evc-mesh/internal/integration/gitlab"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -254,8 +255,8 @@ func TestTurnCommandService_WaitForMRLinks(t *testing.T) {
 		{"URL names no MR", func(task uuid.UUID) *domain.VCSLink {
 			return &domain.VCSLink{TaskID: task, Provider: domain.VCSProviderGitLab, LinkType: domain.VCSLinkTypePR, URL: "https://git.example.com/g/p"}
 		}},
-		{"not GitLab", func(task uuid.UUID) *domain.VCSLink {
-			return &domain.VCSLink{TaskID: task, Provider: domain.VCSProviderGitHub, LinkType: domain.VCSLinkTypePR, URL: "https://github.com/g/p/pull/10"}
+		{"GitHub URL names no PR", func(task uuid.UUID) *domain.VCSLink {
+			return &domain.VCSLink{TaskID: task, Provider: domain.VCSProviderGitHub, LinkType: domain.VCSLinkTypePR, URL: "https://github.com/g/p"}
 		}},
 	}
 	for _, tc := range bad {
@@ -303,6 +304,76 @@ func TestTurnCommandService_WaitForMRLinks(t *testing.T) {
 		e.links.listErr = errors.New("db down")
 		_, err := e.svc.WaitFor(e.ctx, e.task, WaitForInput{On: "mr", Provider: ptr("gitlab"), ProjectPath: ptr("g/p"), MRIID: ptr(10), Until: ptr("merged")})
 		assert.EqualError(t, err, "db down")
+	})
+}
+
+// gitHubStub is the GitHub API boundary: "owner/repo#n" → PR state.
+type gitHubStub map[string]githubapi.PullRequestState
+
+func (g gitHubStub) GetPullRequestState(_ context.Context, owner, repo string, n int) (githubapi.PullRequestState, error) {
+	st, ok := g[fmt.Sprintf("%s/%s#%d", owner, repo, n)]
+	if !ok {
+		return githubapi.PullRequestState{}, errors.New("404")
+	}
+	return st, nil
+}
+
+func TestTurnCommandService_WaitForGitHubPR(t *testing.T) {
+	prURL := "https://github.com/entire-vc/evc-mesh/pull/813"
+	// GitLab answers "found" for everything: a GitHub PR must never reach it.
+	neverGitLab := func(context.Context, uuid.UUID) (gitlabapi.MergeRequestChecker, bool) {
+		t.Error("a GitHub PR was looked up on GitLab")
+		return nil, false
+	}
+	open := func(context.Context, uuid.UUID) (githubapi.PullRequestChecker, bool) {
+		return gitHubStub{"entire-vc/evc-mesh#813": {State: "open"}}, true
+	}
+
+	t.Run("vcs_link_id fills owner/repo and number", func(t *testing.T) {
+		e := newTurnEnv(neverGitLab)
+		link := &domain.VCSLink{ID: uuid.New(), TaskID: e.task, Provider: domain.VCSProviderGitHub, LinkType: domain.VCSLinkTypePR, URL: prURL}
+		e.links.byID[link.ID] = link
+		e.links.byTask = []domain.VCSLink{*link}
+		e.svc.WithGitHub(open)
+		_, err := e.svc.WaitFor(e.ctx, e.task, WaitForInput{On: "mr", VCSLinkID: &link.ID, Until: ptr("green")})
+		require.NoError(t, err)
+		w := e.store.committed[0].Wait
+		assert.Equal(t, "github", *w.Provider)
+		assert.Equal(t, "entire-vc/evc-mesh", *w.ProjectPath)
+		assert.Equal(t, 813, *w.MRIID)
+	})
+
+	t.Run("provider/project/iid resolves through the card's link", func(t *testing.T) {
+		e := newTurnEnv(neverGitLab) // no GitHub client: the link is the evidence
+		link := domain.VCSLink{ID: uuid.New(), TaskID: e.task, Provider: domain.VCSProviderGitHub, LinkType: domain.VCSLinkTypePR, URL: prURL, Status: domain.VCSLinkStatusOpen}
+		e.links.byTask = []domain.VCSLink{link}
+		_, err := e.svc.WaitFor(e.ctx, e.task, WaitForInput{On: "mr", Provider: ptr("github"), ProjectPath: ptr("entire-vc/evc-mesh"), MRIID: ptr(813), Until: ptr("green")})
+		require.NoError(t, err)
+		assert.Equal(t, link.ID, *e.store.committed[0].Wait.VCSLinkID)
+	})
+
+	t.Run("live GitHub answers without any link", func(t *testing.T) {
+		e := newTurnEnv(neverGitLab)
+		e.svc.WithGitHub(open)
+		_, err := e.svc.WaitFor(e.ctx, e.task, WaitForInput{On: "mr", Provider: ptr("github"), ProjectPath: ptr("entire-vc/evc-mesh"), MRIID: ptr(813), Until: ptr("green")})
+		require.NoError(t, err)
+	})
+
+	t.Run("merged PR is already met", func(t *testing.T) {
+		e := newTurnEnv(neverGitLab)
+		e.svc.WithGitHub(func(context.Context, uuid.UUID) (githubapi.PullRequestChecker, bool) {
+			return gitHubStub{"entire-vc/evc-mesh#813": {Merged: true, State: "closed"}}, true
+		})
+		_, err := e.svc.WaitFor(e.ctx, e.task, WaitForInput{On: "mr", Provider: ptr("github"), ProjectPath: ptr("entire-vc/evc-mesh"), MRIID: ptr(813), Until: ptr("merged")})
+		assert.Equal(t, domain.CodeAlreadyMet, outcomeCode(t, err))
+	})
+
+	t.Run("unknown PR and no link is refused", func(t *testing.T) {
+		e := newTurnEnv(neverGitLab)
+		e.svc.WithGitHub(func(context.Context, uuid.UUID) (githubapi.PullRequestChecker, bool) { return gitHubStub{}, true })
+		_, err := e.svc.WaitFor(e.ctx, e.task, WaitForInput{On: "mr", Provider: ptr("github"), ProjectPath: ptr("entire-vc/evc-mesh"), MRIID: ptr(813), Until: ptr("green")})
+		assert.Equal(t, domain.CodeInvalidTarget, outcomeCode(t, err))
+		assert.Empty(t, e.store.committed)
 	})
 }
 

@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifact_id": {
+      "const": 424242
+    },
+    "candidate": {
+      "const": "afcb5827df1d68dcb1d679b19ef3c3aec90f1d6c"
+    },
+    "capability": {
+      "const": "host_local_qa_assignment_v1"
+    },
+    "expected_admission_revision": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "expires": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "operation_manifest_sha256": {
+      "const": "f0dfe0c4d4c3bbd7f2f010ab89e8e82e71aa61cb5f6730eda30f459a1f87e34b"
+    },
+    "policy_sha256": {
+      "const": "8bfef84ce6a570ed99d8f24eac32d836a2fd78ab12b459b6c24917aa754652ad"
+    },
+    "producer": {
+      "additionalProperties": false,
+      "properties": {
+        "producer_pid": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "producer_started": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "terminal_session_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "transport": {
+          "const": "iterm"
+        },
+        "tty": {
+          "pattern": "^/dev/ttys[0-9A-Za-z]{1,16}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "producer_pid",
+        "producer_started",
+        "terminal_session_id",
+        "transport",
+        "tty"
+      ],
+      "type": "object"
+    },
+    "qa_package_sha256": {
+      "const": "78b1bfa7797bc0a25a40364eb76facfe20ecd35de88ad7c9c88fdc8b25cc3a3e"
+    },
+    "receiver_id": {
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "type": "string"
+    },
+    "request_id": {
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "source_task_id": {
+      "const": "33333333-3333-4333-8333-333333333333"
+    },
+    "target": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "const": "11111111-1111-4111-8111-111111111111"
+        },
+        "host_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "hostname": {
+          "const": "example.invalid"
+        },
+        "runner_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "session_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspace_id": {
+          "const": "22222222-2222-4222-8222-222222222222"
+        }
+      },
+      "required": [
+        "agent_id",
+        "host_id",
+        "hostname",
+        "runner_id",
+        "session_id",
+        "workspace_id"
+      ],
+      "type": "object"
+    },
+    "text": {
+      "const": "Local QA fixture v1.\nSynthetic data for exact-text, identity, expiry and revocation validation.\nNo commands or operational authority are contained in this fixture.\n"
+    },
+    "text_sha256": {
+      "const": "762203baafebca0b17c46b4dda2e63b4fd1f1ae02fa74e089dd1e43bc3c47d8c"
+    }
+  },
+  "required": [
+    "artifact_id",
+    "candidate",
+    "capability",
+    "expected_admission_revision",
+    "expires",
+    "operation_manifest_sha256",
+    "policy_sha256",
+    "producer",
+    "qa_package_sha256",
+    "receiver_id",
+    "request_id",
+    "schema_version",
+    "source_task_id",
+    "target",
+    "text",
+    "text_sha256"
+  ],
+  "title": "Host-local QA assignment v1 sender envelope",
+  "type": "object"
+}

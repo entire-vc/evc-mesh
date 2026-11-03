@@ -106,6 +106,11 @@ func newRuntimeHTTP(t *testing.T) *runtimeHTTP {
 	// Identity headers stand in for the auth middleware (tests only).
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			// Project access is the guard's business; these tests are about the runtime.
+			mw.SetProjectAccess(c, mw.ProjectAccessCheck{
+				Task:    func(uuid.UUID) bool { return true },
+				Project: func(uuid.UUID) bool { return true },
+			})
 			if v := c.Request().Header.Get("X-Test-User"); v != "" {
 				c.Set(mw.ContextKeyUserID, uuid.MustParse(v))
 			}
@@ -125,6 +130,9 @@ func newRuntimeHTTP(t *testing.T) *runtimeHTTP {
 	e.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/desired", h.Desired)
 	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/quota-observations", h.ReportQuota)
 	e.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/quota-observations", h.QuotaObservations)
+	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/execution-instances", h.RegisterExecutionInstance)
+	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/execution-reports", h.ReportExecutions)
+	e.GET("/workspaces/:ws_id/agent-executions", h.AgentExecutions)
 	e.GET("/workspaces/:ws_id/runtime/bindings/:binding_id", h.Binding)
 	e.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/admission", h.Admit)
 	e.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/policy", h.SetPolicy)

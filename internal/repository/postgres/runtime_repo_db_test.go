@@ -722,3 +722,52 @@ func clearInstalledRunner(t *testing.T, db *sqlx.DB) {
 		}
 	})
 }
+
+// A Runner switched on before any save holds `{}` and no revision. The forms must open
+// on it (an empty valid catalog), the first save at if_revision 0 must go through and
+// start the history, and an existing catalog must never be replaced by the empty one.
+func TestRuntimeRepoFirstEnableOpensEmptyCatalogAndKeepsCAS(t *testing.T) {
+	f := seedRuntime(t)
+	ctx := context.Background()
+	_, err := f.db.ExecContext(ctx, `INSERT INTO integration_configs(id,workspace_id,provider,config,is_active) VALUES ($1,$2,'runner','{}'::jsonb,true)`, uuid.New(), f.owner)
+	require.NoError(t, err)
+
+	snap, err := f.repo.Inventory(ctx, f.owner, f.ownerActor)
+	require.NoError(t, err, "a first-enabled Runner must read as an empty catalog, not fail")
+	require.Equal(t, "managed", snap.Mode)
+	require.True(t, snap.Enabled)
+	require.EqualValues(t, 0, snap.Revision)
+	require.Empty(t, snap.Catalog.Accounts)
+
+	first, err := f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
+	require.NoError(t, err, "the first save runs against revision 0")
+	require.EqualValues(t, 1, first.Revision)
+	_, err = f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
+	require.Error(t, err, "a stale if_revision must still conflict")
+
+	again, err := f.repo.Inventory(ctx, f.owner, f.ownerActor)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, again.Revision)
+	require.NotEmpty(t, again.Catalog.Accounts, "the saved catalog is what is read, never the empty one")
+
+	_, err = f.db.ExecContext(ctx, `UPDATE integration_configs SET config='{"bogus":1}'::jsonb WHERE workspace_id=$1`, f.owner)
+	require.NoError(t, err)
+	_, err = f.repo.Inventory(ctx, f.owner, f.ownerActor)
+	require.Error(t, err, "a corrupted catalog still fails loudly")
+}
+
+// `{}` after a save is corruption, not a first enable: it must not be read as an empty
+// catalog (which the UI could then save over the history).
+func TestRuntimeRepoEmptyConfigAfterSaveStaysCorrupted(t *testing.T) {
+	f := seedRuntime(t)
+	ctx := context.Background()
+	_, err := f.db.ExecContext(ctx, `INSERT INTO integration_configs(id,workspace_id,provider,config,is_active) VALUES ($1,$2,'runner','{}'::jsonb,true)`, uuid.New(), f.owner)
+	require.NoError(t, err)
+	_, err = f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
+	require.NoError(t, err)
+
+	_, err = f.db.ExecContext(ctx, `UPDATE integration_configs SET config='{}'::jsonb WHERE workspace_id=$1`, f.owner)
+	require.NoError(t, err)
+	_, err = f.repo.Inventory(ctx, f.owner, f.ownerActor)
+	require.Error(t, err, "revision>0 with config={} must stay a detectable corruption")
+}

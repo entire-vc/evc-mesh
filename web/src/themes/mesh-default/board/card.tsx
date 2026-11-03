@@ -147,9 +147,9 @@ function rowField(f: FieldDescriptor, task: TaskData): ReactNode {
   switch (f.key) {
     case "labels":
       return task.labels.length > 0 ? (
-        <div key="labels" className="mt-1.5 flex flex-wrap items-center gap-1">
+        <div key="labels" className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1">
           {task.labels.map((label) => (
-            <Badge key={label} variant="outline" className="text-[10px]">
+            <Badge key={label} variant="outline" title={label} tabIndex={0} className="block max-w-full truncate text-[10px]">
               {label}
             </Badge>
           ))}

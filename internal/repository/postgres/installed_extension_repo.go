@@ -3,7 +3,9 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
@@ -92,22 +94,126 @@ func (r *InstalledExtensionRepo) InsertCatalog(ctx context.Context, ext *domain.
 	return err
 }
 
-// UpdateCatalog moves a source=catalog row to a new release; the version it
-// leaves is kept in previous_version. apierror.NotFound when no such row.
-func (r *InstalledExtensionRepo) UpdateCatalog(ctx context.Context, ext *domain.InstalledExtension) error {
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE installed_extensions SET
-			previous_version = version, version = $2, manifest = $3, commit_sha = $4,
-			artifact_sha256 = $5, trust_level = $6, updated_at = now()
-		WHERE extension_id = $1 AND source = 'catalog'`,
-		ext.ExtensionID, ext.Version, []byte(ext.Manifest), ext.CommitSHA, ext.ArtifactSHA256, string(ext.TrustLevel))
+// UpdateCatalog moves a source=catalog row to a new release while it is still
+// what g names. In the same
+// transaction the release it leaves is sealed into previous_snapshot, so a
+// rollback can restore all of it. apierror.NotFound when no such row.
+func (r *InstalledExtensionRepo) UpdateCatalog(ctx context.Context, ext *domain.InstalledExtension, g domain.CatalogUpdateGuard) error {
+	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	defer func() { _ = tx.Rollback() }()
+	var cur domain.InstalledExtension
+	err = tx.GetContext(ctx, &cur, `SELECT `+installedExtensionCols+` FROM installed_extensions WHERE extension_id = $1 AND source = 'catalog' FOR UPDATE`, ext.ExtensionID)
+	if errors.Is(err, sql.ErrNoRows) {
 		return apierror.NotFound("catalog extension")
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	// The updater read the row some time ago (and fetched an artifact since):
+	// a rollback or another update in between makes this one stale.
+	if cur.Version != g.FromVersion || cur.CommitSHA != g.FromCommitSHA {
+		return apierror.Conflict("the extension changed while the update was prepared")
+	}
+	if g.Auto {
+		var skipped string
+		err = tx.GetContext(ctx, &skipped, `SELECT skipped_commit_sha FROM installed_extensions WHERE extension_id = $1`, ext.ExtensionID)
+		if err != nil {
+			return err
+		}
+		if skipped != "" && skipped == ext.CommitSHA {
+			return apierror.Conflict("that release was rolled back; it is not applied automatically")
+		}
+	}
+	snap := domain.CatalogSnapshot{
+		Version: cur.Version, Manifest: cur.Manifest, CommitSHA: cur.CommitSHA, ArtifactSHA256: cur.ArtifactSHA256,
+		TrustLevel: string(cur.TrustLevel), Source: string(cur.Source),
+		SupersededVersion: ext.Version, SupersededCommit: ext.CommitSHA, CapturedAt: time.Now().UTC(),
+	}
+	snap.Seal()
+	raw, err := json.Marshal(snap)
+	if err != nil {
+		return err
+	}
+	// skipped_commit_sha is cleared: an explicit update is the admin's choice
+	// to take that release again.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE installed_extensions SET
+			previous_version = version, previous_snapshot = $7, skipped_commit_sha = '',
+			version = $2, manifest = $3, commit_sha = $4,
+			artifact_sha256 = $5, trust_level = $6, updated_at = now()
+		WHERE extension_id = $1 AND source = 'catalog'`,
+		ext.ExtensionID, ext.Version, []byte(ext.Manifest), ext.CommitSHA, ext.ArtifactSHA256, string(ext.TrustLevel), raw); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// GetCatalogSnapshot returns the sealed snapshot of a source=catalog row, nil
+// when there is none (never updated, rolled back already, or a legacy row that
+// only has previous_version). An unreadable snapshot is returned as an error.
+func (r *InstalledExtensionRepo) GetCatalogSnapshot(ctx context.Context, extensionID string) (*domain.CatalogSnapshot, error) {
+	var raw []byte
+	err := r.db.GetContext(ctx, &raw, `SELECT previous_snapshot FROM installed_extensions WHERE extension_id = $1 AND source = 'catalog'`, extensionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, apierror.NotFound("catalog extension")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var s domain.CatalogSnapshot
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// SkippedCommit is the commit an admin rolled back from; "" when none.
+func (r *InstalledExtensionRepo) SkippedCommit(ctx context.Context, extensionID string) (string, error) {
+	var sha string
+	err := r.db.GetContext(ctx, &sha, `SELECT skipped_commit_sha FROM installed_extensions WHERE extension_id = $1`, extensionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return sha, err
+}
+
+// RollbackCatalog restores the snapshot over the row and writes journal, all
+// in one transaction. The UPDATE only matches while the row is still the
+// release the guard names, holds exactly that snapshot, and is not blocked, so
+// a concurrent update, rollback or block makes it a 409 and changes nothing.
+// The commit rolled back from is remembered in skipped_commit_sha.
+func (r *InstalledExtensionRepo) RollbackCatalog(ctx context.Context, extensionID string, g domain.CatalogRollbackGuard, snap domain.CatalogSnapshot, journal *domain.InstanceExtensionJournalEntry) error {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, `
+		UPDATE installed_extensions SET
+			skipped_commit_sha = commit_sha,
+			version = $5, manifest = $6, commit_sha = $7, artifact_sha256 = $8, trust_level = $9,
+			previous_version = '', previous_snapshot = NULL,
+			updated_at = now()
+		WHERE extension_id = $1 AND source = 'catalog' AND NOT blocked
+		  AND version = $2 AND commit_sha = $3 AND previous_snapshot->>'digest' = $4`,
+		extensionID, g.Version, g.CommitSHA, g.SnapshotDigest,
+		snap.Version, []byte(snap.Manifest), snap.CommitSHA, snap.ArtifactSHA256, snap.TrustLevel)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return apierror.Conflict("the extension changed or has nothing to roll back to")
+	}
+	if err := appendJournal(ctx, tx, journal); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // CountActiveConnections returns, per extension id, how many workspaces use it:

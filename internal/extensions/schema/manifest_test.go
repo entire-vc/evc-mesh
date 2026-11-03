@@ -15,7 +15,7 @@ import (
 
 // manifestV1SHA256 is the digest of manifest.v1.json fixed by the extensions
 // manifest ADR. The Spark side pins the same value.
-const manifestV1SHA256 = "06c20b0b703a9fa12d09008d19d8c8881ad0335285a46fa1b34c74a72587aad4"
+const manifestV1SHA256 = "ed1e1901417676bd13b27bc4e512fb15faf2d318e628c2a03ef8339d6fc2e0ed"
 
 const schemaFile = "manifest.v1.json"
 
@@ -122,10 +122,10 @@ func TestManifestV1_ActionCapabilities(t *testing.T) {
 		require.NoError(t, err)
 		return sch.Validate(doc)
 	}
-	for _, ok := range []string{"agent_key:rotate", "ext_token:self_rotate"} {
+	for _, ok := range []string{"agent_key:rotate", "ext_token:self_rotate", "members:authorize"} {
 		require.NoError(t, with(ok), ok)
 	}
-	for _, bad := range []string{"agent_key:read", "agent_keys:rotate", "ext_token:rotate", "ext_token:self_rotate:x", "agent_key:rotate "} {
+	for _, bad := range []string{"agent_key:read", "agent_keys:rotate", "ext_token:rotate", "ext_token:self_rotate:x", "agent_key:rotate ", "members:authorise", "users:authorize"} {
 		require.Error(t, with(bad), bad)
 	}
 }

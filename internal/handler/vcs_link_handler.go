@@ -410,7 +410,10 @@ func (h *VCSLinkHandler) PatchShipSHAByURL(c echo.Context) error {
 	if err = json.NewDecoder(c.Request().Body).Decode(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("body must be a JSON object"))
 	}
-	links, err := h.vcsService.PatchShipSHAByURL(c.Request().Context(), wsID, req.URL, req.ShipSHA)
+	// The route names no task, so the project guard on task paths cannot see the
+	// links found by url: each one must be on a task the caller may reach.
+	mayAccess := func(taskID uuid.UUID) bool { return mw.MayAccessTask(c, taskID) }
+	links, err := h.vcsService.PatchShipSHAByURL(c.Request().Context(), wsID, req.URL, req.ShipSHA, mayAccess)
 	if err != nil {
 		return handleError(c, err)
 	}

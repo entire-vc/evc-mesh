@@ -172,11 +172,20 @@ func (s *Server) screen(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "task screen needs a task", http.StatusBadRequest)
 		return
 	}
+	isProject := r.URL.Path == PathUIProject || strings.HasPrefix(r.URL.Path, PathUIProject+"/")
+	if isProject && ctx.ProjectID == "" {
+		http.Error(w, "project screen needs a project", http.StatusBadRequest)
+		return
+	}
+	page := screenPage
+	if isProject {
+		page = projectPage
+	}
 	w.Header().Set("Content-Security-Policy", "frame-ancestors "+s.UI.MeshOrigin)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = screenPage.Execute(w, map[string]any{
-		"Ctx": ctx, "MeshOrigin": s.UI.MeshOrigin, "Roles": strings.Join(ctx.Roles, ", "),
+	_ = page.Execute(w, map[string]any{
+		"Ctx": ctx, "MeshOrigin": s.UI.MeshOrigin, "Base": PathUIProject, "Roles": strings.Join(ctx.Roles, ", "),
 	})
 }
 
@@ -198,6 +207,84 @@ var screenPage = template.Must(template.New("screen").Parse(`<!doctype html>
   });
   window.parent.postMessage({ type: "mesh.ready" }, mesh);
   window.parent.postMessage({ type: "mesh.resize", height: document.body.scrollHeight }, mesh);
+</script>
+</body></html>
+`))
+
+// projectPage is the project.view screen: two sections (/overview, /reports
+// with a #weekly or #monthly hash) that switch without reloading the frame and
+// tell Mesh through mesh.state, so the Mesh address follows. The frame opens
+// at the section named in its own address (a reload or a copied link).
+var projectPage = template.Must(template.New("project").Parse(`<!doctype html>
+<html><head><meta charset="utf-8"><title>Reference extension: project</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 0; padding: 16px; max-width: 720px; }
+  nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+  button { font: inherit; padding: 8px 12px; min-height: 40px; cursor: pointer; }
+  button[aria-current="true"] { font-weight: 600; outline: 2px solid currentColor; }
+  section { border: 1px solid #ccc; border-radius: 6px; padding: 12px 16px; margin: 12px 0; }
+  code { overflow-wrap: anywhere; }
+</style></head>
+<body>
+<h1 data-testid="title">Reference project{{if .Ctx.Email}} · {{.Ctx.Email}}{{end}}</h1>
+<p>Workspace <code data-testid="workspace">{{.Ctx.WorkspaceID}}</code>,
+   project <code data-testid="project">{{.Ctx.ProjectID}}</code></p>
+<p>Frame marker <code data-testid="marker" id="marker"></code> (changes only when the frame reloads)</p>
+<nav aria-label="Sections">
+  <button data-go="/overview" data-replace="0">Overview</button>
+  <button data-go="/reports#weekly" data-replace="0">Reports: weekly</button>
+  <button data-go="/reports#monthly" data-replace="0">Reports: monthly</button>
+  <button data-go="/reports#monthly" data-replace="1">Replace with monthly</button>
+</nav>
+<section id="body" aria-live="polite"></section>
+<script>
+  const mesh = {{.MeshOrigin}};
+  const base = {{.Base}};
+  const marker = Math.random().toString(36).slice(2, 10);
+  document.getElementById("marker").textContent = marker;
+  const bodies = {
+    "/overview": ["Overview", "Synthetic project overview: 3 open items, 0 blockers."],
+    "/reports#weekly": ["Weekly report", "Synthetic weekly report: week 44, 12 items closed."],
+    "/reports#monthly": ["Monthly report", "Synthetic monthly report: October, 48 items closed."],
+  };
+  function current() {
+    let p = location.pathname.startsWith(base) ? location.pathname.slice(base.length) : "";
+    if (p === "" || p === "/") p = "/overview";
+    if (p === "/reports" && !location.hash) return "/reports#weekly";
+    return p + location.hash;
+  }
+  function show(section) {
+    const [title, text] = bodies[section] || bodies["/overview"];
+    const el = document.getElementById("body");
+    el.dataset.section = section;
+    el.innerHTML = "";
+    const h = document.createElement("h2"); h.textContent = title; h.dataset.testid = "section-title";
+    const t = document.createElement("p"); t.textContent = text; t.dataset.testid = "section-text";
+    const s = document.createElement("p"); s.append("Section: ");
+    const c = document.createElement("code"); c.dataset.testid = "section"; c.textContent = section; s.append(c);
+    el.append(h, t, s);
+    document.querySelectorAll("button[data-go]").forEach((b) => b.setAttribute("aria-current", String(b.dataset.go === section && b.dataset.replace === "0")));
+  }
+  document.querySelectorAll("button[data-go]").forEach((b) => b.addEventListener("click", () => {
+    show(b.dataset.go);
+    window.parent.postMessage({ type: "mesh.state", path: b.dataset.go, replace: b.dataset.replace === "1" }, mesh);
+  }));
+  show(current());
+  let renew;
+  window.addEventListener("message", (e) => {
+    if (e.origin !== mesh || e.source !== window.parent || !e.data || e.data.type !== "mesh.context") return;
+    // The address moved without a click here (back/forward, a link): context.path is the section to show.
+    if (typeof e.data.path === "string") {
+      let next = e.data.path === "" || e.data.path === "/" ? "/overview" : e.data.path;
+      if (next === "/reports") next = "/reports#weekly";
+      if (next !== document.getElementById("body").dataset.section) show(next);
+    }
+    clearTimeout(renew);
+    const left = Date.parse(e.data.expires_at) - Date.now();
+    renew = setTimeout(() => window.parent.postMessage({ type: "mesh.ready" }, mesh), Math.max(left - 10000, 1000));
+  });
+  window.parent.postMessage({ type: "mesh.ready" }, mesh);
+  window.parent.postMessage({ type: "mesh.app-ready" }, mesh);
 </script>
 </body></html>
 `))

@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { CreateProjectDialog } from "@/components/create-project-dialog";
 import { apiErrorMessage } from "@/lib/api-error";
+import { api } from "@/lib/api";
 import { useSidebarItems } from "@/lib/extension-slots";
 import "@/core/slots/mesh-default";
 import { resolveSlotView, useSlotRegistryVersion, useThemeSettings, withSlotFallback } from "@/core/slots/registry";
@@ -74,6 +75,26 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   useEffect(() => {
     fetchCapabilities();
   }, [fetchCapabilities]);
+
+  // Effective Spark availability is per workspace and comes from the server's
+  // resolver (the one the Spark routes use); it wins over the instance-level
+  // /api/version flag, which stays the fallback until/unless it answers.
+  const [wsSpark, setWsSpark] = useState<boolean | null>(null);
+  const sparkWsId = currentWorkspace?.id;
+  useEffect(() => {
+    setWsSpark(null);
+    if (!sparkWsId) return;
+    let stale = false;
+    api<{ effective?: { provider: string; effective_enabled: boolean }[] }>(
+      `/api/v1/workspaces/${sparkWsId}/integrations`,
+    )
+      .then((r) => stale || setWsSpark(r.effective?.find((c) => c.provider === "spark")?.effective_enabled ?? null))
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [sparkWsId]);
+  const sparkVisible = wsSpark ?? sparkEnabled;
 
   const handleWsNameChange = useCallback((value: string) => {
     setWsName(value);
@@ -172,8 +193,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   core("team", "tools", "Bot", t("nav.team"), wsHref("org-chart"), path.endsWith("/org-chart"));
   core("memory", "tools", "Brain", t("nav.memory"), wsHref("memories"), path.endsWith("/memories"));
   core("sessions", "tools", "MonitorDot", t("nav.sessions"), wsHref("sessions"), path.endsWith("/sessions"));
-  // Hidden when the server has MESH_SPARK_ENABLED=false.
-  if (sparkEnabled) core("spark", "tools", "Sparkles", t("nav.spark"), wsHref("spark"), path.endsWith("/spark"));
+  // Workspace integration decides when it exists; otherwise the instance flag.
+  if (sparkVisible) core("spark", "tools", "Sparkles", t("nav.spark"), wsHref("spark"), path.endsWith("/spark"));
   core("analytics", "tools", "BarChart2", t("nav.analytics"), wsHref("analytics"), path.endsWith("/analytics"));
   core("events", "tools", "Activity", t("nav.events"), wsHref("events"), path.endsWith("/events"));
   core("extensions", "tools", "Plug", t("nav.extensions"), wsHref("extensions"), path.endsWith("/extensions"));

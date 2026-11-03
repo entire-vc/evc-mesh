@@ -302,6 +302,15 @@ func (f *fakeCatalogInstaller) UpdateAll(context.Context, *uuid.UUID) ([]repoins
 	return []repoinstall.UpdateResult{{ExtensionID: "cat-ext", Outcome: repoinstall.OutcomeUpdated, NewCapabilities: []string{}}}, nil
 }
 
+func (f *fakeCatalogInstaller) Rollback(_ context.Context, _ *uuid.UUID, id string) (*domain.InstalledExtension, error) {
+	f.id = id
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &domain.InstalledExtension{ExtensionID: id, Version: "1.0.0", Source: domain.ExtensionSourceCatalog,
+		TrustLevel: "verified", CommitSHA: "abc", ArtifactSHA256: "dead"}, nil
+}
+
 func TestRepoInstallHandlerCatalogUpdates(t *testing.T) {
 	f := newRepoFixture(t, true)
 	fake := &fakeCatalogInstaller{}
@@ -320,6 +329,32 @@ func TestRepoInstallHandlerCatalogUpdates(t *testing.T) {
 	rec = repoCall(t, f.h.UpdateAll, ``, "", false)
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), `"cat-ext"`)
+}
+
+func TestRepoInstallHandlerCatalogRollback(t *testing.T) {
+	f := newRepoFixture(t, true)
+
+	// without a catalog installer a catalog id is unknown here: the 404 this
+	// route answered for every catalog install before it learned the snapshot
+	assert.Equal(t, http.StatusNotFound, repoCall(t, f.h.Rollback, ``, "cat-ext", false).Code)
+
+	fake := &fakeCatalogInstaller{}
+	f.h.WithCatalogInstall(fake)
+	rec := repoCall(t, f.h.Rollback, ``, "cat-ext", false)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, "cat-ext", fake.id)
+	for _, want := range []string{`"extension_id":"cat-ext"`, `"version":"1.0.0"`, `"commit_sha":"abc"`, `"artifact_sha256":"dead"`, `"source":"catalog"`, `"trust_level":"verified"`} {
+		assert.Contains(t, rec.Body.String(), want)
+	}
+
+	fake.err = apierror.Conflict("nothing to roll back to")
+	assert.Equal(t, http.StatusConflict, repoCall(t, f.h.Rollback, ``, "cat-ext", false).Code)
+
+	// only the human instance admin may roll back, catalog or not
+	assert.Equal(t, http.StatusForbidden, repoCall(t, f.h.Rollback, ``, "cat-ext", true).Code, "agent key refused")
+	denied := newRepoFixture(t, false)
+	denied.h.WithCatalogInstall(&fakeCatalogInstaller{})
+	assert.Equal(t, http.StatusForbidden, repoCall(t, denied.h.Rollback, ``, "cat-ext", false).Code, "non-admin refused")
 }
 
 func TestRepoInstallHandlerCatalogSource(t *testing.T) {

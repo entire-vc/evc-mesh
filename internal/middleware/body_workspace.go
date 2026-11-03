@@ -94,6 +94,20 @@ func RequireBodyWorkspace(db *sqlx.DB) echo.MiddlewareFunc {
 			// guard rather than with the body.
 			c.Set(ContextKeyWorkspaceID, wsID)
 			c.Set(ContextKeyWorkspaceSource, WorkspaceSourceParam)
+			// The project rule on body ids needs the user's role in this
+			// workspace for the owner/admin bypass, as the path guard supplies.
+			if !IsAgent(c) && !IsExtension(c) {
+				if userID, uerr := GetUserID(c); uerr == nil {
+					var role string
+					if rerr := db.QueryRowContext(req.Context(),
+						`SELECT wm.role FROM workspace_members wm
+						 JOIN workspaces w ON w.id = wm.workspace_id
+						 WHERE wm.workspace_id = $1 AND wm.user_id = $2 AND w.deleted_at IS NULL`,
+						wsID, userID).Scan(&role); rerr == nil {
+						c.Set(ContextKeyWorkspaceRole, role)
+					}
+				}
+			}
 			return next(c)
 		}
 	}
@@ -133,7 +147,7 @@ func bodyTenantWorkspace(c echo.Context, db *sqlx.DB, wsID, projID *uuid.UUID) (
 // same from inventing a weaker version of it.
 //
 // For agents this is the same equality check as RequireWorkspaceMember's agent
-// branch, and for the same reason (#7661fc5d) — "member of wsID via some grant"
+// branch, and for the same reason — "member of wsID via some grant"
 // is not "this request's key is the one scoped to wsID". See
 // GetAgentAuthWorkspaceID's doc comment.
 func ActorMayAccessWorkspace(c echo.Context, db *sqlx.DB, wsID uuid.UUID) bool {

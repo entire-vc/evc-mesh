@@ -203,6 +203,9 @@ type RateLimitConfig struct {
 	// rather than riding on APIRPM. Unset → follows APIRPM (the value both
 	// endpoints used before this setting existed).
 	OAuthTokenRPM int
+	// ExtAuthorizeRPM is the per-extension-actor budget for POST
+	// /ext/me/authorize.
+	ExtAuthorizeRPM int
 	// TrustedProxies is a list of CIDR ranges, in addition to the
 	// loopback/link-local/private-net ranges Echo trusts by default, whose
 	// X-Forwarded-For entries are trusted when resolving the client's real
@@ -455,6 +458,7 @@ func Load() *Config {
 			RefreshRPM:        getEnvInt("MESH_RATE_LIMIT_REFRESH_RPM", 60),
 			APIRPM:            getEnvInt("MESH_RATE_LIMIT_API_RPM", 600),
 			OAuthTokenRPM:     getEnvInt("MESH_RATE_LIMIT_OAUTH_TOKEN_RPM", getEnvInt("MESH_RATE_LIMIT_API_RPM", 600)),
+			ExtAuthorizeRPM:   getEnvInt("MESH_RATE_LIMIT_EXT_AUTHORIZE_RPM", 300),
 			TrustedProxies:    getEnvStringSlice("MESH_TRUSTED_PROXIES", nil),
 			AuthMaxFailures:   getEnvInt("MESH_RATE_LIMIT_AUTH_MAX_FAILURES", 10),
 			AuthLockoutWindow: getEnvDuration("MESH_RATE_LIMIT_AUTH_LOCKOUT_WINDOW", 15*time.Minute),

@@ -64,3 +64,19 @@ func TestHandleError_AdHocShapesCarryErrorCode(t *testing.T) {
 		})
 	}
 }
+
+// The quoted FYI prefix in the mention-handoff message is escaped, so a slug
+// carrying a quote or backslash cannot break out of the quoted segment.
+func TestHandleError_MentionHandoffQuotesPrefix(t *testing.T) {
+	for _, tc := range []struct{ slug, want string }{
+		{"bob", `prefix "fyi: @bob".`},
+		{`b"o\b`, `prefix "fyi: @b\"o\\b".`},
+	} {
+		rec := httptest.NewRecorder()
+		c := echo.New().NewContext(httptest.NewRequest(http.MethodPost, "/", http.NoBody), rec)
+		require.NoError(t, handleError(c, &service.MentionHandoffRequiredError{TaskID: uuid.New(), Slugs: []string{tc.slug}}))
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		assert.Contains(t, body["message"], tc.want)
+	}
+}

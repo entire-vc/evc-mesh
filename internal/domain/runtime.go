@@ -213,6 +213,21 @@ var catalogSchema = sync.OnceValues(func() (*jsonschema.Schema, error) {
 
 var ErrRuntimeInput = errors.New("invalid runtime request")
 
+// EmptyRuntimeCatalog is the valid catalog (schema v2) with no resources: what a
+// Runner connection holds before its first save.
+var EmptyRuntimeCatalog = []byte(`{"schema_version":2,"controllers":{},"accounts":{},"pools":{},"profiles":{},"bindings":{}}`)
+
+// NormalizeRuntimeConfig maps a never-saved connection config (empty or `{}`, as the
+// first enable and the first save create it) to the empty valid catalog. Any other
+// content, valid or not, is returned unchanged: an existing catalog is never replaced
+// and a corrupted one still fails loudly.
+func NormalizeRuntimeConfig(config []byte) []byte {
+	if t := bytes.TrimSpace(config); len(t) == 0 || bytes.Equal(t, []byte("{}")) {
+		return EmptyRuntimeCatalog
+	}
+	return config
+}
+
 var runtimeRefPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$`)
 
 func ValidRuntimeRef(value string) bool { return runtimeRefPattern.MatchString(value) }
@@ -225,12 +240,19 @@ func ValidRuntimeVersion(value string) bool { return runtimeVersionPattern.Match
 
 // DecodeRuntimeJSON rejects duplicate keys, unknown fields and trailing documents.
 // Error text deliberately excludes submitted values (including accidental secrets).
-func DecodeRuntimeJSON(data []byte, target any) error {
+func DecodeRuntimeJSON(data []byte, target any) error { return decodeStrictJSON(data, target, false) }
+
+// DecodeExecutionJSON is DecodeRuntimeJSON for the execution observation
+// wire, where null is a meaningful value (unknown model, no task): duplicate
+// keys, unknown fields and trailing documents are still refused.
+func DecodeExecutionJSON(data []byte, target any) error { return decodeStrictJSON(data, target, true) }
+
+func decodeStrictJSON(data []byte, target any, allowNull bool) error {
 	if len(data) > 1<<20 {
 		return ErrRuntimeInput
 	}
 	d := json.NewDecoder(bytes.NewReader(data))
-	if err := runtimeJSONValue(d, 0); err != nil {
+	if err := runtimeJSONValue(d, 0, allowNull); err != nil {
 		return ErrRuntimeInput
 	}
 	if _, err := d.Token(); err != io.EOF {
@@ -244,12 +266,12 @@ func DecodeRuntimeJSON(data []byte, target any) error {
 	return nil
 }
 
-func runtimeJSONValue(d *json.Decoder, depth int) error {
+func runtimeJSONValue(d *json.Decoder, depth int, allowNull bool) error {
 	if depth > 32 {
 		return ErrRuntimeInput
 	}
 	t, err := d.Token()
-	if err != nil || t == nil {
+	if err != nil || (t == nil && !allowNull) {
 		return ErrRuntimeInput
 	}
 	switch t {
@@ -265,7 +287,7 @@ func runtimeJSONValue(d *json.Decoder, depth int) error {
 				return ErrRuntimeInput
 			}
 			seen[name] = true
-			e = runtimeJSONValue(d, depth+1)
+			e = runtimeJSONValue(d, depth+1, allowNull)
 			if e != nil {
 				return e
 			}
@@ -276,7 +298,7 @@ func runtimeJSONValue(d *json.Decoder, depth int) error {
 		}
 	case json.Delim('['):
 		for d.More() {
-			if err := runtimeJSONValue(d, depth+1); err != nil {
+			if err := runtimeJSONValue(d, depth+1, allowNull); err != nil {
 				return err
 			}
 		}
@@ -373,7 +395,7 @@ func ParseRuntimeCatalog(data []byte) (*RuntimeCatalog, error) {
 		return nil, ErrRuntimeInput
 	}
 	d := json.NewDecoder(bytes.NewReader(data))
-	if err := runtimeJSONValue(d, 0); err != nil {
+	if err := runtimeJSONValue(d, 0, false); err != nil {
 		return nil, ErrRuntimeInput
 	}
 	if _, err := d.Token(); err != io.EOF {

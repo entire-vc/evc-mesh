@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "scope": "canonical integration CI requirements; NOT executed runtime evidence",
+  "cases": [
+    {
+      "id": "exact",
+      "trigger": "exact active policy/target/producer/revision/hash; existing allowed sender",
+      "expected": "one injection; received only; producer ACK separate"
+    },
+    {
+      "id": "legacy-rejects-qa",
+      "trigger": "QA payload to old readonly_metadata routes/config",
+      "expected": "403/typed refusal; zero enqueue/paste/write"
+    },
+    {
+      "id": "qa-rejects-legacy",
+      "trigger": "readonly_metadata capability or legacy admission on QA route",
+      "expected": "refuse; zero enqueue/paste/write"
+    },
+    {
+      "id": "unknown-fields",
+      "trigger": "command,argv,cwd,tool,URL or extra nested object property",
+      "expected": "refuse before enqueue; no execution"
+    },
+    {
+      "id": "hash",
+      "trigger": "change brief byte or package/manifest/policy SHA",
+      "expected": "refuse; zero injection/write"
+    },
+    {
+      "id": "identity",
+      "trigger": "each workspace/agent/runner/host/hostname/session field changed independently",
+      "expected": "refuse indistinguishably; zero injection/write"
+    },
+    {
+      "id": "producer",
+      "trigger": "terminal id,tty,PID,start/foreground changed or ambiguous",
+      "expected": "refuse before paste and Enter; no fallback"
+    },
+    {
+      "id": "revision",
+      "trigger": "missing,wrong,bool,stale or different capability receiver revision",
+      "expected": "refuse before enqueue/paste/mutation"
+    },
+    {
+      "id": "expired",
+      "trigger": "expiry<=server now or >8h; queued item expires before delivery/mutation",
+      "expected": "refuse; no renewal; bounded channel cleanup"
+    },
+    {
+      "id": "revoked",
+      "trigger": "revoke between queue/poll/journal intent/paste or subsequent mutation",
+      "expected": "refuse at next boundary; preserve producer/ledger; no new normal write"
+    },
+    {
+      "id": "timeout",
+      "trigger": "assignment check unavailable or malformed/mismatched response",
+      "expected": "no cached allow; refuse normal mutation"
+    },
+    {
+      "id": "duplicate",
+      "trigger": "identical sender/request immutable envelope replay/retry",
+      "expected": "same receipt/delivery; one injection total"
+    },
+    {
+      "id": "conflict",
+      "trigger": "same sender/request with any envelope change incl expiry or capability",
+      "expected": "409 request_conflict; original unchanged"
+    },
+    {
+      "id": "uncertain",
+      "trigger": "crash/partial paste after journal injecting and restart",
+      "expected": "uncertain, zero auto replay, no new request workaround"
+    },
+    {
+      "id": "concurrency",
+      "trigger": "metadata/controller/standalone/iTerm/tmux/QA competing on target",
+      "expected": "one shared lock/injector and retained ledger"
+    },
+    {
+      "id": "disable",
+      "trigger": "disable/revoke QA while metadata/producer already running",
+      "expected": "QA admission only revoked; producer PID/start and ledger unchanged; legacy unaffected"
+    },
+    {
+      "id": "ack-is-not-install",
+      "trigger": "transport or producer ACK only",
+      "expected": "no installed/loaded/channel/matrix/field PASS"
+    },
+    {
+      "id": "mutation-guard",
+      "trigger": "revoke before each three-file replacement and serve stop/start",
+      "expected": "each normal mutation refused; reviewed recovery separately exercised"
+    },
+    {
+      "id": "mini-readback",
+      "trigger": "installed-channel-started but Mini status/source fails",
+      "expected": "no usable capability delivered; source remains open"
+    }
+  ]
+}
