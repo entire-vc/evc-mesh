@@ -214,6 +214,22 @@ func TestScreens(t *testing.T) {
 		t.Fatalf("bad token: want 401, got %d", rec.Code)
 	}
 
+	// project.view: the start and every section path answer the section page.
+	for _, path := range []string{PathUIProject, PathUIProject + "/overview", PathUIProject + "/reports"} {
+		rec := get(path, m.token(t, nil))
+		body := rec.Body.String()
+		if rec.Code != http.StatusOK || !strings.Contains(body, `"mesh.state"`) || !strings.Contains(body, "Weekly report") || !strings.Contains(body, "p1") {
+			t.Fatalf("project screen %s: %d", path, rec.Code)
+		}
+	}
+	noProject := m.token(t, func(c jwt.MapClaims, _ *jwt.Token) { delete(c, "project_id") })
+	if rec := get(PathUIProject, noProject); rec.Code != http.StatusBadRequest {
+		t.Fatalf("project screen without a project: want 400, got %d", rec.Code)
+	}
+	if rec := get(PathUIProject+"x", m.token(t, nil)); rec.Code != http.StatusNotFound {
+		t.Fatalf("lookalike path: want 404, got %d", rec.Code)
+	}
+
 	// No verifier, no screens.
 	s.UI = nil
 	if rec := get(PathUIHello, m.token(t, nil)); rec.Code != http.StatusNotFound {

@@ -25,7 +25,9 @@ import (
 )
 
 type installMem struct {
-	rows map[string]*domain.InstalledExtension
+	rows    map[string]*domain.InstalledExtension
+	snaps   map[string]*domain.CatalogSnapshot
+	skipped string
 }
 
 func (m *installMem) Get(_ context.Context, id string) (*domain.InstalledExtension, error) {
@@ -40,10 +42,39 @@ func (m *installMem) List(context.Context) ([]domain.InstalledExtension, error) 
 	return out, nil
 }
 
-func (m *installMem) UpdateCatalog(_ context.Context, e *domain.InstalledExtension) error {
+func (m *installMem) UpdateCatalog(_ context.Context, e *domain.InstalledExtension, g domain.CatalogUpdateGuard) error {
 	r := m.rows[e.ExtensionID]
+	if r.Version != g.FromVersion || r.CommitSHA != g.FromCommitSHA || (g.Auto && m.skipped != "" && m.skipped == e.CommitSHA) {
+		return apierror.Conflict("the extension changed while the update was prepared")
+	}
+	snap := domain.CatalogSnapshot{Version: r.Version, Manifest: r.Manifest, CommitSHA: r.CommitSHA, ArtifactSHA256: r.ArtifactSHA256,
+		TrustLevel: string(r.TrustLevel), Source: string(r.Source), SupersededVersion: e.Version, SupersededCommit: e.CommitSHA}
+	snap.Seal()
+	if m.snaps == nil {
+		m.snaps = map[string]*domain.CatalogSnapshot{}
+	}
+	m.snaps[e.ExtensionID] = &snap
 	r.PreviousVersion = r.Version
 	r.Version, r.Manifest, r.CommitSHA, r.ArtifactSHA256, r.TrustLevel = e.Version, e.Manifest, e.CommitSHA, e.ArtifactSHA256, e.TrustLevel
+	m.skipped = ""
+	return nil
+}
+
+func (m *installMem) GetCatalogSnapshot(_ context.Context, id string) (*domain.CatalogSnapshot, error) {
+	return m.snaps[id], nil
+}
+
+func (m *installMem) SkippedCommit(context.Context, string) (string, error) { return m.skipped, nil }
+
+func (m *installMem) RollbackCatalog(_ context.Context, id string, g domain.CatalogRollbackGuard, s domain.CatalogSnapshot, j *domain.InstanceExtensionJournalEntry) error {
+	r, cur := m.rows[id], m.snaps[id]
+	if r == nil || cur == nil || r.Blocked || r.Version != g.Version || r.CommitSHA != g.CommitSHA || cur.Digest != g.SnapshotDigest {
+		return apierror.Conflict("the extension changed or has nothing to roll back to")
+	}
+	m.skipped = r.CommitSHA
+	r.Version, r.Manifest, r.CommitSHA, r.ArtifactSHA256, r.TrustLevel = s.Version, s.Manifest, s.CommitSHA, s.ArtifactSHA256, domain.ExtensionTrustLevel(s.TrustLevel)
+	r.PreviousVersion = ""
+	delete(m.snaps, id)
 	return nil
 }
 
@@ -61,6 +92,7 @@ type installFixture struct {
 	journal  *memJournal
 	changes  int
 	manifest []byte
+	detail   map[string]any
 }
 
 func newInstallFixture(t *testing.T, mutate func(e *Entry, cat *Catalog)) *installFixture {
@@ -76,8 +108,9 @@ func newInstallFixture(t *testing.T, mutate func(e *Entry, cat *Catalog)) *insta
 	digest := hex.EncodeToString(sum[:])
 	detail := map[string]any{"id": id, "releases": []any{map[string]any{"version": ver, "manifest": mf, "installable": true, "status": "published", "yanked": false}}}
 
+	f.detail = detail
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/mesh-extensions/"+id, func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(detail) })
+	mux.HandleFunc("/api/v1/mesh-extensions/"+id, func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(f.detail) })
 	mux.HandleFunc("/api/v1/mesh-extensions/"+id+"/releases/"+ver+"/artifact", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(f.artifact) })
 	mux.HandleFunc("/api/v1/mesh-extensions/"+id+"/installs", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {

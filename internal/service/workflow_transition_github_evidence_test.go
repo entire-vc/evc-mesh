@@ -14,6 +14,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	githubapi "github.com/entire-vc/evc-mesh/internal/integration/github"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -231,4 +232,144 @@ func TestMoveTask_AuthorIfMergedShipped_RestoresOldLinkMissingHeadAndCI(t *testi
 			assert.Equal(t, "author_if_merged_shipped", ae.Context["gate"])
 		})
 	}
+}
+
+// versionBumpRepo models the vcs_task_snapshot trigger: the first read sees
+// version 1, every later read sees laterVersion (default 2): each link row the
+// gate's sync wrote bumped it once.
+// onLaterRead can also change the row, as a real concurrent writer would.
+type versionBumpRepo struct {
+	repository.TaskRepository
+	reads        int
+	laterVersion int64 // version later reads report; default 2
+	onLaterRead  func(*domain.Task)
+	expectedSeen int64
+}
+
+func (r *versionBumpRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Task, error) {
+	t, err := r.TaskRepository.GetByID(ctx, id)
+	if err != nil || t == nil {
+		return t, err
+	}
+	cp := *t
+	r.reads++
+	cp.Version = 1
+	if r.reads > 1 {
+		cp.Version = 2
+		if r.laterVersion != 0 {
+			cp.Version = r.laterVersion
+		}
+		if r.onLaterRead != nil {
+			r.onLaterRead(&cp)
+		}
+	}
+	return &cp, nil
+}
+
+func (r *versionBumpRepo) UpdateTransition(ctx context.Context, task *domain.Task, in domain.TaskTransition) error {
+	r.expectedSeen = in.ExpectedVersion
+	// Conditional like the production writer: the row is at the version the
+	// reads last reported, anything else is a lost CAS.
+	// The gate's link write has already happened by now, so the row is at 2
+	// whether or not the caller re-read it.
+	current := int64(2)
+	if r.laterVersion != 0 {
+		current = r.laterVersion
+	}
+	if in.ExpectedVersion != current {
+		return &CASConflictError{CurrentVersion: current, CurrentStatusID: task.StatusID, CurrentUpdatedAt: task.UpdatedAt, CurrentAssigneeID: task.AssigneeID}
+	}
+	return r.Update(ctx, task)
+}
+
+// The gate's GitHub sync writes vcs_links, which advances tasks.version. The
+// transition must expect that bump (else review→done 409s for ever), but a
+// real concurrent write to the row must still be expected at the old version.
+func TestMoveTask_GateSyncVersionBumpDoesNotSelfConflict(t *testing.T) {
+	author := uuid.New()
+	head := strings.Repeat("a", 40)
+	tr := domain.TransitionRule{AllowedActors: []string{actorPatternAuthorIfMergedShipped}}
+	cases := []struct {
+		name         string
+		concurrent   func(*domain.Task)
+		laterVersion int64
+		wantVersion  int64
+		wantConflict bool
+	}{
+		{"only the child-table bump: CAS expects the new version", nil, 3, 3, false},
+		{"row changed too: CAS keeps the original version and refuses", func(tk *domain.Task) { tk.AssigneeID = &author }, 3, 1, true},
+		// The gate's sync wrote the link twice (head sha, check result: +2) and an
+		// unrelated comment/artifact/link write landed too (+1): row fields are
+		// untouched, only the version says so.
+		{"unrelated child write on top of the gate's own: CAS refuses", nil, 4, 1, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			set := func(tk *domain.Task) { tk.PreReviewAssigneeID = &author }
+			svc, _, taskID, toID := journalSetup(t, domain.RuleConfigEnforcementStrict, tr, set)
+			br := &versionBumpRepo{TaskRepository: svc.taskRepo, onLaterRead: c.concurrent, laterVersion: c.laterVersion}
+			svc.taskRepo = br
+			repo := NewMockVCSLinkRepository()
+			svc.vcsLinkRepo = repo
+			svc.githubPRChecker = &gateGitHub{
+				heads: map[int]githubapi.PullRequestHead{81: {Merged: true, HeadSHA: head}},
+				sums:  map[int]githubapi.ChecksSummary{81: {Total: 6, Status: "success", RunID: 9}}}
+			meta, _ := json.Marshal(map[string]string{"ship_sha": head})
+			require.NoError(t, repo.Create(context.Background(), &domain.VCSLink{
+				ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitHub, LinkType: domain.VCSLinkTypePR,
+				ExternalID: "81", URL: "https://github.com/entire-vc/evc-mesh-mcp/pull/81",
+				Status: domain.VCSLinkStatusMerged, Metadata: meta,
+			}))
+			ctx := actorctx.WithActor(context.Background(), author, domain.ActorTypeAgent)
+			// One attempt: MoveTask retries implicit-CAS moves and would mask the refusal.
+			err := svc.moveTaskOnce(ctx, taskID, MoveTaskInput{StatusID: &toID})
+			if c.wantConflict {
+				var cas *CASConflictError
+				require.ErrorAs(t, err, &cas)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, c.wantVersion, br.expectedSeen)
+		})
+	}
+}
+
+// A version bump the gate did not cause (a concurrent comment, artifact or
+// link write) must not be adopted: the gate reports it wrote nothing when the
+// task has no GitHub delivery link to sync.
+func TestApplyTransitionGate_NoGitHubLinkReportsNoSync(t *testing.T) {
+	author := uuid.New()
+	tr := domain.TransitionRule{AllowedActors: []string{actorPatternAuthorIfMergedShipped}}
+	svc, _, taskID, toID := journalSetup(t, domain.RuleConfigEnforcementStrict, tr, func(tk *domain.Task) { tk.PreReviewAssigneeID = &author })
+	svc.vcsLinkRepo = NewMockVCSLinkRepository()
+	task, err := svc.taskRepo.GetByID(context.Background(), taskID)
+	require.NoError(t, err)
+	to, err := svc.statusRepo.GetByID(context.Background(), toID)
+	require.NoError(t, err)
+	ctx := actorctx.WithActor(context.Background(), author, domain.ActorTypeAgent)
+	_, _, _, writes := svc.applyTransitionGate(ctx, task, task.StatusID, to)
+	assert.Zero(t, writes)
+}
+
+// MergeMetadata answers (nil, nil) when its UPDATE matched no row. That fires
+// no vcs_task_snapshot trigger, so it must not count as one of the gate's own
+// version bumps: a concurrent write could otherwise fill the gap and be adopted.
+func TestCountingVCSLinkRepo_CountsOnlyRowsActuallyWritten(t *testing.T) {
+	ctx := context.Background()
+	taskID := uuid.New()
+	inner := NewMockVCSLinkRepository()
+	link := &domain.VCSLink{ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitHub, LinkType: domain.VCSLinkTypePR}
+	require.NoError(t, inner.Create(ctx, link))
+	repo := &countingVCSLinkRepo{VCSLinkRepository: inner}
+	patch := json.RawMessage(`{"head_sha":"abc"}`)
+
+	got, err := repo.MergeMetadata(ctx, taskID, uuid.New(), patch) // no such link
+	require.NoError(t, err)
+	require.Nil(t, got)
+	assert.Zero(t, repo.writes)
+
+	got, err = repo.MergeMetadata(ctx, taskID, link.ID, patch)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, int64(1), repo.writes)
 }

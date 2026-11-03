@@ -120,6 +120,11 @@ func (h *SecretHandler) Create(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
+	// The route guard checked the workspace, not a project named in the body.
+	if req.ProjectID != nil && !middleware.MayAccessProject(c, *req.ProjectID) {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("Project"))
+	}
+
 	actorID, actorType := actorctx.FromContext(c.Request().Context())
 	secret, err := h.secretSvc.Create(c.Request().Context(), domain.CreateSecretInput{
 		WorkspaceID:   workspaceID,

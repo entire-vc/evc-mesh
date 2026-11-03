@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
+import { AgentExecutionsPanel } from "@/components/agent-executions-panel";
 import { PolicyEditor } from "@/components/agent-runtime-policy-editor";
 import {
   controllerSync,
@@ -22,9 +23,9 @@ import {
 } from "@/lib/agent-runtime";
 import type { Agent } from "@/types";
 
-type TabId = "profile" | "access" | "execution" | "state";
+type TabId = "profile" | "route" | "access" | "execution" | "state";
 
-const TABS: { id: TabId }[] = [{ id: "profile" }, { id: "access" }, { id: "execution" }, { id: "state" }];
+const TABS: { id: TabId }[] = [{ id: "profile" }, { id: "route" }, { id: "access" }, { id: "execution" }, { id: "state" }];
 
 interface AgentRuntimeTabsProps {
   /** Only the id is read: a foreign (invited) agent has no home profile here. */
@@ -34,9 +35,11 @@ interface AgentRuntimeTabsProps {
   profile: ReactNode;
   /** Existing workspace-grant list, rendered in the access tab. */
   access: ReactNode;
+  /** false: the viewer's role cannot read the catalog, so no request is made (it would 403 into the console); null: role still loading. */
+  canReadRuntime?: boolean | null;
 }
 
-export function AgentRuntimeTabs({ agent, workspaceId, profile, access }: AgentRuntimeTabsProps) {
+export function AgentRuntimeTabs({ agent, workspaceId, profile, access, canReadRuntime = true }: AgentRuntimeTabsProps) {
   const { t } = useTranslation("integrations");
   const [tab, setTab] = useState<TabId>("profile");
   const [load, setLoad] = useState<RuntimeLoad | "loading">("loading");
@@ -49,13 +52,21 @@ export function AgentRuntimeTabs({ agent, workspaceId, profile, access }: AgentR
       setLoad({ kind: "unavailable" });
       return;
     }
+    if (canReadRuntime === false) {
+      setLoad({ kind: "forbidden" });
+      return;
+    }
+    if (canReadRuntime === null) {
+      setLoad("loading");
+      return;
+    }
     // quiet: refresh behind an open editor without unmounting it.
     if (!quiet) setLoad("loading");
     void fetchWorkspaceRuntime(workspaceId).then((result) => {
       // A slower response for a previous agent/workspace must not overwrite a newer one.
       if (requestId.current === id) setLoad(result);
     });
-  }, [workspaceId]);
+  }, [workspaceId, canReadRuntime]);
 
   useEffect(() => {
     reload();
@@ -110,7 +121,13 @@ export function AgentRuntimeTabs({ agent, workspaceId, profile, access }: AgentR
       </div>
 
       <div role="tabpanel" id={`agent-panel-${tab}`} aria-labelledby={`agent-tab-${tab}`} className="pt-4">
-        {tab === "profile" && profile}
+        {tab === "profile" && (
+          <div className="space-y-4">
+            <p className="text-xs text-muted-foreground">{t("executions.profileEditNote")}</p>
+            {profile}
+          </div>
+        )}
+        {tab === "route" && <AgentExecutionsPanel agentId={agent.id} workspaceId={workspaceId} />}
         {tab === "access" && (
           <div className="space-y-5">
             {access}

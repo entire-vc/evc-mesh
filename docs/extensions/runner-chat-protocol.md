@@ -127,14 +127,26 @@ The runner does not hand its agent key to the harness. A host controller mints a
 
 These are open work; do not rely on or promise them.
 
-- **E3 an internal ticket, E4 an internal ticket, E5 an internal ticket** carry the remaining runner-side and delivery work. Until
-  they are accepted, treat everything below as unavailable.
+- **Runner-side and UI work is accepted, but not everything it was measured against.** E3 (chat UI,
+  an internal ticket) and E5 (runner sessions) are accepted. The limits below are what remains
+  true after that acceptance.
+- **Warm reply ≤3 s is not guaranteed.** Cold reply ≤15 s was accepted; the warm ≤3 s target was
+  not accepted (follow-up an internal ticket). Do not promise it to users.
+- **Codex replies arrive as one piece.** Multi-block streaming for Codex is not provided (scenario
+  S04b was skipped by agreement); Codex Stop was verified only during a tool call, not after a text
+  delta.
 - **No live streaming to the browser guaranteed by this contract.** The runner posts `text_delta`
   batches and Mesh stores them; real-time token streaming and its latency are not promised.
 - **No capacity reporting.** Mesh does not know how many turns a runner can take; a claim returns
   what is queued up to `max`.
-- **No write-workspace for chat.** A chat session has the agent∩user rights over the Mesh API
-  only; checked-out workspaces for writing code are not part of the chat contract.
+- **Write-workspace is Codex-only.** With the runner's `chat_workspace="write"` a Codex chat gets a
+  slot from the repo pool and writes inside `workspace-write` (the runner implementation;
+  canary on an isolated instance, rolled back). The other harness refuses with
+  `chat_workspace_unconfinable`: it has no write boundary without an OS sandbox, so write is not
+  allowed there. Without the setting a chat session has the agent∩user rights over the Mesh API
+  only. That a deleted write chat leaves no files is not verified through the API.
+- **Chat quota accounting is not a shared gate.** Chat windows sit outside
+  `interactive_max_sessions`; the code shows no common gate with cards.
 - **Cancel is polled**, not pushed (§5). The `cancel_turn` kind named in the design is not produced.
 - `commands` in the claim answer is always empty (§7).
 - Publishing to a catalog and acceptance of the whole chat are not claimed by this page.

@@ -522,7 +522,7 @@ func roleSetStamp(ctx context.Context, at time.Time) map[string]any {
 // PatchShipSHAByURL resolves the pr links naming mrURL (number from the last
 // path segment, url compared after normalisation, so another project's same
 // number never matches) inside workspaceID and merges ship_sha into each.
-func (s *vcsLinkService) PatchShipSHAByURL(ctx context.Context, workspaceID uuid.UUID, mrURL, shipSHA string) ([]domain.VCSLink, error) {
+func (s *vcsLinkService) PatchShipSHAByURL(ctx context.Context, workspaceID uuid.UUID, mrURL, shipSHA string, mayAccessTask func(taskID uuid.UUID) bool) ([]domain.VCSLink, error) {
 	if !domain.IsFullCommitSHA(shipSHA) {
 		return nil, apierror.BadRequest("ship_sha must be a 40-character lowercase hex string")
 	}
@@ -543,6 +543,16 @@ func (s *vcsLinkService) PatchShipSHAByURL(ctx context.Context, workspaceID uuid
 		links = append(links, filterLinksByURL(found, mrURL)...)
 	}
 	links = s.filterLinksInWorkspace(ctx, workspaceID, links)
+	if mayAccessTask != nil {
+		reachable := links[:0]
+		for _, l := range links {
+			if mayAccessTask(l.TaskID) {
+				reachable = append(reachable, l)
+			}
+		}
+		links = reachable
+	}
+	// A link the caller may not reach answers like a link that does not exist.
 	if len(links) == 0 {
 		return nil, apierror.NotFound("VCSLink")
 	}
@@ -746,6 +756,9 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 	}
 	taskID, matched, outcome, candidates := s.resolveTaskRef(ctx, ev.WorkspaceID, sources...)
 	viaMention := taskID != uuid.Nil
+	// primaryUnambiguous: the payload (or exactly one stored link) names the
+	// primary card. Only then may the same MR's other existing links be refreshed.
+	primaryUnambiguous := viaMention
 	if taskID != uuid.Nil {
 		log.Printf("[vcs-webhook] mr=%s!%d resolved task=%s via=%s src=%s raw=%q",
 			ev.ProjectPath, ev.MRIID, taskID, matched.Kind, matched.Source, truncate(matched.Raw, 60))
@@ -792,6 +805,7 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 			return PRHandleResult{Reason: "no_task_ref"}, nil
 		case len(links) == 1:
 			taskID = links[0].TaskID
+			primaryUnambiguous = true
 		default:
 			// Multiple historical links; ListByExternalID orders by created_at
 			// DESC so the first row is the newest association.
@@ -836,6 +850,13 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 		return PRHandleResult{TaskID: taskID}, fmt.Errorf("upsert vcs link: %w", err)
 	}
 
+	// 3b. Refresh the exact-MR evidence on the other cards' existing links. Runs
+	//     before the terminal-state early return below, so an open MR's new head
+	//     reaches them too; it never creates a link or moves a card.
+	if primaryUnambiguous {
+		s.syncSecondaryLinks(ctx, ev, taskID, linkStatus)
+	}
+
 	// 4. Transitions only happen once the MR reaches a terminal state.
 	//    GitLab has no single boolean equivalent to GitHub's
 	//    action=="closed" gate — `state` already carries this distinction.
@@ -866,6 +887,94 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 	s.closeReviewSubjects(ctx, ev.WorkspaceID, domain.VCSProviderGitLab, strconv.Itoa(ev.MRIID), ev.MRURL, taskID,
 		merged, fmt.Sprintf("MR !%d", ev.MRIID), shortSHA(ev.MergeSHA), "gitlab-webhook")
 	return res, err
+}
+
+// syncSecondaryLinks copies the delivery's status and head commit onto links of
+// OTHER cards that already name exactly this MR: same provider, external id and
+// full URL, and the URL must really be ev.ProjectPath's !iid (an empty or
+// disagreeing project/URL matches nothing). The workspace is the delivering
+// one; a legacy delivery without it is narrowed to the primary card's own
+// workspace, and when that cannot be proven nothing is written. Writes go
+// through Upsert on the stored row, so other metadata (ship_sha, CI, binding)
+// survives, no link is created and no card moves. Failures are logged and never
+// fail the delivery: the primary has already been written.
+func (s *vcsLinkService) syncSecondaryLinks(ctx context.Context, ev GitLabWebhookEvent, primary uuid.UUID, status domain.VCSLinkStatus) {
+	iid := strconv.Itoa(ev.MRIID)
+	if !mrURLNamesProject(ev.MRURL, ev.ProjectPath, iid) {
+		slog.Warn("vcs webhook secondary sync skipped: url does not match project", "project", ev.ProjectPath, "url", ev.MRURL, "iid", iid)
+		return
+	}
+	workspaceID := ev.WorkspaceID
+	if workspaceID == uuid.Nil {
+		workspaceID = s.workspaceOfTask(ctx, primary)
+		if workspaceID == uuid.Nil {
+			slog.Warn("vcs webhook secondary sync skipped: legacy delivery without a provable workspace", "project", ev.ProjectPath, "url", ev.MRURL, "primary", primary.String())
+			return
+		}
+	} else if !s.taskInWorkspace(ctx, primary, workspaceID) {
+		return
+	}
+	links, err := s.repo.ListByExternalID(ctx, domain.VCSProviderGitLab, domain.VCSLinkTypePR, iid)
+	if err != nil {
+		log.Printf("[vcs-webhook] mr=%s!%d secondary sync list: %v", ev.ProjectPath, ev.MRIID, err)
+		return
+	}
+	patch := gitLabLinkMetadata(ev.HeadSHA)
+	wantHead := strings.TrimSpace(ev.HeadSHA)
+	for _, l := range s.filterLinksInWorkspace(ctx, workspaceID, filterLinksByURL(links, ev.MRURL)) {
+		if l.TaskID == primary || l.Provider != domain.VCSProviderGitLab || l.ExternalID != iid {
+			continue
+		}
+		if l.Status == status && vcsLinkHeadSHA(l) == wantHead {
+			continue
+		}
+		l := l
+		l.Status = status
+		l.Metadata = patch
+		if _, err := s.repo.Upsert(ctx, &l); err != nil {
+			log.Printf("[vcs-webhook] mr=%s!%d secondary sync upsert task=%s: %v", ev.ProjectPath, ev.MRIID, l.TaskID, err)
+		}
+	}
+}
+
+// workspaceOfTask returns the workspace owning taskID, or uuid.Nil when it
+// cannot be proven (missing repo, lookup error, unknown task or project).
+func (s *vcsLinkService) workspaceOfTask(ctx context.Context, taskID uuid.UUID) uuid.UUID {
+	if s.taskRepo == nil || s.projectRepo == nil {
+		return uuid.Nil
+	}
+	t, err := s.taskRepo.GetByID(ctx, taskID)
+	if err != nil || t == nil {
+		return uuid.Nil
+	}
+	p, err := s.projectRepo.GetByID(ctx, t.ProjectID)
+	if err != nil || p == nil {
+		return uuid.Nil
+	}
+	return p.WorkspaceID
+}
+
+// mrURLNamesProject reports whether rawURL is the merge request projectPath!iid.
+func mrURLNamesProject(rawURL, projectPath, iid string) bool {
+	projectPath = strings.Trim(projectPath, "/")
+	if rawURL == "" || projectPath == "" || iid == "" {
+		return false
+	}
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.TrimRight(u.Path, "/") == "/"+projectPath+"/-/merge_requests/"+iid
+}
+
+// vcsLinkHeadSHA is the head_sha stored in a link's metadata ("" when absent).
+func vcsLinkHeadSHA(l domain.VCSLink) string {
+	var m map[string]any
+	if json.Unmarshal(l.Metadata, &m) != nil {
+		return ""
+	}
+	v, _ := m[domain.VCSLinkMetaHeadSHA].(string)
+	return strings.TrimSpace(v)
 }
 
 // githubLinkStatus maps a pull_request delivery to the status its link stores.

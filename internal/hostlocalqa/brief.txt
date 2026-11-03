@@ -1,0 +1,3 @@
+Local QA fixture v1.
+Synthetic data for exact-text, identity, expiry and revocation validation.
+No commands or operational authority are contained in this fixture.

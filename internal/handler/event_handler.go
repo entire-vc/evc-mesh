@@ -133,6 +133,10 @@ func (h *EventHandler) Create(c echo.Context) error {
 			"subject": "subject is required",
 		}))
 	}
+	// The route guard checked the project in the path, not a task in the body.
+	if req.TaskID != nil && !mw.MayAccessTask(c, *req.TaskID) {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("Task"))
+	}
 
 	// Determine the agent ID from context if available.
 	var agentID *uuid.UUID

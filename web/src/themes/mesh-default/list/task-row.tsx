@@ -521,10 +521,10 @@ export const TaskRow: TaskRowView = ({ data, actions }) => {
         return <DueDateCell key={column.key} {...props} />;
       case "labels":
         return (
-          <td key={column.key} className="px-3 py-2">
-            <div className="flex flex-wrap gap-1">
+          <td key={column.key} className="max-w-[16rem] px-3 py-2">
+            <div className="flex min-w-0 flex-wrap gap-1">
               {task.labels.slice(0, 3).map((label) => (
-                <span key={label} className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                <span key={label} title={label} tabIndex={0} className="block max-w-full min-w-0 truncate rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                   {label}
                 </span>
               ))}

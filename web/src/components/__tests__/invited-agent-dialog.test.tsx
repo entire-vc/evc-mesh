@@ -67,11 +67,11 @@ describe("InvitedAgentDialog — receiving workspace runtime", () => {
     useAgentWorkspaceGrantStore.setState({ workspaceAgentGrants: [] });
   });
 
-  it("shows the four tabs and the routes/preferred/preview of the RECEIVING workspace", async () => {
+  it("shows the five tabs and the routes/preferred/preview of the RECEIVING workspace", async () => {
     mockApi(envelope);
     renderDialog();
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
-      "Profile", "Workspace access", "Execution & routes", "Observed state",
+      "Profile", "Route & runs", "Workspace access", "Execution & routes", "Observed state",
     ]);
     fireEvent.click(screen.getByRole("tab", { name: "Execution & routes" }));
     expect(await screen.findByText("Allowed routes, in order")).toBeInTheDocument();

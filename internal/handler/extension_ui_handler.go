@@ -15,6 +15,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/extensions/external"
 	"github.com/entire-vc/evc-mesh/internal/extensions/uictx"
+	"github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -55,6 +56,9 @@ type ExtensionUIHandler struct {
 	users    extUIUsers
 	tasks    extUITasks
 	projects extUIProjects
+	// projectMembers decides whether the user may be handed a token naming a
+	// project — the same rule the API applies to that project's routes.
+	projectMembers middleware.ProjectMembership
 	// bindings, when set, gate project.view on an enabled binding to the project.
 	bindings extUIBindings
 	// scope refuses a token for a project the extension's connection is not
@@ -64,8 +68,8 @@ type ExtensionUIHandler struct {
 	selfHosts []string
 }
 
-func NewExtensionUIHandler(reg *extensions.Registry, signer UIContextSigner, members extUIMembers, users extUIUsers, tasks extUITasks, projects extUIProjects) *ExtensionUIHandler {
-	return &ExtensionUIHandler{reg: reg, signer: signer, members: members, users: users, tasks: tasks, projects: projects}
+func NewExtensionUIHandler(reg *extensions.Registry, signer UIContextSigner, members extUIMembers, users extUIUsers, tasks extUITasks, projects extUIProjects, projectMembers middleware.ProjectMembership) *ExtensionUIHandler {
+	return &ExtensionUIHandler{reg: reg, signer: signer, members: members, users: users, tasks: tasks, projects: projects, projectMembers: projectMembers}
 }
 
 // WithProjectScope makes ui-context refuse a project or task the extension's
@@ -233,6 +237,15 @@ func (h *ExtensionUIHandler) UIContext(c echo.Context) error {
 		if perr != nil || pr == nil || pr.WorkspaceID != req.WorkspaceID {
 			return c.JSON(http.StatusNotFound, apierror.NotFound("project"))
 		}
+	}
+	// The token names the project to the extension service, which acts on it with
+	// the user's identity; it must not name one the user could not open here.
+	// Answered like a missing object so the refusal does not confirm it exists.
+	if projectID != nil && !middleware.UserMayAccessProject(ctx, h.projectMembers, *projectID, uid, role) {
+		if taskID != nil {
+			return c.JSON(http.StatusNotFound, apierror.NotFound("task"))
+		}
+		return c.JSON(http.StatusNotFound, apierror.NotFound("project"))
 	}
 	if projectID != nil && !h.projectAllowed(ctx, req.Slot, extID, *projectID) {
 		return c.JSON(http.StatusConflict, apierror.Conflict("the extension is not enabled in this project"))

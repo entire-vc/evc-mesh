@@ -70,6 +70,12 @@ func (in *Installer) Updates(ctx context.Context) ([]repoinstall.UpdateInfo, err
 			ExtensionID: row.ExtensionID, Name: cur.Name, CurrentVersion: row.Version, CurrentCommit: row.CommitSHA,
 			NewCapabilities: []string{}, PreviousVersion: row.PreviousVersion,
 		}
+		// can_rollback is the answer of the same checks Rollback runs, so it is
+		// true only when the endpoint would proceed (a legacy previous_version
+		// has no snapshot and never qualifies).
+		if _, perr := in.rollbackPlan(ctx, row); perr == nil {
+			info.CanRollback = true
+		}
 		if cerr != nil {
 			info.Error = "catalog is not available"
 			out = append(out, info)
@@ -90,6 +96,12 @@ func (in *Installer) Updates(ctx context.Context) ([]repoinstall.UpdateInfo, err
 // Update moves one catalog install to the newest release. Added permissions
 // need consent: consentSHA must be the commit the admin saw in the Updates tab.
 func (in *Installer) Update(ctx context.Context, actor *uuid.UUID, id, consentSHA string) (*repoinstall.UpdateResult, error) {
+	return in.update(ctx, actor, id, consentSHA, false)
+}
+
+// update is Update; auto marks the bulk pass, which leaves alone the commit an
+// admin rolled back from (a manual update still takes it).
+func (in *Installer) update(ctx context.Context, actor *uuid.UUID, id, consentSHA string, auto bool) (*repoinstall.UpdateResult, error) {
 	row, err := in.Store.Get(ctx, id)
 	if err != nil {
 		return nil, err
@@ -107,6 +119,14 @@ func (in *Installer) Update(ctx context.Context, actor *uuid.UUID, id, consentSH
 		res.Outcome = repoinstall.OutcomeUpToDate
 		return res, nil
 	}
+	if auto {
+		if skipped, serr := in.Store.SkippedCommit(ctx, id); serr != nil {
+			return nil, serr
+		} else if skipped != "" && skipped == e.Latest.CommitSHA {
+			res.Outcome = repoinstall.OutcomeUpToDate
+			return res, nil
+		}
+	}
 	res.Version, res.CommitSHA = e.Latest.Version, e.Latest.CommitSHA
 	cur, _ := extensions.ParseManifest(row.Manifest)
 	res.NewCapabilities = repoinstall.NewCapabilities(repoinstall.Capabilities(cur), e.Latest.Flatten())
@@ -122,7 +142,7 @@ func (in *Installer) Update(ctx context.Context, actor *uuid.UUID, id, consentSH
 		ExtensionID: id, Version: e.Latest.Version, Manifest: m.Raw, CommitSHA: e.Latest.CommitSHA,
 		ArtifactSHA256: *e.Latest.ArtifactSHA256, TrustLevel: domain.ExtensionTrustLevel(e.Trust),
 	}
-	if err := in.Store.UpdateCatalog(ctx, upd); err != nil {
+	if err := in.Store.UpdateCatalog(ctx, upd, domain.CatalogUpdateGuard{FromVersion: row.Version, FromCommitSHA: row.CommitSHA, Auto: auto}); err != nil {
 		return nil, err
 	}
 	if in.Journal != nil {
@@ -147,7 +167,7 @@ func (in *Installer) UpdateAll(ctx context.Context, actor *uuid.UUID) ([]repoins
 	}
 	out := make([]repoinstall.UpdateResult, 0, len(rows))
 	for i := range rows {
-		r, uerr := in.Update(ctx, actor, rows[i].ExtensionID, "")
+		r, uerr := in.update(ctx, actor, rows[i].ExtensionID, "", true)
 		if uerr != nil {
 			out = append(out, repoinstall.UpdateResult{ExtensionID: rows[i].ExtensionID, NewCapabilities: []string{}, Error: fmt.Sprint(uerr)})
 			continue

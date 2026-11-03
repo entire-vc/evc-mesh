@@ -2354,3 +2354,8 @@ type DecisionRequestRepository interface {
 	// Withdraw marks an open request withdrawn. Returns false when it is not open.
 	Withdraw(ctx context.Context, id uuid.UUID) (bool, error)
 }
+
+// ErrKeepMetadataNotFound is the single answer of the Keep metadata probe's
+// secret lookup for every reason there is nothing to probe (absent, another
+// workspace, not a current workspace-scoped row, unusable keep_ref).
+var ErrKeepMetadataNotFound = errors.New("secret has no keep metadata")

@@ -77,18 +77,41 @@ func (r *ChatRunnerRepo) AuthenticateRunner(ctx context.Context, caller uuid.UUI
 }
 
 // RevokeRunner kills a runner's credential. Its pending orders stay and expire;
-// nobody can authenticate as that runner any more.
+// nobody can authenticate as that runner any more. Existing-session receivers
+// registered by the runner end with it: queued deliveries fail as
+// receiver_revoked, received ones as delivery_uncertain, and their text is dropped.
 func (r *ChatRunnerRepo) RevokeRunner(ctx context.Context, caller, runner uuid.UUID) error {
 	if caller == uuid.Nil {
 		return errChatRunnerForbidden()
 	}
-	res, err := r.db.ExecContext(ctx, `UPDATE ext_agent_chat_runners SET revoked_at = $3
-		WHERE id = $1 AND agent_id = $2 AND revoked_at IS NULL`, runner, caller, r.now().UTC())
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := r.now().UTC()
+	// Receivers first: this UPDATE waits for a concurrent Enqueue holding the
+	// receiver FOR SHARE, so the delivery it inserts is committed (and settled
+	// below) or, if revocation won, Enqueue no longer finds an active receiver.
+	if _, err = tx.ExecContext(ctx, `UPDATE existing_session_receivers SET revoked_at = $3
+		WHERE runner_id = $1 AND agent_id = $2 AND revoked_at IS NULL`, runner, caller, now); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE existing_session_deliveries d SET state = 'failed', body = NULL, updated_at = $2,
+		error_code = CASE WHEN d.state = 'received' THEN 'delivery_uncertain' ELSE 'receiver_revoked' END
+		FROM existing_session_receivers rc
+		WHERE rc.id = d.receiver_id AND rc.runner_id = $1 AND d.state IN ('queued', 'received')`, runner, now); err != nil {
+		return err
+	}
+	// The runner row last: an unknown or foreign runner is a 404 and the
+	// transaction, receivers included, rolls back.
+	res, err := tx.ExecContext(ctx, `UPDATE ext_agent_chat_runners SET revoked_at = $3
+		WHERE id = $1 AND agent_id = $2 AND revoked_at IS NULL`, runner, caller, now)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return apierror.NotFound("runner")
 	}
-	return nil
+	return tx.Commit()
 }

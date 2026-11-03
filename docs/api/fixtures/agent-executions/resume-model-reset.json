@@ -1,0 +1,89 @@
+{
+  "name": "resume-model-reset",
+  "kind": "read",
+  "description": "A resumed session is a new turn: model and effort are unknown until a new matching observation.",
+  "now": "2026-10-30T12:00:00Z",
+  "response": {
+    "schema_version": 1,
+    "generated_at": "2026-10-30T12:00:00Z",
+    "max_age_seconds": 120,
+    "items": [
+      {
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "project_id": "22222222-2222-4222-8222-222222222222",
+        "agent_id": "33333333-3333-4333-8333-333333333333",
+        "managed": true,
+        "enabled": true,
+        "management_source": "runtime_policy",
+        "reason": null,
+        "configured": {
+          "source": "runtime_policy",
+          "revision": 17,
+          "digest": "sha256:policy-17",
+          "routes": [
+            {
+              "binding_ref": "lane-a",
+              "controller_ref": "controller-a",
+              "profile_ref": "sol-high",
+              "harness": "codex",
+              "model": "gpt-6.1-sol",
+              "effort": null,
+              "order": 0
+            },
+            {
+              "binding_ref": "lane-a",
+              "controller_ref": "controller-a",
+              "profile_ref": "opus-reserve",
+              "harness": "claude",
+              "model": "opus",
+              "effort": null,
+              "order": 1
+            }
+          ]
+        },
+        "attempts": [
+          {
+            "attempt_id": "attempt-1",
+            "controller_ref": "controller-a",
+            "binding_ref": "lane-a",
+            "task_id": "44444444-4444-4444-8444-444444444441",
+            "instance_id": "boot-3",
+            "generation": 3,
+            "sequence": 12,
+            "turn_id": "turn-2",
+            "state": "running",
+            "resolved_route": {
+              "source": "runner_resolver",
+              "revision": 17,
+              "profile_ref": "sol-high",
+              "harness": "codex",
+              "model": "gpt-6.1-sol"
+            },
+            "observed": {
+              "harness": "codex",
+              "model": null,
+              "effort": null,
+              "source": "adapter_handshake",
+              "observed_at": "2026-10-30T11:59:40Z"
+            },
+            "received_at": "2026-10-30T11:59:55Z",
+            "heartbeat_at": "2026-10-30T11:59:55Z",
+            "stale": false,
+            "freshness": "unknown",
+            "policy_matches": true
+          }
+        ],
+        "profile": {
+          "source": "agent_profile",
+          "harness": "claude_code",
+          "model": "sonnet"
+        },
+        "freshness": "unknown"
+      }
+    ],
+    "next_cursor": null
+  },
+  "expect": {
+    "jq": ".items[0].attempts[0].turn_id == \"turn-2\" and .items[0].attempts[0].observed.model == null"
+  }
+}

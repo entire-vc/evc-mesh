@@ -1,0 +1,20 @@
+{
+  "agent_id": "11111111-1111-4111-8111-111111111111",
+  "allowed_sender_agent_ids": [
+    "11111111-1111-4111-8111-111111111111"
+  ],
+  "artifact_id": 424242,
+  "candidate": "afcb5827df1d68dcb1d679b19ef3c3aec90f1d6c",
+  "capability": "host_local_qa_assignment_v1",
+  "default_enabled": false,
+  "hostname": "example.invalid",
+  "max_expiry_seconds": 28800,
+  "operation_manifest_sha256": "f0dfe0c4d4c3bbd7f2f010ab89e8e82e71aa61cb5f6730eda30f459a1f87e34b",
+  "profile": "/tmp/example-profile",
+  "qa_package_sha256": "78b1bfa7797bc0a25a40364eb76facfe20ecd35de88ad7c9c88fdc8b25cc3a3e",
+  "schema_version": 1,
+  "source_task_id": "33333333-3333-4333-8333-333333333333",
+  "text_sha256": "762203baafebca0b17c46b4dda2e63b4fd1f1ae02fa74e089dd1e43bc3c47d8c",
+  "vault": "/tmp/example-vault",
+  "workspace_id": "22222222-2222-4222-8222-222222222222"
+}

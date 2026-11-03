@@ -94,6 +94,7 @@ func newChatE2EEnv(t *testing.T) *chatE2EEnv {
 	api.Use(mw.ChatSessionDenialAudit(activityRepo))
 	api.Use(mw.WorkspaceRLS(db, projectRepo))
 	api.Use(mw.RequireWorkspaceMemberScoped(db))
+	api.Use(mw.RequireTaskProjectMember(db))
 	api.Use(mw.ChatSessionProjectScope(db))
 	api.POST("/tasks/:task_id/move", taskHandler.MoveTask, mw.RequireWorkspaceMember(db), mw.RequirePermission(mw.PermUpdateTask, memberRepo))
 	api.POST("/tasks/:task_id/dependencies", depHandler.Create, mw.RequireWorkspaceMember(db), mw.RequirePermission(mw.PermUpdateTask, memberRepo))

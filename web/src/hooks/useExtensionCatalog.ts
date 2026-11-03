@@ -159,7 +159,9 @@ export function mergeCatalog(
       blocked: s.blocked, blockedReason: s.blocked_reason,
       allowed: s.allowed ?? !s.blocked,
       installed,
-      connected: !theme && (Boolean(w?.connection) || status?.source === "instance"),
+      // For a repository-installed (external) extension an instance-level setting is not a workspace
+      // connection: the install handshake needs one, so connecting stays a separate, consented step.
+      connected: !theme && (Boolean(w?.connection) || (status?.source === "instance" && s.runtime !== "external")),
       themeActive: theme && activeThemeId !== undefined ? activeThemeId === s.id : undefined,
       enabled: Boolean(status?.enabled),
       createdAt: s.created_at ?? "", updatedAt: s.updated_at ?? "",

@@ -1899,6 +1899,11 @@ func (r *MemoryRepo) TouchAccessed(ctx context.Context, ids []uuid.UUID) error {
 // other-project/out-of-scope rows in via the fallback. That risk is not theoretical here:
 // this fallback is the widening path, so it is precisely where an unfiltered query would
 // pull the most ineligible rows in.
+// memoryORCandidateCap bounds how many OR matches ftsRankedORFallback ranks (never fewer
+// than the requested limit). Ranking recomputes each row's tsvector, ~1ms per memory on
+// prod, so the cap is what the arm costs.
+const memoryORCandidateCap = 100
+
 func (r *MemoryRepo) ftsRankedORFallback(
 	ctx context.Context,
 	wsID uuid.UUID,
@@ -1913,13 +1918,28 @@ func (r *MemoryRepo) ftsRankedORFallback(
 		return andRows, nil
 	}
 
-	args := []interface{}{wsID, orFragment} // $1=workspace_id, $2=OR tsquery fragment
-	conditions := []string{
-		"workspace_id = $1",
-		"to_tsvector('english', content || ' ' || COALESCE(key, '')) @@ to_tsquery('english', $2)",
+	// Candidates are the rows matching at least ceil(n/2) of the query's n lexemes, counted
+	// through the GIN expression index with one single-term scan per lexeme and capped at
+	// memoryORCandidateCap; only those are ranked. Evaluating the OR tsquery on every match
+	// and ranking each recomputed to_tsvector took 12s in production (8k of 8.7k rows match).
+	var lexemes pq.StringArray
+	if err := r.db.GetContext(ctx, &lexemes, `SELECT tsvector_to_array(to_tsvector('english', replace($1, '|', ' ')))`, orFragment); err != nil {
+		return andRows, fmt.Errorf("fts ranked or fallback: lexemes: %w", err)
 	}
+	if len(lexemes) == 0 {
+		return andRows, nil
+	}
+
+	args := []interface{}{wsID, orFragment} // $1=workspace_id, $2=OR tsquery fragment
+	const tsv = "to_tsvector('english', content || ' ' || COALESCE(key, ''))"
+	perLexeme := make([]string, len(lexemes))
+	for i, l := range lexemes {
+		args = append(args, "'"+strings.ReplaceAll(l, "'", "''")+"'")
+		perLexeme[i] = fmt.Sprintf("SELECT id AS mid FROM memories WHERE %s @@ $%d::tsquery", tsv, len(args))
+	}
+	conditions := []string{"workspace_id = $1"}
 	conditions = append(conditions, recallLifecycleConditions(filter, true)...)
-	argIdx := 3
+	argIdx := len(args) + 1
 
 	if projID != nil {
 		conditions = append(conditions, fmt.Sprintf("project_id = $%d", argIdx))
@@ -1932,17 +1952,24 @@ func (r *MemoryRepo) ftsRankedORFallback(
 	limitIdx := argIdx
 
 	q := fmt.Sprintf(`
+		WITH m AS MATERIALIZED (
+			SELECT mid, count(*) AS matched FROM (%s) u GROUP BY mid HAVING count(*) >= %d
+		), cand AS MATERIALIZED (
+			SELECT memories.id AS cid FROM memories JOIN m ON m.mid = memories.id
+			WHERE %s ORDER BY m.matched DESC LIMIT %d
+		)
 		SELECT %s,
-		       ts_rank_cd(
-		           to_tsvector('english', content || ' ' || COALESCE(key, '')),
-		           to_tsquery('english', $2)
-		       ) AS score
+		       ts_rank_cd(%s, to_tsquery('english', $2)) AS score
 		FROM memories
-		WHERE %s
+		WHERE id IN (SELECT cid FROM cand)
 		ORDER BY score DESC
 		LIMIT $%d`,
-		memoryColumns,
+		strings.Join(perLexeme, " UNION ALL "),
+		(len(lexemes)+1)/2,
 		joinAnd(conditions),
+		max(memoryORCandidateCap, limit),
+		memoryColumns,
+		tsv,
 		limitIdx,
 	)
 

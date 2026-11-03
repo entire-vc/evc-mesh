@@ -69,6 +69,18 @@ func (f fakeProjects) GetByID(_ context.Context, id uuid.UUID) (*domain.Project,
 	return nil, errors.New("not found")
 }
 
+// fakeProjectMembers holds project_members rows as project -> users.
+type fakeProjectMembers map[uuid.UUID][]uuid.UUID
+
+func (f fakeProjectMembers) ExistsMember(_ context.Context, projectID uuid.UUID, userID, _ *uuid.UUID) (bool, error) {
+	for _, u := range f[projectID] {
+		if userID != nil && u == *userID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 type fakeBindings map[uuid.UUID]bool
 
 func (f fakeBindings) GetBinding(_ context.Context, projectID uuid.UUID, _ string) (*domain.ProjectIntegration, error) {
@@ -83,12 +95,16 @@ type uiFixture struct {
 	signer         *fakeSigner
 	user, ws       uuid.UUID
 	ownTask, other uuid.UUID
-	ownProj        uuid.UUID
+	// member is a plain workspace member who is in the task's project;
+	// stranger is a plain workspace member who is not.
+	member, stranger uuid.UUID
+	ownProj          uuid.UUID
 }
 
 func newUIFixture(t *testing.T, enabled bool, domains ...string) *uiFixture {
 	t.Helper()
-	f := &uiFixture{signer: &fakeSigner{}, user: uuid.New(), ws: uuid.New(), ownTask: uuid.New(), other: uuid.New()}
+	f := &uiFixture{signer: &fakeSigner{}, user: uuid.New(), ws: uuid.New(), ownTask: uuid.New(), other: uuid.New(),
+		member: uuid.New(), stranger: uuid.New()}
 	man := extensions.Manifest{
 		ID: "hello", Runtime: "external",
 		Capabilities: extensions.Capabilities{Network: &extensions.Network{AllowedDomains: domains}},
@@ -107,10 +123,11 @@ func newUIFixture(t *testing.T, enabled bool, domains ...string) *uiFixture {
 	}))
 	ownProj, otherProj := uuid.New(), uuid.New()
 	f.ownProj = ownProj
-	f.h = NewExtensionUIHandler(reg, f.signer, fakeMembers{f.user: "admin"},
+	f.h = NewExtensionUIHandler(reg, f.signer, fakeMembers{f.user: "admin", f.member: "member", f.stranger: "member"},
 		fakeUsers{&domain.User{ID: f.user, Email: "me@example.com"}},
 		fakeTasks{f.ownTask: {ID: f.ownTask, ProjectID: ownProj}, f.other: {ID: f.other, ProjectID: otherProj}},
-		fakeProjects{ownProj: {ID: ownProj, WorkspaceID: f.ws}, otherProj: {ID: otherProj, WorkspaceID: uuid.New()}})
+		fakeProjects{ownProj: {ID: ownProj, WorkspaceID: f.ws}, otherProj: {ID: otherProj, WorkspaceID: uuid.New()}},
+		fakeProjectMembers{ownProj: {f.member}})
 	return f
 }
 
@@ -310,6 +327,41 @@ func TestUIContext_ServiceOnMeshOriginRefused(t *testing.T) {
 	f.h.WithSelfOrigins("https://HELLO.example.com", "")
 	rec, _ = f.callOn(t, f.user, body(f), "mesh.example.com")
 	assert.Equal(t, http.StatusConflict, rec.Code, "the configured public Mesh URL is the service host")
+}
+
+// A workspace member who is not in the project must not be handed a token that
+// names the project or one of its tasks: the extension service acts on that
+// token with the user's identity. Owner/admin and project members keep it, and a
+// token naming no project is still a workspace-member matter.
+func TestUIContext_ProjectMembership(t *testing.T) {
+	f := newUIFixture(t, true, "hello.example.com")
+	ws := `"workspace_id":"` + f.ws.String() + `","slot":"sidebar.item"`
+	byTask := `{` + ws + `,"task_id":"` + f.ownTask.String() + `"}`
+	byProject := `{` + ws + `,"project_id":"` + f.ownProj.String() + `"}`
+
+	for _, tc := range []struct {
+		name string
+		user uuid.UUID
+		body string
+		want int
+	}{
+		{"stranger by task", f.stranger, byTask, http.StatusNotFound},
+		{"stranger by project", f.stranger, byProject, http.StatusNotFound},
+		{"stranger without project", f.stranger, `{` + ws + `}`, http.StatusOK},
+		{"member by task", f.member, byTask, http.StatusOK},
+		{"member by project", f.member, byProject, http.StatusOK},
+		{"admin by task", f.user, byTask, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f.signer.got = uictx.Claims{}
+			rec, out := f.call(t, tc.user, tc.body)
+			assert.Equal(t, tc.want, rec.Code, rec.Body.String())
+			if tc.want != http.StatusOK {
+				assert.Nil(t, out["token"], "a refused request carried a token")
+				assert.Equal(t, uuid.Nil, f.signer.got.UserID, "a token was signed for a refused request")
+			}
+		})
+	}
 }
 
 func TestUIContext_ProjectView(t *testing.T) {

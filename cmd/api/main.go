@@ -46,6 +46,7 @@ import (
 	telegramext "github.com/entire-vc/evc-mesh/internal/extensions/telegram"
 	"github.com/entire-vc/evc-mesh/internal/extensions/uictx"
 	"github.com/entire-vc/evc-mesh/internal/handler"
+	"github.com/entire-vc/evc-mesh/internal/hostlocalqa"
 	githubapi "github.com/entire-vc/evc-mesh/internal/integration/github"
 	gitlabapi "github.com/entire-vc/evc-mesh/internal/integration/gitlab"
 	"github.com/entire-vc/evc-mesh/internal/integration/teamrelay"
@@ -1055,6 +1056,8 @@ func main() {
 	sessionRepo := postgres.NewSessionRepo(db)
 	taskHandler := handler.NewTaskHandlerWithSessions(taskService, sessionRepo).
 		WithCommentService(commentService)
+	transitionReceiptHandler := handler.NewTransitionReceiptHandler(
+		service.NewTransitionReceiptService(postgres.NewTransitionReceiptRepo(db), taskRepo), taskService)
 	statusHandler := handler.NewTaskStatusHandler(taskStatusService)
 	commentHandler := handler.NewCommentHandler(commentService, taskService)
 	humanGateDecisionHandler := handler.NewHumanGateDecisionHandler(commentService, taskService)
@@ -1122,7 +1125,7 @@ func main() {
 	// Mesh as the identity provider of external-extension iframe screens: instance
 	// signing key (rotates with an overlap), JWKS and the context token.
 	uiContextService := uictx.New(postgres.NewSigningKeyRepo(db), cfg.Email.BaseURL)
-	extensionUIHandler := handler.NewExtensionUIHandler(extensionRegistry, uiContextService, workspaceMemberRepo, userRepo, taskRepo, projectRepo).
+	extensionUIHandler := handler.NewExtensionUIHandler(extensionRegistry, uiContextService, workspaceMemberRepo, userRepo, taskRepo, projectRepo, projectMemberRepo).
 		WithSelfOrigins(append([]string{cfg.Email.BaseURL}, cfg.CORS.AllowOrigins...)...).
 		WithProjectBindings(projectIntegrationService).
 		WithProjectScope(extensionProjectScopeRepo)
@@ -1140,7 +1143,16 @@ func main() {
 	agentChatHandler := handler.NewAgentChatHandler(postgres.NewAgentChatRepo(db), integrationRepo, projectIntegrationRepo).WithEvents(chatEvents).
 		WithAttachments(postgres.NewChatAttachmentRepo(db), chatAttachmentStore).WithRunnerHints(agentNotifyRedis)
 	chatAuditHandler := handler.NewChatAuditHandler(postgres.NewChatAuditRepo(db))
-	chatRunnerHandler := handler.NewChatRunnerHandler(postgres.NewChatRunnerRepo(db))
+	chatRunnerRepo := postgres.NewChatRunnerRepo(db)
+	chatRunnerHandler := handler.NewChatRunnerHandler(chatRunnerRepo)
+	existingSessionHandler := handler.NewExistingSessionHandler(postgres.NewExistingSessionRepo(db), chatRunnerRepo)
+	hostLocalQAPolicy, qaPolicyErr := hostlocalqa.LoadPolicy()
+	if qaPolicyErr != nil {
+		log.Fatalf("host-local QA policy: %v", qaPolicyErr)
+	}
+	// OFF unless explicitly "true": the routes then refuse every authenticated caller.
+	hostLocalQAHandler := handler.NewHostLocalQAHandler(postgres.NewHostLocalQARepo(db, hostLocalQAPolicy), chatRunnerRepo,
+		hostLocalQAPolicy, os.Getenv("HOST_LOCAL_QA_ASSIGNMENT_ENABLED") == "true")
 	chatClaimHandler := handler.NewChatClaimHandler(postgres.NewChatRunnerRepo(db), agentNotifyRedis, chatAttachmentStore)
 	chatClaimHandler.SetShutdownSignal(httpShutdownCh)
 	chatTurnEventsService := service.NewChatTurnEventsService(
@@ -1678,6 +1690,9 @@ func main() {
 	api := v1.Group("")
 	// ExtensionAuth first: an ext_ token is resolved here (invalid one = 401, no
 	// fall-through) and DualAuth then skips the request.
+	// The Keep metadata probe answers in its own closed error envelope, so this is
+	// first: it must see the 401/403/404/429 the guards below produce.
+	api.Use(mw.KeepMetadataEnvelope())
 	api.Use(mw.ExtensionAuth(extensionActorService))
 	// A cst_ chat-session token is resolved here too (invalid = 401, no
 	// fall-through) and DualAuth then skips the request.
@@ -1706,6 +1721,12 @@ func main() {
 	// guarded by construction rather than by the author remembering.
 	// Must run after WorkspaceRLS, which resolves and stores the workspace role.
 	api.Use(mw.RequireWorkspaceMemberScoped(db))
+	// Project membership for every route naming a task or an object of one. Those
+	// routes have no :proj_id, so without this a workspace member outside the
+	// project read and edited its tasks by id. Group-level for the same reason as
+	// the workspace guard above. Must run after it: it relies on the workspace
+	// role WorkspaceRLS resolved and on the 404 for a task that does not exist.
+	api.Use(mw.RequireTaskProjectMember(db))
 	// A chat token reaches only its own project; refuses what it cannot place.
 	// After the workspace guards: it is a narrowing, never a substitute for them.
 	api.Use(mw.ChatSessionProjectScope(db))
@@ -1824,6 +1845,9 @@ func main() {
 	api.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/desired", runtimeHandler.Desired)
 	api.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/quota-observations", runtimeHandler.ReportQuota)
 	api.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/quota-observations", runtimeHandler.QuotaObservations)
+	api.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/execution-instances", runtimeHandler.RegisterExecutionInstance)
+	api.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/execution-reports", runtimeHandler.ReportExecutions)
+	api.GET("/workspaces/:ws_id/agent-executions", runtimeHandler.AgentExecutions)
 	api.POST("/workspaces/:ws_id/runtime/artifacts/:provenance_artifact_id/provenance", runtimeHandler.Provenance)
 	api.GET("/workspaces/:ws_id/runtime/bindings/:binding_id", runtimeHandler.Binding)
 	api.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/admission", runtimeHandler.Admit, rbac(mw.PermManageMembers))
@@ -1910,6 +1934,21 @@ func main() {
 	api.GET("/runner/chat/commands", chatRunnerHandler.Commands)
 	api.POST("/runner/chat/commands/:command_id/ack", chatRunnerHandler.AckCommand)
 	api.GET("/runner/chat/threads/:thread_id/history", chatRunnerHandler.History)
+	// Strict existing-session metadata delivery (agent key; receiver routes also need the runner bearer).
+	api.POST("/runner/existing-session/receivers", existingSessionHandler.RegisterReceiver)
+	api.DELETE("/runner/existing-session/receivers/:receiver_id", existingSessionHandler.RevokeReceiver)
+	api.GET("/runner/existing-session/deliveries", existingSessionHandler.ListDeliveries)
+	api.POST("/runner/existing-session/deliveries/:delivery_id/ack", existingSessionHandler.AckDelivery)
+	api.POST("/existing-session/deliveries", existingSessionHandler.SendDelivery)
+	api.GET("/existing-session/deliveries/:delivery_id", existingSessionHandler.GetDelivery)
+	// Host-local QA assignment v1: separate capability, routes and admission; default OFF.
+	api.POST("/runner/host-local-qa/v1/receivers", hostLocalQAHandler.RegisterReceiver)
+	api.DELETE("/runner/host-local-qa/v1/receivers/:receiver_id", hostLocalQAHandler.RevokeReceiver)
+	api.GET("/runner/host-local-qa/v1/deliveries", hostLocalQAHandler.ListDeliveries)
+	api.POST("/runner/host-local-qa/v1/deliveries/:delivery_id/ack", hostLocalQAHandler.AckDelivery)
+	api.POST("/runner/host-local-qa/v1/deliveries/:delivery_id/check", hostLocalQAHandler.CheckDelivery)
+	api.POST("/host-local-qa/v1/deliveries", hostLocalQAHandler.SendDelivery)
+	api.GET("/host-local-qa/v1/deliveries/:delivery_id", hostLocalQAHandler.GetDelivery)
 	api.POST("/projects/:proj_id/members", projectMemberHandler.Add, projAccess, rbac(mw.PermManageMembers))
 	api.POST("/projects/:proj_id/members/agents", projectMemberHandler.AddAgent, projAccess, rbac(mw.PermManageMembers))
 	api.PATCH("/projects/:proj_id/members/:user_id", projectMemberHandler.UpdateRole, projAccess, rbac(mw.PermManageMembers))
@@ -1939,6 +1978,15 @@ func main() {
 	api.PATCH("/tasks/:task_id", taskHandler.Update, wsAccess, rbac(mw.PermUpdateTask))
 	api.DELETE("/tasks/:task_id", taskHandler.Delete, wsAccess, rbac(mw.PermDeleteTask))
 	api.POST("/tasks/:task_id/move", taskHandler.MoveTask, wsAccess, rbac(mw.PermUpdateTask))
+	api.POST("/tasks/:task_id/transitions/product-done", transitionReceiptHandler.ProductDone, wsAccess, rbac(mw.PermUpdateTask))
+	api.GET("/tasks/:task_id/transition-receipts", transitionReceiptHandler.ListReceipts, wsAccess)
+	api.POST("/tasks/:task_id/acceptance-intents", transitionReceiptHandler.RecordAcceptance, wsAccess, rbac(mw.PermUpdateTask))
+	api.GET("/tasks/:task_id/acceptance-intents", transitionReceiptHandler.ListAcceptances, wsAccess)
+	api.POST("/tasks/:task_id/acceptance-intents/:intent_id/revoke", transitionReceiptHandler.RevokeAcceptance, wsAccess, rbac(mw.PermUpdateTask))
+	api.GET("/tasks/:task_id/product-done-acceptance", transitionReceiptHandler.ProductDoneAcceptance, wsAccess)
+	api.GET("/projects/:proj_id/product-done-capabilities", transitionReceiptHandler.Capabilities, projAccess)
+	api.GET("/projects/:proj_id/transition-receipt-policy", transitionReceiptHandler.GetPolicy, projAccess)
+	api.PUT("/projects/:proj_id/transition-receipt-policy", transitionReceiptHandler.SetPolicy, projAccess, rbac(mw.PermManageProject))
 	api.POST("/tasks/:task_id/parked-waits", taskHandler.RegisterParkedWait, wsAccess, rbac(mw.PermUpdateTask))
 	api.POST("/tasks/:task_id/parked-waits/release", taskHandler.ReleaseParkedWait, wsAccess, rbac(mw.PermUpdateTask))
 	api.POST("/tasks/:task_id/start-after/compare-clear", taskHandler.CompareClearStartAfter, wsAccess, rbac(mw.PermUpdateTask))
@@ -1998,7 +2046,13 @@ func main() {
 				return nil, false
 			}
 			return gitlabapi.NewClient(cfg.BaseURL, cfg.Token), true
-		}), taskService)
+		}).WithGitHub(func(ctx context.Context, ws uuid.UUID) (githubapi.PullRequestChecker, bool) {
+		cfg, _, ok := vcsIntegrationResolver.ResolveGitHub(ctx, ws)
+		if !ok || cfg.Token == "" {
+			return nil, false
+		}
+		return githubapi.NewClient(cfg.Token), true
+	}), taskService)
 	api.POST("/tasks/:task_id/wait", turnCommandHandler.WaitFor, wsAccess, rbac(mw.PermUpdateTask))
 	api.POST("/tasks/:task_id/next", turnCommandHandler.ContinueNext, wsAccess, rbac(mw.PermUpdateTask))
 	api.POST("/tasks/:task_id/handoff", turnCommandHandler.HandOff, wsAccess, rbac(mw.PermUpdateTask))
@@ -2303,6 +2357,14 @@ func main() {
 	api.GET("/workspaces/:ws_id/secrets", secretHandler.List, rbac(mw.PermManageSecrets))
 	api.POST("/secrets/:secret_id/rotate", secretHandler.Rotate, rbac(mw.PermManageSecrets))
 	api.DELETE("/secrets/:secret_id", secretHandler.Delete, rbac(mw.PermManageSecrets))
+	// Keep metadata probe (protocol mesh-keep-metadata-v1): version + length of a
+	// workspace secret's current Keep value, never the value. A human session with
+	// PermManageSecrets only: RequireUserAuth refuses agent keys, extensions,
+	// connectors and chat tokens before the role is read. Its errors use the
+	// route's closed envelope (mw.KeepMetadataEnvelope, first in the group).
+	keepMetadataHandler := handler.NewKeepMetadataHandler(secretRepo, keepMetadataReader(secretRouter))
+	api.GET("/workspaces/:ws_id/secrets/:secret_id/keep-metadata", keepMetadataHandler.Get, mw.RequireUserAuth(), rbac(mw.PermManageSecrets))
+	api.HEAD("/workspaces/:ws_id/secrets/:secret_id/keep-metadata", keepMetadataHandler.Head, mw.RequireUserAuth(), rbac(mw.PermManageSecrets))
 
 	// Integration config routes.
 	api.GET("/extensions/events", extensionEventHandler.ListEvents)
@@ -2312,18 +2374,8 @@ func main() {
 	// Signed Spark catalog: hourly refresh, ed25519-verified, last good copy kept.
 	// The pinned key can be replaced by the Spark instance setting catalog_public_key.
 	extensionCatalog := catalog.NewClient(
-		func() string {
-			u, _ := sparkIntegrationResolver.InstanceURL(context.Background())
-			return u
-		},
-		func() string {
-			is, ierr := extensionInstanceStore.InstanceSetting(context.Background(), sparkext.ID)
-			if ierr != nil || is == nil {
-				return ""
-			}
-			k, _ := is.Settings["catalog_public_key"].(string)
-			return k
-		},
+		func() string { return sparkIntegrationResolver.CatalogConfig(context.Background()).URL },
+		func() string { return sparkIntegrationResolver.CatalogConfig(context.Background()).PublicKey },
 	)
 	extensionCatalog.OnRefresh = (&catalog.Enforcer{
 		Store: installedExtRepo, Journal: extensionPolicyRepo,
@@ -2395,20 +2447,10 @@ func main() {
 	themeHandler.WithRepoInstall(repoInstallSvc)
 	go repoInstallSvc.RunAutoUpdate(context.Background(), 30*time.Minute)
 	catalogInstaller := &catalog.Installer{
-		Catalog: extensionCatalog,
-		SparkURL: func() string {
-			u, _ := sparkIntegrationResolver.InstanceURL(context.Background())
-			return u
-		},
-		CounterOn: func() bool {
-			is, ierr := extensionInstanceStore.InstanceSetting(context.Background(), sparkext.ID)
-			if ierr != nil || is == nil {
-				return true
-			}
-			on, set := is.Settings["catalog_install_counter"].(bool)
-			return !set || on
-		},
-		Store: installedExtRepo, Journal: extensionPolicyRepo,
+		Catalog:   extensionCatalog,
+		SparkURL:  func() string { return sparkIntegrationResolver.CatalogConfig(context.Background()).URL },
+		CounterOn: func() bool { return sparkIntegrationResolver.CatalogConfig(context.Background()).CounterOn },
+		Store:     installedExtRepo, Journal: extensionPolicyRepo,
 		OnChange: func(ctx context.Context) {
 			if syncErr := externalRuntime.Sync(ctx); syncErr != nil {
 				log.Printf("[extensions] external runtime sync after catalog install: %v", syncErr)
@@ -2445,6 +2487,15 @@ func main() {
 	api.GET("/ext/me", extensionActorHandler.Me)
 	api.POST("/ext/me/token/rotate", extensionActorHandler.SelfRotate)
 	api.DELETE("/ext/me/token/previous", extensionActorHandler.SelfRevokePrevious)
+	// Own limit per extension actor: an external service may call this once per
+	// user request, and it must not become a cheap way to probe the workspace.
+	api.POST("/ext/me/authorize", handler.NewExtensionAuthorizeHandler(db, extensionProjectScopeRepo, extensionActorService).Authorize, mw.RateLimit(mw.RateLimitConfig{
+		Enabled:     cfg.RateLimit.Enabled,
+		RPM:         cfg.RateLimit.ExtAuthorizeRPM,
+		KeyFunc:     mw.RateLimitKeyByActor,
+		RedisClient: sharedRedis,
+		Name:        "ext-authorize",
+	}))
 	extensionEventReplayer, _ := webhookService.(service.ExtensionEventReplayer)
 	extensionEventReplayHandler := handler.NewExtensionEventReplayHandler(extensionEventReplayer)
 	api.GET("/ext/me/events", extensionEventReplayHandler.List)
@@ -3380,4 +3431,19 @@ func artifactIdempotencyBodyLimit(maxBytes int64) int64 {
 		maxBytes = maxArtifactBodyBytes
 	}
 	return (maxBytes+2)/3*4 + (2 << 20)
+}
+
+// keepMetadataReader is the metadata-only view of the process Keep client, nil
+// when Keep is not configured. It is the narrow interface on purpose: the probe
+// route is handed nothing that can read or write a value.
+func keepMetadataReader(r *secretstore.Router) secretstore.KeepMetadataReader {
+	if r == nil {
+		return nil
+	}
+	k, ok := r.Keep.(secretstore.Keep)
+	if !ok || k.Client == nil {
+		return nil
+	}
+	m, _ := k.Client.(secretstore.KeepMetadataReader)
+	return m
 }

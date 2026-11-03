@@ -37,7 +37,7 @@ export function MyRunnerPage() {
   const subtitleKey = runtime.result.state !== "ready" ? "subtitle.neutral"
     : runtime.result.data.source === "workspace" ? "subtitle.workspace" : "subtitle.personal";
 
-  const reloadAll = () => { agents.reload(); runners.reload(); history.reload(); };
+  const reloadAll = () => { agents.reload(); runners.reload(); runtime.reload(); history.reload(); };
   const reloadCatalog = () => { runtime.reload(); history.reload(); };
   const doc = runtime.result.state === "ready" ? runtime.result.data : null;
 
@@ -52,7 +52,7 @@ export function MyRunnerPage() {
         {tab === "overview" && (
           <>
             {/* Keyed so a workspace switch starts the card (role, extension catalog) from scratch. */}
-            <RunnerAdminCard key={wsId} />
+            <RunnerAdminCard key={wsId} onChanged={reloadAll} />
             <RunnerProgramCard key={`program-${wsId}`} />
             <RunnersSection result={runners.result} reload={runners.reload} wsId={wsId} />
           </>

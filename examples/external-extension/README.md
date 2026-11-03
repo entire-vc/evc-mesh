@@ -9,7 +9,7 @@ every call Mesh makes to an external service and how to answer it:
 | token delivery | `token_path` `/mesh/token` | stores the extension token, answers `{"ok":true}` |
 | events | `events_path` `/mesh/events` | verifies the signature and the timestamp, skips a repeat of a body already processed in this process within one hour (see "Deduplicate deliveries") |
 | health | `health_path` `/healthz` | answers 200 |
-| screens | `external.ui` `/mesh/ui/hello`, `/mesh/ui/task` | verifies the 60-second context token, renders a page |
+| screens | `external.ui` `/mesh/ui/hello`, `/mesh/ui/task`, `/mesh/ui/project[/section]` | verifies the 60-second context token, renders a page; the project screen has two sections and sends `mesh.state` when the user switches |
 
 And one call back: on the first event it sees for a task (picked from `task_id` in the signed body, not from the unsigned event header) it posts a comment with its extension
 token (`POST /api/v1/tasks/{id}/comments`, capability `comments:write`).

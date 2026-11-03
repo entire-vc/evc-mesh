@@ -9,6 +9,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 )
 
 // The body checks run before the repository is touched, so a handler with a nil
@@ -95,6 +98,38 @@ func TestRuntimeHandlerRefusesMalformedBodiesBeforeRepository(t *testing.T) {
 			e.ServeHTTP(rec, req)
 			assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 			assert.NotContains(t, rec.Body.String(), "api_key", "refusal must not echo the rejected field value")
+		})
+	}
+}
+
+// AcquireReservation is handed a task in the body, which the workspace guard on
+// the path never saw: a task outside the caller's projects is refused before the
+// repository (nil here, so reaching it would panic), and so is a request that
+// carries no access check at all.
+func TestRuntimeAcquireReservationRequiresTaskProjectAccess(t *testing.T) {
+	own, foreign := uuid.New(), uuid.New()
+	onlyOwn := mw.ProjectAccessCheck{Task: func(id uuid.UUID) bool { return id == own }}
+	h := NewRuntimeHandler(nil)
+	body := func(task uuid.UUID) string {
+		return `{"idempotency_key":"k","profile_id":"p","task_id":"` + task.String() + `","checkout_generation":1,"checkout_request_id":"` + uuid.New().String() + `","worker_ref":"w",` +
+			`"expected_catalog_revision":1,"expected_catalog_digest":"d","expected_admission_revision":1,"expected_profile_revision":"rev-1","expected_pool_set_digest":"p","ttl_seconds":60}`
+	}
+	for _, tc := range []struct {
+		name   string
+		checks []mw.ProjectAccessCheck
+	}{{"not a member", []mw.ProjectAccessCheck{onlyOwn}}, {"no check on the request", nil}} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/?resource_owner_workspace_id="+uuid.New().String(), strings.NewReader(body(foreign)))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			rec := httptest.NewRecorder()
+			c := echo.New().NewContext(req, rec)
+			c.SetParamNames("ws_id", "binding_id")
+			c.SetParamValues(uuid.New().String(), "b")
+			for _, check := range tc.checks {
+				mw.SetProjectAccess(c, check)
+			}
+			require.NoError(t, h.AcquireReservation(c))
+			assert.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
 		})
 	}
 }

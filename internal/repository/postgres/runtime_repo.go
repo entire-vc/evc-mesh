@@ -249,6 +249,14 @@ func runtimeConnection(ctx context.Context, q sqlx.QueryerContext, ws uuid.UUID,
 		return nil, err
 	}
 	value := row.toDomain()
+	// A connection that was only switched on holds `{}` and no saved revision: read it as
+	// the empty catalog, so the forms open; the first save (if_revision 0) writes the real
+	// one. Once a revision exists, `{}` is damage and must stay visible as such.
+	if revision, _, err := runtimeRevision(ctx, q, value.ID); err != nil {
+		return nil, err
+	} else if revision == 0 {
+		value.Config = domain.NormalizeRuntimeConfig(value.Config)
+	}
 	return &value, nil
 }
 

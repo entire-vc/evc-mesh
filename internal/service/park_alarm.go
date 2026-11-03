@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
@@ -56,8 +57,8 @@ type ParkAlarmError struct {
 }
 
 func (e *ParkAlarmError) Error() string {
-	return "park without a wake-up: this task carries the passive-wait label \"" + e.Label +
-		"\", so nothing will feed it again while it sits in backlog — no agent feed polls " +
+	return "park without a wake-up: this task carries the passive-wait label " + strconv.Quote(e.Label) +
+		", so nothing will feed it again while it sits in backlog — no agent feed polls " +
 		"backlog, and the promotion sweeper fires on due_date. Set a future due_date on the " +
 		"task first (PATCH /tasks/:id with due_date) and retry, or drop the label if the card " +
 		"is genuinely ready to be picked up"

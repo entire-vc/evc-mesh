@@ -39,6 +39,7 @@ type patchCall struct {
 
 // stubVCSLinkService captures the GitHubWebhookEvent passed by the handler.
 type stubVCSLinkService struct {
+	shipAllow shipAllowFn
 	// actor types seen on the ctx of each webhook handler call.
 	handleActors       []domain.ActorType
 	gitlabHandleActors []domain.ActorType
@@ -86,9 +87,10 @@ func (s *stubVCSLinkService) Create(_ context.Context, input domain.CreateVCSLin
 	return link, created, s.createReturnErr
 }
 
-func (s *stubVCSLinkService) PatchShipSHAByURL(_ context.Context, ws uuid.UUID, mrURL, sha string) ([]domain.VCSLink, error) {
+func (s *stubVCSLinkService) PatchShipSHAByURL(_ context.Context, ws uuid.UUID, mrURL, sha string, mayAccessTask func(uuid.UUID) bool) ([]domain.VCSLink, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.shipAllow = mayAccessTask
 	s.shipCalls = append(s.shipCalls, shipCall{ws: ws, url: mrURL, sha: sha})
 	if s.shipReturnErr != nil {
 		return nil, s.shipReturnErr
@@ -1158,6 +1160,9 @@ func TestGitHubWebhook_ActorOnCtx(t *testing.T) {
 		})
 	}
 }
+
+// shipAllowFn is the task filter the handler handed to PatchShipSHAByURL.
+type shipAllowFn = func(uuid.UUID) bool
 
 type shipCall struct {
 	ws       uuid.UUID

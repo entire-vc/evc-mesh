@@ -18,7 +18,8 @@ import { installCatalogExtension, getCatalogCard, type CatalogCard } from "@/lib
 import { extensionSettingsPath } from "@/lib/extension-settings-route";
 import { toast } from "@/components/ui/toast";
 import { applyWorkspaceTheme } from "@/core/themes/runtime";
-import { putWorkspaceTheme } from "@/lib/themes";
+import { installBuiltinTheme, putWorkspaceTheme } from "@/lib/themes";
+import { setExtensionAllowed } from "@/lib/extension-instance";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { cn } from "@/lib/cn";
 import { isRunnerProduct, runnerScreenPath } from "@/lib/runner-product";
@@ -32,7 +33,7 @@ export function detailTab(search: URLSearchParams): DetailTab {
 }
 
 // W2.9 (install from repository) is not shipped: the admin action stays inert.
-const ADMIN_ACTIONS_ENABLED = import.meta.env.VITE_EXTENSIONS_ADMIN_ACTIONS === "true";
+const adminActionsEnabled = () => import.meta.env.VITE_EXTENSIONS_ADMIN_ACTIONS === "true";
 
 function Permissions({ entry }: { entry: CatalogEntry }) {
   const { t } = useTranslation("integrations");
@@ -158,18 +159,22 @@ function PrimaryAction({ entry, wsSlug, isAdmin, isInstanceAdmin, onInstalled }:
     return <Button variant={entry.connected ? "outline" : "default"} onClick={() => navigate(runnerScreenPath(wsSlug))}>{t("detail.action.manageInRunner")}</Button>;
   }
   if (entry.blocked) return <Button disabled>{t("detail.action.blocked")}</Button>;
-  if (!entry.installed && entry.source === "catalog" && isInstanceAdmin) {
-    const install = () => {
-      setBusy(true);
-      installCatalogExtension(entry.id)
-        .then(() => (toast.success(t("detail.action.installed", { name: entry.name })), onInstalled()))
-        .catch((e) => toast.error(apiErrorMessage(e, t("installed.actionFailed"))))
-        .finally(() => setBusy(false));
-    };
-    return <Button disabled={busy} onClick={install}>{t("detail.action.install")}</Button>;
+  // One instance-admin action: a catalog extension or a built-in theme missing from the instance is installed
+  // (themes through the theme flow, not the generic one); an explicit deny is lifted by Allow below.
+  const run = (call: () => Promise<unknown>, done: string) => () => {
+    setBusy(true);
+    call()
+      .then(() => (toast.success(done), onInstalled()))
+      .catch((e) => toast.error(apiErrorMessage(e, t("installed.actionFailed"))))
+      .finally(() => setBusy(false));
+  };
+  const builtinTheme = entry.kind === "theme" && entry.source === "builtin";
+  if (!entry.installed && (entry.source === "catalog" || builtinTheme) && isInstanceAdmin) {
+    const install = builtinTheme ? () => installBuiltinTheme(entry.id) : () => installCatalogExtension(entry.id);
+    return <Button disabled={busy} onClick={run(install, t("detail.action.installed", { name: entry.name }))}>{t("detail.action.install")}</Button>;
   }
   if (!entry.installed) {
-    return ADMIN_ACTIONS_ENABLED && isAdmin
+    return adminActionsEnabled() && isAdmin && !builtinTheme
       ? <Button disabled>{t("detail.action.install")}</Button>
       : <p className="max-w-56 text-xs text-muted-foreground">{t("detail.action.askAdmin")}</p>;
   }
@@ -180,7 +185,11 @@ function PrimaryAction({ entry, wsSlug, isAdmin, isInstanceAdmin, onInstalled }:
       : <p className="max-w-56 text-xs text-muted-foreground">{t("installed.managedElsewhere")}</p>;
   }
   if (!entry.allowed) {
-    return isAdmin && ADMIN_ACTIONS_ENABLED
+    // Explicit deny is lifted by the instance admin through the ordinary allow call; the global list is untouched.
+    if (isInstanceAdmin) {
+      return <Button disabled={busy} onClick={run(() => setExtensionAllowed(entry.id, true), t("detail.action.allowed", { name: entry.name }))}>{t("detail.action.allow")}</Button>;
+    }
+    return isAdmin && adminActionsEnabled() && entry.kind !== "theme"
       ? <Button disabled>{t("detail.action.allow")}</Button>
       : <p className="max-w-56 text-xs text-muted-foreground">{t("detail.action.notAllowed")}</p>;
   }

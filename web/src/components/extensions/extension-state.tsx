@@ -4,6 +4,7 @@ import { EXTENSION_STATE_KEY, KEYS_FROM_KEY, type ExtensionState, type Extension
 import { cn } from "@/lib/cn";
 
 const VARIANT: Record<ExtensionStateName, "warning" | "outline" | "success" | "destructive"> = {
+  not_installed: "outline",
   not_allowed: "warning",
   available: "outline",
   enabled: "success",

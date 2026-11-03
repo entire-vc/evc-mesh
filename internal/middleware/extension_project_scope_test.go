@@ -47,9 +47,17 @@ func TestExtensionRoutes_ProjectScopeClassified(t *testing.T) {
 		if extensionBoundDeniedRoutes[route] {
 			classes++
 		}
+		if extensionBodyScopedRoutes[route] {
+			classes++
+		}
 		if classes != 1 {
 			t.Errorf("%s: classified %d times for the extension project scope, want exactly 1 "+
-				"(project parameter, extensionWorkspaceLevelRoutes or extensionBoundDeniedRoutes)", route, classes)
+				"(project parameter, extensionWorkspaceLevelRoutes, extensionBodyScopedRoutes or extensionBoundDeniedRoutes)", route, classes)
+		}
+	}
+	for route := range extensionBodyScopedRoutes {
+		if _, ok := routes[route]; !ok {
+			t.Errorf("%s is in extensionBodyScopedRoutes but not an extension route", route)
 		}
 	}
 	for route := range extensionWorkspaceLevelRoutes {

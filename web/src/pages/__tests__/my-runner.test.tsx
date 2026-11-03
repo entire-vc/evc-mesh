@@ -36,7 +36,7 @@ const PROGRAM = { id: "agent-runner", name: "Agent Runner", version: "0.1.0", ki
 const AGENT = { agent_id: "a1", name: "Robin", operator_user_id: ME, max_concurrent_tasks: 3, runtime_manager: false, controller: CONTROLLER };
 
 interface World {
-  agents: unknown[] | Error; runners: unknown[] | Error; history: unknown[] | Error; runtime: unknown | Error; extensionOn: boolean; role: string; enableError?: Error; slowOwner?: Promise<{ role: string }>; roleWs2?: string; slowCatalogWs2?: Promise<unknown>;
+  agents: unknown[] | Error; runners: unknown[] | Error; history: unknown[] | Error; runtime: unknown | Error; extensionOn: boolean; role: string; enableError?: Error; onEnable?: () => void; slowOwner?: Promise<{ role: string }>; roleWs2?: string; slowCatalogWs2?: Promise<unknown>;
   catalog: unknown | Error; revisions: unknown[]; puts: unknown[];
   /** What the next catalog PUT is refused with (once). */
   refuse?: Error; manifest?: unknown;
@@ -49,6 +49,7 @@ function route(path: string, init?: { method?: string; body?: unknown }): Promis
   const out = (v: unknown) => (v instanceof Error ? Promise.reject(v) : Promise.resolve(v));
   if (init?.method && init.method !== "GET") {
     if (path.endsWith("/runner/enable") && world.enableError) return Promise.reject(world.enableError);
+    if (path.endsWith("/runner/enable") && world.onEnable) world.onEnable();
     if (path === "/api/v1/workspaces/0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02/runtime" && init.method === "PUT") return saveCatalog(init.body as { if_revision: number; enabled: boolean; config: unknown });
     world.posts.push({ path, body: init.body });
     return Promise.resolve({});
@@ -320,6 +321,21 @@ describe("MyRunnerPage", () => {
     renderPage("owner");
     fireEvent.click(await screen.findByRole("button", { name: "Turn on Runner" }));
     await waitFor(() => expect(mockedApi).toHaveBeenCalledWith("/api/v1/workspaces/0b3c5a52-34d6-4a8e-9a8f-1f6b2e6c1d02/extensions/runner/enable", expect.objectContaining({ method: "POST" })));
+  });
+
+  it("first enable: Accounts opens the editable catalog at once, without a reload", async () => {
+    // Before: no runner connection, so the page holds the personal read-only document.
+    world.onEnable = () => {
+      world.extensionOn = true;
+      world.catalog = { mode: "managed", revision: 0, digest: "", enabled: true, drain_requested: false, config: { schema_version: 2, controllers: {}, accounts: {}, pools: {}, profiles: {}, bindings: {} }, controllers: [] };
+    };
+    renderPage("owner", "overview");
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on Runner" }));
+    await screen.findByText("Turn off Runner");
+    fireEvent.click(screen.getByRole("tab", { name: "Accounts" }));
+    const accounts = await screen.findByTestId("my-runner-resources-accounts");
+    // positive control: the personal view (the defect) has no Add button
+    expect(await within(accounts).findByRole("button", { name: "Add" })).toBeInTheDocument();
   });
 
   it("ignores a role cached in the shared store", async () => {

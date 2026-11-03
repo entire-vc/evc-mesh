@@ -82,7 +82,14 @@ __pycache__/
 web/e2e-tabs/results/
 web/e2e-appearance/results/
 web/e2e-appearance/junit.xml
+web/e2e-connect/results/
+web/e2e-connect/junit.xml
 web/e2e-tabs/shots/
 web/e2e-tabs/view-tab-bar.before.tsx
 web/agent-chat-e2e/
 extension-authorship-logs/
+keep-metadata-404-logs/
+connect-tls/
+
+web/partner-ui-report/
+.partner-ui-state.json

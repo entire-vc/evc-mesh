@@ -278,6 +278,25 @@ An extension whose manifest sets `external.token_path` gets its actor token (`ex
 
 Without `token_path` nothing changes: `rotate-token` returns the token in its response.
 
+### Checking a user's access (`POST /ext/me/authorize`)
+
+An external service that acts for workspace users (it took their identity from Mesh earlier) asks Mesh, per request, whether that user may still do the thing, instead of trusting what it cached. Requires the API capability `members:authorize` in the manifest; `members:read` does not grant it.
+
+```json
+POST /api/v1/ext/me/authorize
+{"user_id": "<uuid>", "action": "read" | "write" | "manage",
+ "workspace_id": "<optional>", "project_id": "<optional>", "task_id": "<optional>"}
+
+200 {"allowed": true, "reason": "project_role", "user_id": "...", "action": "write",
+     "workspace_id": "...", "project_id": "...", "checked_at": "..."}
+```
+
+- **Answered from the database as it is now:** workspace membership and role, a disabled account, and for a project (or a task, which names its project) the project role. A user removed from a project is denied by the next call. Workspace owners and admins pass every project; a workspace viewer is read-only whatever its project role; a project admin may `manage` that project.
+- **Scope:** always the extension's own workspace. A `workspace_id`, project or task outside it, deleted, or a `project_id` that is not the task's project is `404`.
+- **Not a directory:** a user id that does not exist and a user of another workspace get the same answer, `allowed: false, reason: "not_workspace_member"`. Other deny reasons: `user_disabled`, `not_project_member`, `insufficient_role`.
+- **Limit:** per extension actor, `MESH_RATE_LIMIT_EXT_AUTHORIZE_RPM` (default 300/min), `429` above it. Unknown body fields are `400`.
+- **Project-bound connection:** a connection limited to bound projects may ask only about those. A `project_id`, or a `task_id` whose project is not bound, is `403` (the same answer as on every other route), checked before the user is looked at; a workspace-level question stays open.
+
 ## Extension Event Catch-up and Redelivery
 
 An extension subscribed to events with `delivery: webhook` gets each event with up to four attempts (immediately, then after 1, 5 and 25 seconds). An event whose attempts all failed, or that the service lost after answering `2xx`, can be read back and sent again with the extension's own token. Both routes need no `capabilities.api` entry; they only ever touch the calling connection's own subscriptions.

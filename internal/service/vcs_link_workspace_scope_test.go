@@ -249,7 +249,7 @@ func TestPatchShipSHAByURL_WorkspaceIsolation(t *testing.T) {
 	}
 	linkA, linkB := mk(h.taskA.ID), mk(taskB.ID)
 
-	got, err := h.svc.PatchShipSHAByURL(ctx, h.wsA, mrURL, ship)
+	got, err := h.svc.PatchShipSHAByURL(ctx, h.wsA, mrURL, ship, nil)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, linkA.ID, got[0].ID)
@@ -257,6 +257,6 @@ func TestPatchShipSHAByURL_WorkspaceIsolation(t *testing.T) {
 	assert.NotContains(t, string(h.repo.links[linkB.ID].Metadata), ship, "other workspace's link must stay untouched")
 
 	// A workspace with no link on this url gets NotFound, not a silent write.
-	_, err = h.svc.PatchShipSHAByURL(ctx, uuid.New(), mrURL, ship)
+	_, err = h.svc.PatchShipSHAByURL(ctx, uuid.New(), mrURL, ship, nil)
 	require.Error(t, err)
 }

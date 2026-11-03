@@ -10,6 +10,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -120,6 +121,11 @@ func (h *TurnCommandHandler) WaitFor(c echo.Context) error {
 	var b waitForBody
 	if apiErr := bindWaitFor(c, &b); apiErr != nil {
 		return c.JSON(apiErr.Code, apiErr)
+	}
+	// Waiting on a card reads its state; the card is named in the body, out of
+	// the route guard's sight.
+	if b.TargetTaskID != nil && !mw.MayAccessTask(c, *b.TargetTaskID) {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("Task"))
 	}
 	res, err := h.svc.WaitFor(c.Request().Context(), id, service.WaitForInput{
 		TurnCommon: b.common(), On: b.On, TargetTaskID: b.TargetTaskID, TargetCondition: b.TargetCondition,

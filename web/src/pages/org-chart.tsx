@@ -1,6 +1,6 @@
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { agentLabel } from "@/lib/agent-label";
-import { useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router";
 import { useTranslation } from "react-i18next";
 import { Bot, Plus, UserPlus } from "lucide-react";
@@ -14,7 +14,12 @@ import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ExecutionCardSummary } from "@/components/agent-execution-summary";
+import { useAgentExecutions } from "@/hooks/use-agent-executions";
+import { summarizeByAgent, type AgentExecutionSummary, type ExecutionLoad } from "@/lib/agent-executions";
+import { useProjectStore } from "@/stores/project";
 import { AgentDetailDialog } from "@/components/agent-detail-dialog";
 import { InvitedAgentDialog } from "@/components/invited-agent-dialog";
 import { RegisterAgentDialog } from "@/components/register-agent-dialog";
@@ -188,6 +193,9 @@ function AgentCard({
   };
   const borderColor = statusBorderColors[agent.status] ?? "border-l-tone-neutral-400";
   const runnerModel = [agent.agent_type, agent.model].filter(Boolean).join(" · ");
+  const { load, summaries } = useContext(ExecutionsContext);
+  // With a projection the profile model is shown only as "profile" (unmanaged) or not at all.
+  const showLegacyProfile = !hasProjection(load, summaries, agent.id);
 
   return (
     <Card
@@ -220,11 +228,16 @@ function AgentCard({
           <p className="text-xs text-muted-foreground truncate">{agent.role}</p>
         )}
 
-        {(agent.agent_type || agent.model) && (
-          <p className="font-mono text-[11px] text-muted-foreground truncate" title={runnerModel}>
-            {runnerModel}
+        {showLegacyProfile && (agent.agent_type || agent.model) && (
+          <p className="flex items-baseline gap-1 font-mono text-[11px] text-muted-foreground min-w-0">
+            <span className="shrink-0 font-sans" data-testid="profile-model-label">
+              {t("executions.profileLabel")}
+            </span>
+            <span className="truncate" title={runnerModel}>{runnerModel}</span>
           </p>
         )}
+
+        <CardExecutions agentId={agent.id} />
 
         {agent.responsibility_zone && (
           <p className="text-xs text-muted-foreground truncate" title={agent.responsibility_zone}>
@@ -315,6 +328,51 @@ function HumanCard({ human }: { human: TeamDirectoryHuman }) {
       </CardContent>
     </Card>
   );
+}
+
+
+// ---------------------------------------------------------------------------
+// Scoped execution projection shared by every card (one fetch per page)
+// ---------------------------------------------------------------------------
+
+interface ExecutionsCtx {
+  load: ExecutionLoad | "loading";
+  summaries: Map<string, AgentExecutionSummary>;
+  projectName: (projectId: string) => string;
+}
+
+const ExecutionsContext = createContext<ExecutionsCtx>({
+  load: "loading",
+  summaries: new Map(),
+  projectName: (id) => id,
+});
+
+/** Run block of a card; the legacy profile line stays only where there is no projection to trust. */
+function CardExecutions({ agentId }: { agentId: string }) {
+  const { t } = useTranslation("integrations");
+  const { load, summaries, projectName } = useContext(ExecutionsContext);
+  if (load === "loading") {
+    return (
+      <div role="status" aria-busy="true" aria-label={t("executions.loading")}>
+        <Skeleton className="h-8 w-full" />
+      </div>
+    );
+  }
+  if (load.kind === "error") {
+    return (
+      <p data-testid="exec-error" role="status" className="text-[11px] text-tone-attention-600">
+        {t("executions.error")}
+      </p>
+    );
+  }
+  if (load.kind === "forbidden") return null;
+  const summary = summaries.get(agentId);
+  if (!summary) return null;
+  return <ExecutionCardSummary summary={summary} projectName={projectName} />;
+}
+
+function hasProjection(load: ExecutionsCtx["load"], summaries: ExecutionsCtx["summaries"], agentId: string) {
+  return load !== "loading" && load.kind === "ok" && summaries.has(agentId);
 }
 
 // ---------------------------------------------------------------------------
@@ -547,6 +605,21 @@ export function OrgChartPage() {
   const { orgChart, isOrgChartLoading, fetchOrgChart } = useRulesStore();
   const { agents, fetchAgents } = useAgentStore();
   const { myRole, fetchMyRole } = useMemberStore();
+  const { projects, fetchProjects } = useProjectStore();
+  const [projectFilter, setProjectFilter] = useState<string>("");
+  const { load: executions } = useAgentExecutions(currentWorkspace?.id, { projectId: projectFilter || null });
+  const summaries = useMemo(
+    () => (executions !== "loading" && executions.kind === "ok" ? summarizeByAgent(executions.items) : new Map<string, AgentExecutionSummary>()),
+    [executions],
+  );
+  const executionsCtx = useMemo<ExecutionsCtx>(
+    () => ({
+      load: executions,
+      summaries,
+      projectName: (id) => projects.find((p) => p.id === id)?.name ?? id,
+    }),
+    [executions, summaries, projects],
+  );
 
   // View mode from URL: /org-chart = tree, /org-chart/grid = grid
   const location = useLocation();
@@ -562,8 +635,9 @@ export function OrgChartPage() {
       void fetchOrgChart(currentWorkspace.id);
       void fetchAgents(currentWorkspace.id);
       void fetchMyRole(currentWorkspace.id);
+      void fetchProjects(currentWorkspace.id);
     }
-  }, [currentWorkspace, fetchOrgChart, fetchAgents, fetchMyRole]);
+  }, [currentWorkspace, fetchOrgChart, fetchAgents, fetchMyRole, fetchProjects]);
 
   // The org-chart payload is fetched separately from the agents list that the
   // detail dialog edits, so overlay the edited fields from the agents store —
@@ -609,7 +683,22 @@ export function OrgChartPage() {
           )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Select
+            aria-label={t("executions.project")}
+            value={projectFilter}
+            onChange={(e) => setProjectFilter(e.target.value)}
+            className="h-8 w-44 text-xs"
+          >
+            <option value="">{t("executions.allProjects")}</option>
+            {projects
+              .filter((p) => !p.is_archived)
+              .map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+          </Select>
           <Button
             variant="outline"
             size="sm"
@@ -632,8 +721,15 @@ export function OrgChartPage() {
         </div>
       </div>
 
+      {executions !== "loading" && executions.kind === "ok" && executions.partial && (
+        <p role="status" className="pb-2 text-xs text-tone-attention-600">
+          {t("executions.partial")}
+        </p>
+      )}
+
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
+        <ExecutionsContext.Provider value={executionsCtx}>
         {isOrgChartLoading ? (
           <OrgChartSkeleton />
         ) : viewMode === "tree" ? (
@@ -641,6 +737,7 @@ export function OrgChartPage() {
         ) : (
           <GridView agentTree={agentTree} humans={humans} onAgentClick={handleAgentClick} />
         )}
+        </ExecutionsContext.Provider>
       </div>
 
       {/* Agent detail dialog */}

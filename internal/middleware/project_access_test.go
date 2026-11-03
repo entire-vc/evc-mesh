@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -262,4 +263,18 @@ func TestRequireProjectMember_InvalidProjID(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, hit)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestUserProjectRole_ReturnsTheRole(t *testing.T) {
+	projID, userID := uuid.New(), uuid.New()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	mock.ExpectQuery("SELECT role::text FROM project_members").WithArgs(projID, userID).
+		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow(domain.ProjectRoleAdmin))
+
+	role, member, err := UserProjectRole(context.Background(), sqlx.NewDb(db, "sqlmock"), projID, userID)
+	require.NoError(t, err)
+	assert.True(t, member)
+	assert.Equal(t, domain.ProjectRoleAdmin, role)
 }

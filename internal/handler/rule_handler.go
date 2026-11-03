@@ -278,6 +278,15 @@ func (h *RuleHandler) EvaluateRules(c echo.Context) error {
 		req.WorkspaceID = wsID
 	}
 
+	// A dry run over a task or project the caller may not open would tell them
+	// about it all the same.
+	if req.TaskID != nil && !mw.MayAccessTask(c, *req.TaskID) {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("Task"))
+	}
+	if req.ProjectID != nil && !mw.MayAccessProject(c, *req.ProjectID) {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("not a member of this project"))
+	}
+
 	actorID, actorType := actorctx.FromContext(c.Request().Context())
 
 	input := service.EvaluateInput{

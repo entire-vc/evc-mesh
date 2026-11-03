@@ -226,16 +226,23 @@ func TestBodyTenantFieldsAreDeclared(t *testing.T) {
 // declaredBodyTenantFields is the reviewed verdict on every tenant-identifying id
 // that arrives in a request body. The key is "<file>:<struct>.<json field>".
 var declaredBodyTenantFields = map[string]string{
-	"agent_chat_handler.go:createThreadBody.agent_id": "checked: AgentChatHandler.CreateThread requires the agent to be in the project's chat agent list (422 otherwise)",
-	"user_runtime_handler.go:managerBody.agent_id":    "UserRuntimeRepo.managerChange checks in the transaction that the agent's operator_user_id is the signed-in user (a human, never a connector); another tenant's agent is a plain 404",
+	"existing_session_handler.go:existingSessionSendRequest.workspace_id": "checked: ExistingSessionRepo.Enqueue refuses a target workspace other than the key's workspace (403 existing_session_target_denied) before reading anything",
+	"existing_session_handler.go:existingSessionSendRequest.agent_id":     "checked: ExistingSessionRepo.Enqueue looks the receiver up by the key's workspace and answers an unknown or foreign agent, and a sender its receiver did not list, with the same 403",
+	"agent_chat_handler.go:createThreadBody.agent_id":                     "checked: AgentChatHandler.CreateThread requires the agent to be in the project's chat agent list (422 otherwise)",
+	"user_runtime_handler.go:managerBody.agent_id":                        "UserRuntimeRepo.managerChange checks in the transaction that the agent's operator_user_id is the signed-in user (a human, never a connector); another tenant's agent is a plain 404",
 	// Guarded by middleware.RequireBodyWorkspace on the route.
-	"extension_ui_handler.go:uiContextRequest.workspace_id":         "guarded: bodyWS on POST /ext/:ext_id/ui-context",
-	"extension_ui_handler.go:uiContextRequest.project_id":           "checked: ExtensionUIHandler.UIContext requires the project to belong to workspace_id (404 otherwise)",
-	"extension_ui_handler.go:uiContextRequest.task_id":              "checked: ExtensionUIHandler.UIContext requires the task to belong to workspace_id (404 otherwise)",
-	"rule_handler.go:evaluateRuleRequest.workspace_id":              "guarded: bodyWS on POST /rules/evaluate",
-	"notification_handler.go:updatePreferencesRequest.workspace_id": "guarded: bodyWS on PUT /notifications/preferences",
-	"rule_handler.go:evaluateRuleRequest.project_id":                "guarded: bodyWS resolves it and requires it to agree with workspace_id",
-	"rule_handler.go:evaluateRuleRequest.task_id":                   "benign: only narrows an evaluation already scoped to the guarded workspace",
+	"extension_ui_handler.go:uiContextRequest.workspace_id":            "guarded: bodyWS on POST /ext/:ext_id/ui-context",
+	"extension_ui_handler.go:uiContextRequest.project_id":              "checked: ExtensionUIHandler.UIContext requires the project to belong to workspace_id (404 otherwise)",
+	"extension_ui_handler.go:uiContextRequest.task_id":                 "checked: ExtensionUIHandler.UIContext requires the task to belong to workspace_id (404 otherwise)",
+	"extension_authorize_handler.go:extAuthorizeRequest.workspace_id":  "checked: ExtensionAuthorizeHandler.Authorize answers 404 unless it is the extension actor's own workspace",
+	"extension_authorize_handler.go:extAuthorizeRequest.project_id":    "checked: ExtensionAuthorizeHandler.resolveProject requires the project to belong to the actor's workspace (404 otherwise)",
+	"extension_authorize_handler.go:extAuthorizeRequest.task_id":       "checked: ExtensionAuthorizeHandler.resolveProject requires the task's project to belong to the actor's workspace (404 otherwise)",
+	"extension_authorize_handler.go:extAuthorizeResponse.workspace_id": "response: the extension actor's own workspace",
+	"extension_authorize_handler.go:extAuthorizeResponse.project_id":   "response: the project resolveProject already checked",
+	"rule_handler.go:evaluateRuleRequest.workspace_id":                 "guarded: bodyWS on POST /rules/evaluate",
+	"notification_handler.go:updatePreferencesRequest.workspace_id":    "guarded: bodyWS on PUT /notifications/preferences",
+	"rule_handler.go:evaluateRuleRequest.project_id":                   "guarded: bodyWS resolves it and requires it to agree with workspace_id",
+	"rule_handler.go:evaluateRuleRequest.task_id":                      "benign: only narrows an evaluation already scoped to the guarded workspace",
 
 	// Checked in the handler, or in the service it calls.
 	"chat_session_handler.go:chatSessionIssueRequest.workspace_id":     "checked: ChatSessionService.checkLive requires the user to be a member and the agent connected in this workspace; the route is runner-only (ChatControllerAuth)",

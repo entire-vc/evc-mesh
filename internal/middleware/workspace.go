@@ -305,6 +305,11 @@ var workspaceParamResolvers = []workspaceParamResolver{
 	                            JOIN projects p ON t.project_id = p.id
 	                           WHERE v.id = $1`)},
 	{param: "recurring_id", resolve: uuidResolver(`SELECT workspace_id FROM recurring_schedules WHERE id = $1`)},
+	{param: "intent_id", resolve: uuidResolver(`SELECT p.workspace_id
+	                            FROM task_acceptance_intents i
+	                            JOIN tasks t ON i.task_id = t.id AND t.deleted_at IS NULL
+	                            JOIN projects p ON t.project_id = p.id
+	                           WHERE i.id = $1`)},
 
 	// The child half of the composite routes. Before these existed the parent id
 	// alone satisfied the guard and these ids addressed any tenant's row.
@@ -493,6 +498,13 @@ var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/projects/:proj_id/chat/threads/:thread_id/messages":                                  true,
 	"/api/v1/projects/:proj_id/chat/threads/:thread_id/stop":                                      true,
 	"/api/v1/runner/chat/runners/:runner_id":                                                      true, // ChatRunnerRepo.RevokeRunner matches the runner id and the calling agent in one UPDATE (404 otherwise), and an agent belongs to one workspace
+	"/api/v1/host-local-qa/v1/deliveries/:delivery_id":                                            true, // HostLocalQARepo.Get matches the delivery id, the key's workspace and the sending agent in one SELECT, and answers anyone else with 404
+	"/api/v1/runner/host-local-qa/v1/deliveries/:delivery_id/ack":                                 true, // HostLocalQARepo.Ack matches the delivery to the key's workspace, agent and verified runner bearer in SQL, then every binding field of the body; every mismatch is the same 403
+	"/api/v1/runner/host-local-qa/v1/deliveries/:delivery_id/check":                               true, // HostLocalQARepo.Check matches the delivery to the key's workspace, agent and verified runner bearer in SQL, then every binding field of the body; every mismatch is the same 403
+	"/api/v1/runner/host-local-qa/v1/receivers/:receiver_id":                                      true, // HostLocalQARepo.Revoke matches the receiver id, workspace, agent and verified runner in one UPDATE (404 otherwise)
+	"/api/v1/existing-session/deliveries/:delivery_id":                                            true, // ExistingSessionRepo.Get matches the delivery id, the key's workspace and the sending agent in one SELECT, and answers anyone else with 404
+	"/api/v1/runner/existing-session/deliveries/:delivery_id/ack":                                 true, // ExistingSessionRepo.Ack matches the delivery to the key's workspace, agent and verified runner bearer in SQL, then host, session and revision; every mismatch is the same 403
+	"/api/v1/runner/existing-session/receivers/:receiver_id":                                      true, // ExistingSessionRepo.Revoke matches the receiver id, workspace, agent and verified runner in one UPDATE (404 otherwise)
 	"/api/v1/runner/chat/commands/:command_id/ack":                                                true, // ChatRunnerRepo.AckCommand compares the command's agent_id with the calling agent (403 otherwise), and an agent belongs to one workspace
 	"/api/v1/runner/chat/threads/:thread_id/history":                                              true, // ChatRunnerRepo.History only answers the runner of the thread's own agent that holds an active turn of it
 	"/api/v1/runner/chat/turns/:id/start":                                                         true, // runner-only: ChatRunnerRepo.StartTurn pins the turn to the key's workspace and agent in SQL, and answers an unknown or foreign turn with the same 404
@@ -540,6 +552,8 @@ var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/workspaces/:ws_id/runtime/controllers/:controller_ref/report":                        true,
 	"/api/v1/workspaces/:ws_id/runtime/controllers/:controller_ref/desired":                       true,
 	"/api/v1/workspaces/:ws_id/runtime/controllers/:controller_ref/quota-observations":            true,
+	"/api/v1/workspaces/:ws_id/runtime/controllers/:controller_ref/execution-instances":           true,
+	"/api/v1/workspaces/:ws_id/runtime/controllers/:controller_ref/execution-reports":             true,
 }
 
 // workspaceScopeExemptRoutes lists routes that carry one of WorkspaceScopedParams

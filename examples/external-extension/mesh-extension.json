@@ -12,7 +12,7 @@
   "levels": {
     "instance": false,
     "workspace": true,
-    "project": false
+    "project": true
   },
   "settings": {
     "workspace": {
@@ -46,7 +46,8 @@
     },
     "ui": [
       "sidebar.item",
-      "task.panel"
+      "task.panel",
+      "project.view"
     ]
   },
   "external": {
@@ -63,7 +64,15 @@
       "task.panel": {
         "path": "/mesh/ui/task",
         "title": "Reference"
+      },
+      "project.view": {
+        "path": "/mesh/ui/project",
+        "title": "Reference"
       }
     }
+  },
+  "project_view": {
+    "icon": "Puzzle",
+    "title": "Reference"
   }
 }

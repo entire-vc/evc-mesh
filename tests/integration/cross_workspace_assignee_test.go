@@ -177,6 +177,14 @@ func TestCrossWorkspaceAssignee_RefusedUnderAnAgentKey(t *testing.T) {
 	f := newTwoWorkspaceFixture(t)
 	taskID := f.createHomeTask(t, "agent-key assign target")
 
+	// The caller is a member of the home project, as a real agent working on its
+	// tasks is. Without the row the project membership guard refuses the request
+	// with 403 before the assignee check is reached, and this arm would no longer
+	// exercise the tenancy guard it exists for.
+	enrol := f.env.Post(t, fmt.Sprintf("/api/v1/projects/%s/members/agents", f.homeProject),
+		map[string]interface{}{"agent_id": f.homeAgentID, "role": "member"})
+	require.Equal(t, http.StatusCreated, enrol.StatusCode, string(f.env.ReadBody(t, enrol)))
+
 	resp := f.env.PostWithAgentKey(t, fmt.Sprintf("/api/v1/tasks/%s/assign", taskID), f.homeKey,
 		map[string]interface{}{"assignee_id": f.foreignAgentID, "assignee_type": "agent"})
 

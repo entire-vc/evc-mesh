@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
@@ -789,6 +790,7 @@ func TestTaskHandler_MoveToProject_HasDescriptionConsistentWithBody(t *testing.T
 			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
+			mw.SetProjectAccess(c, openAccess)
 			c.SetPath("/tasks/:task_id/move-to-project")
 			c.SetParamNames("task_id")
 			c.SetParamValues(taskID.String())
@@ -1042,6 +1044,7 @@ func TestTaskHandler_Update_ParentTaskID_Reparent(t *testing.T) {
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
+	mw.SetProjectAccess(c, openAccess)
 	c.SetPath("/tasks/:task_id")
 	c.SetParamNames("task_id")
 	c.SetParamValues(taskID.String())
@@ -1226,6 +1229,7 @@ func TestTaskHandler_Update_ParentTaskID_NonexistentParentErrors(t *testing.T) {
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
+	mw.SetProjectAccess(c, openAccess)
 	c.SetPath("/tasks/:task_id")
 	c.SetParamNames("task_id")
 	c.SetParamValues(taskID.String())

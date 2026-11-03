@@ -44,6 +44,25 @@ var extensionWorkspaceLevelRoutes = map[string]bool{
 	"DELETE /api/v1/agents/:agent_id/keys/:key_id":      true,
 }
 
+// extensionBodyScopedRoutes are the extension routes whose project (or task) is
+// named in the JSON body. The guard cannot resolve it from the URL, so it passes
+// the request on and the handler must check the resolved project with
+// ExtensionProjectScopeRepository.AllowsProject before it answers anything about
+// it. A route listed here without that check in its handler reaches every project.
+var extensionBodyScopedRoutes = map[string]bool{
+	"POST /api/v1/ext/me/authorize": true,
+}
+
+// ExtensionBodyScopedRoutes returns a copy of the body-scoped route set, for the
+// classification test.
+func ExtensionBodyScopedRoutes() map[string]bool {
+	out := make(map[string]bool, len(extensionBodyScopedRoutes))
+	for k, v := range extensionBodyScopedRoutes {
+		out[k] = v
+	}
+	return out
+}
+
 // ExtensionWorkspaceLevelRoutes returns a copy of the workspace-level route set,
 // for the classification test.
 func ExtensionWorkspaceLevelRoutes() map[string]bool {
@@ -93,7 +112,7 @@ func ExtensionProjectScopeGuard(db *sqlx.DB, scope repository.ExtensionProjectSc
 				return c.JSON(http.StatusInternalServerError, apierror.InternalError("failed to check the extension project scope"))
 			}
 			if !found {
-				if extensionWorkspaceLevelRoutes[key] {
+				if extensionWorkspaceLevelRoutes[key] || extensionBodyScopedRoutes[key] {
 					return next(c)
 				}
 				return deny(key + " is not available to a project-bound extension")

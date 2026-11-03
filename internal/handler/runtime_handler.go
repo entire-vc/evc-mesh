@@ -49,8 +49,12 @@ func runtimeOwner(c echo.Context) (uuid.UUID, error) {
 }
 
 func runtimeBody(c echo.Context, target any, required ...string) error {
+	return runtimeBodyWith(c, domain.DecodeRuntimeJSON, target, required...)
+}
+
+func runtimeBodyWith(c echo.Context, decode func([]byte, any) error, target any, required ...string) error {
 	data, err := io.ReadAll(http.MaxBytesReader(c.Response(), c.Request().Body, 1<<20))
-	if err != nil || domain.DecodeRuntimeJSON(data, target) != nil {
+	if err != nil || decode(data, target) != nil {
 		return apierror.BadRequest("invalid runtime request")
 	}
 	var fields map[string]json.RawMessage
@@ -341,6 +345,11 @@ func (h *RuntimeHandler) AcquireReservation(c echo.Context) error {
 		"expected_pool_set_digest", "ttl_seconds"); err != nil {
 		return handleError(c, err)
 	}
+	// The route guard checked the workspace in the path, not the task named in
+	// the body; the repository only pins the task to that workspace.
+	if !mw.MayAccessTask(c, input.TaskID) {
+		return handleError(c, apierror.NotFound("Task"))
+	}
 	value, created, err := h.repo.AcquireReservation(c.Request().Context(), owner, ws, c.Param("binding_id"), runtimeActor(c), input)
 	if err != nil {
 		return handleError(c, err)
@@ -427,6 +436,74 @@ func (h *RuntimeHandler) Capacity(c echo.Context) error {
 		agent = &id
 	}
 	value, err := h.repo.Capacity(c.Request().Context(), ws, runtimeActor(c), agent)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, value)
+}
+
+// RegisterExecutionInstance records a controller boot for execution
+// telemetry and answers with its generation. It is not a controller claim and
+// not a launch or checkout lease.
+func (h *RuntimeHandler) RegisterExecutionInstance(c echo.Context) error {
+	ws, err := runtimeWorkspace(c)
+	if err != nil {
+		return handleError(c, err)
+	}
+	var input domain.ExecutionInstanceRequest
+	if err = runtimeBodyWith(c, domain.DecodeExecutionJSON, &input, "schema_version", "instance_id"); err != nil {
+		return handleError(c, err)
+	}
+	value, err := h.repo.RegisterExecutionInstance(c.Request().Context(), ws, c.Param("controller_ref"), runtimeActor(c), input)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, value)
+}
+
+// ReportExecutions stores one batch of observed attempts. Like every runtime
+// answer it never authorizes a launch.
+func (h *RuntimeHandler) ReportExecutions(c echo.Context) error {
+	ws, err := runtimeWorkspace(c)
+	if err != nil {
+		return handleError(c, err)
+	}
+	var input domain.ExecutionReport
+	if err = runtimeBodyWith(c, domain.DecodeExecutionJSON, &input, "schema_version", "instance_id", "generation", "sequence", "reported_at", "attempts"); err != nil {
+		return handleError(c, err)
+	}
+	ack, err := h.repo.ReportExecutions(c.Request().Context(), ws, c.Param("controller_ref"), runtimeActor(c), input)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, ack)
+}
+
+// AgentExecutions is the scoped batch read: configured policy and observed
+// attempts per project and agent, for the org chart and the agent detail.
+func (h *RuntimeHandler) AgentExecutions(c echo.Context) error {
+	ws, err := runtimeWorkspace(c)
+	if err != nil {
+		return handleError(c, err)
+	}
+	filter := postgres.ExecutionFilter{Cursor: c.QueryParam("cursor")}
+	for name, target := range map[string]**uuid.UUID{"project_id": &filter.ProjectID, "agent_id": &filter.AgentID} {
+		if raw := c.QueryParam(name); raw != "" {
+			id, perr := uuid.Parse(raw)
+			if perr != nil || id == uuid.Nil {
+				return handleError(c, apierror.BadRequest("invalid "+name))
+			}
+			*target = &id
+		}
+	}
+	if raw := c.QueryParam("limit"); raw != "" {
+		n, perr := strconv.Atoi(raw)
+		if perr != nil || n < 1 {
+			return handleError(c, apierror.BadRequest("limit must be within 1..200"))
+		}
+		filter.Limit = n
+	}
+	value, err := h.repo.AgentExecutions(c.Request().Context(), ws, runtimeActor(c), filter)
 	if err != nil {
 		return handleError(c, err)
 	}

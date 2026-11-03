@@ -284,3 +284,14 @@ func TestParkAlarm_AlarmStateUnchanged(t *testing.T) {
 		})
 	}
 }
+
+// A label containing a quote or backslash must be escaped, not break out of the
+// quoted segment of the message.
+func TestParkAlarmError_QuotesLabel(t *testing.T) {
+	msg := (&ParkAlarmError{Label: `a"b\c`}).Error()
+	assert.Contains(t, msg, `label "a\"b\\c", so`)
+	assert.NotContains(t, msg, `label "a"b`)
+
+	plain := (&ParkAlarmError{Label: "kind:monitor"}).Error()
+	assert.Contains(t, plain, `label "kind:monitor", so`)
+}

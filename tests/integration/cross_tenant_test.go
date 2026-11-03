@@ -107,6 +107,9 @@ var wsScopedRoutes = []wsRoute{
 	{http.MethodPost, "/runtime/controllers/runner-a/quota-observations", map[string]any{}},
 	{http.MethodGet, "/runtime/controllers/runner-a/quota-observations", nil},
 	{http.MethodGet, "/runtime/controllers/runner-a/desired", nil},
+	{http.MethodPost, "/runtime/controllers/runner-a/execution-instances", map[string]any{}},
+	{http.MethodPost, "/runtime/controllers/runner-a/execution-reports", map[string]any{}},
+	{http.MethodGet, "/agent-executions", nil},
 	{http.MethodGet, "/runtime/bindings/worker-b?resource_owner_workspace_id=" + dummyUUID, nil},
 	{http.MethodPut, "/runtime/bindings/worker-b/admission?resource_owner_workspace_id=" + dummyUUID, map[string]any{"if_revision": 0, "enabled": false, "permitted_profiles": []string{}}},
 	{http.MethodPut, "/runtime/bindings/worker-b/policy?resource_owner_workspace_id=" + dummyUUID, map[string]any{"if_revision": 0, "policy": map[string]any{}}},
@@ -164,6 +167,53 @@ var wsScopedRoutes = []wsRoute{
 	// like everything else — neither is an exception.
 	{http.MethodGet, "/secrets", nil},
 	{http.MethodPost, "/secrets", map[string]string{"name": "INTRUDER_TOKEN", "scope": "workspace", "value": "planted"}},
+}
+
+// wsConcealedRoute is a workspace-scoped route that refuses a non-member just
+// like every route in wsScopedRoutes, but answers 404 instead of 403 on purpose:
+// its contract (Mesh keep-metadata probe, closed error envelope) gives a
+// non-member, a foreign secret and an absent secret one identical 404, so the
+// status cannot be used to learn whether a secret id exists. The guards still
+// run first; only what they say is flattened. why is mandatory.
+type wsConcealedRoute struct {
+	method string
+	suffix string
+	why    string
+}
+
+var wsConcealedRoutes = []wsConcealedRoute{
+	{http.MethodGet, "/secrets/" + dummyUUID + "/keep-metadata",
+		"closed envelope: non-member, foreign and absent secret are the same 404 not_found"},
+	{http.MethodHead, "/secrets/" + dummyUUID + "/keep-metadata",
+		"same guards as GET; HEAD is never served, a non-member sees the same 404"},
+}
+
+// TestCrossTenant_NonMemberIsConcealedOnConcealedRoutes proves the routes in
+// wsConcealedRoutes refuse a non-member with the uniform 404 and no data.
+func TestCrossTenant_NonMemberIsConcealedOnConcealedRoutes(t *testing.T) {
+	victim := NewTestEnv(t)
+	defer victim.Cleanup(t)
+	victim.Register(t, uniqueEmail("xt-victim"), "TestPass123", "Victim Owner")
+	victimWS := firstWorkspaceID(t, victim)
+
+	intruder := NewTestEnv(t)
+	defer intruder.Cleanup(t)
+	intruder.Register(t, uniqueEmail("xt-intruder"), "TestPass123", "Intruder")
+
+	for _, r := range wsConcealedRoutes {
+		require.NotEmpty(t, r.why, "a concealed route needs a justification")
+		name := r.method + " /workspaces/:ws_id" + r.suffix
+		t.Run(name, func(t *testing.T) {
+			path := fmt.Sprintf("/api/v1/workspaces/%s%s", victimWS, r.suffix)
+			resp := intruder.doRequest(t, r.method, path, nil)
+			body := string(intruder.ReadBody(t, resp))
+			assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+				"a non-member got status %d on %s (body %s)", resp.StatusCode, name, body)
+			if r.method != http.MethodHead {
+				assert.Contains(t, body, `"error_class":"not_found"`, "%s: not the closed not_found envelope", name)
+			}
+		})
+	}
 }
 
 // wsPublicRoute is a workspace-scoped route that is deliberately readable
@@ -314,12 +364,16 @@ func TestCrossTenant_RouteTableIsComplete(t *testing.T) {
 		suffix = strings.ReplaceAll(suffix, "/runtime/controllers/runner-a/", "/runtime/controllers/:controller_ref/")
 		suffix = strings.ReplaceAll(suffix, "/runtime/bindings/worker-b", "/runtime/bindings/:binding_id")
 		suffix = strings.ReplaceAll(suffix, "/reservations/"+dummyUUID, "/reservations/:reservation_id")
+		suffix = strings.ReplaceAll(suffix, "/secrets/"+dummyUUID+"/", "/secrets/:secret_id/")
 		suffix = strings.ReplaceAll(suffix, "/runtime/artifacts/"+dummyUUID+"/", "/runtime/artifacts/:provenance_artifact_id/")
 		return suffix
 	}
 
 	covered := make(map[string]bool, len(wsScopedRoutes)+len(wsPublicRoutes))
 	for _, r := range wsScopedRoutes {
+		covered[r.method+" /workspaces/:ws_id"+normalise(r.suffix)] = true
+	}
+	for _, r := range wsConcealedRoutes {
 		covered[r.method+" /workspaces/:ws_id"+normalise(r.suffix)] = true
 	}
 	registeredPublic := make(map[string]bool, len(wsPublicRoutes))

@@ -17,7 +17,7 @@ embedder, cosine similarity between a query and a memory is noise: semantically
 related texts are no closer than unrelated ones. The dense arm then contributes
 nothing to the ranking *by construction*, so breaking it changes no score, and
 the gate reports green on a PR that severed vector search entirely. That is
-#b052cdda reproduced inside the fix for #b052cdda.
+an internal ticket reproduced inside the fix for an internal ticket.
 
 The requirement is therefore not "deterministic" but "carries real semantic
 signal, reproducibly". A fixed model at a fixed revision gives both.
@@ -26,7 +26,7 @@ WHY 384 DIMENSIONS, AND WHY TRUNCATION IS A FEATURE
 ---------------------------------------------------
 Prod's embedder is 384-dim (see `migrations/20260727082_memory_chunks.sql`) and
 silently truncates its input at 512 tokens — which is *why* `memory_chunks`
-exists at all (#e8063a65: a memory longer than 512 tokens only ever had its
+exists at all (an internal ticket: a memory longer than 512 tokens only ever had its
 first ~15% embedded). bge-small-en-v1.5 is 384-dim with the same 512-token
 window, and fastembed truncates rather than erroring.
 
@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -60,7 +61,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # Pinned. A floating model name would let a silent upstream re-upload move every
 # score at once, which reads exactly like a memory regression on whatever PR
 # happens to run next.
-MODEL_NAME = "BAAI/bge-small-en-v1.5"
+# CI_EMBEDDER_MODEL lets the full-500 job serve the model the installed stack
+# actually runs (multilingual-e5-small, 384-d); the recall gate leaves it unset.
+MODEL_NAME = os.environ.get("CI_EMBEDDER_MODEL", "BAAI/bge-small-en-v1.5")
 MODEL_DIM = 384
 
 # Guards against the failure mode where an upstream default changes the vector
@@ -76,6 +79,10 @@ def _load_model(cache_dir: str | None):
     with _model_lock:
         if _model is not None:
             return _model
+        if os.environ.get("CI_EMBEDDER_BACKEND") == "st":
+            _model = _SentenceTransformerBackend(MODEL_NAME, cache_dir)
+            _check_dim(_model)
+            return _model
         try:
             from fastembed import TextEmbedding
         except ImportError as exc:  # pragma: no cover - environment problem
@@ -90,17 +97,46 @@ def _load_model(cache_dir: str | None):
             kwargs["cache_dir"] = cache_dir
         _model = TextEmbedding(**kwargs)
 
-        # Fail at startup, not on question 14 of 24. A wrong width here is
-        # unrecoverable for the run, and finding out mid-run costs the whole
-        # ingest and reports as a recall drop rather than as infrastructure.
-        probe = next(iter(_model.embed(["dimension probe"])))
-        if len(probe) != MODEL_DIM:
-            raise SystemExit(
-                f"ci_embedder: {MODEL_NAME} returned {len(probe)} dims, "
-                f"expected {MODEL_DIM}. Refusing to serve — every vector written "
-                "in this run would be incomparable with the baseline's."
-            )
+        _check_dim(_model)
         return _model
+
+
+def _check_dim(model) -> None:
+    # Fail at startup, not on question 14 of 24. A wrong width here is
+    # unrecoverable for the run, and finding out mid-run costs the whole
+    # ingest and reports as a recall drop rather than as infrastructure.
+    probe = next(iter(model.embed(["dimension probe"])))
+    if len(probe) != MODEL_DIM:
+        raise SystemExit(
+            f"ci_embedder: {MODEL_NAME} returned {len(probe)} dims, "
+            f"expected {MODEL_DIM}. Refusing to serve — every vector written "
+            "in this run would be incomparable with the baseline's."
+        )
+
+
+class _SentenceTransformerBackend:
+    """Same `.embed(list[str])` shape as fastembed, for models fastembed does not
+    ship (multilingual-e5-small, the model the installed TEI serves). Mean pooling
+    + L2 normalisation come from the model's own sentence-transformers config, as
+    in TEI; no query:/passage: prefix is added, matching the plain-text calls
+    internal/embedding/openai.go sends. CI_EMBEDDER_REVISION pins the weights."""
+
+    def __init__(self, model_name: str, cache_dir: str | None) -> None:
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:  # pragma: no cover - environment problem
+            raise SystemExit(f"ci_embedder: sentence-transformers missing ({exc})") from exc
+        self._m = SentenceTransformer(
+            model_name,
+            cache_folder=cache_dir,
+            revision=os.environ.get("CI_EMBEDDER_REVISION") or None,
+            device="cpu",
+        )
+        self._m.max_seq_length = 512
+
+    def embed(self, texts):
+        for vec in self._m.encode(list(texts), normalize_embeddings=True):
+            yield vec
 
 
 def _embed_one(text: str) -> list[float]:

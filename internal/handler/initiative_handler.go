@@ -8,6 +8,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -174,6 +175,9 @@ func (h *InitiativeHandler) LinkProject(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
 			"project_id": "must be a valid UUID",
 		}))
+	}
+	if !mw.MayAccessProject(c, projID) {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("not a member of this project"))
 	}
 
 	if err := h.initiativeService.LinkProject(c.Request().Context(), initID, projID); err != nil {

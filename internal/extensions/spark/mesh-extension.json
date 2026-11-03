@@ -24,10 +24,24 @@
       "$ref": "#/schemas/connection"
     },
     "workspace": {
-      "$ref": "#/schemas/connection"
+      "$ref": "#/schemas/workspace_connection"
     }
   },
   "schemas": {
+    "workspace_connection": {
+      "type": "object",
+      "properties": {
+        "spark_url": {
+          "type": "string",
+          "format": "uri",
+          "title": "Spark catalog URL",
+          "title_i18n": { "ru": "Адрес каталога Spark" }
+        }
+      },
+      "required": [
+        "spark_url"
+      ]
+    },
     "connection": {
       "type": "object",
       "properties": {

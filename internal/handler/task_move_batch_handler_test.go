@@ -18,7 +18,18 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
+func allowAll(uuid.UUID) bool { return true }
+
+// openAccess stands in for the project guard when a test is about something else.
+var openAccess = mw.ProjectAccessCheck{Task: allowAll, Project: allowAll}
+
 func postMoveBatch(t *testing.T, svc *MockTaskService, body string, withWorkspace uuid.UUID) *httptest.ResponseRecorder {
+	t.Helper()
+	return postMoveBatchWith(t, svc, body, withWorkspace, allowAll, allowAll)
+}
+
+func postMoveBatchWith(t *testing.T, svc *MockTaskService, body string, withWorkspace uuid.UUID,
+	taskAccess, projectAccess func(uuid.UUID) bool) *httptest.ResponseRecorder {
 	t.Helper()
 	h, e := setupTaskTest(svc)
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
@@ -27,6 +38,9 @@ func postMoveBatch(t *testing.T, svc *MockTaskService, body string, withWorkspac
 	c := e.NewContext(req, rec)
 	if withWorkspace != uuid.Nil {
 		c.Set(mw.ContextKeyWorkspaceID, withWorkspace)
+	}
+	if taskAccess != nil || projectAccess != nil {
+		mw.SetProjectAccess(c, mw.ProjectAccessCheck{Task: taskAccess, Project: projectAccess})
 	}
 	require.NoError(t, h.MoveToProjectBatch(c))
 	return rec
@@ -87,4 +101,46 @@ func TestTaskHandler_MoveToProjectBatch_ServiceErrorIsMapped(t *testing.T) {
 	}}
 	rec := postMoveBatch(t, svc, fmt.Sprintf(`{"project_id":%q,"task_ids":[%q]}`, id, id), ws)
 	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+}
+
+// The batch route names its tasks and target project in the body, out of the
+// route guard's sight: every one must pass the project access check, and with
+// no check on the request nothing moves.
+func TestTaskHandler_MoveToProjectBatch_RequiresProjectAccess(t *testing.T) {
+	ws, proj, mine, foreign, src, dst := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	called := false
+	svc := &MockTaskService{MoveToProjectBatchFunc: func(context.Context, domain.MoveBatchInput) (*domain.MoveBatchResult, error) {
+		called = true
+		return &domain.MoveBatchResult{}, nil
+	}}
+	body := func(tasks ...uuid.UUID) string {
+		ids := make([]string, len(tasks))
+		for i, id := range tasks {
+			ids[i] = fmt.Sprintf("%q", id)
+		}
+		return fmt.Sprintf(`{"project_id":%q,"task_ids":[%s],"status_mapping":{%q:%q}}`, proj, strings.Join(ids, ","), src, dst)
+	}
+	onlyMine := func(id uuid.UUID) bool { return id == mine }
+	deny := func(uuid.UUID) bool { return false }
+
+	cases := map[string]struct {
+		body          string
+		task, project func(uuid.UUID) bool
+		code          int
+	}{
+		"unwired":       {body(mine), nil, nil, http.StatusForbidden},
+		"foreign task":  {body(mine, foreign), onlyMine, allowAll, http.StatusNotFound},
+		"closed target": {body(mine), onlyMine, deny, http.StatusForbidden},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rec := postMoveBatchWith(t, svc, tc.body, ws, tc.task, tc.project)
+			assert.Equal(t, tc.code, rec.Code)
+		})
+	}
+	assert.False(t, called, "a refused batch reached the service")
+
+	rec := postMoveBatchWith(t, svc, body(mine), ws, onlyMine, allowAll)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, called)
 }

@@ -79,7 +79,7 @@ func TestVCSLinkHandler_PatchMetadata_ServiceErrorsKeepTheirStatus(t *testing.T)
 	}
 }
 
-func shipSHAByURLRequest(h *VCSLinkHandler, ws *uuid.UUID, body string) *httptest.ResponseRecorder {
+func shipSHAByURLRequest(h *VCSLinkHandler, ws *uuid.UUID, body string, access ...mw.ProjectAccessCheck) *httptest.ResponseRecorder {
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(body))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
@@ -87,6 +87,9 @@ func shipSHAByURLRequest(h *VCSLinkHandler, ws *uuid.UUID, body string) *httptes
 	c := e.NewContext(req, rec)
 	if ws != nil {
 		c.Set(mw.ContextKeyWorkspaceID, *ws)
+	}
+	for _, a := range access {
+		mw.SetProjectAccess(c, a)
 	}
 	_ = h.PatchShipSHAByURL(c)
 	return rec
@@ -102,6 +105,27 @@ func TestVCSLinkHandler_PatchShipSHAByURL_PassesWorkspaceURLAndSHA(t *testing.T)
 	require.Len(t, stub.shipCalls, 1)
 	assert.Equal(t, shipCall{ws: ws, url: "https://h/p/-/merge_requests/5", sha: "abc"}, stub.shipCalls[0])
 	assert.Contains(t, rec.Body.String(), "vcs_links")
+}
+
+// The route names no task, so the project guard on task paths cannot see it:
+// the handler must hand the service the project access check, and with no
+// check on the request it must reach no link at all.
+func TestVCSLinkHandler_PatchShipSHAByURL_FiltersByTaskAccess(t *testing.T) {
+	ws := uuid.New()
+	allowed, denied := uuid.New(), uuid.New()
+	body := `{"url":"https://h/p/-/merge_requests/5","ship_sha":"abc"}`
+
+	stub := &stubVCSLinkService{}
+	shipSHAByURLRequest(NewVCSLinkHandler(stub), &ws, body)
+	require.NotNil(t, stub.shipAllow, "the handler passed no task filter")
+	assert.False(t, stub.shipAllow(allowed), "without a check on the request no task is reachable")
+
+	stub = &stubVCSLinkService{}
+	shipSHAByURLRequest(NewVCSLinkHandler(stub), &ws, body,
+		mw.ProjectAccessCheck{Task: func(id uuid.UUID) bool { return id == allowed }})
+	require.NotNil(t, stub.shipAllow)
+	assert.True(t, stub.shipAllow(allowed))
+	assert.False(t, stub.shipAllow(denied))
 }
 
 func TestVCSLinkHandler_PatchShipSHAByURL_RejectsMissingWorkspaceAndBadBody(t *testing.T) {
