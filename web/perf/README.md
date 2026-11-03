@@ -1151,3 +1151,8 @@ Revert: restore 173.5 / 736.3 together with reverting the MR. Lead sign-off: the
 `created_at` timestamp with `parseISO` and renders the time next to the date; `login.initial_js_kb_gz` is unchanged. Main sat at 736.4
 against the 736.4 ceiling (no headroom); the canonical bundle check measured 736.59 on the branch. The ceiling is the smallest 0.1 step above it.
 Revert: restore 736.4 together with reverting the MR. Lead sign-off: the product lead, 2026-11-03 (signed on the delivery thread); does not cover growth above 736.6.
+
+`total_js_kb_gz` 736.6 → 736.9 (**+0.26 KB gz** over the old ceiling, extension detail role-unknown state, the extension detail role-state change): the detail page refetches the workspace role and renders a
+loading / retry state (a few lines of JSX, three strings in en and ru) instead of reading the title as "not an admin" while the role is unknown; `login.initial_js_kb_gz` is unchanged.
+Main sat at the 736.6 ceiling (no headroom); the canonical bundle check measured 736.86 on the branch. The ceiling is the smallest 0.1 step above it.
+Revert: restore 736.6 together with reverting the MR. Lead sign-off: the product lead, requested on the delivery thread; does not cover growth above 736.9.

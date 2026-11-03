@@ -147,7 +147,9 @@ function Support({ entry }: { entry: CatalogEntry }) {
   );
 }
 
-function PrimaryAction({ entry, wsSlug, isAdmin, isInstanceAdmin, onInstalled }: { entry: CatalogEntry; wsSlug: string; isAdmin: boolean; isInstanceAdmin: boolean; onInstalled: () => void }) {
+type RoleState = "loading" | "error" | "known";
+
+function PrimaryAction({ entry, wsSlug, isAdmin, isInstanceAdmin, roleState = "known", onRetryRole, onInstalled }: { entry: CatalogEntry; wsSlug: string; isAdmin: boolean; isInstanceAdmin: boolean; roleState?: RoleState; onRetryRole?: () => void; onInstalled: () => void }) {
   const { t } = useTranslation("integrations");
   const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
@@ -159,6 +161,16 @@ function PrimaryAction({ entry, wsSlug, isAdmin, isInstanceAdmin, onInstalled }:
     return <Button variant={entry.connected ? "outline" : "default"} onClick={() => navigate(runnerScreenPath(wsSlug))}>{t("detail.action.manageInRunner")}</Button>;
   }
   if (entry.blocked) return <Button disabled>{t("detail.action.blocked")}</Button>;
+  // An unknown workspace role is not "not an admin": wherever a hint would depend on it (instance admin or not),
+  // show loading or a retry instead of telling an admin to ask an admin.
+  const roleGate = roleState === "known" ? null : roleState === "loading"
+    ? <div role="status" aria-label={t("detail.action.roleLoading")}><Skeleton className="h-9 w-40" /></div>
+    : (
+      <div role="alert" className="flex max-w-56 flex-col items-start gap-2 text-xs text-muted-foreground">
+        <p>{t("detail.action.roleError")}</p>
+        <Button variant="outline" size="sm" onClick={onRetryRole}>{t("detail.action.roleRetry")}</Button>
+      </div>
+    );
   // One instance-admin action: a catalog extension or a built-in theme missing from the instance is installed
   // (themes through the theme flow, not the generic one); an explicit deny is lifted by Allow below.
   const run = (call: () => Promise<unknown>, done: string) => () => {
@@ -174,6 +186,7 @@ function PrimaryAction({ entry, wsSlug, isAdmin, isInstanceAdmin, onInstalled }:
     return <Button disabled={busy} onClick={run(install, t("detail.action.installed", { name: entry.name }))}>{t("detail.action.install")}</Button>;
   }
   if (!entry.installed) {
+    if (roleGate && !isAdmin) return roleGate;
     return adminActionsEnabled() && isAdmin && !builtinTheme
       ? <Button disabled>{t("detail.action.install")}</Button>
       : <p className="max-w-56 text-xs text-muted-foreground">{t("detail.action.askAdmin")}</p>;
@@ -189,6 +202,7 @@ function PrimaryAction({ entry, wsSlug, isAdmin, isInstanceAdmin, onInstalled }:
     if (isInstanceAdmin) {
       return <Button disabled={busy} onClick={run(() => setExtensionAllowed(entry.id, true), t("detail.action.allowed", { name: entry.name }))}>{t("detail.action.allow")}</Button>;
     }
+    if (roleGate && !isAdmin) return roleGate;
     return isAdmin && adminActionsEnabled() && entry.kind !== "theme"
       ? <Button disabled>{t("detail.action.allow")}</Button>
       : <p className="max-w-56 text-xs text-muted-foreground">{t("detail.action.notAllowed")}</p>;
@@ -198,6 +212,7 @@ function PrimaryAction({ entry, wsSlug, isAdmin, isInstanceAdmin, onInstalled }:
     if (entry.themeActive) {
       return <Button variant="outline" onClick={() => settings && navigate(settings)}>{t("detail.action.openSettings")}</Button>;
     }
+    if (roleGate) return roleGate;
     if (!isAdmin) return <p className="max-w-56 text-xs text-muted-foreground">{t("detail.action.themeAskAdmin")}</p>;
     const enable = () => {
       setBusy(true);
@@ -231,10 +246,19 @@ export function ExtensionDetailPage() {
   const { t } = useTranslation("integrations");
   const { wsSlug = "", extId = "" } = useParams();
   const [search, setSearch] = useSearchParams();
-  const { myRole } = useMemberStore();
+  const { myRole, myRoleLoaded, myRoleError, myRoleWorkspaceId, fetchMyRole } = useMemberStore();
+  const wsId = useWorkspaceStore((st) => st.currentWorkspace?.id);
+  const roleSettled = myRoleLoaded && myRoleWorkspaceId === wsId;
+  // The layout loads the role once per workspace; a failed or stale answer is fetched again here.
+  useEffect(() => {
+    if (wsId && (!roleSettled || myRoleError)) void fetchMyRole(wsId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wsId]);
+  const roleState: RoleState = !roleSettled ? "loading" : myRoleError ? "error" : "known";
   const catalog = useExtensionCatalog();
   const tab = detailTab(search);
-  const isAdmin = myRole === "owner" || myRole === "admin";
+  // Only a role settled for THIS workspace counts: a stale one from the previous workspace is unknown.
+  const isAdmin = roleSettled && (myRole === "owner" || myRole === "admin");
   // Catalog install is an instance-level action: only the instance API can say who may do it.
   const isInstanceAdmin = useIsInstanceAdmin();
   const base = catalog.entries.find((e) => e.id === extId);
@@ -308,7 +332,7 @@ export function ExtensionDetailPage() {
             {state.state !== "blocked" && <ExtensionStateNote state={state} className="mt-1" />}
           </div>
         </div>
-        <PrimaryAction entry={entry} wsSlug={wsSlug} isAdmin={isAdmin} isInstanceAdmin={isInstanceAdmin} onInstalled={catalog.reload} />
+        <PrimaryAction entry={entry} wsSlug={wsSlug} isAdmin={isAdmin} isInstanceAdmin={isInstanceAdmin} roleState={roleState} onRetryRole={() => wsId && void fetchMyRole(wsId)} onInstalled={catalog.reload} />
       </header>
 
       {entry.blocked && (

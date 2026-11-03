@@ -48,7 +48,8 @@ beforeEach(async () => {
   await setLanguage("en");
   apiMock.mockReset();
   apiMock.mockRejectedValue(new Error("no card"));
-  useMemberStore.setState({ myRole: "member" } as never);
+  useWorkspaceStore.setState({ currentWorkspace: { id: "ws1", slug: "acme" } } as never);
+  useMemberStore.setState({ myRole: "member", myRoleLoaded: true, myRoleError: null, myRoleWorkspaceId: "ws1" } as never);
   state.value = {
     state: "ready", catalogUnavailable: false, reload: vi.fn(), refresh: vi.fn(),
     entries: mergeCatalog(
@@ -257,7 +258,6 @@ describe("theme status", () => {
 
   it("enables a theme in the workspace from its page, the way an extension is enabled", async () => {
     useMemberStore.setState({ myRole: "admin" } as never);
-    useWorkspaceStore.setState({ currentWorkspace: { id: "ws1", slug: "acme" } } as never);
     apiMock.mockImplementation((url: string) => Promise.resolve(url.endsWith("/theme") ? { theme_id: "mesh-default" } : Promise.reject(new Error("no card"))));
     state.value = { ...state.value, entries: themes("graphite") };
     mount("/w/acme/extensions/mesh-default", "detail");
@@ -280,5 +280,51 @@ describe("theme status", () => {
     mount("/w/acme/extensions/mesh-default", "detail");
     expect(screen.queryByRole("button", { name: "Enable in workspace" })).toBeNull();
     expect(screen.getByText(/workspace owner or admin enables the workspace theme/)).toBeTruthy();
+  });
+
+  it("an unknown role is not 'ask an admin': it loads again and an admin gets the button", async () => {
+    useMemberStore.setState({ myRole: null, myRoleLoaded: false, myRoleError: null, myRoleWorkspaceId: null } as never);
+    apiMock.mockImplementation((url: string) => Promise.resolve(url.endsWith("/members/me") ? { role: "admin" } : Promise.reject(new Error("no card"))));
+    state.value = { ...state.value, entries: themes("graphite") };
+    mount("/w/acme/extensions/mesh-default", "detail");
+    expect(screen.queryByText(/workspace owner or admin enables the workspace theme/)).toBeNull();
+    expect(await screen.findByRole("button", { name: "Enable in workspace" })).toBeTruthy();
+  });
+
+  it("a failed role check shows a retry, not 'ask an admin'; retry recovers", async () => {
+    useMemberStore.setState({ myRole: null, myRoleLoaded: true, myRoleError: "boom", myRoleWorkspaceId: "ws1" } as never);
+    let ok = false;
+    apiMock.mockImplementation((url: string) => url.endsWith("/members/me")
+      ? (ok ? Promise.resolve({ role: "admin" }) : Promise.reject(new Error("boom")))
+      : Promise.reject(new Error("no card")));
+    state.value = { ...state.value, entries: themes("graphite") };
+    mount("/w/acme/extensions/mesh-default", "detail");
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect(screen.queryByText(/workspace owner or admin enables the workspace theme/)).toBeNull();
+    ok = true;
+    fireEvent.click(retry);
+    expect(await screen.findByRole("button", { name: "Enable in workspace" })).toBeTruthy();
+  });
+
+  it("an admin role left over from another workspace does not offer Enable here", async () => {
+    useMemberStore.setState({ myRole: "admin", myRoleLoaded: true, myRoleError: null, myRoleWorkspaceId: "other-ws" } as never);
+    apiMock.mockImplementation((url: string) => url.endsWith("/members/me") ? new Promise(() => {}) : Promise.reject(new Error("no card")));
+    state.value = { ...state.value, entries: themes("graphite") };
+    mount("/w/acme/extensions/mesh-default", "detail");
+    expect(screen.queryByRole("button", { name: "Enable in workspace" })).toBeNull();
+    expect(screen.getByRole("status", { name: /Checking your workspace role/ })).toBeTruthy();
+  });
+
+  it("an instance admin with an unknown workspace role is not told to ask an admin either", async () => {
+    useMemberStore.setState({ myRole: null, myRoleLoaded: true, myRoleError: "boom", myRoleWorkspaceId: "ws1" } as never);
+    apiMock.mockImplementation((url: string) => url.endsWith("/instance/overview") || url.endsWith("/extensions/instance/overview")
+      ? Promise.resolve({ extensions: [], auto_update: false })
+      : Promise.reject(new Error("no card")));
+    state.value = { ...state.value, entries: themes("graphite") };
+    mount("/w/acme/extensions/mesh-default", "detail");
+    await waitFor(() => expect(apiMock.mock.calls.some((c) => String(c[0]).includes("instance/overview"))).toBe(true));
+    await new Promise((r) => setTimeout(r, 50)); // let the instance-admin answer land
+    expect(await screen.findByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByText(/workspace owner or admin enables the workspace theme/)).toBeNull();
   });
 });

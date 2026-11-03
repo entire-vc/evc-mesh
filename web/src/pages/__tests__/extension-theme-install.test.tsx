@@ -41,7 +41,7 @@ beforeEach(async () => {
   apiMock.mockReset();
   apiMock.mockImplementation((path: string) => (path.includes("/instance/themes") || path.includes("/allowed") ? Promise.resolve({}) : Promise.reject(new Error("no card"))));
   state.instanceAdmin = true;
-  useMemberStore.setState({ myRole: "admin", myRoleLoaded: true } as never);
+  useMemberStore.setState({ myRole: "admin", myRoleLoaded: true, myRoleWorkspaceId: "ws1" } as never);
   useWorkspaceStore.setState({ currentWorkspace: { id: "ws1", slug: "acme" } } as never);
   // not installed on the instance: absent from instance summaries
   setCatalog(mergeCatalog([], [], [theme() as never]));
@@ -79,7 +79,7 @@ describe("builtin theme missing from the instance", () => {
 
   it("a plain member gets no install either", () => {
     state.instanceAdmin = false;
-    useMemberStore.setState({ myRole: "member", myRoleLoaded: true } as never);
+    useMemberStore.setState({ myRole: "member", myRoleLoaded: true, myRoleWorkspaceId: "ws1" } as never);
     mount();
     expect(screen.queryByRole("button", { name: /Install|Allow/ })).toBeNull();
   });
