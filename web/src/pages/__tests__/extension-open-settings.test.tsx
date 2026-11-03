@@ -60,7 +60,7 @@ beforeEach(async () => {
   await setLanguage("en");
   apiMock.mockReset();
   apiMock.mockRejectedValue(new Error("no card"));
-  useMemberStore.setState({ myRole: "admin", myRoleLoaded: true } as never);
+  useMemberStore.setState({ myRole: "admin", myRoleLoaded: true, myRoleWorkspaceId: "ws1" } as never);
   useWorkspaceStore.setState({ currentWorkspace: { id: "ws1", slug: "acme" } } as never);
   state.value = { state: "ready", catalogUnavailable: false, reload: vi.fn(), refresh: vi.fn(), entries: entries() };
 });
@@ -90,7 +90,7 @@ describe("Open settings", () => {
   });
 
   it("a member without rights lands on the list, not in a dialog", async () => {
-    useMemberStore.setState({ myRole: "member", myRoleLoaded: true } as never);
+    useMemberStore.setState({ myRole: "member", myRoleLoaded: true, myRoleWorkspaceId: "ws1" } as never);
     mount("/w/acme/extensions?tab=installed&settings=gitlab");
     await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/w/acme/extensions?tab=installed"));
     expect(screen.queryByRole("dialog")).toBeNull();

@@ -17,27 +17,21 @@ import (
 //	the gate on the read that resolves a status slug must never be stricter than
 //	the gate on the transition that read serves.
 //
-// POST /tasks/:task_id/move is workspace-gated. Resolving "which status is 'done'
-// in this task's project" is a precondition of that move. While the only way to
-// resolve it was GET /projects/:proj_id/statuses — project-gated — a caller who was
-// allowed to move a task could not discover where to move it, and the refusal it got
-// back named the project, not the move. The move was unreachable and the 403 pointed
-// at the wrong resource.
+// Both routes sit behind the same project-membership rule (RequireTaskProjectMember
+// / projectAccessDenial): GET /tasks/:task_id/statuses resolves "which status is
+// 'done' in this task's project", POST /tasks/:task_id/move uses the answer. An
+// agent that is a member of the task's project reaches both; a workspace agent
+// that is NOT a project member is refused both; an agent of another workspace is
+// refused both; a human workspace owner reaches both without a project_members
+// row. An agent never gets the owner/admin bypass.
 //
-// The test therefore asserts three things together; any one alone is not evidence:
-//  1. positive — a workspace member who is NOT a project member reads the new endpoint;
-//  2. negative (a check exists) — an agent outside the workspace is refused it;
-//  3. negative (nothing was weakened) — that same non-project-member key is still
-//     refused the project-scoped status route.
-//
-// Without (2) a passing (1) cannot be distinguished from "the endpoint has no gate
-// at all", and without (3) it cannot be distinguished from "we relaxed the project
-// route and broke project scoping for every other consumer, including the UI".
+// The membership of the allowed agent is created explicitly through the API and
+// asserted in the database. Assignment auto-enrols the assignee (#497), so the
+// task is deliberately assigned to nobody.
 func TestStatusResolveGateParity(t *testing.T) {
 	env := NewTestEnv(t)
 	defer env.Cleanup(t)
 
-	// --- Workspace A: the task, the project, and an agent that is NOT a project member.
 	env.Register(t, uniqueEmail("gate-parity"), "TestPass123", "Gate Parity Owner")
 
 	resp := env.Get(t, "/api/v1/workspaces")
@@ -55,100 +49,148 @@ func TestStatusResolveGateParity(t *testing.T) {
 	env.DecodeJSON(t, resp, &project)
 	projectID := project["id"].(string)
 
-	resp = env.Post(t, fmt.Sprintf("/api/v1/projects/%s/tasks", projectID), map[string]interface{}{
-		"title": "Task whose status the outsider must be able to resolve",
-	})
-	require.Equal(t, http.StatusCreated, resp.StatusCode)
-	var task map[string]interface{}
-	env.DecodeJSON(t, resp, &task)
-	taskID := task["id"].(string)
+	newTask := func(t *testing.T, title string) string {
+		t.Helper()
+		resp := env.Post(t, fmt.Sprintf("/api/v1/projects/%s/tasks", projectID), map[string]interface{}{"title": title})
+		require.Equal(t, http.StatusCreated, resp.StatusCode)
+		var task map[string]interface{}
+		env.DecodeJSON(t, resp, &task)
+		return task["id"].(string)
+	}
+	isMember := func(t *testing.T, column, id string) bool {
+		t.Helper()
+		var ok bool
+		require.NoError(t, env.DB.QueryRowContext(context.Background(),
+			"SELECT EXISTS(SELECT 1 FROM project_members WHERE project_id = $1 AND "+column+" = $2)",
+			projectID, id).Scan(&ok))
+		return ok
+	}
+	taskStatus := func(t *testing.T, taskID string) string {
+		t.Helper()
+		var statusID string
+		require.NoError(t, env.DB.QueryRowContext(context.Background(),
+			"SELECT status_id FROM tasks WHERE id = $1", taskID).Scan(&statusID))
+		return statusID
+	}
 
-	// The agent is created in the workspace and deliberately left out of the project.
-	// It is also NOT assigned the task: assignment auto-enrols the assignee into
-	// project_members (#497), which would quietly destroy the condition under test.
-	outsiderID, outsiderKey := env.CreateAgent(t, wsID, "Workspace Member Not Project Member")
+	// Explicit project member: enrolled through the API, then verified in the DB.
+	memberID, memberKey := env.CreateAgent(t, wsID, "Project Member Agent")
+	enrol := env.Post(t, fmt.Sprintf("/api/v1/projects/%s/members/agents", projectID),
+		map[string]interface{}{"agent_id": memberID, "role": "member"})
+	require.Equal(t, http.StatusCreated, enrol.StatusCode, string(env.ReadBody(t, enrol)))
+	require.True(t, isMember(t, "agent_id", memberID), "premise: member agent must have a project_members row")
 
-	// Guard the premise rather than assume it. If a future change enrols agents into
-	// projects on creation, this test would otherwise keep passing while testing nothing.
-	var isProjectMember bool
-	require.NoError(t, env.DB.QueryRowContext(context.Background(),
-		"SELECT EXISTS(SELECT 1 FROM project_members WHERE project_id = $1 AND agent_id = $2)",
-		projectID, outsiderID,
-	).Scan(&isProjectMember))
-	require.False(t, isProjectMember,
-		"premise broken: the agent is a project member, so this test proves nothing")
+	// Workspace agent left out of the project (never assigned, so never auto-enrolled).
+	outsiderID, outsiderKey := env.CreateAgent(t, wsID, "Workspace Agent Not Project Member")
+	require.False(t, isMember(t, "agent_id", outsiderID),
+		"premise broken: the agent is a project member, so the deny cases prove nothing")
 
-	// --- Workspace B: an agent with no relationship to workspace A at all.
-	outsiderEnv := NewTestEnv(t)
-	defer outsiderEnv.Cleanup(t)
-	outsiderEnv.Register(t, uniqueEmail("gate-parity-foreign"), "TestPass123", "Foreign Owner")
-
-	resp = outsiderEnv.Get(t, "/api/v1/workspaces")
+	// Agent of an unrelated workspace.
+	foreignEnv := NewTestEnv(t)
+	defer foreignEnv.Cleanup(t)
+	foreignEnv.Register(t, uniqueEmail("gate-parity-foreign"), "TestPass123", "Foreign Owner")
+	resp = foreignEnv.Get(t, "/api/v1/workspaces")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var foreignWorkspaces []map[string]interface{}
-	outsiderEnv.DecodeJSON(t, resp, &foreignWorkspaces)
+	foreignEnv.DecodeJSON(t, resp, &foreignWorkspaces)
 	require.NotEmpty(t, foreignWorkspaces)
-	foreignWsID := foreignWorkspaces[0]["id"].(string)
-	_, foreignAgentKey := outsiderEnv.CreateAgent(t, foreignWsID, "Foreign Workspace Agent")
+	_, foreignKey := foreignEnv.CreateAgent(t, foreignWorkspaces[0]["id"].(string), "Foreign Workspace Agent")
 
+	// Resolve the project's done status once (as the human owner) for the move calls.
 	var doneStatusID string
+	statusesPath := func(taskID string) string { return fmt.Sprintf("/api/v1/tasks/%s/statuses", taskID) }
+	movePath := func(taskID string) string { return fmt.Sprintf("/api/v1/tasks/%s/move", taskID) }
 
-	// --- 1. POSITIVE: workspace member, not project member, reads the task's statuses.
-	t.Run("WorkspaceMemberCanResolveStatusesForATaskItMayMove", func(t *testing.T) {
-		resp := env.GetWithAgentKey(t, fmt.Sprintf("/api/v1/tasks/%s/statuses", taskID), outsiderKey)
-		require.Equal(t, http.StatusOK, resp.StatusCode,
-			"a caller allowed to move this task must be allowed to list where it can move")
+	t.Run("ProjectMemberAgentResolvesAndMoves", func(t *testing.T) {
+		taskID := newTask(t, "Task a project member agent resolves and moves")
 
+		resp := env.GetWithAgentKey(t, statusesPath(taskID), memberKey)
+		require.Equal(t, http.StatusOK, resp.StatusCode, "a project member must be able to list where the task can move")
 		var statuses []map[string]interface{}
 		env.DecodeJSON(t, resp, &statuses)
 		require.NotEmpty(t, statuses, "project must have default statuses")
-
-		// The response must carry the fields the slug resolver reads, or the endpoint
-		// is reachable but useless — a 200 that resolves nothing.
+		var resolved string
 		for _, s := range statuses {
 			assert.NotEmpty(t, s["id"], "status must expose id")
 			assert.NotEmpty(t, s["slug"], "status must expose slug")
 			assert.Equal(t, projectID, s["project_id"], "statuses must be the task's own project's")
 			if s["category"] == "done" {
-				doneStatusID, _ = s["id"].(string)
+				resolved, _ = s["id"].(string)
 			}
 		}
-		require.NotEmpty(t, doneStatusID, "project must expose a done-category status")
-	})
+		require.NotEmpty(t, resolved, "project must expose a done-category status")
+		doneStatusID = resolved
 
-	// --- 2. NEGATIVE CONTROL: a check exists at all.
-	t.Run("AgentOutsideTheWorkspaceIsRefused", func(t *testing.T) {
-		resp := env.GetWithAgentKey(t, fmt.Sprintf("/api/v1/tasks/%s/statuses", taskID), foreignAgentKey)
-		defer func() { _ = resp.Body.Close() }()
-		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
-			"without this, a passing positive case cannot be told apart from an ungated endpoint")
-	})
-
-	// --- 3. NEGATIVE CONTROL: the project-scoped route was not weakened.
-	t.Run("ProjectScopedStatusRouteStillRequiresProjectMembership", func(t *testing.T) {
-		resp := env.GetWithAgentKey(t, fmt.Sprintf("/api/v1/projects/%s/statuses", projectID), outsiderKey)
-		defer func() { _ = resp.Body.Close() }()
-		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
-			"the fix must be additive: project config stays behind project membership "+
-				"for every existing consumer, including the UI")
-	})
-
-	// --- 4. The loop closes: the read the write needed now permits the write.
-	t.Run("SameCallerCanCompleteTheMoveTheResolveServed", func(t *testing.T) {
-		if doneStatusID == "" {
-			t.Skip("done status not resolved")
-		}
+		before := taskStatus(t, taskID)
+		require.NotEqual(t, doneStatusID, before)
 
 		// The done-evidence governance rule requires a comment before a done move.
-		resp := env.PostWithAgentKey(t, fmt.Sprintf("/api/v1/tasks/%s/comments", taskID), outsiderKey,
+		resp = env.PostWithAgentKey(t, fmt.Sprintf("/api/v1/tasks/%s/comments", taskID), memberKey,
 			map[string]string{"body": "Gate parity integration test — closing evidence."})
 		require.Contains(t, []int{http.StatusOK, http.StatusCreated}, resp.StatusCode)
 		_ = resp.Body.Close()
 
-		resp = env.PostWithAgentKey(t, fmt.Sprintf("/api/v1/tasks/%s/move", taskID), outsiderKey,
-			map[string]string{"status_id": doneStatusID})
+		resp = env.PostWithAgentKey(t, movePath(taskID), memberKey, map[string]string{"status_id": doneStatusID})
 		defer func() { _ = resp.Body.Close() }()
-		assert.Equal(t, http.StatusOK, resp.StatusCode,
-			"resolve and move must be reachable by the same caller — that is the whole invariant")
+		require.Equal(t, http.StatusOK, resp.StatusCode, "the same caller that resolved the status must be able to move")
+		assert.Equal(t, doneStatusID, taskStatus(t, taskID), "the move must actually change the task's status")
+	})
+	require.NotEmpty(t, doneStatusID, "member subtest must have resolved the done status")
+
+	t.Run("WorkspaceAgentNotInProjectIsRefusedBothRoutes", func(t *testing.T) {
+		taskID := newTask(t, "Task a non-member workspace agent must not reach")
+		before := taskStatus(t, taskID)
+
+		resp := env.GetWithAgentKey(t, statusesPath(taskID), outsiderKey)
+		defer func() { _ = resp.Body.Close() }()
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode, "task statuses must stay behind project membership")
+
+		resp2 := env.PostWithAgentKey(t, movePath(taskID), outsiderKey, map[string]string{"status_id": doneStatusID})
+		defer func() { _ = resp2.Body.Close() }()
+		assert.Equal(t, http.StatusForbidden, resp2.StatusCode, "task move must stay behind project membership")
+		assert.Equal(t, before, taskStatus(t, taskID), "a refused move must not change the status")
+	})
+
+	t.Run("ProjectScopedStatusRouteRequiresProjectMembership", func(t *testing.T) {
+		resp := env.GetWithAgentKey(t, fmt.Sprintf("/api/v1/projects/%s/statuses", projectID), outsiderKey)
+		defer func() { _ = resp.Body.Close() }()
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+
+		resp2 := env.GetWithAgentKey(t, fmt.Sprintf("/api/v1/projects/%s/statuses", projectID), memberKey)
+		defer func() { _ = resp2.Body.Close() }()
+		assert.Equal(t, http.StatusOK, resp2.StatusCode, "positive control: the member reads the project route")
+	})
+
+	t.Run("AgentOutsideTheWorkspaceIsRefusedBothRoutes", func(t *testing.T) {
+		taskID := newTask(t, "Task a foreign-workspace agent must not reach")
+		before := taskStatus(t, taskID)
+
+		resp := env.GetWithAgentKey(t, statusesPath(taskID), foreignKey)
+		defer func() { _ = resp.Body.Close() }()
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+
+		resp2 := env.PostWithAgentKey(t, movePath(taskID), foreignKey, map[string]string{"status_id": doneStatusID})
+		defer func() { _ = resp2.Body.Close() }()
+		assert.Equal(t, http.StatusForbidden, resp2.StatusCode)
+		assert.Equal(t, before, taskStatus(t, taskID))
+	})
+
+	t.Run("HumanWorkspaceOwnerBypassesWithoutProjectMembership", func(t *testing.T) {
+		// Remove any membership row the project creator may have received, so the
+		// owner bypass is what grants access, not a project_members row.
+		_, err := env.DB.ExecContext(context.Background(),
+			"DELETE FROM project_members WHERE project_id = $1 AND user_id = $2", projectID, env.UserID)
+		require.NoError(t, err)
+		require.False(t, isMember(t, "user_id", env.UserID), "premise: owner has no project_members row")
+
+		taskID := newTask(t, "Task the workspace owner reaches by role")
+		resp := env.Get(t, statusesPath(taskID))
+		defer func() { _ = resp.Body.Close() }()
+		assert.Equal(t, http.StatusOK, resp.StatusCode, "human owner/admin reaches every project of the workspace")
+
+		resp2 := env.MoveTaskToDone(t, taskID, doneStatusID)
+		defer func() { _ = resp2.Body.Close() }()
+		assert.Equal(t, http.StatusOK, resp2.StatusCode)
+		assert.Equal(t, doneStatusID, taskStatus(t, taskID))
 	})
 }

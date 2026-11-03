@@ -837,6 +837,9 @@
       "notAllowed": "The instance administrator has not allowed this extension.",
       "enableTheme": "Enable in workspace",
       "themeAskAdmin": "A workspace owner or admin enables the workspace theme.",
+      "roleLoading": "Checking your workspace role…",
+      "roleError": "Could not check your workspace role.",
+      "roleRetry": "Retry",
       "manageInRunner": "Manage in Runner"
     },
     "permissions": {
