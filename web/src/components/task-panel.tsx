@@ -32,6 +32,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { RuntimeStateBadge } from "@/components/runtime-state-badge";
+import { RuntimeConstraints } from "@/components/runtime-constraints";
 import { readableRuntimeState } from "@/lib/runtime-state";
 import { useBlocker, useLocation, useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
@@ -1391,8 +1392,9 @@ export function TaskPanel({
         {currentTask.runtime_state && (
           <>
             <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">{t("panel.props.now")}</label>
-            <div className="flex min-w-0 items-center pt-0.5" data-testid="runtime-state-row">
+            <div className="flex min-w-0 flex-col gap-1.5 pt-0.5" data-testid="runtime-state-row">
               <RuntimeStateBadge state={readableRuntimeState(currentTask)!} variant="line" />
+              <RuntimeConstraints state={readableRuntimeState(currentTask)!} variant="full" />
             </div>
           </>
         )}

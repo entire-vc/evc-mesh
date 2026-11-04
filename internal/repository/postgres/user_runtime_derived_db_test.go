@@ -370,3 +370,89 @@ func TestOperatorRunners_UnreportedVersionIsInstalled(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "0.1.7", d.agentRow(t).Controller.Version, "a version the runner sends wins")
 }
+
+// An agent that lives in the receiving workspace and is admitted to a runner
+// pool owned by another workspace is listed for the receiving workspace's
+// owner or admin: the admission carries the agent's own workspace, and an
+// active exact grant there. The pool owner's screen does not gain the agent,
+// and nothing else of the receiving workspace's is listed.
+func TestOperatorAgents_ReceivingAdmissionForForeignPool(t *testing.T) {
+	d := seedDerived(t)
+	ctx := context.Background()
+	_, err := d.db.ExecContext(ctx, `UPDATE agents SET workspace_id=$2, operator_user_id=NULL WHERE id=$1`, d.agent, d.receiver)
+	require.NoError(t, err)
+	admin, member := seedGrantUser(t, d.db), seedGrantUser(t, d.db)
+	for user, role := range map[uuid.UUID]string{admin: "admin", member: "member"} {
+		_, err = d.db.ExecContext(ctx, `INSERT INTO workspace_members (id, workspace_id, user_id, role) VALUES ($1,$2,$3,$4)`, uuid.New(), d.receiver, user, role)
+		require.NoError(t, err)
+	}
+	// An unrelated agent of the receiving workspace, not admitted anywhere.
+	other := seedGrantAgent(t, d.db, d.receiver)
+
+	d.admitted(false)
+	require.Empty(t, agentIDs(t, d.repo, admin, d.receiver), "disabled admission: not listed")
+
+	d.admitted(true)
+	require.Equal(t, []uuid.UUID{d.agent}, agentIDs(t, d.repo, admin, d.receiver))
+	require.NotContains(t, agentIDs(t, d.repo, admin, d.receiver), other.ID)
+	require.Empty(t, agentIDs(t, d.repo, member, d.receiver), "a plain member is not shown it")
+	require.Empty(t, agentIDs(t, d.repo, d.actor.UserID, d.owner), "the pool owner's screen does not list another workspace's agent")
+	_, err = d.repo.OperatorAgents(ctx, UserRuntimeActor{UserID: admin}, d.owner)
+	require.Error(t, err, "the receiving admin has no access to the pool owner's workspace")
+
+	// The same admin in a third workspace sees nothing of it.
+	third := seedGrantWorkspace(t, d.db)
+	t.Cleanup(func() { _, _ = d.db.ExecContext(context.Background(), `DELETE FROM workspaces WHERE id=$1`, third) })
+	_, err = d.db.ExecContext(ctx, `INSERT INTO workspace_members (id, workspace_id, user_id, role) VALUES ($1,$2,$3,'admin')`, uuid.New(), third, admin)
+	require.NoError(t, err)
+	require.Empty(t, agentIDs(t, d.repo, admin, third))
+
+	_, err = d.db.ExecContext(ctx, `UPDATE agent_workspace_grants SET revoked_at=now() WHERE id=$1`, d.grant)
+	require.NoError(t, err)
+	require.Empty(t, agentIDs(t, d.repo, admin, d.receiver), "revoked grant: not listed")
+}
+
+// A stale enabled admission must not keep a foreign-pool agent listed once the
+// pool owner's current catalog no longer carries its binding, or carries it for
+// another agent or grant.
+func TestOperatorAgents_ReceivingAdmissionStaleBindingNotLed(t *testing.T) {
+	d := seedDerived(t)
+	ctx := context.Background()
+	_, err := d.db.ExecContext(ctx, `UPDATE agents SET workspace_id=$2, operator_user_id=NULL WHERE id=$1`, d.agent, d.receiver)
+	require.NoError(t, err)
+	admin := seedGrantUser(t, d.db)
+	_, err = d.db.ExecContext(ctx, `INSERT INTO workspace_members (id, workspace_id, user_id, role) VALUES ($1,$2,$3,'admin')`, uuid.New(), d.receiver, admin)
+	require.NoError(t, err)
+	d.admitted(true)
+	require.Equal(t, []uuid.UUID{d.agent}, agentIDs(t, d.repo, admin, d.receiver))
+
+	save := func(mutate func(c *domain.RuntimeCatalog)) {
+		catalog := *d.catalog
+		catalog.Bindings = map[string]domain.RuntimeBinding{}
+		for ref, b := range d.catalog.Bindings {
+			catalog.Bindings[ref] = b
+		}
+		mutate(&catalog)
+		data, e := json.Marshal(catalog)
+		require.NoError(t, e)
+		snapshot, e := d.runtimeFixture.repo.Inventory(ctx, d.owner, d.ownerActor)
+		require.NoError(t, e)
+		_, e = d.runtimeFixture.repo.Save(ctx, d.owner, d.ownerActor, RuntimeSave{IfRevision: snapshot.Revision, Config: data})
+		require.NoError(t, e)
+		d.admitted(true) // force the stale row back on
+	}
+
+	// Reassigned to another agent.
+	other := seedGrantAgent(t, d.db, d.receiver)
+	otherGrant := insertGrant(t, d.db, other.ID, d.receiver, "member", "runtime-other", "synthetic-other-hash", nil)
+	save(func(c *domain.RuntimeCatalog) {
+		b := c.Bindings["worker-b"]
+		b.Binding = domain.RuntimeIdentity{AgentID: other.ID, WorkspaceID: d.receiver, GrantID: otherGrant}
+		c.Bindings["worker-b"] = b
+	})
+	require.Empty(t, agentIDs(t, d.repo, admin, d.receiver), "reassigned binding: stale admission does not lead")
+
+	// Removed from the current catalog.
+	save(func(c *domain.RuntimeCatalog) { c.Bindings = map[string]domain.RuntimeBinding{} })
+	require.Empty(t, agentIDs(t, d.repo, admin, d.receiver), "removed binding: stale admission does not lead")
+}

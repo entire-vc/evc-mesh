@@ -22,6 +22,7 @@ import (
 type MockAgentWorkspaceGrantService struct {
 	InviteAgentFunc         func(ctx context.Context, workspaceID, agentID uuid.UUID, role string, invitedBy uuid.UUID) (*service.InviteAgentResult, error)
 	RevokeGrantFunc         func(ctx context.Context, workspaceID, grantID uuid.UUID) error
+	UpdateGrantRoleFunc     func(ctx context.Context, workspaceID, grantID uuid.UUID, newRole string) (*domain.AgentWorkspaceGrant, error)
 	ListWorkspaceAgentsFunc func(ctx context.Context, workspaceID uuid.UUID) ([]domain.AgentWorkspaceGrantWithAgent, error)
 	ListAgentWorkspacesFunc func(ctx context.Context, agentID uuid.UUID) ([]domain.AgentWorkspaceGrantWithWorkspace, error)
 }
@@ -38,6 +39,13 @@ func (m *MockAgentWorkspaceGrantService) RevokeGrant(ctx context.Context, worksp
 		return m.RevokeGrantFunc(ctx, workspaceID, grantID)
 	}
 	return nil
+}
+
+func (m *MockAgentWorkspaceGrantService) UpdateGrantRole(ctx context.Context, workspaceID, grantID uuid.UUID, newRole string) (*domain.AgentWorkspaceGrant, error) {
+	if m.UpdateGrantRoleFunc != nil {
+		return m.UpdateGrantRoleFunc(ctx, workspaceID, grantID, newRole)
+	}
+	return nil, nil
 }
 
 func (m *MockAgentWorkspaceGrantService) ListWorkspaceAgents(ctx context.Context, workspaceID uuid.UUID) ([]domain.AgentWorkspaceGrantWithAgent, error) {
@@ -376,4 +384,49 @@ func TestAgentWorkspaceGrantHandler_ListMyWorkspaces_NoAgentKey_401(t *testing.T
 
 	require.NoError(t, h.ListMyWorkspaces(c))
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestAgentWorkspaceGrantHandler_UpdateRole_StrictBody(t *testing.T) {
+	wsID, grantID := uuid.New(), uuid.New()
+	called := 0
+	svc := &MockAgentWorkspaceGrantService{
+		UpdateGrantRoleFunc: func(_ context.Context, _, _ uuid.UUID, role string) (*domain.AgentWorkspaceGrant, error) {
+			called++
+			return &domain.AgentWorkspaceGrant{ID: grantID, WorkspaceID: wsID, Role: role, APIKeyHash: "secret-hash"}, nil
+		},
+	}
+	h := NewAgentWorkspaceGrantHandler(svc)
+
+	// The stub always succeeds, so a 400 can only come from the handler's own
+	// body validation, and called must stay 0.
+	for _, body := range []string{
+		`{"role":"member","api_key":"x"}`, `{"role":"member","agent_id":"` + uuid.NewString() + `"}`,
+		`not json`, ``, `{"role":"member"}{"role":"admin"}`,
+		`{"role":"member"}}`, `{"role":"member"}]`, `{"role":"member"} x`,
+		`{"role":"viewer","role":"admin"}`, `{"role":"admin","role":"admin"}`, `{"role":["admin"]}`, `{"role":null}`, `[]`, `"admin"`,
+		`{}`, `{"role":""}`, `{"role":"owner"}`, `{"role":"superuser"}`, `{"role":"Admin"}`,
+	} {
+		c, rec := newGrantReq(t, http.MethodPatch, body, wsID, grantID, uuid.New())
+		require.NoError(t, h.UpdateRole(c))
+		assert.Equal(t, http.StatusBadRequest, rec.Code, body)
+	}
+	assert.Equal(t, 0, called, "service must not be reached for malformed bodies")
+
+	// Valid body, trailing whitespace allowed; response carries no key material.
+	c, rec := newGrantReq(t, http.MethodPatch, "{\"role\":\"member\"}\n", wsID, grantID, uuid.New())
+	require.NoError(t, h.UpdateRole(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 1, called)
+	assert.Contains(t, rec.Body.String(), `"role":"member"`)
+	assert.NotContains(t, rec.Body.String(), "secret-hash")
+	assert.NotContains(t, rec.Body.String(), "api_key\"")
+
+	// Every allowed role reaches the service.
+	for _, role := range []string{"admin", "member", "viewer"} {
+		before := called
+		c, rec = newGrantReq(t, http.MethodPatch, `{"role":"`+role+`"}`, wsID, grantID, uuid.New())
+		require.NoError(t, h.UpdateRole(c))
+		assert.Equal(t, http.StatusOK, rec.Code, role)
+		assert.Equal(t, before+1, called, role)
+	}
 }

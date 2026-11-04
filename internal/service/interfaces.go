@@ -900,6 +900,13 @@ type AgentServiceConfigurable interface {
 // this same process. *agentService implements this by delegating to
 // grantRepo; a nil grantRepo (never wired) answers false so the check is a
 // no-op rather than a crash.
+//
+// GrantStateChecker is the stronger form: it also reports the grant's current
+// role so a role change (PATCH agent-grants) takes effect on warm entries.
+type GrantStateChecker interface {
+	GrantState(ctx context.Context, grantID uuid.UUID) (revoked bool, role string, err error)
+}
+
 type GrantRevocationChecker interface {
 	IsGrantRevoked(ctx context.Context, grantID uuid.UUID) (bool, error)
 }
@@ -1434,6 +1441,10 @@ type AgentWorkspaceGrantService interface {
 	// ListAgentWorkspaces returns every workspace agentID currently holds an
 	// active connection to.
 	ListAgentWorkspaces(ctx context.Context, agentID uuid.UUID) ([]domain.AgentWorkspaceGrantWithWorkspace, error)
+	// UpdateGrantRole changes only the role of an active grant (admin/member/
+	// viewer; owner is refused) without touching its key. Revoked grants are
+	// not reactivated (409). Same role is an idempotent success.
+	UpdateGrantRole(ctx context.Context, workspaceID, grantID uuid.UUID, newRole string) (*domain.AgentWorkspaceGrant, error)
 }
 
 // ProjectMemberService provides business logic for project member management.

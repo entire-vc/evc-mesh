@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -264,4 +265,41 @@ func TestListAgentWorkspaces_OnlyActive(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	assert.Equal(t, wsB.ID, list[0].WorkspaceID)
+}
+
+func TestAgentWorkspaceGrantService_UpdateGrantRole(t *testing.T) {
+	ctx := context.Background()
+	wsID := uuid.New()
+	grantRepo := NewMockAgentWorkspaceGrantRepository()
+	svc := NewAgentWorkspaceGrantService(grantRepo, nil, nil, nil)
+
+	active := &domain.AgentWorkspaceGrant{ID: uuid.New(), AgentID: uuid.New(), WorkspaceID: wsID, Role: domain.RoleViewer, APIKeyPrefix: "p1", APIKeyHash: "h1"}
+	revokedAt := time.Now()
+	revoked := &domain.AgentWorkspaceGrant{ID: uuid.New(), AgentID: uuid.New(), WorkspaceID: wsID, Role: domain.RoleMember, RevokedAt: &revokedAt}
+	grantRepo.Seed(active)
+	grantRepo.Seed(revoked)
+
+	for _, bad := range []string{"", "owner", "root"} {
+		_, err := svc.UpdateGrantRole(ctx, wsID, active.ID, bad)
+		require.Error(t, err, "role %q must be rejected", bad)
+	}
+
+	g, err := svc.UpdateGrantRole(ctx, wsID, active.ID, domain.RoleMember)
+	require.NoError(t, err)
+	require.Equal(t, domain.RoleMember, g.Role)
+	require.Equal(t, "h1", g.APIKeyHash)
+
+	// idempotent retry
+	g, err = svc.UpdateGrantRole(ctx, wsID, active.ID, domain.RoleMember)
+	require.NoError(t, err)
+	require.Equal(t, domain.RoleMember, g.Role)
+
+	_, err = svc.UpdateGrantRole(ctx, wsID, revoked.ID, domain.RoleAdmin)
+	require.Error(t, err, "revoked grant is not reactivated")
+	require.Equal(t, domain.RoleMember, revoked.Role)
+
+	_, err = svc.UpdateGrantRole(ctx, uuid.New(), active.ID, domain.RoleAdmin)
+	require.Error(t, err, "foreign workspace must not find the grant")
+	_, err = svc.UpdateGrantRole(ctx, wsID, uuid.New(), domain.RoleAdmin)
+	require.Error(t, err)
 }

@@ -176,6 +176,29 @@ func (s *agentWorkspaceGrantService) RevokeGrant(ctx context.Context, workspaceI
 	return nil
 }
 
+// UpdateGrantRole changes only the role of an active grant, atomically with
+// its audit row (see repository.UpdateRoleWithAudit). The key is untouched.
+func (s *agentWorkspaceGrantService) UpdateGrantRole(ctx context.Context, workspaceID, grantID uuid.UUID, newRole string) (*domain.AgentWorkspaceGrant, error) {
+	if newRole != domain.RoleAdmin && newRole != domain.RoleMember && newRole != domain.RoleViewer {
+		return nil, apierror.ValidationError(map[string]string{
+			"role": "role must be one of: admin, member, viewer (owner cannot be set via this endpoint)",
+		})
+	}
+	actorID, actorType := actorctx.FromContext(ctx)
+	res, err := s.grantRepo.UpdateRoleWithAudit(ctx, grantID, workspaceID, newRole, actorID, actorType)
+	if err != nil {
+		return nil, fmt.Errorf("agent_workspace_grant_service.UpdateGrantRole: %w", err)
+	}
+	if !res.Found {
+		return nil, apierror.NotFound("AgentWorkspaceGrant")
+	}
+	if res.Revoked {
+		return nil, apierror.Conflict("grant is revoked — re-invite the agent to restore access")
+	}
+	g := res.Grant
+	return &g, nil
+}
+
 // ListWorkspaceAgents returns every agent with an active connection to workspaceID.
 func (s *agentWorkspaceGrantService) ListWorkspaceAgents(ctx context.Context, workspaceID uuid.UUID) ([]domain.AgentWorkspaceGrantWithAgent, error) {
 	return s.grantRepo.ListActiveByWorkspace(ctx, workspaceID)

@@ -81,6 +81,7 @@ var wsScopedRoutes = []wsRoute{
 
 	{http.MethodGet, "/agent-grants", nil},
 	{http.MethodPost, "/agent-grants", map[string]string{"agent_id": dummyUUID, "role": "member"}},
+	{http.MethodPatch, "/agent-grants/" + dummyUUID, map[string]string{"role": "member"}},
 	{http.MethodDelete, "/agent-grants/" + dummyUUID, nil},
 
 	{http.MethodGet, "/theme", nil},

@@ -1,0 +1,70 @@
+{
+  "a2_enrollment": {
+    "assignment": {
+      "owner": "00000000-0000-4000-8000-00000000e051",
+      "sequence": 1
+    },
+    "issuer_key": "wOhXluXY5bPQ8X5u3tEXXO6v30775A06ScZKyv8CE4M=",
+    "pin": {
+      "author_family": "claude",
+      "authority_id": "00000000-0000-4000-8000-00000000e021",
+      "enrollment_id": "00000000-0000-4000-8000-00000000e001",
+      "issuer_actor_id": "00000000-0000-4000-8000-00000000e011",
+      "native": {
+        "binding": {
+          "package_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+          "producer": "00000000-0000-4000-8000-00000000e013",
+          "stage": "review-receipt",
+          "task": "00000000-0000-4000-8000-00000000e032",
+          "test": true
+        },
+        "registration": "8e869b5237c0ada5f7298bd6862035abe8e4ef2a1268fe6d66499efdbd50d82e"
+      },
+      "owner_actor_id": "00000000-0000-4000-8000-00000000e017",
+      "pins": {
+        "config_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+        "manifest_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+        "package_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "source_repo": "evc-mesh",
+        "source_sha": "0123456789abcdef0123456789abcdef01234567"
+      },
+      "product": {
+        "authority_sha256": "e9f3115f13f33de34bba22195c10242259e1a383dd58534e618997ca9e4f09d1",
+        "observation_id": "66666666666666666666666666666666",
+        "owning_task_id": "00000000-0000-4000-8000-00000000e034",
+        "root_disposition_sha256": "e5c539a8b63c6d82cef68f7425be587020102f57750e41cd0d63b2cddd5821a0",
+        "session_id": "77777777777777777777777777777777"
+      },
+      "project_id": "00000000-0000-4000-8000-00000000e003",
+      "publisher_actor_id": "00000000-0000-4000-8000-00000000e012",
+      "receiver": {
+        "attempt": "00000000-0000-4000-8000-0000000000a2",
+        "generation": 1,
+        "session": "00000000-0000-4000-8000-0000000000a3",
+        "task": "00000000-0000-4000-8000-0000000000a1"
+      },
+      "review_task_id": "00000000-0000-4000-8000-00000000e031",
+      "reviewer_family": "codex",
+      "schema": "native-review-admission/v1",
+      "scope": {
+        "context_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "criteria_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "domain": "t12-successor-synthetic",
+        "namespace": "00000000-0000-4000-8000-00000000e033",
+        "test": true
+      },
+      "source_task_id": "00000000-0000-4000-8000-00000000e032",
+      "transport_source_id": "00000000-0000-4000-8000-00000000e013",
+      "workspace_id": "00000000-0000-4000-8000-00000000e002"
+    }
+  },
+  "authority_original_bytes": "QTEgdmVjdG9yIG9yaWdpbmFsIGF1dGhvcml0eSBieXRlcwo=",
+  "authority_sha256": "e9f3115f13f33de34bba22195c10242259e1a383dd58534e618997ca9e4f09d1",
+  "issuer_public_key": "wOhXluXY5bPQ8X5u3tEXXO6v30775A06ScZKyv8CE4M=",
+  "note": "Issued by the real A1 issue path from the fixed enrollment below. The signing key is a harness-only test key and is NOT stored here; only the public key is. Ed25519 is deterministic: re-issuing with the same inputs yields the same bytes. Regenerate: NR_VECTOR_WRITE=1.",
+  "packet_canonical": "{\"author_family\":\"claude\",\"authority_id\":\"00000000-0000-4000-8000-00000000e021\",\"body\":{\"bytes\":\"U0hJUCBleGFjdCBoZWFkLCB2ZWN0b3IgYm9keQo=\",\"encoding\":\"base64\",\"sha256\":\"209e69c3f46c6304654c88e85cdb3b45755d29177e91cb291b628f9ad45566dd\"},\"created_at\":\"2026-11-03T20:00:00Z\",\"enrollment_id\":\"00000000-0000-4000-8000-00000000e001\",\"issuer_actor_id\":\"00000000-0000-4000-8000-00000000e011\",\"issuer_signature\":\"4K8ljAmCMjHXO7czmgeifm/q1eGHz85vfVl9Bs57C29DmA2RU0eInt/nsRAD2soQd5MxEQ1zqJQ1mHHwZbUcDA==\",\"native\":{\"binding\":{\"package_sha256\":\"3333333333333333333333333333333333333333333333333333333333333333\",\"producer\":\"00000000-0000-4000-8000-00000000e013\",\"stage\":\"review-receipt\",\"task\":\"00000000-0000-4000-8000-00000000e032\",\"test\":true},\"registration\":\"8e869b5237c0ada5f7298bd6862035abe8e4ef2a1268fe6d66499efdbd50d82e\"},\"owner_actor_id\":\"00000000-0000-4000-8000-00000000e017\",\"pins\":{\"config_sha256\":\"5555555555555555555555555555555555555555555555555555555555555555\",\"manifest_sha256\":\"4444444444444444444444444444444444444444444444444444444444444444\",\"package_sha256\":\"3333333333333333333333333333333333333333333333333333333333333333\",\"source_repo\":\"evc-mesh\",\"source_sha\":\"0123456789abcdef0123456789abcdef01234567\"},\"product\":{\"authority_sha256\":\"e9f3115f13f33de34bba22195c10242259e1a383dd58534e618997ca9e4f09d1\",\"observation_id\":\"66666666666666666666666666666666\",\"owning_task_id\":\"00000000-0000-4000-8000-00000000e034\",\"root_disposition_sha256\":\"e5c539a8b63c6d82cef68f7425be587020102f57750e41cd0d63b2cddd5821a0\",\"session_id\":\"77777777777777777777777777777777\"},\"project_id\":\"00000000-0000-4000-8000-00000000e003\",\"publisher_actor_id\":\"00000000-0000-4000-8000-00000000e012\",\"receipt_id\":\"00000000-0000-4000-8000-00000000e041\",\"receipt_sha256\":\"5c0a4d33fab2713636cbdc20f7caad09394d26cc5e24cb0f2e041bcbe54f403d\",\"receiver\":{\"attempt\":\"00000000-0000-4000-8000-0000000000a2\",\"generation\":1,\"session\":\"00000000-0000-4000-8000-0000000000a3\",\"task\":\"00000000-0000-4000-8000-0000000000a1\"},\"result_author_actor_id\":\"00000000-0000-4000-8000-00000000e016\",\"review_task_id\":\"00000000-0000-4000-8000-00000000e031\",\"reviewer_family\":\"codex\",\"schema\":\"native-review-admission/v1\",\"scope\":{\"context_sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"criteria_sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"domain\":\"t12-successor-synthetic\",\"namespace\":\"00000000-0000-4000-8000-00000000e033\",\"test\":true},\"source_task_id\":\"00000000-0000-4000-8000-00000000e032\",\"transport_source_id\":\"00000000-0000-4000-8000-00000000e013\",\"verdict\":\"SHIP\",\"workspace_id\":\"00000000-0000-4000-8000-00000000e002\"}",
+  "packet_canonical_sha256": "4b722a9b39e0ec41efd032eb5386733b99338fd92963f9d280c7987638a3d2d6",
+  "root_disposition_original_bytes": "QTEgdmVjdG9yIG9yaWdpbmFsIHJvb3QgZGlzcG9zaXRpb24gYnl0ZXMK",
+  "root_disposition_sha256": "e5c539a8b63c6d82cef68f7425be587020102f57750e41cd0d63b2cddd5821a0",
+  "vector": "native-review-a1-issued/v1"
+}

@@ -136,6 +136,28 @@ func (r *TaskDependencyRepo) ListByTask(ctx context.Context, taskID uuid.UUID) (
 	return deps, nil
 }
 
+// ListBlockingByTasks returns, per task, its `blocks` edges that still hold it
+// (condition not satisfied), oldest first, in one query. Tasks without such an
+// edge are absent from the map. The board reads it for a whole page.
+func (r *TaskDependencyRepo) ListBlockingByTasks(ctx context.Context, taskIDs []uuid.UUID) (map[uuid.UUID][]domain.TaskDependency, error) {
+	out := make(map[uuid.UUID][]domain.TaskDependency)
+	if len(taskIDs) == 0 {
+		return out, nil
+	}
+	q := `SELECT ` + taskDependencySelectCols + ` FROM ` + taskDependencyFrom +
+		` WHERE d.task_id = ANY($1) AND d.dependency_type = 'blocks' ORDER BY d.created_at ASC`
+	var deps []domain.TaskDependency
+	if err := r.db.SelectContext(ctx, &deps, q, pq.Array(taskIDs)); err != nil {
+		return nil, err
+	}
+	for _, d := range deps {
+		if !d.ConditionSatisfied {
+			out[d.TaskID] = append(out[d.TaskID], d)
+		}
+	}
+	return out, nil
+}
+
 // ListDependents returns all dependencies where another task depends on the given task.
 func (r *TaskDependencyRepo) ListDependents(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error) {
 	q := `SELECT ` + taskDependencySelectCols + ` FROM ` + taskDependencyFrom + ` WHERE d.depends_on_task_id = $1 ORDER BY d.created_at ASC`

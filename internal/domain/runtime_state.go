@@ -27,6 +27,9 @@ const (
 	RuntimeStateSourceExplicit RuntimeStateSource = "explicit"
 	// RuntimeStateSourceCheckout: nothing was written, derived from a live checkout.
 	RuntimeStateSourceCheckout RuntimeStateSource = "checkout"
+	// RuntimeStateSourceDependency: nothing was written; the read side derived a
+	// waiting state from live blocks edges only. Never stored.
+	RuntimeStateSourceDependency RuntimeStateSource = "dependency"
 )
 
 // RuntimeStateStaleAfter is how long an explicit state may go without a refreshing
@@ -102,6 +105,10 @@ type RuntimeState struct {
 	// its placeholders (e.g. {"minutes":"4"}). Both optional: old records have neither.
 	ReasonCode   *string           `json:"reason_code,omitempty"`
 	ReasonParams map[string]string `json:"reason_params,omitempty"`
+	// Constraints are the operational-constraints contract (additive v1). nil means
+	// a legacy producer; an empty list means no known active constraint, which does
+	// not prove every source was readable.
+	Constraints []OperationalConstraint `json:"constraints,omitempty"`
 	// UpdatedAt is set by the server on every write; staleness is measured from it.
 	UpdatedAt time.Time `json:"updated_at"`
 
@@ -172,6 +179,12 @@ func (s *RuntimeState) Normalize(now time.Time) error {
 	if len(s.ReasonParams) == 0 {
 		s.ReasonParams = nil
 	}
+	if err := normalizeConstraints(s.Constraints, now); err != nil {
+		return err
+	}
+	if len(s.Constraints) == 0 {
+		s.Constraints = nil
+	}
 	s.UpdatedAt = now
 	s.Source = ""
 	s.Stale = false
@@ -181,19 +194,24 @@ func (s *RuntimeState) Normalize(now time.Time) error {
 // Marshal returns the JSON persisted in tasks.runtime_state (read-time fields dropped).
 func (s *RuntimeState) Marshal() ([]byte, error) {
 	stored := *s
+	stored.Constraints = append([]OperationalConstraint(nil), s.Constraints...)
+	for i := range stored.Constraints {
+		stored.Constraints[i].Stale = false
+	}
 	stored.Source = ""
 	stored.Stale = false
 	return json.Marshal(struct {
-		Kind         RuntimeKind       `json:"kind"`
-		Since        time.Time         `json:"since"`
-		Until        *time.Time        `json:"until,omitempty"`
-		Ref          *string           `json:"ref,omitempty"`
-		Lane         *string           `json:"lane,omitempty"`
-		Reason       *string           `json:"reason,omitempty"`
-		ReasonCode   *string           `json:"reason_code,omitempty"`
-		ReasonParams map[string]string `json:"reason_params,omitempty"`
-		UpdatedAt    time.Time         `json:"updated_at"`
-	}{stored.Kind, stored.Since, stored.Until, stored.Ref, stored.Lane, stored.Reason, stored.ReasonCode, stored.ReasonParams, stored.UpdatedAt})
+		Kind         RuntimeKind             `json:"kind"`
+		Since        time.Time               `json:"since"`
+		Until        *time.Time              `json:"until,omitempty"`
+		Ref          *string                 `json:"ref,omitempty"`
+		Lane         *string                 `json:"lane,omitempty"`
+		Reason       *string                 `json:"reason,omitempty"`
+		ReasonCode   *string                 `json:"reason_code,omitempty"`
+		ReasonParams map[string]string       `json:"reason_params,omitempty"`
+		Constraints  []OperationalConstraint `json:"constraints,omitempty"`
+		UpdatedAt    time.Time               `json:"updated_at"`
+	}{stored.Kind, stored.Since, stored.Until, stored.Ref, stored.Lane, stored.Reason, stored.ReasonCode, stored.ReasonParams, stored.Constraints, stored.UpdatedAt})
 }
 
 // ResolveRuntimeState returns the effective state of a card at `now`.
@@ -216,6 +234,7 @@ func ResolveRuntimeState(raw []byte, t *Task, now time.Time) *RuntimeState {
 			// its until can make it stale.
 			fromWait := s.Ref != nil && strings.HasPrefix(*s.Ref, WaitRuntimeRefPrefix)
 			s.Stale = (!fromWait && now.Sub(s.UpdatedAt) > RuntimeStateStaleAfter) || (s.Until != nil && now.After(*s.Until))
+			MarkConstraintsStale(s.Constraints, now)
 			return &s
 		}
 	}

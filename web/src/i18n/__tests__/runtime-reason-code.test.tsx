@@ -47,14 +47,13 @@ describe("runtime_state reason_code", () => {
     expect(text()).toBe("Stopped: refeed-cap");
   });
 
-  it("a waiting state with a ref shows the coded reason next to the ref; without a code it stays ref-only", () => {
+  it("a waiting state with a ref shows the reason next to the ref, coded or free text", () => {
     const ref = "entire-vc/evc-mesh#10918";
     const view = render(<RuntimeStateBadge state={{ kind: "waiting", ref, reason_code: "umbrella" }} />);
     expect(text()).toMatch(/^Waiting: Epic: awaits children/);
     view.unmount();
     render(<RuntimeStateBadge state={{ kind: "waiting", ref, reason: "free text" }} />);
-    expect(text()).toMatch(/^Waiting:/);
-    expect(text()).not.toContain("free text");
+    expect(text()).toMatch(/^Waiting: free text/);
   });
 
   it("an unknown code (newer server) falls back to the free-text reason", () => {

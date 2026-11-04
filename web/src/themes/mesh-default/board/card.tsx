@@ -5,6 +5,7 @@ import { AssigneeAvatarView } from "@/components/assignee-avatar";
 import { DelegationLevelBadge } from "@/components/delegation-level-select";
 import { PriorityFlag } from "@/components/priority-flag";
 import { RuntimeStateBadge } from "@/components/runtime-state-badge";
+import { RuntimeConstraints } from "@/components/runtime-constraints";
 import { Badge } from "@/components/ui/badge";
 import { SlotBadges } from "@/components/extensions/slots/slot-host";
 import { Draggable, TaskBadges, TaskLink } from "@entire-vc/mesh-theme-sdk";
@@ -157,8 +158,9 @@ function rowField(f: FieldDescriptor, task: TaskData): ReactNode {
       ) : null;
     case "runtime":
       return task.runtimeState ? (
-        <div key="runtime" className="mt-1.5 flex min-w-0">
+        <div key="runtime" className="mt-1.5 flex min-w-0 flex-col gap-1">
           <RuntimeStateBadge state={task.runtimeState} />
+          <RuntimeConstraints state={task.runtimeState} variant="compact" />
         </div>
       ) : null;
     case "subtasks": {

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"time"
 
@@ -128,6 +130,77 @@ func (h *AgentWorkspaceGrantHandler) Revoke(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+// parseRoleOnlyBody reads exactly one JSON object holding a single string
+// "role" key. Unknown or duplicate keys, non-string values and any data after
+// the object are refused; the stdlib struct decoder would silently accept
+// duplicate keys (last wins) and, via Decoder.More, trailing closers.
+func parseRoleOnlyBody(r io.Reader) (string, bool) {
+	dec := json.NewDecoder(r)
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return "", false
+	}
+	role, seen := "", false
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil || key != "role" || seen {
+			return "", false
+		}
+		val, err := dec.Token()
+		if err != nil {
+			return "", false
+		}
+		str, ok := val.(string)
+		if !ok {
+			return "", false
+		}
+		role, seen = str, true
+	}
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
+		return "", false
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return "", false
+	}
+	return role, seen
+}
+
+// UpdateRole handles PATCH /workspaces/:ws_id/agent-grants/:grant_id — changes
+// the grant's role in place; the agent's key is not reissued or exposed.
+func (h *AgentWorkspaceGrantHandler) UpdateRole(c echo.Context) error {
+	wsID, err := uuid.Parse(c.Param("ws_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid workspace_id"))
+	}
+	grantID, err := uuid.Parse(c.Param("grant_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid grant_id"))
+	}
+	role, ok := parseRoleOnlyBody(c.Request().Body)
+	if !ok {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("body must be {\"role\": \"admin|member|viewer\"} only"))
+	}
+	// Allowed roles are checked here too, so owner/empty/unknown never reach the service.
+	switch role {
+	case "admin", "member", "viewer":
+	default:
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("role must be one of admin, member, viewer"))
+	}
+	g, err := h.svc.UpdateGrantRole(c.Request().Context(), wsID, grantID, role)
+	if err != nil {
+		return handleError(c, err)
+	}
+	// Explicit fields: no key material of any kind in this response.
+	return c.JSON(http.StatusOK, map[string]any{
+		"id":             g.ID,
+		"agent_id":       g.AgentID,
+		"workspace_id":   g.WorkspaceID,
+		"role":           g.Role,
+		"api_key_prefix": g.APIKeyPrefix,
+		"invited_by":     g.InvitedBy,
+		"created_at":     g.CreatedAt,
+	})
 }
 
 // List handles GET /workspaces/:ws_id/agent-grants

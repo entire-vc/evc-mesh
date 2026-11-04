@@ -29,6 +29,48 @@
       "park": "Parked",
       "blocker_in_backlog": "Blocker is in backlog",
       "dependencies_unreadable": "Blocker is unreadable"
+    },
+    "constraints": {
+      "title": "Constraints",
+      "more": "+{{count}} more",
+      "classes": {
+        "mesh_dependency": "Dependency",
+        "local_wait": "Wait",
+        "ci_capacity": "CI",
+        "review_rejection": "Review",
+        "expired_authority": "Authority",
+        "write_acl": "Access",
+        "unknown": "Constraint"
+      },
+      "nextActor": "Next",
+      "nextActorUnknown": "unknown",
+      "wake": "Wakes on",
+      "wakeUnknown": "unknown",
+      "source": "Source",
+      "observed": "observed {{time}}",
+      "observedUnknown": "time unknown",
+      "ci": {
+        "capacity": "Waiting for CI capacity",
+        "manual_required": "Manual action required",
+        "unavailable": "CI status unavailable",
+        "scope": "scope {{scope}}",
+        "position": "position {{position}}"
+      },
+      "restricted": "Details are restricted",
+      "unavailable": "Source unavailable",
+      "less": "Show less",
+      "reasonCodes": {
+        "mesh_dependency": "Blocked by another card",
+        "local_wait": "Waiting for an event",
+        "ci_capacity": "Waiting for CI",
+        "review_rejection": "Review rejected the change",
+        "expired_authority": "Authority expired",
+        "write_acl": "No write access",
+        "dependency_unreleased": "Blocked by another card",
+        "dependency_not_visible": "Blocked by a card you cannot open",
+        "access_denied": "Details are restricted",
+        "source_unavailable": "Source unavailable"
+      }
     }
   },
   "filter": {

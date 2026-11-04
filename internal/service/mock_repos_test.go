@@ -2123,6 +2123,48 @@ func (m *MockAgentWorkspaceGrantRepository) IsRevoked(_ context.Context, id uuid
 	return true, nil
 }
 
+// GetState mirrors the real PK lookup: (revoked, role); a missing row is revoked.
+func (m *MockAgentWorkspaceGrantRepository) GetState(_ context.Context, id uuid.UUID) (revoked bool, role string, err error) {
+	if m.errToReturn != nil {
+		return false, "", m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, g := range m.items {
+		if g.ID == id {
+			return g.IsRevoked(), g.Role, nil
+		}
+	}
+	return true, "", nil
+}
+
+// UpdateRoleWithAudit mirrors the real repo's outcome flags (no audit store here).
+func (m *MockAgentWorkspaceGrantRepository) UpdateRoleWithAudit(_ context.Context, id, workspaceID uuid.UUID, newRole string, _ uuid.UUID, _ domain.ActorType) (*repository.GrantRoleUpdate, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, g := range m.items {
+		if g.ID != id || g.WorkspaceID != workspaceID {
+			continue
+		}
+		res := &repository.GrantRoleUpdate{Found: true, OldRole: g.Role}
+		if g.IsRevoked() {
+			res.Revoked = true
+			res.Grant = *g
+			return res, nil
+		}
+		if g.Role != newRole {
+			g.Role = newRole
+			res.Changed = true
+		}
+		res.Grant = *g
+		return res, nil
+	}
+	return &repository.GrantRoleUpdate{}, nil
+}
+
 // SeedRevoke flips revoked_at on the seeded grant with the given id directly,
 // bypassing Revoke's (task U3) workspace check and found-reporting — for
 // tests that need to revoke a connection AFTER it has already been cached, to

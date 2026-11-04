@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 )
 
 // No //go:build integration tag — same convention as the other *_db_test.go
@@ -377,4 +378,167 @@ func TestAgentWorkspaceGrantRepo_ListActiveByAgent_JoinsWorkspaceExcludesRevoked
 	require.Len(t, list, 1, "the revoked connection must not appear")
 	assert.Equal(t, wsActive, list[0].WorkspaceID)
 	assert.NotEmpty(t, list[0].Workspace.Slug, "must actually join workspaces.slug, not leave it blank")
+}
+
+func grantAuditCount(t *testing.T, db *sqlx.DB, grantID uuid.UUID) int {
+	t.Helper()
+	var n int
+	require.NoError(t, db.GetContext(context.Background(), &n,
+		`SELECT COUNT(*) FROM activity_log WHERE entity_type='agent_workspace_grant' AND entity_id=$1 AND action='agent_grant.role_changed'`, grantID))
+	return n
+}
+
+func TestAgentWorkspaceGrantRepo_UpdateRoleWithAudit(t *testing.T) {
+	db := agentDigestTestDB(t)
+	ctx := context.Background()
+	wsID := seedGrantWorkspace(t, db)
+	otherWS := seedGrantWorkspace(t, db)
+	agent := seedGrantAgent(t, db, wsID)
+	other := seedGrantAgent(t, db, wsID)
+	repo := NewAgentWorkspaceGrantRepo(db)
+	actor := seedGrantUser(t, db)
+
+	grantID := insertGrant(t, db, agent.ID, wsID, "viewer", "rolepfx1", "$2a$12$role-hash", nil)
+	otherID := insertGrant(t, db, other.ID, wsID, "viewer", "rolepfx2", "$2a$12$other-hash", nil)
+	_, err := db.ExecContext(ctx, `UPDATE agent_workspace_grants SET api_key_sha256='digest-1' WHERE id=$1`, grantID)
+	require.NoError(t, err)
+	before, err := repo.GetByAgentAndWorkspace(ctx, agent.ID, wsID)
+	require.NoError(t, err)
+
+	// viewer -> member: only role changes, exactly one audit row.
+	res, err := repo.UpdateRoleWithAudit(ctx, grantID, wsID, "member", actor, domain.ActorTypeUser)
+	require.NoError(t, err)
+	require.True(t, res.Found)
+	require.True(t, res.Changed)
+	assert.Equal(t, "viewer", res.OldRole)
+	after, err := repo.GetByAgentAndWorkspace(ctx, agent.ID, wsID)
+	require.NoError(t, err)
+	assert.Equal(t, "member", after.Role)
+	before.Role = "member"
+	assert.Equal(t, before, after, "everything except role must be unchanged")
+	assert.Equal(t, 1, grantAuditCount(t, db, grantID))
+	var changes string
+	require.NoError(t, db.GetContext(ctx, &changes,
+		`SELECT changes::text FROM activity_log WHERE entity_id=$1 AND action='agent_grant.role_changed'`, grantID))
+	assert.Contains(t, changes, `"old_role": "viewer"`)
+	assert.Contains(t, changes, `"new_role": "member"`)
+	var aud struct {
+		WorkspaceID uuid.UUID `db:"workspace_id"`
+		EntityType  string    `db:"entity_type"`
+		EntityID    uuid.UUID `db:"entity_id"`
+		ActorID     uuid.UUID `db:"actor_id"`
+		ActorType   string    `db:"actor_type"`
+		CreatedAt   time.Time `db:"created_at"`
+	}
+	require.NoError(t, db.GetContext(ctx, &aud,
+		`SELECT workspace_id, entity_type, entity_id, actor_id, actor_type, created_at FROM activity_log WHERE entity_id=$1 AND action='agent_grant.role_changed'`, grantID))
+	assert.Equal(t, wsID, aud.WorkspaceID)
+	assert.Equal(t, "agent_workspace_grant", aud.EntityType)
+	assert.Equal(t, grantID, aud.EntityID)
+	assert.Equal(t, actor, aud.ActorID)
+	assert.Equal(t, string(domain.ActorTypeUser), aud.ActorType)
+	assert.WithinDuration(t, time.Now(), aud.CreatedAt, time.Minute)
+	o, err := repo.GetByAgentAndWorkspace(ctx, other.ID, wsID)
+	require.NoError(t, err)
+	assert.Equal(t, "viewer", o.Role, "other grants untouched")
+	assert.Equal(t, 0, grantAuditCount(t, db, otherID))
+
+	// Same role: idempotent, no second audit row.
+	res, err = repo.UpdateRoleWithAudit(ctx, grantID, wsID, "member", actor, domain.ActorTypeUser)
+	require.NoError(t, err)
+	assert.True(t, res.Found)
+	assert.False(t, res.Changed)
+	assert.Equal(t, 1, grantAuditCount(t, db, grantID))
+
+	// Foreign workspace and missing id: not found, no change.
+	res, err = repo.UpdateRoleWithAudit(ctx, grantID, otherWS, "admin", actor, domain.ActorTypeUser)
+	require.NoError(t, err)
+	assert.False(t, res.Found)
+	res, err = repo.UpdateRoleWithAudit(ctx, uuid.New(), wsID, "admin", actor, domain.ActorTypeUser)
+	require.NoError(t, err)
+	assert.False(t, res.Found)
+
+	// Audit failure (invalid actor_type) rolls the role change back.
+	_, err = repo.UpdateRoleWithAudit(ctx, grantID, wsID, "admin", actor, domain.ActorType("bogus"))
+	require.Error(t, err)
+	still, err := repo.GetByAgentAndWorkspace(ctx, agent.ID, wsID)
+	require.NoError(t, err)
+	assert.Equal(t, "member", still.Role, "failed audit must not leave a partial role change")
+	assert.Equal(t, 1, grantAuditCount(t, db, grantID))
+
+	// Revoked: not reactivated, nothing changed.
+	_, err = repo.Revoke(ctx, grantID, wsID)
+	require.NoError(t, err)
+	res, err = repo.UpdateRoleWithAudit(ctx, grantID, wsID, "admin", actor, domain.ActorTypeUser)
+	require.NoError(t, err)
+	assert.True(t, res.Found)
+	assert.True(t, res.Revoked)
+	assert.False(t, res.Changed)
+	rv, err := repo.GetByAgentAndWorkspace(ctx, agent.ID, wsID)
+	require.NoError(t, err)
+	assert.Equal(t, "member", rv.Role)
+	assert.NotNil(t, rv.RevokedAt)
+
+	// GetState reflects revoke + role.
+	revoked, role, err := repo.GetState(ctx, otherID)
+	require.NoError(t, err)
+	assert.False(t, revoked)
+	assert.Equal(t, "viewer", role)
+}
+
+// A concurrent revoke that holds the grant row lock must win: the blocked role
+// update re-checks under FOR UPDATE, reports Revoked, and leaves no role change
+// and no audit row.
+func TestAgentWorkspaceGrantRepo_UpdateRoleWithAudit_ConcurrentRevoke(t *testing.T) {
+	db := agentDigestTestDB(t)
+	ctx := context.Background()
+	wsID := seedGrantWorkspace(t, db)
+	agent := seedGrantAgent(t, db, wsID)
+	actor := seedGrantUser(t, db)
+	repo := NewAgentWorkspaceGrantRepo(db)
+	grantID := insertGrant(t, db, agent.ID, wsID, "viewer", "concpfx1", "$2a$12$conc-hash", nil)
+
+	revokeTx, err := db.BeginTxx(ctx, nil)
+	require.NoError(t, err)
+	_, err = revokeTx.ExecContext(ctx, `UPDATE agent_workspace_grants SET revoked_at = NOW() WHERE id = $1`, grantID)
+	require.NoError(t, err)
+
+	type out struct {
+		res *repository.GrantRoleUpdate
+		err error
+	}
+	done := make(chan out, 1)
+	go func() {
+		r, e := repo.UpdateRoleWithAudit(ctx, grantID, wsID, "admin", actor, domain.ActorTypeUser)
+		done <- out{r, e}
+	}()
+	// Positive control: wait until Postgres itself reports a backend blocked on a
+	// lock while running the grant SELECT ... FOR UPDATE. Only then is the update
+	// provably queued behind the revoke, independent of goroutine scheduling.
+	require.Eventually(t, func() bool {
+		var n int
+		if qerr := db.GetContext(ctx, &n, `SELECT COUNT(*) FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock' AND state = 'active'
+			  AND query ILIKE '%FROM agent_workspace_grants%FOR UPDATE%'`); qerr != nil {
+			return false
+		}
+		return n > 0
+	}, 10*time.Second, 20*time.Millisecond, "role update never reached the row lock held by the revoke")
+	select {
+	case <-done:
+		t.Fatal("role update must block on the row lock held by the revoke")
+	default:
+	}
+	require.NoError(t, revokeTx.Commit())
+
+	o := <-done
+	require.NoError(t, o.err)
+	require.True(t, o.res.Found)
+	assert.True(t, o.res.Revoked)
+	assert.False(t, o.res.Changed)
+	g, err := repo.GetByAgentAndWorkspace(ctx, agent.ID, wsID)
+	require.NoError(t, err)
+	assert.Equal(t, "viewer", g.Role, "no partial role change after concurrent revoke")
+	assert.NotNil(t, g.RevokedAt)
+	assert.Equal(t, 0, grantAuditCount(t, db, grantID))
 }

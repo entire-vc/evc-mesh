@@ -1,0 +1,124 @@
+{
+ "enrollment": {
+  "assignment": {
+   "owner": "00000000-0000-4000-8000-000000000050",
+   "sequence": 1
+  },
+  "issuer_key": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=",
+  "pin": {
+   "author_family": "claude",
+   "authority_id": "00000000-0000-4000-8000-000000000002",
+   "enrollment_id": "00000000-0000-4000-8000-000000000001",
+   "issuer_actor_id": "00000000-0000-4000-8000-000000000004",
+   "native": {
+    "binding": {
+     "package_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+     "producer": "00000000-0000-4000-8000-000000000003",
+     "stage": "review-receipt",
+     "task": "00000000-0000-4000-8000-000000000010",
+     "test": true
+    },
+    "registration": "ca614806eca16ab67cc1487b82dcc6e03edb98226ea228845f94cf909a54fef8"
+   },
+   "owner_actor_id": "00000000-0000-4000-8000-000000000014",
+   "pins": {
+    "config_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+    "manifest_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+    "package_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "source_repo": "evc/evc-mesh-runner",
+    "source_sha": "1111111111111111111111111111111111111111"
+   },
+   "product": {
+    "authority_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "observation_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "owning_task_id": "00000000-0000-4000-8000-000000000030",
+    "root_disposition_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "session_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+   },
+   "project_id": "00000000-0000-4000-8000-000000000013",
+   "publisher_actor_id": "00000000-0000-4000-8000-000000000005",
+   "receiver": {
+    "attempt": "00000000-0000-4000-8000-000000000021",
+    "generation": 1,
+    "session": "00000000-0000-4000-8000-000000000022",
+    "task": "00000000-0000-4000-8000-000000000020"
+   },
+   "review_task_id": "00000000-0000-4000-8000-000000000011",
+   "reviewer_family": "codex",
+   "schema": "native-review-admission/v1",
+   "scope": {
+    "context_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "criteria_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "domain": "t12-successor-synthetic",
+    "namespace": "00000000-0000-4000-8000-000000000040",
+    "test": true
+   },
+   "source_task_id": "00000000-0000-4000-8000-000000000010",
+   "transport_source_id": "00000000-0000-4000-8000-000000000003",
+   "workspace_id": "00000000-0000-4000-8000-000000000012"
+  }
+ },
+ "receipt": {
+  "author_family": "claude",
+  "authority_id": "00000000-0000-4000-8000-000000000002",
+  "body": {
+   "bytes": "VkVSRElDVDogU0hJUApoZWFkPTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEKYWxsIGNyaXRlcmlhIFBBU1MK",
+   "encoding": "base64",
+   "sha256": "c9a8d9fe0712b68002057a1638f58b038782aece166dc3785d3c142c837642b6"
+  },
+  "created_at": "2026-11-03T17:45:00Z",
+  "enrollment_id": "00000000-0000-4000-8000-000000000001",
+  "issuer_actor_id": "00000000-0000-4000-8000-000000000004",
+  "issuer_signature": "LPQpeNBpwEbdmvuIjPVzI8Rqo20WHEj/MMgqvG6u1HJTjHxKpndEAQKkBL9LWmR4ypmWI/0JlFI1WLbQfXT2Dw==",
+  "native": {
+   "binding": {
+    "package_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "producer": "00000000-0000-4000-8000-000000000003",
+    "stage": "review-receipt",
+    "task": "00000000-0000-4000-8000-000000000010",
+    "test": true
+   },
+   "registration": "ca614806eca16ab67cc1487b82dcc6e03edb98226ea228845f94cf909a54fef8"
+  },
+  "owner_actor_id": "00000000-0000-4000-8000-000000000014",
+  "pins": {
+   "config_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+   "manifest_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+   "package_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+   "source_repo": "evc/evc-mesh-runner",
+   "source_sha": "1111111111111111111111111111111111111111"
+  },
+  "product": {
+   "authority_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "observation_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "owning_task_id": "00000000-0000-4000-8000-000000000030",
+   "root_disposition_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+   "session_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "project_id": "00000000-0000-4000-8000-000000000013",
+  "publisher_actor_id": "00000000-0000-4000-8000-000000000005",
+  "receipt_id": "00000000-0000-4000-8000-000000000060",
+  "receipt_sha256": "acc1ce61f2811b5e92ede2fc2eb37269dc354b442c021f04c63cc5abeca71594",
+  "receiver": {
+   "attempt": "00000000-0000-4000-8000-000000000021",
+   "generation": 1,
+   "session": "00000000-0000-4000-8000-000000000022",
+   "task": "00000000-0000-4000-8000-000000000020"
+  },
+  "result_author_actor_id": "00000000-0000-4000-8000-000000000061",
+  "review_task_id": "00000000-0000-4000-8000-000000000011",
+  "reviewer_family": "codex",
+  "schema": "native-review-admission/v1",
+  "scope": {
+   "context_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "criteria_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+   "domain": "t12-successor-synthetic",
+   "namespace": "00000000-0000-4000-8000-000000000040",
+   "test": true
+  },
+  "source_task_id": "00000000-0000-4000-8000-000000000010",
+  "transport_source_id": "00000000-0000-4000-8000-000000000003",
+  "verdict": "SHIP",
+  "workspace_id": "00000000-0000-4000-8000-000000000012"
+ }
+}
