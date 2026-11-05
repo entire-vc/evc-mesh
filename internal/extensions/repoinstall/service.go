@@ -35,6 +35,10 @@ type Service struct {
 	// in every source, so a repository whose manifest takes such an id is
 	// refused instead of standing in for it. May be nil.
 	Owner func(ctx context.Context, id string) string
+	// CatalogUpdate is the catalog half of the scheduled auto-update pass (the
+	// catalog package imports this one, so it is wired in). It must apply the
+	// same rules as the manual update-all. May be nil.
+	CatalogUpdate func(ctx context.Context) ([]UpdateResult, error)
 }
 
 // FetchFunc reads one file of the repository at the commit being installed.
@@ -483,8 +487,8 @@ func (s *Service) Rollback(ctx context.Context, actor *uuid.UUID, id string) (*d
 }
 
 // AutoUpdateOnce runs one pass of the instance auto-update: a no-op while the
-// flag is off, otherwise the same as UpdateAll (permission growth waits for
-// consent).
+// flag is off, otherwise the same as UpdateAll for repo and catalog installs
+// (permission growth waits for consent; one source failing leaves the other).
 func (s *Service) AutoUpdateOnce(ctx context.Context) {
 	cfg, err := s.Policy.GetConfig(ctx)
 	if err != nil {
@@ -496,9 +500,21 @@ func (s *Service) AutoUpdateOnce(ctx context.Context) {
 	}
 	res, err := s.updateAll(ctx, nil, true)
 	if err != nil {
+		// Independent of the catalog pass below.
 		log.Printf("[extensions] auto-update: %v", err)
+	}
+	logAutoResults(res)
+	if s.CatalogUpdate == nil {
 		return
 	}
+	cres, cerr := s.CatalogUpdate(ctx)
+	if cerr != nil {
+		log.Printf("[extensions] auto-update catalog: %v", cerr)
+	}
+	logAutoResults(cres)
+}
+
+func logAutoResults(res []UpdateResult) {
 	for _, r := range res {
 		if r.Error != "" {
 			log.Printf("[extensions] auto-update %s: %s", r.ExtensionID, r.Error)

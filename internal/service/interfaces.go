@@ -1690,7 +1690,18 @@ type AnalyticsFilter struct {
 	ProjectID   *uuid.UUID
 	From        time.Time
 	To          time.Time
+	// TopTasksSort selects the ordering of cost_metrics.top_tasks before LIMIT 10.
+	// Empty means TopTasksSortCost. Only the values below are valid.
+	TopTasksSort string
 }
+
+// Allowed AnalyticsFilter.TopTasksSort values.
+const (
+	// TopTasksSortCost orders by SUM(estimated_cost) DESC (default).
+	TopTasksSortCost = "cost"
+	// TopTasksSortTokens orders by SUM(tokens_in)+SUM(tokens_out) DESC.
+	TopTasksSortTokens = "tokens"
+)
 
 // AnalyticsService provides business logic for analytics queries.
 type AnalyticsService interface {

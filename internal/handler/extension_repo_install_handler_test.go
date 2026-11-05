@@ -298,6 +298,10 @@ func (f *fakeCatalogInstaller) Update(_ context.Context, _ *uuid.UUID, id, conse
 	return &repoinstall.UpdateResult{ExtensionID: id, Outcome: repoinstall.OutcomeUpdated, NewCapabilities: []string{}}, nil
 }
 
+func (f *fakeCatalogInstaller) UpdateTarget(context.Context, *uuid.UUID, string, string, string, string) (*repoinstall.UpdateResult, error) {
+	return nil, apierror.BadRequest("target selection is not implemented by this legacy test fixture")
+}
+
 func (f *fakeCatalogInstaller) UpdateAll(context.Context, *uuid.UUID) ([]repoinstall.UpdateResult, error) {
 	return []repoinstall.UpdateResult{{ExtensionID: "cat-ext", Outcome: repoinstall.OutcomeUpdated, NewCapabilities: []string{}}}, nil
 }
@@ -329,6 +333,33 @@ func TestRepoInstallHandlerCatalogUpdates(t *testing.T) {
 	rec = repoCall(t, f.h.UpdateAll, ``, "", false)
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), `"cat-ext"`)
+}
+
+func TestRepoInstallHandlerUpdateRejectsMalformedTarget(t *testing.T) {
+	for _, body := range []string{
+		`{"target_version":"0.3.0"}`,
+		`{"expected_target_commit_sha":"` + strings.Repeat("a", 40) + `"}`,
+		`{"target_version":null,"expected_target_commit_sha":null}`,
+		`{"target_version":30,"expected_target_commit_sha":"abc"}`,
+		`{"target_version":"","expected_target_commit_sha":""}`,
+		`{"target_version":`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			f := newRepoFixture(t, true)
+			assert.Equal(t, http.StatusBadRequest, repoCall(t, f.h.Update, body, "missing", false).Code)
+		})
+	}
+}
+
+func TestRepoInstallHandlerPinnedUpdateDoesNotUpdateRepo(t *testing.T) {
+	f := newRepoFixture(t, true)
+	f.publish(t, "v1", "old", "1.0.0")
+	rec := repoCall(t, f.h.Install, `{"source":"repo","repo_url":"`+f.url+`","ref":"v1"}`, "", false)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	f.publish(t, "v1", "new", "1.1.0")
+	rec = repoCall(t, f.h.Update, `{"target_version":"1.1.0","expected_target_commit_sha":"`+strings.Repeat("a", 40)+`"}`, "hello", false)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	assert.Equal(t, "1.0.0", f.repo.rows["hello"].Version)
 }
 
 func TestRepoInstallHandlerCatalogRollback(t *testing.T) {

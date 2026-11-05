@@ -52,7 +52,7 @@ describe("RuntimeStateBadge", () => {
   it("waiting: mr and pipeline refs link to GitLab, decision stays plain text", () => {
     expect(parseRuntimeRef("mr:entire-vc/evc-mesh!12")?.href).toBe("https://gitlab.com/entire-vc/evc-mesh/-/merge_requests/12");
     expect(parseRuntimeRef("pipeline:entire-vc/evc-mesh#9954")?.href).toBe("https://gitlab.com/entire-vc/evc-mesh/-/pipelines/9954");
-    expect(parseRuntimeRef("decision:@garfield")).toEqual({ label: "@garfield", href: null });
+    expect(parseRuntimeRef("decision:@lead")).toEqual({ label: "@lead", href: null });
     expect(parseRuntimeRef(null)).toBeNull();
   });
 
@@ -295,20 +295,37 @@ const diagState: RuntimeState = {
 } as RuntimeState;
 
 describe("kanban card hides service diagnostics; detail marks them unconfirmed", () => {
-  it("compact card: kind word only, none of the diagnostic details", () => {
+  it("compact card: brief with the known target, none of the diagnostic details", () => {
     const { container } = render(<TaskCard task={makeTask({ runtime_state: diagState })} />);
     const text = container.textContent ?? "";
-    expect(screen.getByTestId("runtime-state").textContent).toBe("Waiting");
-    for (const bad of ["HTTP", "UNKNOWN", "addressee", "Wakes on", "Source", "Next", "observed", "#00000000"]) expect(text).not.toContain(bad);
+    expect(screen.getByTestId("runtime-state").textContent).toBe("Waiting for task#00000000");
+    expect(screen.getByTestId("runtime-state-ref").getAttribute("href")).toBe("/t/00000000");
+    for (const bad of ["HTTP", "UNKNOWN", "addressee", "Wakes on", "Source", "Next", "observed"]) expect(text).not.toContain(bad);
     expect(screen.queryByTestId("runtime-constraints")).toBeNull();
   });
 
-  it("detail: unreadable diagnostic is shown as unconfirmed, raw HTTP 0 text is not", () => {
+  it("detail: a known dependency stays visible even when the diagnostic is unreadable; raw HTTP 0 text is not", () => {
     render(<RuntimeStateBadge state={diagState} variant="line" />);
-    expect(screen.getByTestId("runtime-state").textContent).toContain("Wait not confirmed");
-    expect(screen.getByTestId("runtime-state").textContent).not.toContain("HTTP 0");
+    expect(screen.getByTestId("runtime-state").textContent).toContain("Waiting for task");
+    expect(screen.getByTestId("runtime-state").textContent).not.toMatch(/HTTP 0|not confirmed/);
     render(<RuntimeConstraints state={diagState} variant="full" />);
     expect(screen.getByTestId("constraint-reason").textContent).toContain("Wait not confirmed");
+  });
+
+  it("detail brief: the target is printed once; Next/Wakes/Source live in collapsed technical details; incompleteness is one short note", () => {
+    const { container } = render(
+      <>
+        <RuntimeStateBadge state={diagState} variant="line" />
+        <RuntimeConstraints state={diagState} variant="full" hideBriefTarget />
+      </>,
+    );
+    expect(container.querySelectorAll("a[href='/t/00000000']")).toHaveLength(1);
+    expect(screen.queryByTestId("runtime-constraint")).toBeNull();
+    expect(screen.getByTestId("runtime-incomplete").textContent).toBe("Details incomplete");
+    const details = screen.getByTestId("runtime-technical") as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary")?.textContent).toBe("Technical details");
+    expect(details.textContent).not.toMatch(/HTTP 0|addressee=/);
   });
 
   it("detail: a confirmed wait keeps its reason", () => {
@@ -391,5 +408,261 @@ describe("kanban card hides service diagnostics; detail marks them unconfirmed",
     const el = screen.getByTestId("runtime-state");
     expect(el.textContent).toBe("Waiting");
     expect(el.getAttribute("title")).toBe("Waiting");
+  });
+});
+
+describe("waiting brief: real contract shapes", () => {
+  const text = () => screen.getByTestId("runtime-state").textContent;
+  const link = () => screen.getByTestId("runtime-state-ref") as HTMLAnchorElement;
+
+  it("MR ref without reason (the theme card): brief + GitLab link on the board tile", () => {
+    render(<TaskCard task={makeTask({ runtime_state: { kind: "waiting", ref: "mr:entire-vc/evc-mesh!12" } })} />);
+    expect(text()).toBe("Waiting for MR!12");
+    expect(link().getAttribute("href")).toBe("https://gitlab.com/entire-vc/evc-mesh/-/merge_requests/12");
+    expect(link().getAttribute("aria-label")).toContain("entire-vc/evc-mesh!12");
+    expect(link().getAttribute("rel")).toBe("noreferrer");
+  });
+
+  it("pipeline ref: CI wording and link", () => {
+    render(<RuntimeStateBadge state={{ kind: "waiting", ref: "pipeline:entire-vc/evc-mesh#9954" }} variant="kind" />);
+    expect(text()).toBe("Waiting for CI#9954");
+    expect(link().getAttribute("href")).toBe("https://gitlab.com/entire-vc/evc-mesh/-/pipelines/9954");
+  });
+
+  it("actual until: shown on the tile; no ref and no until stays the neutral word", () => {
+    const a = render(<RuntimeStateBadge state={{ kind: "waiting", until: "2026-10-10T19:15:00Z" }} variant="kind" />);
+    expect(text()).toMatch(/^Waiting until \d\d:\d\d$/);
+    a.unmount();
+    render(<RuntimeStateBadge state={{ kind: "waiting" }} variant="kind" />);
+    expect(text()).toBe("Waiting");
+    expect(screen.queryByTestId("runtime-state-ref")).toBeNull();
+  });
+
+  it("verbose WAIT prose is never promoted to a target; the tile stays neutral", () => {
+    render(<RuntimeStateBadge state={{ kind: "waiting", ref: "Runner: catalog rollout archive root on SSD, then mr:g/p!3 later", reason: "x".repeat(300) }} variant="kind" />);
+    expect(text()).toBe("Waiting");
+    expect(screen.queryByTestId("runtime-state-ref")).toBeNull();
+  });
+
+  it("a ref on the dependency constraint only (no state ref) still names the target, even with a verbose diagnostic reason", () => {
+    const st = { kind: "waiting", reason: "Blocking path diagnostic UNKNOWN (HTTP 0); addressee=Developer Three; observed_at=2026-11-04T10:48:01Z", constraints: [{ id: "dep", class: "mesh_dependency", reason_code: "dependency_unreleased", next_actor: { kind: "unknown" }, wake: { predicate: "card", ref: "card:00000000-0000-4000-8000-000000000001" }, source: { kind: "task_dependency", ref: "00000000-0000-4000-8000-000000000002" } } as OperationalConstraint] } as RuntimeState;
+    const { container } = render(
+      <>
+        <RuntimeStateBadge state={st} variant="line" />
+        <RuntimeConstraints state={st} variant="full" hideBriefTarget />
+      </>,
+    );
+    expect(link().getAttribute("href")).toBe("/t/00000000-0000-4000-8000-000000000001");
+    expect(link().textContent).toBe("#00000000");
+    expect(container.querySelectorAll("a[href^='/t/']")).toHaveLength(1);
+    const visible = Array.from(container.children).map((el) => (el.closest("details") ? "" : el.textContent)).join(" ");
+    expect(visible).not.toMatch(/Blocking path|addressee|observed_at|HTTP 0/);
+  });
+
+  it("long short reason is kept beside the brief; long prose is dropped from the main line", () => {
+    const a = render(<RuntimeStateBadge state={{ kind: "waiting", ref: "card:#00000000", reason: "needs the contract" }} variant="line" />);
+    expect(text()).toContain("needs the contract");
+    a.unmount();
+    render(<RuntimeStateBadge state={{ kind: "waiting", ref: "card:#00000000", reason: "y".repeat(200) }} variant="line" />);
+    expect(text()).not.toContain("yyyy");
+  });
+
+  it("decision ref is plain text; unsafe schemes never become links; stale tile keeps brief but no stale note", () => {
+    const a = render(<RuntimeStateBadge state={{ kind: "waiting", ref: "decision:@lead" }} variant="kind" />);
+    expect(text()).toBe("Waiting for decision@lead");
+    expect(link().tagName).toBe("SPAN");
+    a.unmount();
+    const b = render(<RuntimeStateBadge state={{ kind: "waiting", ref: "javascript:alert(1)" }} variant="kind" />);
+    expect(b.container.querySelector("a")).toBeNull();
+    b.unmount();
+    render(<RuntimeStateBadge state={{ kind: "waiting", ref: "mr:g/p!3", stale: true }} variant="kind" />);
+    expect(screen.queryByTestId("runtime-state-stale")).toBeNull();
+  });
+
+  it("non-waiting kinds are unchanged on the tile (a ref on a working card is not a wait target)", () => {
+    render(<RuntimeStateBadge state={{ kind: "working", ref: "mr:g/p!3", lane: "Developer Two" }} variant="kind" />);
+    expect(text()).toBe("Working");
+    expect(screen.queryByTestId("runtime-state-ref")).toBeNull();
+  });
+
+  it("a redacted constraint never supplies the target, even when it comes first and carries a ref", () => {
+    const st = { kind: "waiting", constraints: [c({ id: "r", class: "write_acl", reason_code: "access_denied", wake: { predicate: "card", ref: "card:#deadbeef" } })] } as RuntimeState;
+    const { container } = render(<RuntimeStateBadge state={st} variant="kind" />);
+    expect(text()).toBe("Waiting");
+    expect(container.textContent).not.toContain("deadbeef");
+  });
+
+  it("only one plain constraint repeats the brief; a stale or CI one with the same ref keeps its row", () => {
+    const ref = { predicate: "card", ref: "card:#00000000" };
+    const st = waiting([
+      c({ id: "p", class: "mesh_dependency", reason_code: "dependency_unreleased", wake: ref }),
+      c({ id: "s", class: "local_wait", stale: true, wake: ref }),
+      c({ id: "ci", class: "ci_capacity", ci: { state: "manual_required" }, wake: ref }),
+    ]);
+    render(<RuntimeConstraints state={st} variant="full" hideBriefTarget />);
+    const rows = screen.getAllByTestId("runtime-constraint").map((li) => li.getAttribute("data-constraint-key"));
+    expect(rows).toEqual(["s", "ci"]);
+    expect(screen.queryByTestId("constraint-ref")).toBeNull(); // the rows keep their facts, the target is named by the brief
+    expect(screen.getAllByTestId("runtime-technical-item")).toHaveLength(3);
+  });
+
+  it("detail without a target: long reason prose is not in the Now line, it is in the collapsed technical details", () => {
+    const prose = "Runner: catalog rollout archive root on SSD, waiting for the install window and the lane to free up, then retry";
+    const st = { kind: "waiting", reason: prose } as RuntimeState;
+    const { container } = render(
+      <>
+        <RuntimeStateBadge state={st} variant="line" />
+        <RuntimeConstraints state={st} variant="full" hideBriefTarget />
+      </>,
+    );
+    expect(text()).toBe("Waiting");
+    const tech = screen.getByTestId("runtime-technical") as HTMLDetailsElement;
+    expect(tech.open).toBe(false);
+    expect(screen.getByTestId("runtime-technical-reason").textContent).toBe(prose);
+    expect(container.querySelectorAll("details")).toHaveLength(1);
+  });
+
+  it("detail without a target: a short reason stays beside Waiting; a diagnostic reason never reaches the technical details", () => {
+    const a = render(<RuntimeStateBadge state={{ kind: "waiting", reason: "human gate" }} variant="line" />);
+    expect(text()).toContain("human gate");
+    a.unmount();
+    const diag = { kind: "waiting", reason: "Blocking path diagnostic UNKNOWN (HTTP 0); addressee=Developer Three" } as RuntimeState;
+    const b = render(<RuntimeConstraints state={diag} variant="full" hideBriefTarget />);
+    expect(b.container.innerHTML).toBe("");
+  });
+
+  it("technical details show a long reason in full (beyond the 240-char display cap)", () => {
+    const prose = `Runner: ${"waiting for the install window; ".repeat(15)}done`;
+    expect(prose.length).toBeGreaterThan(400);
+    render(<RuntimeConstraints state={{ kind: "waiting", reason: prose } as RuntimeState} variant="full" hideBriefTarget />);
+    expect(screen.getByTestId("runtime-technical-reason").textContent).toBe(prose);
+  });
+
+  it("technical details: a long constraint reason is shown in full while the row stays capped; control chars never render", () => {
+    const long = `free text ${"x".repeat(500)} END`;
+    const st = waiting([c({ id: "L", class: "brand_new", reason_code: "brand_new_code", reason: long })]);
+    render(<RuntimeConstraints state={st} variant="full" />);
+    expect(screen.getByTestId("constraint-reason").textContent!.length).toBeLessThan(long.length);
+    expect(screen.getByTestId("runtime-technical-item").querySelector("dd")?.textContent).toBe(long);
+  });
+
+  it("a reason parameter with control characters is cleaned in the Now line", () => {
+    render(<RuntimeStateBadge state={{ kind: "waiting", reason_code: "review_cooldown", reason_params: { minutes: "4\u0007\u001b[31m" } } as RuntimeState} variant="line" />);
+    // eslint-disable-next-line no-control-regex
+    expect(text()).not.toMatch(/[\u0000-\u001f\u007f]/);
+  });
+
+  it("a recognised constraint reason code with control characters in reason_params is cleaned in the row and in technical details", () => {
+    const st = waiting([c({ id: "P", class: "local_wait", reason_code: "review_cooldown", reason_params: { minutes: "4\u0007\u001b[31m" } })]);
+    const { container } = render(<RuntimeConstraints state={st} variant="full" />);
+    // eslint-disable-next-line no-control-regex
+    expect(container.textContent).not.toMatch(/[\u0000-\u001f\u007f]/);
+  });
+
+  it("a ref that is not a recognised target never reaches the detail line raw; the dense badge sanitises it", () => {
+    const raw = "Blocking path diagnostic\u0007 UNKNOWN (HTTP 0) addressee=Developer Three";
+    const a = render(<RuntimeStateBadge state={{ kind: "waiting", ref: raw }} variant="line" />);
+    expect(screen.queryByTestId("runtime-state-ref")).toBeNull();
+    expect(a.container.textContent).not.toMatch(/HTTP 0|addressee/);
+    a.unmount();
+    const b = render(<RuntimeStateBadge state={{ kind: "waiting", ref: "free text\u0007 ref" }} />);
+    // eslint-disable-next-line no-control-regex
+    expect(b.container.textContent).not.toMatch(/[\u0000-\u001f\u007f]/);
+  });
+
+  it("a dependency the caller cannot open never supplies a target or a link, even when the payload carries a ref", () => {
+    const st = waiting([c({ id: "h", class: "mesh_dependency", reason_code: "dependency_not_visible", wake: { predicate: "card", ref: "card:deadbeef-1b2c-4d3e-8f90-a1b2c3d4e5f6" } })]);
+    const a = render(<RuntimeStateBadge state={st} variant="kind" />);
+    expect(text()).toBe("Waiting");
+    expect(a.container.textContent).not.toContain("deadbeef");
+    a.unmount();
+    const { container } = render(<RuntimeConstraints state={st} variant="full" hideBriefTarget />);
+    expect(screen.queryByTestId("constraint-ref")).toBeNull();
+    expect(container.querySelector("a")).toBeNull();
+    expect(screen.getByTestId("constraint-reason").textContent).toBe("Blocked by a card you cannot open");
+  });
+
+  it("a state-level ref that points at a hidden dependency is not a target either", () => {
+    const hid = c({ id: "h", class: "mesh_dependency", reason_code: "dependency_not_visible", wake: { predicate: "card", ref: "card:deadbeef-1b2c-4d3e-8f90-a1b2c3d4e5f6" } });
+    const st = { kind: "waiting", ref: "card:#deadbeef", constraints: [hid] } as RuntimeState;
+    const a = render(<RuntimeStateBadge state={st} variant="kind" />);
+    expect(text()).toBe("Waiting");
+    expect(a.container.textContent).not.toContain("deadbeef");
+    a.unmount();
+    const b = render(<RuntimeStateBadge state={st} variant="line" />);
+    expect(b.container.querySelector("a")).toBeNull();
+    b.unmount();
+    // a different, visible state-level target is still shown
+    render(<RuntimeStateBadge state={{ ...st, ref: "mr:g/p!3" } as RuntimeState} variant="kind" />);
+    expect(text()).toBe("Waiting for MR!3");
+  });
+
+  it("working / queued / stopped detail text is cleaned of control characters (lane and reason)", () => {
+    for (const st of [
+      { kind: "working", lane: "Ca\u0007rl" },
+      { kind: "queued", lane: "Ca\u0007rl", position: 1 },
+      { kind: "stopped", reason: "refeed\u001b[31m-cap" },
+    ] as RuntimeState[]) {
+      const { container, unmount } = render(<RuntimeStateBadge state={st} variant="line" />);
+      // eslint-disable-next-line no-control-regex
+      expect(container.textContent).not.toMatch(/[\u0000-\u001f\u007f]/);
+      unmount();
+    }
+  });
+
+  it("hidden-target matching ignores id casing (a case-variant state ref is still the hidden card)", () => {
+    const hid = c({ id: "h", class: "mesh_dependency", reason_code: "dependency_not_visible", wake: { predicate: "card", ref: "card:deadbeef-1b2c-4d3e-8f90-a1b2c3d4e5f6" } });
+    const { container } = render(<RuntimeStateBadge state={{ kind: "waiting", ref: "card:#DEADBEEF", constraints: [hid] } as RuntimeState} variant="kind" />);
+    expect(text()).toBe("Waiting");
+    expect(container.textContent?.toLowerCase()).not.toContain("deadbeef");
+    expect(container.querySelector("a")).toBeNull();
+  });
+
+  it("detail names the target once even when the state ref and the constraint ref differ only in id casing", () => {
+    const st = { kind: "waiting", ref: "card:#DEADBEEF", constraints: [c({ id: "d", class: "mesh_dependency", reason_code: "dependency_unreleased", wake: { predicate: "card", ref: "card:#deadbeef" } })] } as RuntimeState;
+    const { container } = render(
+      <>
+        <RuntimeStateBadge state={st} variant="line" />
+        <RuntimeConstraints state={st} variant="full" hideBriefTarget />
+      </>,
+    );
+    expect(container.querySelectorAll("a")).toHaveLength(1);
+    expect(screen.queryByTestId("runtime-constraint")).toBeNull();
+  });
+
+  it("a stale or CI constraint that repeats the brief target keeps its facts but not the link", () => {
+    const st = { kind: "waiting", ref: "card:#00000000", constraints: [c({ id: "ci", class: "ci_capacity", ci: { state: "manual_required" }, wake: { predicate: "card", ref: "card:#00000000" } })] } as RuntimeState;
+    const { container } = render(
+      <>
+        <RuntimeStateBadge state={st} variant="line" />
+        <RuntimeConstraints state={st} variant="full" hideBriefTarget />
+      </>,
+    );
+    expect(container.querySelectorAll("a[href='/t/00000000']")).toHaveLength(1);
+    expect(screen.getByTestId("constraint-ci").textContent).toBe("Manual action required");
+  });
+
+  it("dependency_not_visible leaks no metadata (source, wake, actor, time) in the technical details", () => {
+    const st = waiting([c({ id: "h", class: "mesh_dependency", reason_code: "dependency_not_visible", next_actor: { name: "secret-actor" }, observed_at: "2026-11-04T10:00:00Z", source: "gitlab:secret/path!9", wake: { predicate: "card", ref: "card:deadbeef-1b2c-4d3e-8f90-a1b2c3d4e5f6" } } as never)]);
+    const { container } = render(<RuntimeConstraints state={st} variant="full" hideBriefTarget />);
+    const text = container.textContent ?? "";
+    for (const bad of ["deadbeef", "secret", "gitlab:"]) expect(text).not.toContain(bad);
+    expect(container.querySelector("a")).toBeNull();
+  });
+
+  it("technical details carry the raw target ref while the main detail names it once", () => {
+    const st = waiting([c({ id: "d", class: "mesh_dependency", wake: { predicate: "card", ref: "card:#00000000" } })]);
+    const { container } = render(<RuntimeConstraints state={st} variant="full" />);
+    expect(screen.getByTestId("constraint-target").textContent).toBe("card:#00000000");
+    expect(container.querySelector("details")?.contains(screen.getByTestId("constraint-target"))).toBe(true);
+  });
+
+  it("a state-level target without constraints still has its raw ref in collapsed technical details", () => {
+    const uuid = "card:00000000-1b2c-4d3e-8f90-a1b2c3d4e5f6";
+    const st = { kind: "waiting", ref: uuid } as RuntimeState;
+    const { container } = render(<RuntimeConstraints state={st} variant="full" hideBriefTarget />);
+    const d = container.querySelector("details");
+    expect(d).not.toBeNull();
+    expect(d?.querySelector('[data-testid="runtime-technical-target"]')?.textContent).toBe(uuid);
   });
 });

@@ -10,6 +10,12 @@
     "position": "position {{position}}",
     "stopped": "Stopped",
     "unverified": "Wait not confirmed: diagnostic unavailable",
+    "waitFor": {
+      "card": "Waiting for task",
+      "mr": "Waiting for MR",
+      "pipeline": "Waiting for CI",
+      "decision": "Waiting for decision"
+    },
     "stale": "data is stale",
     "reasons": {
       "review_refeed_hold": "Reviewed; awaits commit",
@@ -32,6 +38,9 @@
       "dependencies_unreadable": "Blocker is unreadable"
     },
     "constraints": {
+      "target": "Target",
+      "technical": "Technical details",
+      "incomplete": "Details incomplete",
       "title": "Constraints",
       "classes": {
         "mesh_dependency": "Dependency",

@@ -10,6 +10,12 @@
     "position": "позиция {{position}}",
     "stopped": "Стоит",
     "unverified": "Ожидание не подтверждено: диагностика недоступна",
+    "waitFor": {
+      "card": "Ждёт задачу",
+      "mr": "Ждёт MR",
+      "pipeline": "Ждёт CI",
+      "decision": "Ждёт решения"
+    },
     "stale": "данные устарели",
     "reasons": {
       "review_refeed_hold": "ревью было; ждёт коммита",
@@ -32,6 +38,9 @@
       "dependencies_unreadable": "блокер недоступен для чтения"
     },
     "constraints": {
+      "target": "Цель",
+      "technical": "Технические подробности",
+      "incomplete": "Данные неполные",
       "title": "Ограничения",
       "classes": {
         "mesh_dependency": "Зависимость",

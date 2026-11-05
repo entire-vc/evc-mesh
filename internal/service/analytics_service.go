@@ -521,6 +521,17 @@ func (s *analyticsService) queryCostMetrics(ctx context.Context, filter Analytic
 		}
 	}
 
+	// ORDER BY comes from a closed set; user input is never interpolated.
+	var topTasksOrder string
+	switch filter.TopTasksSort {
+	case "", TopTasksSortCost:
+		topTasksOrder = "cost DESC, ags.task_id ASC"
+	case TopTasksSortTokens:
+		topTasksOrder = "(COALESCE(SUM(ags.tokens_in), 0) + COALESCE(SUM(ags.tokens_out), 0)) DESC, ags.task_id ASC"
+	default:
+		return nil, fmt.Errorf("invalid top_tasks_sort %q", filter.TopTasksSort)
+	}
+
 	topTasksQ := fmt.Sprintf(`
 		SELECT ags.task_id, t.title AS task_title,
 		       COALESCE(SUM(ags.estimated_cost), 0) AS cost,
@@ -533,9 +544,9 @@ func (s *analyticsService) queryCostMetrics(ctx context.Context, filter Analytic
 		  AND ags.started_at >= $2 AND ags.started_at <= $3
 		  %s
 		GROUP BY ags.task_id, t.title
-		ORDER BY cost DESC
+		ORDER BY %s
 		LIMIT 10
-	`, innerJoinProjectFilter)
+	`, innerJoinProjectFilter, topTasksOrder)
 	var taskRows []taskCostQueryRow
 	if err := s.db.SelectContext(ctx, &taskRows, topTasksQ, args...); err != nil {
 		return nil, err

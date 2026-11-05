@@ -29,6 +29,7 @@ func NewAnalyticsHandler(svc service.AnalyticsService) *AnalyticsHandler {
 //   - from   (RFC3339 or YYYY-MM-DD, default: 30 days ago)
 //   - to     (RFC3339 or YYYY-MM-DD, default: now)
 //   - project_id (optional UUID)
+//   - top_tasks_sort (optional: cost (default) | tokens) — ordering of cost_metrics.top_tasks
 func (h *AnalyticsHandler) GetMetrics(c echo.Context) error {
 	wsID, err := uuid.Parse(c.Param("ws_id"))
 	if err != nil {
@@ -68,6 +69,15 @@ func (h *AnalyticsHandler) GetMetrics(c echo.Context) error {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
 		}
 		filter.ProjectID = &projID
+	}
+
+	switch sortParam := c.QueryParam("top_tasks_sort"); sortParam {
+	case "", service.TopTasksSortCost:
+		filter.TopTasksSort = service.TopTasksSortCost
+	case service.TopTasksSortTokens:
+		filter.TopTasksSort = service.TopTasksSortTokens
+	default:
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid top_tasks_sort; use cost or tokens"))
 	}
 
 	metrics, err := h.analyticsService.GetMetrics(c.Request().Context(), filter)

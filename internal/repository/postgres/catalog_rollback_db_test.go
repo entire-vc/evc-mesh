@@ -32,22 +32,27 @@ import (
 // sparkFixture is a signed fake Spark: catalog.json, the release list and the
 // artifacts of two releases of one extension, A (0.1.13) and B (0.1.20).
 type sparkFixture struct {
-	t         *testing.T
-	id        string
-	srv       *httptest.Server
-	priv      ed25519.PrivateKey
-	mu        sync.Mutex
-	latest    string
-	blocklist []map[string]string
-	yanked    map[string]bool
-	manifests map[string][]byte
-	artifacts map[string][]byte
-	digests   map[string]string
-	client    *catalog.Client
+	t              *testing.T
+	id             string
+	srv            *httptest.Server
+	priv           ed25519.PrivateKey
+	mu             sync.Mutex
+	latest         string
+	blocklist      []map[string]string
+	yanked         map[string]bool
+	manifests      map[string][]byte
+	artifacts      map[string][]byte
+	digests        map[string]string
+	versions       []string
+	beforeArtifact func()
+	client         *catalog.Client
 }
 
-func newSparkFixture(t *testing.T) *sparkFixture {
+func newSparkFixture(t *testing.T, versions ...string) *sparkFixture {
 	t.Helper()
+	if len(versions) == 0 {
+		versions = []string{"0.1.13", "0.1.20"}
+	}
 	raw, err := os.ReadFile("../../extensions/catalog/testdata/mesh-ext-hello.json")
 	require.NoError(t, err)
 	var base map[string]any
@@ -55,9 +60,9 @@ func newSparkFixture(t *testing.T) *sparkFixture {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 
-	f := &sparkFixture{t: t, id: base["id"].(string), priv: priv, latest: "0.1.13", yanked: map[string]bool{},
+	f := &sparkFixture{t: t, id: base["id"].(string), priv: priv, latest: versions[0], versions: versions, yanked: map[string]bool{},
 		manifests: map[string][]byte{}, artifacts: map[string][]byte{}, digests: map[string]string{}}
-	for _, v := range []string{"0.1.13", "0.1.20"} {
+	for _, v := range versions {
 		base["version"] = v
 		m, err := json.Marshal(base)
 		require.NoError(t, err)
@@ -78,10 +83,16 @@ func newSparkFixture(t *testing.T) *sparkFixture {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		caps := base["capabilities"]
+		release := func(v string) map[string]any {
+			return map[string]any{"version": v, "mesh_api": ">=1 <3", "commit_sha": fixtureCommit(v), "artifact_sha256": f.digests[v], "capabilities": caps}
+		}
+		var releases []any
+		for _, v := range f.versions {
+			releases = append(releases, release(v))
+		}
 		body, _ := json.Marshal(map[string]any{"schema": 1, "generated_at": "2026-10-31T00:00:00Z", "blocklist": f.blocklist,
 			"extensions": []any{map[string]any{"id": f.id, "name": "Hello", "runtime": "external", "trust": "verified",
-				"latest":   map[string]any{"version": f.latest, "mesh_api": ">=1 <3", "commit_sha": "commit-" + f.latest, "artifact_sha256": f.digests[f.latest], "capabilities": caps},
-				"releases": []any{}}}})
+				"latest": release(f.latest), "releases": releases}}})
 		w.Header().Set(catalog.SignatureHeader, base64.StdEncoding.EncodeToString(ed25519.Sign(priv, body)))
 		w.Header().Set("ETag", catalog.ETagOf(body))
 		_, _ = w.Write(body)
@@ -90,14 +101,19 @@ func newSparkFixture(t *testing.T) *sparkFixture {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		var rels []any
-		for _, v := range []string{"0.1.20", "0.1.13"} {
+		for _, v := range f.versions {
 			rels = append(rels, map[string]any{"version": v, "installable": true, "yanked": f.yanked[v]})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": f.id, "releases": rels})
 	})
 	for v := range f.artifacts {
 		art := f.artifacts[v]
-		mux.HandleFunc("/api/v1/mesh-extensions/"+f.id+"/releases/"+v+"/artifact", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(art) })
+		mux.HandleFunc("/api/v1/mesh-extensions/"+f.id+"/releases/"+v+"/artifact", func(w http.ResponseWriter, _ *http.Request) {
+			if f.beforeArtifact != nil {
+				f.beforeArtifact()
+			}
+			_, _ = w.Write(art)
+		})
 	}
 	mux.HandleFunc("/api/v1/mesh-extensions/"+f.id+"/installs", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
 	f.srv = httptest.NewServer(mux)
@@ -106,6 +122,11 @@ func newSparkFixture(t *testing.T) *sparkFixture {
 	cl := catalog.NewClient(func() string { return f.srv.URL }, func() string { return base64.StdEncoding.EncodeToString(pub) })
 	f.client = cl
 	return f
+}
+
+func fixtureCommit(version string) string {
+	sum := sha256.Sum256([]byte("commit-" + version))
+	return hex.EncodeToString(sum[:])[:40]
 }
 
 func (f *sparkFixture) setLatest(v string) {
@@ -434,4 +455,87 @@ func TestCatalogRollback_StaleUpdateCannotReapplyRolledBackRelease(t *testing.T)
 	fresh.Auto = false
 	require.NoError(t, e.repo.UpdateCatalog(ctx, upd, fresh))
 	assert.Equal(t, b.Version, e.row().Version)
+}
+
+func newPinnedUpdateEnv(t *testing.T) *rollbackEnv {
+	t.Helper()
+	db := testDB(t)
+	f := newSparkFixture(t, "0.2.3", "0.3.0", "0.3.9")
+	e := &rollbackEnv{t: t, f: f, repo: NewInstalledExtensionRepo(db), actor: uuid.New()}
+	e.inst = &catalog.Installer{Catalog: f.client, SparkURL: func() string { return f.srv.URL }, CounterOn: func() bool { return false },
+		Store: e.repo, Journal: NewInstanceExtensionPolicyRepo(db)}
+	clean := func() {
+		db.Exec(`DELETE FROM installed_extensions WHERE extension_id = $1`, f.id)
+		db.Exec(`DELETE FROM instance_extension_journal WHERE extension_id = $1`, f.id)
+	}
+	clean()
+	t.Cleanup(clean)
+	f.setLatest("0.2.3")
+	_, err := e.inst.Install(context.Background(), e.actor, f.id)
+	require.NoError(t, err)
+	f.setLatest("0.3.9")
+	return e
+}
+
+func TestCatalogUpdateTarget_PinnedSequenceCreatesRestorableSnapshot(t *testing.T) {
+	e := newPinnedUpdateEnv(t)
+	ctx := context.Background()
+	changes := 0
+	e.inst.OnChange = func(context.Context) { changes++ }
+	for _, version := range []string{"0.3.0", "0.3.9"} {
+		before := e.row()
+		res, err := e.inst.UpdateTarget(ctx, &e.actor, e.f.id, "", version, fixtureCommit(version))
+		require.NoError(t, err)
+		require.Equal(t, "updated", string(res.Outcome))
+		require.Equal(t, version, res.Version)
+		require.Equal(t, fixtureCommit(version), e.row().CommitSHA)
+		snap, err := e.repo.GetCatalogSnapshot(ctx, e.f.id)
+		require.NoError(t, err)
+		require.NotNil(t, snap)
+		assert.True(t, snap.Intact())
+		assert.Equal(t, before.Version, snap.Version)
+		assert.JSONEq(t, string(before.Manifest), string(snap.Manifest))
+		assert.Equal(t, before.CommitSHA, snap.CommitSHA)
+		assert.Equal(t, before.ArtifactSHA256, snap.ArtifactSHA256)
+		assert.Equal(t, string(before.TrustLevel), snap.TrustLevel)
+		assert.Equal(t, string(before.Source), snap.Source)
+	}
+	assert.Equal(t, 2, changes)
+	assert.Equal(t, "0.3.0", e.row().PreviousVersion)
+	cat, err := e.f.client.Current()
+	require.NoError(t, err)
+	entry, ok := cat.Entry(e.f.id)
+	require.True(t, ok)
+	assert.Equal(t, "0.3.9", entry.Latest.Version, "target selection never rewrites the verified cache")
+	got, err := e.inst.Rollback(ctx, &e.actor, e.f.id)
+	require.NoError(t, err)
+	assert.Equal(t, "0.3.0", got.Version)
+	assert.Equal(t, fixtureCommit("0.3.0"), got.CommitSHA)
+	assert.Equal(t, e.f.digests["0.3.0"], got.ArtifactSHA256)
+}
+
+func TestCatalogUpdateTarget_ConcurrentRowChangePreservesCAS(t *testing.T) {
+	e := newPinnedUpdateEnv(t)
+	ctx := context.Background()
+	db := testDB(t)
+	changes := 0
+	e.inst.OnChange = func(context.Context) { changes++ }
+	var concurrentErr error
+	e.f.beforeArtifact = func() {
+		_, concurrentErr = db.Exec(`UPDATE installed_extensions SET commit_sha = 'concurrent-writer' WHERE extension_id = $1`, e.f.id)
+	}
+	_, err := e.inst.UpdateTarget(ctx, &e.actor, e.f.id, "", "0.3.0", fixtureCommit("0.3.0"))
+	require.NoError(t, concurrentErr)
+	var ae *apierror.Error
+	require.ErrorAs(t, err, &ae)
+	assert.Equal(t, http.StatusConflict, ae.Code)
+	assert.Equal(t, "0.2.3", e.row().Version)
+	assert.Equal(t, "concurrent-writer", e.row().CommitSHA)
+	snap, err := e.repo.GetCatalogSnapshot(ctx, e.f.id)
+	require.NoError(t, err)
+	assert.Nil(t, snap)
+	var updates int
+	require.NoError(t, db.Get(&updates, `SELECT count(*) FROM instance_extension_journal WHERE extension_id = $1 AND action = 'updated'`, e.f.id))
+	assert.Zero(t, updates)
+	assert.Zero(t, changes)
 }

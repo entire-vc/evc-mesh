@@ -108,3 +108,48 @@ func TestAnalyticsHandler_ExportMetrics_RetainedSinceNil(t *testing.T) {
 	require.Nil(t, findCSVRow(t, body, "Event Coverage", "retained_since"),
 		"retained_since row must be absent when RetainedSince is nil")
 }
+
+func doGetMetrics(t *testing.T, query string, mockSvc *MockAnalyticsService) *httptest.ResponseRecorder {
+	t.Helper()
+	h := NewAnalyticsHandler(mockSvc)
+	req := httptest.NewRequest(http.MethodGet, "/?"+query, http.NoBody)
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+	c.SetPath("/workspaces/:ws_id/analytics")
+	c.SetParamNames("ws_id")
+	c.SetParamValues(uuid.New().String())
+	require.NoError(t, h.GetMetrics(c))
+	return rec
+}
+
+func TestAnalyticsHandler_GetMetrics_TopTasksSort(t *testing.T) {
+	cases := []struct {
+		query    string
+		wantCode int
+		wantSort string
+	}{
+		{"", http.StatusOK, service.TopTasksSortCost},
+		{"top_tasks_sort=cost", http.StatusOK, service.TopTasksSortCost},
+		{"top_tasks_sort=tokens", http.StatusOK, service.TopTasksSortTokens},
+		{"top_tasks_sort=bogus", http.StatusBadRequest, ""},
+		{"top_tasks_sort=Tokens", http.StatusBadRequest, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.query, func(t *testing.T) {
+			var got *service.AnalyticsFilter
+			rec := doGetMetrics(t, tc.query, &MockAnalyticsService{
+				GetMetricsFunc: func(_ context.Context, f service.AnalyticsFilter) (*service.AnalyticsMetrics, error) {
+					got = &f
+					return &service.AnalyticsMetrics{}, nil
+				},
+			})
+			require.Equal(t, tc.wantCode, rec.Code)
+			if tc.wantCode == http.StatusOK {
+				require.NotNil(t, got)
+				require.Equal(t, tc.wantSort, got.TopTasksSort)
+			} else {
+				require.Nil(t, got, "service must not be called on an invalid sort")
+			}
+		})
+	}
+}

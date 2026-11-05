@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -426,4 +427,142 @@ func TestAnalyticsService_GetMetrics_EventMetrics_EmptyWorkspace(t *testing.T) {
 	assert.Nil(t, ev.RetainedSince)
 	assert.False(t, ev.PeriodFullyCovered)
 	assert.Empty(t, ev.ByType)
+}
+
+// insertTopTaskFixtureTask adds a task with a fixed id to the fixture project, reusing the
+// project's default status. taskNumber must be unique within the project.
+func insertTopTaskFixtureTask(t *testing.T, db *sqlx.DB, projectID, taskID uuid.UUID, taskNumber int) {
+	t.Helper()
+	var statusID uuid.UUID
+	require.NoError(t, db.GetContext(context.Background(), &statusID,
+		`SELECT id FROM task_statuses WHERE project_id = $1 LIMIT 1`, projectID))
+	_, err := db.ExecContext(context.Background(),
+		`INSERT INTO tasks (id, project_id, status_id, title, description, assignee_type, priority, position, custom_fields, labels, task_number, created_by, created_by_type, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+		taskID, projectID, statusID, "Top Task "+taskID.String()[:8], "", "unassigned", "medium", float64(taskNumber), json.RawMessage(`{}`), "{}", taskNumber, uuid.New(), "user", time.Now().UTC(), time.Now().UTC(),
+	)
+	require.NoError(t, err)
+}
+
+func topTaskIDs(rows []TaskCostRow) []uuid.UUID {
+	ids := make([]uuid.UUID, len(rows))
+	for i, r := range rows {
+		ids[i] = r.TaskID
+	}
+	return ids
+}
+
+// Regression: with more than 10 tasks and cost = 0 everywhere, the old
+// "ORDER BY cost DESC LIMIT 10" picked arbitrary groups and dropped the token-heavy ones.
+// Empty tasks get low UUIDs and token tasks high ones, so the cost ordering (tie-break
+// task_id ASC) cannot reach the token tasks, while tokens ordering must put them first.
+func TestAnalyticsService_TopTasksSort_TokensWithZeroCost(t *testing.T) {
+	db := testDB(t)
+	workspaceID, projectID, fixtureTask, agentID, _ := seedCostFixture(t, db)
+	svc := NewAnalyticsService(db)
+
+	for i := 1; i <= 11; i++ {
+		id := uuid.MustParse(fmt.Sprintf("00000000-0000-0000-0000-%012d", i))
+		insertTopTaskFixtureTask(t, db, projectID, id, 100+i)
+		insertSession(t, db, workspaceID, agentID, &id, 0, 0, 0, "")
+	}
+	heavy := []uuid.UUID{
+		uuid.MustParse("ffffffff-0000-0000-0000-000000000001"), // 3000 total
+		uuid.MustParse("ffffffff-0000-0000-0000-000000000002"), // 9000 total
+		uuid.MustParse("ffffffff-0000-0000-0000-000000000003"), // 600 total
+	}
+	for i, tokens := range []int64{3000, 9000, 600} {
+		insertTopTaskFixtureTask(t, db, projectID, heavy[i], 200+i)
+		insertSession(t, db, workspaceID, agentID, &heavy[i], 0, tokens/2, tokens-tokens/2, "")
+	}
+	// The fixture's own task carries $2.25 and 4500 tokens and takes part in both orderings.
+	window := func(sort string) []TaskCostRow {
+		m, err := svc.GetMetrics(context.Background(), AnalyticsFilter{
+			WorkspaceID: workspaceID, From: time.Now().Add(-time.Hour), To: time.Now().Add(time.Hour), TopTasksSort: sort,
+		})
+		require.NoError(t, err)
+		return m.CostMetrics.TopTasks
+	}
+
+	tokens := window(TopTasksSortTokens)
+	require.Len(t, tokens, 10)
+	assert.Equal(t, []uuid.UUID{heavy[1], fixtureTask, heavy[0], heavy[2]}, topTaskIDs(tokens)[:4], "tokens descending, zero-cost heavy tasks included")
+	assert.Equal(t, int64(9000), tokens[0].TokensIn+tokens[0].TokensOut)
+
+	// The pre-fix behaviour (default / cost) cannot see the zero-cost token tasks: negative control.
+	byCost := window("")
+	require.Len(t, byCost, 10)
+	for _, id := range heavy {
+		assert.NotContains(t, topTaskIDs(byCost), id)
+	}
+	assert.Equal(t, byCost, window(TopTasksSortCost), "empty sort equals explicit cost")
+}
+
+func TestAnalyticsService_TopTasksSort_MixedCostAndTokens(t *testing.T) {
+	db := testDB(t)
+	workspaceID, projectID, fixtureTask, agentID, _ := seedCostFixture(t, db)
+	otherWS, otherProject, otherTask, otherAgent, _ := seedCostFixture(t, db)
+	_ = otherProject
+	insertSession(t, db, otherWS, otherAgent, &otherTask, 50, 5_000_000, 5_000_000, "") // other workspace: must never leak
+	svc := NewAnalyticsService(db)
+
+	// 12 fillers: cost $1 each, 100 tokens. They fill the cost top-10 above the whale.
+	for i := 1; i <= 12; i++ {
+		id := uuid.MustParse(fmt.Sprintf("00000000-0000-0000-0000-%012d", i))
+		insertTopTaskFixtureTask(t, db, projectID, id, 100+i)
+		insertSession(t, db, workspaceID, agentID, &id, 1.0, 50, 50, "")
+	}
+	// Whale: cheap but huge in tokens. Twin pair: equal tokens, tie broken by task_id ASC.
+	whale := uuid.MustParse("ffffffff-0000-0000-0000-0000000000aa")
+	insertTopTaskFixtureTask(t, db, projectID, whale, 300)
+	insertSession(t, db, workspaceID, agentID, &whale, 0.5, 1_000_000, 1_000_000, "")
+	twinHi := uuid.MustParse("ffffffff-0000-0000-0000-0000000000b2")
+	twinLo := uuid.MustParse("ffffffff-0000-0000-0000-0000000000b1")
+	for i, id := range []uuid.UUID{twinHi, twinLo} {
+		insertTopTaskFixtureTask(t, db, projectID, id, 301+i)
+		insertSession(t, db, workspaceID, agentID, &id, 0.01, 40_000, 10_000, "")
+	}
+	// Outside the window: huge tokens but started 10 days ago.
+	old := uuid.MustParse("ffffffff-0000-0000-0000-0000000000cc")
+	insertTopTaskFixtureTask(t, db, projectID, old, 310)
+	_, err := db.ExecContext(context.Background(),
+		`INSERT INTO agent_sessions (id, workspace_id, agent_id, task_id, started_at, status, tokens_in, tokens_out, estimated_cost)
+		 VALUES ($1,$2,$3,$4,$5,'ended',9000000,9000000,99)`,
+		uuid.New(), workspaceID, agentID, old, time.Now().UTC().AddDate(0, 0, -10))
+	require.NoError(t, err)
+
+	get := func(sort string, project *uuid.UUID) []TaskCostRow {
+		m, getErr := svc.GetMetrics(context.Background(), AnalyticsFilter{
+			WorkspaceID: workspaceID, ProjectID: project,
+			From: time.Now().Add(-time.Hour), To: time.Now().Add(time.Hour), TopTasksSort: sort,
+		})
+		require.NoError(t, getErr)
+		return m.CostMetrics.TopTasks
+	}
+
+	// Cost: fixture task ($2.25) first, then the $1 fillers; whale ($0.5) is cut.
+	byCost := get(TopTasksSortCost, nil)
+	require.Len(t, byCost, 10)
+	assert.Equal(t, fixtureTask, byCost[0].TaskID)
+	assert.NotContains(t, topTaskIDs(byCost), whale)
+
+	// Tokens: whale, then the twins in task_id ASC order.
+	byTokens := get(TopTasksSortTokens, nil)
+	require.Len(t, byTokens, 10)
+	assert.Equal(t, []uuid.UUID{whale, twinLo, twinHi}, topTaskIDs(byTokens)[:3])
+	ids := topTaskIDs(byTokens)
+	assert.NotContains(t, ids, old, "outside the date window")
+	assert.NotContains(t, ids, otherTask, "other workspace")
+
+	// Project filter: positive control for the real project, empty for an unrelated one.
+	assert.Equal(t, whale, get(TopTasksSortTokens, &projectID)[0].TaskID)
+	unrelated := uuid.New()
+	assert.Empty(t, get(TopTasksSortTokens, &unrelated))
+
+	// Unknown sort is rejected, not interpolated.
+	_, err = svc.GetMetrics(context.Background(), AnalyticsFilter{
+		WorkspaceID: workspaceID, From: time.Now().Add(-time.Hour), To: time.Now().Add(time.Hour),
+		TopTasksSort: "cost; DROP TABLE tasks",
+	})
+	require.Error(t, err)
 }

@@ -122,3 +122,31 @@ func TestInstallRefusesIDOwnedByAnotherSource(t *testing.T) {
 	_, err = svc.Install(context.Background(), uuid.New(), url, "v1", "")
 	require.NoError(t, err, "a free id installs as before")
 }
+
+func TestAutoUpdateOnceRunsCatalogPassIndependently(t *testing.T) {
+	svc, repo, gl, url := setup(t, "")
+	gl.tags, gl.branches = []string{"v0.1.0"}, []string{"main"}
+	gl.set("v0.1.0", "aaa111", manifestJSON(t, withVersion("0.1.0")))
+	gl.set("main", "bbb222", manifestJSON(t, withVersion("0.1.0")))
+	ctx := context.Background()
+	_, err := svc.Install(ctx, uuid.New(), url, "v0.1.0", "")
+	require.NoError(t, err)
+	gl.tags = []string{"v0.1.0", "v0.1.1"}
+	gl.set("v0.1.1", "eee555", manifestJSON(t, withVersion("0.1.1")))
+
+	calls := 0
+	svc.CatalogUpdate = func(context.Context) ([]UpdateResult, error) {
+		calls++
+		return nil, errors.New("catalog down")
+	}
+	svc.AutoUpdateOnce(ctx) // flag off: neither source runs
+	assert.Equal(t, 0, calls)
+	row, _ := repo.Get(ctx, "hello")
+	assert.Equal(t, "0.1.0", row.Version)
+
+	repo.auto = true
+	svc.AutoUpdateOnce(ctx) // a failing catalog does not stop the repo update
+	assert.Equal(t, 1, calls)
+	row, _ = repo.Get(ctx, "hello")
+	assert.Equal(t, "0.1.1", row.Version)
+}
