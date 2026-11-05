@@ -395,6 +395,12 @@ func TestOperatorAgents_ReceivingAdmissionForForeignPool(t *testing.T) {
 	d.admitted(true)
 	require.Equal(t, []uuid.UUID{d.agent}, agentIDs(t, d.repo, admin, d.receiver))
 	require.NotContains(t, agentIDs(t, d.repo, admin, d.receiver), other.ID)
+	rows, err := d.repo.OperatorAgents(ctx, UserRuntimeActor{UserID: admin}, d.receiver)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NotNil(t, rows[0].Receiving, "the receiving admin gets the owner workspace and binding to resolve the profile")
+	require.Equal(t, d.owner, rows[0].Receiving.ResourceOwnerWorkspaceID)
+	require.Equal(t, "worker-b", rows[0].Receiving.BindingRef)
 	require.Empty(t, agentIDs(t, d.repo, member, d.receiver), "a plain member is not shown it")
 	require.Empty(t, agentIDs(t, d.repo, d.actor.UserID, d.owner), "the pool owner's screen does not list another workspace's agent")
 	_, err = d.repo.OperatorAgents(ctx, UserRuntimeActor{UserID: admin}, d.owner)
@@ -455,4 +461,36 @@ func TestOperatorAgents_ReceivingAdmissionStaleBindingNotLed(t *testing.T) {
 	// Removed from the current catalog.
 	save(func(c *domain.RuntimeCatalog) { c.Bindings = map[string]domain.RuntimeBinding{} })
 	require.Empty(t, agentIDs(t, d.repo, admin, d.receiver), "removed binding: stale admission does not lead")
+}
+
+// The receiving reference is the admission the pool owner's current binding
+// still names, even when a newer admission row of the same agent has outlived
+// its binding; once the valid one is gone the reference is not handed out,
+// though the agent stays listed (the admin also operates it).
+func TestOperatorAgents_ReceivingRefIgnoresStaleAdmission(t *testing.T) {
+	d := seedDerived(t)
+	ctx := context.Background()
+	admin := seedGrantUser(t, d.db)
+	_, err := d.db.ExecContext(ctx, `UPDATE agents SET workspace_id=$2, operator_user_id=$3 WHERE id=$1`, d.agent, d.receiver, admin)
+	require.NoError(t, err)
+	_, err = d.db.ExecContext(ctx, `INSERT INTO workspace_members (id, workspace_id, user_id, role) VALUES ($1,$2,$3,'admin')`, uuid.New(), d.receiver, admin)
+	require.NoError(t, err)
+	d.admitted(true)
+	// A newer admission whose binding the current catalog does not have.
+	_, err = d.db.ExecContext(ctx, `INSERT INTO runtime_binding_admissions(integration_id,binding_ref,workspace_id,agent_id,grant_id,grant_fingerprint,revision,catalog_digest,enabled,permitted_profiles,updated_by,updated_at)
+		SELECT integration_id,'removed-binding',workspace_id,agent_id,grant_id,grant_fingerprint,revision,catalog_digest,true,permitted_profiles,updated_by,now()+interval '1 minute'
+		FROM runtime_binding_admissions WHERE agent_id=$1 AND binding_ref='worker-b'`, d.agent)
+	require.NoError(t, err)
+	rows, err := d.repo.OperatorAgents(ctx, UserRuntimeActor{UserID: admin}, d.receiver)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NotNil(t, rows[0].Receiving)
+	require.Equal(t, "worker-b", rows[0].Receiving.BindingRef, "the stale newer admission is not chosen")
+
+	_, err = d.db.ExecContext(ctx, `UPDATE runtime_binding_admissions SET enabled=false WHERE agent_id=$1 AND binding_ref='worker-b'`, d.agent)
+	require.NoError(t, err)
+	rows, err = d.repo.OperatorAgents(ctx, UserRuntimeActor{UserID: admin}, d.receiver)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "still listed: the admin operates it")
+	require.Nil(t, rows[0].Receiving, "no valid admission left: no reference")
 }

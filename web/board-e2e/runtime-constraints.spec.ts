@@ -33,16 +33,16 @@ interface Want {
   cls: string; reason: string; ref: string | null; href: string | RegExp | null; stale: boolean; ci: string | null;
   actor: string | null; wake: string | null; source: string | null; timeKnown: boolean;
 }
-const L: Record<string, { cls: Record<string, string>; reason: Record<string, string>; unknown: string; timeUnknown: string; observed: string; stale: string; ci: [string, string, string, string]; restricted: string }> = {
+const L: Record<string, { cls: Record<string, string>; reason: Record<string, string>; unknown: string; timeUnknown: string; observed: string; stale: string; ci: [string, string, string, string]; restricted: string; unverified: string }> = {
   "en-US": {
     cls: { mesh_dependency: "Dependency", local_wait: "Wait", ci_capacity: "CI", review_rejection: "Review", expired_authority: "Authority", write_acl: "Access", unknown: "Constraint" },
     reason: { mesh_dependency: "Blocked by another card", local_wait: "Waiting for an event", ci_capacity: "Waiting for CI" },
-    unknown: "unknown", timeUnknown: "time unknown", observed: "observed", stale: "data is stale", ci: ["Waiting for CI capacity", "CI status unavailable", "scope", "position"], restricted: "Details are restricted",
+    unknown: "unknown", timeUnknown: "time unknown", observed: "observed", stale: "data is stale", ci: ["Waiting for CI capacity", "CI status unavailable", "scope", "position"], restricted: "Details are restricted", unverified: "Wait not confirmed: diagnostic unavailable",
   },
   "ru-RU": {
     cls: { mesh_dependency: "Зависимость", local_wait: "Ожидание", ci_capacity: "CI", review_rejection: "Ревью", expired_authority: "Полномочия", write_acl: "Доступ", unknown: "Ограничение" },
     reason: { mesh_dependency: "Заблокировано другой карточкой", local_wait: "Ждёт события", ci_capacity: "Ждёт CI" },
-    unknown: "неизвестно", timeUnknown: "время неизвестно", observed: "замечено", stale: "данные устарели", ci: ["Ждёт свободный CI", "Статус CI недоступен", "область", "позиция"], restricted: "Подробности скрыты",
+    unknown: "неизвестно", timeUnknown: "время неизвестно", observed: "замечено", stale: "данные устарели", ci: ["Ждёт свободный CI", "Статус CI недоступен", "область", "позиция"], restricted: "Подробности скрыты", unverified: "Ожидание не подтверждено: диагностика недоступна",
   },
 };
 const CARD_HREF = "/t/00000000";
@@ -68,7 +68,7 @@ const wants = (lng: string): Record<string, Want[]> => {
     "fixture-task-318": [
       { ...base, cls: "local_wait", reason: l.reason.local_wait, wake: LONG_REF, ref: LONG_REF, href: null, source: `mesh ${"x".repeat(120)}` },
       // fixture default reason_code is local_wait; only the 315 CI entry sets ci_capacity
-      { ...base, cls: "ci_capacity", reason: l.reason.local_wait, ci: l.ci[1] },
+      { ...base, cls: "ci_capacity", reason: l.unverified, ci: l.ci[1] },
     ],
   };
 };
@@ -123,10 +123,6 @@ const values = (root: Locator): Promise<Seen[]> => root.evaluate((el) => {
   });
 });
 
-// The surface-independent view of a constraint: board and detail must agree on all of it.
-const common = (v: Seen) => ({ cls: v.cls, label: v.label, reason: v.reason, ref: v.ref, href: v.href, stale: v.stale, staleLabel: v.staleLabel, ci: v.ci });
-// The compact board line is "<Next>: a · <Wakes on>: b · <source> · <observed t>"; rebuild it from the detail rows and compare exactly.
-const compactOf = (d: Seen) => `${d.labels[0]}: ${d.actor} · ${d.labels[1]}: ${d.wake} · ${d.sourceTime}`;
 
 const checkAgainstWant = (id: string, lng: string, seen: Seen[], want: Want[]) => {
   const l = L[lng];
@@ -166,15 +162,12 @@ for (const lng of ["en-US", "ru-RU"]) for (const vp of [{ width: 1440, height: 9
       for (const id of Object.keys(STORIES)) {
         const card = page.locator(`[data-testid="task-card"][data-task-id="${id}"]`);
         await card.scrollIntoViewIfNeeded();
-        await expect(card.locator('[data-testid="runtime-constraint"]').first()).toBeVisible();
-        const more = card.getByTestId("constraint-more");
-        if (await more.count()) await more.click();
-        const board = await values(card);
-        // every constraint is reachable on the board (compact expands in place); the card itself does not overflow with long refs
-        expect(board.length, `${id} constraints on board`).toBe(want[id].length);
-        const boxed = await card.evaluate((el) => ({ card: el.scrollWidth - el.clientWidth, list: (el.querySelector('[data-testid="runtime-constraints"]') as HTMLElement | null)?.scrollWidth ?? 0, listBox: (el.querySelector('[data-testid="runtime-constraints"]') as HTMLElement | null)?.clientWidth ?? 0 }));
-        expect(boxed.card, `${id} board card overflow`).toBeLessThanOrEqual(1);
-        expect(boxed.list - boxed.listBox, `${id} board constraint list overflow`).toBeLessThanOrEqual(1);
+        // the kanban tile carries the kind word only: no constraints, no Next / Wakes on / Source / observed, no raw diagnostics
+        await expect(card.getByTestId("runtime-constraint")).toHaveCount(0);
+        await expect(card.getByTestId("constraint-who-wake")).toHaveCount(0);
+        const tile = (await card.innerText()).toLowerCase();
+        for (const bad of ["http 0", "unknown", "addressee", "wakes on", "source"]) expect(tile, `${id} tile leaks "${bad}"`).not.toContain(bad);
+        expect(await card.evaluate((el) => el.scrollWidth - el.clientWidth), `${id} board card overflow`).toBeLessThanOrEqual(1);
         if (id === "fixture-task-315") await page.screenshot({ path: SHOTS ? `${SHOTS}/board-${tag}.png` : undefined });
         await page.goto(`/t/${id}`);
         // the task panel mounts the property row twice (one per layout); read the one that is actually visible
@@ -183,9 +176,6 @@ for (const lng of ["en-US", "ru-RU"]) for (const vp of [{ width: 1440, height: 9
         const detail = await values(row);
         // 1) detail matches the hand-written oracle (class, reason, ref, safe href, stale, CI, actor, wake, source, time)
         checkAgainstWant(id, lng, detail, want[id]);
-        // 2) board shows exactly the same values as detail, including the compact actor / wake / source / time line
-        expect(board.map(common), `${id} board == detail`).toEqual(detail.map(common));
-        expect(board.map((v) => v.compact), `${id} board who/wake/source/time == detail`).toEqual(detail.map(compactOf));
         if (id === "fixture-task-316") {
           // stale shown as stale; redacted write_acl leaks no ref/owner even though the payload carried them
           await expect(row.getByTestId("constraint-stale")).toHaveCount(1);
@@ -202,7 +192,7 @@ for (const lng of ["en-US", "ru-RU"]) for (const vp of [{ width: 1440, height: 9
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
         expect(overflow, `${id} no horizontal scroll`).toBeLessThanOrEqual(0);
         if (SHOTS) { mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: `${SHOTS}/detail-${id}-${tag}.png` }); }
-        walk(`${tag} ${id}: board==detail (${board.length} constraints), classes ${board.map((v) => v.cls).join(",")} — ok`);
+        walk(`${tag} ${id}: tile clean, detail ${detail.length} constraints, classes ${detail.map((v) => v.cls).join(",")} — ok`);
         await page.goto("/w/board-fixture/p/contenthub");
         await expect(page.locator('[data-testid="task-card"]').first()).toBeVisible({ timeout: BOOT_MS });
       }

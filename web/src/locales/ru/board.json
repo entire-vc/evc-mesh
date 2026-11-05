@@ -9,6 +9,7 @@
     "queuedLane": "В очереди лейна {{lane}}",
     "position": "позиция {{position}}",
     "stopped": "Стоит",
+    "unverified": "Ожидание не подтверждено: диагностика недоступна",
     "stale": "данные устарели",
     "reasons": {
       "review_refeed_hold": "ревью было; ждёт коммита",
@@ -32,7 +33,6 @@
     },
     "constraints": {
       "title": "Ограничения",
-      "more": "ещё {{count}}",
       "classes": {
         "mesh_dependency": "Зависимость",
         "local_wait": "Ожидание",
@@ -58,7 +58,6 @@
       },
       "restricted": "Подробности скрыты",
       "unavailable": "Источник недоступен",
-      "less": "Свернуть",
       "reasonCodes": {
         "mesh_dependency": "Заблокировано другой карточкой",
         "local_wait": "Ждёт события",

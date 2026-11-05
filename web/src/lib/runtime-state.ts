@@ -44,10 +44,45 @@ export function runtimeReasonText(rs: Pick<RuntimeState, "reason" | "reason_code
   return rs.reason ?? null;
 }
 
+const DIAGNOSTIC_TEXT = /\bUNKNOWN\b|\bHTTP\s*0\b|addressee\s*=\s*unknown/i;
+
+/** True when a displayed value is an unreadable-diagnostic string (non-strings never are). */
+const isDiag = (v: unknown): boolean => typeof v === "string" && DIAGNOSTIC_TEXT.test(v);
+/** Reason parameters are interpolated into the displayed reason, so they are checked like any other text. */
+const paramsDiag = (p: unknown): boolean => Object.values((p as object) ?? {}).some(isDiag);
+
+/**
+ * Every text field a constraint can put on screen is checked here, so no field can show a diagnostic as a
+ * confirmed value. Only the exact wake predicate "unknown" (the contract's "event not nameable") is exempt.
+ */
+function constraintHasDiagnostic(c: OperationalConstraint): boolean {
+  const w = c?.wake?.predicate;
+  return (
+    c?.ci?.state === "unavailable" ||
+    paramsDiag(c?.reason_params) ||
+    [c?.reason, c?.ci?.reason, c?.ci?.scope, c?.source?.kind, c?.source?.ref, c?.next_actor?.name, c?.next_actor?.id, c?.wake?.ref, w === "unknown" ? null : w].some(isDiag)
+  );
+}
+
+/**
+ * A diagnostic that could not be read ("UNKNOWN", "HTTP 0", addressee unknown) is a fetch failure,
+ * not a confirmed wait. Display-only: nothing is inferred and nothing is scheduled from it.
+ */
+export function isUnverifiedDiagnostic(rs: Pick<RuntimeState, "kind" | "reason" | "reason_params" | "constraints">): boolean {
+  if (rs.kind !== "waiting") return false;
+  return isDiag(rs.reason) || paramsDiag(rs.reason_params) || (rs.constraints ?? []).some(constraintHasDiagnostic);
+}
+
+/** Kind word only (Working / Waiting / Queued / Stopped): the compact board card never shows reasons, refs or diagnostics. */
+export function runtimeKindLabel(rs: Pick<RuntimeState, "kind">): string {
+  return i18n.t(`board:runtimeState.${rs.kind}`);
+}
+
 /** Short text for the board badge and the title attribute. Refs are rendered separately (they are links). */
 export function runtimeStateText(rs: RuntimeState): string {
   const t = (key: string, opts?: Record<string, unknown>) => i18n.t(`board:runtimeState.${key}`, opts);
-  const reason = runtimeReasonText(rs);
+  const unverified = isUnverifiedDiagnostic(rs);
+  const reason = unverified ? t("unverified") : runtimeReasonText(rs);
   switch (rs.kind) {
     case "working": {
       const at = clock(rs.since);
@@ -139,14 +174,19 @@ export function constraintView(c: OperationalConstraint, index = 0): ConstraintV
   const classKey = KNOWN_CLASSES.includes(c.class) ? c.class : "unknown";
   const code = safeText(c.reason_code);
   const codeKey = `board:runtimeState.constraints.reasonCodes.${code}`;
-  const reason = code && i18n.exists(codeKey)
+  const baseReason = code && i18n.exists(codeKey)
     ? i18n.t(codeKey, { ...(c.reason_params ?? {}) })
     : runtimeReasonText({ reason: safeText(c.reason), reason_code: code, reason_params: c.reason_params ?? null });
-  const wakeRaw = safeText(c.wake?.predicate);
+  const unverifiedReason = constraintHasDiagnostic(c);
+  const clean = (v: string | null | undefined): string | null => (isDiag(v) ? null : safeText(v));
+  // The one reason every return path below uses: an unreadable diagnostic is never shown as a confirmed reason.
+  const reason = unverifiedReason ? i18n.t("board:runtimeState.unverified") : baseReason;
+  const wakeRaw = clean(c.wake?.predicate);
   const wake = wakeRaw && wakeRaw !== "unknown" ? wakeRaw : null;
-  const actorName = c.next_actor && c.next_actor.kind !== "unknown" ? safeText(c.next_actor.name) ?? safeText(c.next_actor.id) : null;
-  const sourceRef = safeText(c.source?.ref);
-  const source = safeText(c.source?.kind) ? `${safeText(c.source.kind)}${sourceRef ? ` ${sourceRef}` : ""}` : sourceRef;
+  const actorName = c.next_actor && c.next_actor.kind !== "unknown" ? clean(c.next_actor.name) ?? clean(c.next_actor.id) : null;
+  const sourceRef = clean(c.source?.ref);
+  const sourceKind = clean(c.source?.kind);
+  const source = sourceKind ? `${sourceKind}${sourceRef ? ` ${sourceRef}` : ""}` : sourceRef;
   // Scope/position are provider evidence only for the two recognised non-unavailable states.
   const ciEvidence = c.ci?.state === "capacity" || c.ci?.state === "manual_required";
   const ci = c.ci
@@ -154,9 +194,9 @@ export function constraintView(c: OperationalConstraint, index = 0): ConstraintV
         label: i18n.exists(`board:runtimeState.constraints.ci.${c.ci.state}`) ? t(`ci.${c.ci.state}`) : t("ci.unavailable"),
         details: [
           // Only provider-evidenced facts; never filled in for `unavailable`.
-          ...(ciEvidence && safeText(c.ci.scope) ? [t("ci.scope", { scope: safeText(c.ci.scope) })] : []),
+          ...(ciEvidence && clean(c.ci.scope) ? [t("ci.scope", { scope: clean(c.ci.scope) })] : []),
           ...(ciEvidence && typeof c.ci.position === "number" ? [t("ci.position", { position: c.ci.position })] : []),
-          ...(safeText(c.ci.reason) ? [safeText(c.ci.reason) as string] : []),
+          ...(clean(c.ci.reason) ? [clean(c.ci.reason) as string] : []),
         ],
       }
     : null;
@@ -181,7 +221,7 @@ export function constraintView(c: OperationalConstraint, index = 0): ConstraintV
     classKey,
     classLabel: t(`classes.${classKey}`),
     reason,
-    ref: safeRef(c.wake?.ref),
+    ref: isDiag(c.wake?.ref) ? null : safeRef(c.wake?.ref),
     nextActor: actorName,
     wake,
     source,

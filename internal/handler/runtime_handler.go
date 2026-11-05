@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -224,7 +225,47 @@ func (h *RuntimeHandler) Binding(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+	if owner != ws {
+		value = narrowBindingForReceiver(value)
+	}
 	return c.JSON(http.StatusOK, value)
+}
+
+// narrowBindingForReceiver limits the raw binding of a view read by a workspace
+// other than the resource owner to what its admission permits: the owner's full
+// profile list and the policy entries of other profiles stay with the owner.
+func narrowBindingForReceiver(v *postgres.RuntimeBindingView) *postgres.RuntimeBindingView {
+	out := *v
+	admitted := func(ref string) bool { return slices.Contains(v.Admission.PermittedProfiles, ref) }
+	keep := func(refs []string) []string {
+		kept := []string{}
+		for _, ref := range refs {
+			if admitted(ref) {
+				kept = append(kept, ref)
+			}
+		}
+		return kept
+	}
+	b := v.Binding
+	b.PermittedProfiles = keep(b.PermittedProfiles)
+	b.Policy.PrimaryProfiles = keep(b.Policy.PrimaryProfiles)
+	b.Policy.QuotaEdges = map[string][]string{}
+	for from, targets := range v.Binding.Policy.QuotaEdges {
+		if admitted(from) {
+			b.Policy.QuotaEdges[from] = keep(targets)
+		}
+	}
+	b.Policy.PreferredAccounts = map[string]string{}
+	for provider, account := range v.Binding.Policy.PreferredAccounts {
+		for _, ref := range b.PermittedProfiles {
+			if v.Profiles[ref].AccountRef == account {
+				b.Policy.PreferredAccounts[provider] = account
+				break
+			}
+		}
+	}
+	out.Binding = b
+	return &out
 }
 
 func (h *RuntimeHandler) Admit(c echo.Context) error {
