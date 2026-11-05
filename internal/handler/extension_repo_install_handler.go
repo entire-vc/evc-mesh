@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -60,6 +61,7 @@ type CatalogInstaller interface {
 	Install(ctx context.Context, actor uuid.UUID, id string) (*domain.InstalledExtension, error)
 	Updates(ctx context.Context) ([]repoinstall.UpdateInfo, error)
 	Update(ctx context.Context, actor *uuid.UUID, id, consentSHA string) (*repoinstall.UpdateResult, error)
+	UpdateTarget(ctx context.Context, actor *uuid.UUID, id, consentSHA, version, expectedCommitSHA string) (*repoinstall.UpdateResult, error)
 	UpdateAll(ctx context.Context, actor *uuid.UUID) ([]repoinstall.UpdateResult, error)
 	Rollback(ctx context.Context, actor *uuid.UUID, id string) (*domain.InstalledExtension, error)
 }
@@ -196,18 +198,36 @@ func (h *ExtensionRepoInstallHandler) Updates(c echo.Context) error {
 
 type updateBody struct {
 	// ConsentCommitSHA is the commit whose added permissions the admin accepted.
-	ConsentCommitSHA string `json:"consent_commit_sha"`
+	ConsentCommitSHA        string          `json:"consent_commit_sha"`
+	TargetVersion           json.RawMessage `json:"target_version"`
+	ExpectedTargetCommitSHA json.RawMessage `json:"expected_target_commit_sha"`
 }
 
 // Update handles POST /extensions/:ext_id/update.
 func (h *ExtensionRepoInstallHandler) Update(c echo.Context) error {
-	uid, denied, err := authorizeInstanceAdmin(c, h.admins)
+	uid, denied, authErr := authorizeInstanceAdmin(c, h.admins)
 	if denied {
-		return err
+		return authErr
 	}
 	var b updateBody
-	_ = c.Bind(&b)
+	if err := c.Bind(&b); err != nil {
+		return handleError(c, apierror.BadRequest("invalid request body"))
+	}
 	consent := strings.TrimSpace(b.ConsentCommitSHA)
+	if len(b.TargetVersion) > 0 || len(b.ExpectedTargetCommitSHA) > 0 {
+		var version, sha string
+		if json.Unmarshal(b.TargetVersion, &version) != nil || json.Unmarshal(b.ExpectedTargetCommitSHA, &sha) != nil || version == "" || sha == "" {
+			return handleError(c, apierror.BadRequest("target_version and expected_target_commit_sha must be supplied together as nonempty strings"))
+		}
+		if h.catalog == nil {
+			return handleError(c, apierror.BadRequest("target selection requires a catalog extension"))
+		}
+		res, err := h.catalog.UpdateTarget(c.Request().Context(), &uid, c.Param("ext_id"), consent, version, sha)
+		if err != nil {
+			return handleError(c, err)
+		}
+		return c.JSON(http.StatusOK, res)
+	}
 	res, err := h.svc.Update(c.Request().Context(), &uid, c.Param("ext_id"), consent)
 	if err != nil && h.catalog != nil && isNotFound(err) {
 		res, err = h.catalog.Update(c.Request().Context(), &uid, c.Param("ext_id"), consent)

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"reflect"
+	"regexp"
 
 	"github.com/google/uuid"
 
@@ -39,20 +41,27 @@ func (in *Installer) catalogRows(ctx context.Context) ([]domain.InstalledExtensi
 // target: yanked versions only vanish from the Updates tab, nothing is switched off.
 func (in *Installer) updateTarget(cat *Catalog, row *domain.InstalledExtension) *Entry {
 	e, ok := cat.Entry(row.ExtensionID)
-	if !ok || e.Runtime == "builtin" {
-		return nil
-	}
-	if e.Latest.Yanked || e.Latest.ArtifactSHA256 == nil || *e.Latest.ArtifactSHA256 == "" {
-		// No signed digest, nothing verifiable to install: never offered.
-		return nil
-	}
-	if _, hit := cat.Blocks(e.ID, e.Latest.Version); hit {
-		return nil
-	}
-	if !repoinstall.MeshAPICompatible(e.Latest.MeshAPI, extensions.ExtensionsAPIVersion) || !semverNewer(e.Latest.Version, row.Version) {
+	if !ok || !catalogUpdateUsable(cat, row, e) {
 		return nil
 	}
 	return e
+}
+
+func catalogUpdateUsable(cat *Catalog, row *domain.InstalledExtension, e *Entry) bool {
+	if e.Runtime == "builtin" {
+		return false
+	}
+	if e.Latest.Yanked || e.Latest.ArtifactSHA256 == nil || *e.Latest.ArtifactSHA256 == "" {
+		// No signed digest, nothing verifiable to install: never offered.
+		return false
+	}
+	if _, hit := cat.Blocks(e.ID, e.Latest.Version); hit {
+		return false
+	}
+	if !repoinstall.MeshAPICompatible(e.Latest.MeshAPI, extensions.ExtensionsAPIVersion) || !semverNewer(e.Latest.Version, row.Version) {
+		return false
+	}
+	return true
 }
 
 // Updates is the catalog half of the Updates tab: one row per catalog install.
@@ -96,12 +105,95 @@ func (in *Installer) Updates(ctx context.Context) ([]repoinstall.UpdateInfo, err
 // Update moves one catalog install to the newest release. Added permissions
 // need consent: consentSHA must be the commit the admin saw in the Updates tab.
 func (in *Installer) Update(ctx context.Context, actor *uuid.UUID, id, consentSHA string) (*repoinstall.UpdateResult, error) {
-	return in.update(ctx, actor, id, consentSHA, false)
+	return in.update(ctx, actor, id, consentSHA, false, "", "")
+}
+
+var targetVersionPattern = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$`)
+var targetCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// UpdateTarget pins a manual catalog update to a release in the verified copy.
+// It shares the consent, artifact verification and guarded write used by Update.
+func (in *Installer) UpdateTarget(ctx context.Context, actor *uuid.UUID, id, consentSHA, version, expectedCommitSHA string) (*repoinstall.UpdateResult, error) {
+	if !targetVersionPattern.MatchString(version) || !targetCommitPattern.MatchString(expectedCommitSHA) {
+		return nil, apierror.BadRequest("target_version and expected_target_commit_sha must be a version and full commit SHA")
+	}
+	return in.update(ctx, actor, id, consentSHA, false, version, expectedCommitSHA)
+}
+
+// selectedUpdateTarget never changes the cached entry. Every record naming the
+// selected version must describe the same release, even when the pin matches one.
+func selectedUpdateTarget(cat *Catalog, row *domain.InstalledExtension, version, expectedCommitSHA string) (*Entry, error) {
+	e, ok := cat.Entry(row.ExtensionID)
+	if !ok {
+		return nil, apiErr(http.StatusConflict, CodeReleaseRevoked, "extension is not in the verified catalog")
+	}
+	var selected *Release
+	var selectedCaps any
+	for _, r := range append([]Release{e.Latest}, e.Releases...) {
+		if r.Version != version {
+			continue
+		}
+		caps, err := checkedCapabilities(r)
+		if err != nil {
+			return nil, err
+		}
+		if selected != nil && (selected.MeshAPI != r.MeshAPI || selected.CommitSHA != r.CommitSHA ||
+			!reflect.DeepEqual(selected.ArtifactSHA256, r.ArtifactSHA256) || selected.Yanked != r.Yanked || !reflect.DeepEqual(selectedCaps, caps)) {
+			return nil, apierror.Conflict("the verified catalog has conflicting records for target_version")
+		}
+		release := r
+		selected, selectedCaps = &release, caps
+	}
+	if selected == nil {
+		return nil, apiErr(http.StatusConflict, CodeReleaseRevoked, "target_version is not in the verified catalog")
+	}
+	if selected.CommitSHA != expectedCommitSHA {
+		return nil, apierror.Conflict("expected_target_commit_sha does not match the verified release")
+	}
+	entryCopy := *e
+	entryCopy.Latest = *selected
+	if row.Blocked || !catalogUpdateUsable(cat, row, &entryCopy) {
+		return nil, apierror.Conflict("the selected catalog release is not an eligible upgrade")
+	}
+	return &entryCopy, nil
+}
+
+// checkedCapabilities distinguishes a valid empty declaration from Flatten's
+// nil-on-malformed result. Unknown groups (including network) remain supported.
+func checkedCapabilities(r Release) (map[string]any, error) {
+	invalid := apiErr(http.StatusUnprocessableEntity, repoinstall.CodeManifestInvalid, "the selected catalog release has malformed capabilities")
+	var groups map[string]json.RawMessage
+	if json.Unmarshal(r.Capabilities, &groups) != nil || groups == nil {
+		return nil, invalid
+	}
+	for _, group := range []string{"api", "events", "webhooks_in", "ui", "secrets"} {
+		raw, ok := groups[group]
+		if !ok {
+			continue
+		}
+		var vals []json.RawMessage
+		if json.Unmarshal(raw, &vals) != nil {
+			return nil, invalid
+		}
+		for _, val := range vals {
+			var s string
+			if json.Unmarshal(val, &s) != nil || s == "" {
+				return nil, invalid
+			}
+		}
+	}
+	// Decode once more for semantic duplicate comparison: JSON object key order
+	// and whitespace do not make two otherwise identical releases conflict.
+	var canonical map[string]any
+	if json.Unmarshal(r.Capabilities, &canonical) != nil {
+		return nil, invalid
+	}
+	return canonical, nil
 }
 
 // update is Update; auto marks the bulk pass, which leaves alone the commit an
 // admin rolled back from (a manual update still takes it).
-func (in *Installer) update(ctx context.Context, actor *uuid.UUID, id, consentSHA string, auto bool) (*repoinstall.UpdateResult, error) {
+func (in *Installer) update(ctx context.Context, actor *uuid.UUID, id, consentSHA string, auto bool, targetVersion, expectedCommitSHA string) (*repoinstall.UpdateResult, error) {
 	row, err := in.Store.Get(ctx, id)
 	if err != nil {
 		return nil, err
@@ -115,6 +207,12 @@ func (in *Installer) update(ctx context.Context, actor *uuid.UUID, id, consentSH
 	}
 	res := &repoinstall.UpdateResult{ExtensionID: id, Version: row.Version, CommitSHA: row.CommitSHA, NewCapabilities: []string{}}
 	e := in.updateTarget(cat, row)
+	if targetVersion != "" {
+		e, err = selectedUpdateTarget(cat, row, targetVersion, expectedCommitSHA)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if e == nil {
 		res.Outcome = repoinstall.OutcomeUpToDate
 		return res, nil
@@ -167,7 +265,7 @@ func (in *Installer) UpdateAll(ctx context.Context, actor *uuid.UUID) ([]repoins
 	}
 	out := make([]repoinstall.UpdateResult, 0, len(rows))
 	for i := range rows {
-		r, uerr := in.update(ctx, actor, rows[i].ExtensionID, "", true)
+		r, uerr := in.update(ctx, actor, rows[i].ExtensionID, "", true, "", "")
 		if uerr != nil {
 			out = append(out, repoinstall.UpdateResult{ExtensionID: rows[i].ExtensionID, NewCapabilities: []string{}, Error: fmt.Sprint(uerr)})
 			continue

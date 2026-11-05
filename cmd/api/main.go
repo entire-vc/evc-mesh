@@ -2468,7 +2468,6 @@ func main() {
 		return ""
 	}
 	themeHandler.WithRepoInstall(repoInstallSvc)
-	go repoInstallSvc.RunAutoUpdate(context.Background(), 30*time.Minute)
 	catalogInstaller := &catalog.Installer{
 		Catalog:   extensionCatalog,
 		SparkURL:  func() string { return sparkIntegrationResolver.CatalogConfig(context.Background()).URL },
@@ -2480,6 +2479,10 @@ func main() {
 			}
 		},
 	}
+	repoInstallSvc.CatalogUpdate = func(ctx context.Context) ([]repoinstall.UpdateResult, error) {
+		return catalogInstaller.UpdateAll(ctx, nil)
+	}
+	go repoInstallSvc.RunAutoUpdate(context.Background(), 30*time.Minute)
 	extensionRepoInstallHandler := handler.NewExtensionRepoInstallHandler(repoInstallSvc, instanceSettingRepo).WithCatalogInstall(catalogInstaller).WithCatalogRefresh(func(ctx context.Context) (catalog.Receipt, error) {
 		return extensionCatalog.RefreshNow(ctx, extensions.ExtensionsAPIVersion)
 	})

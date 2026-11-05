@@ -100,29 +100,39 @@ interface Seen {
   cls: string | null; label: string | null; reason: string | null; ref: string | null; href: string | null; stale: string | null;
   staleLabel: string | null; ci: string | null; compact: string | null; actor: string | null; wake: string | null; sourceTime: string | null; labels: string[];
 }
-// Reads every user-visible field of every constraint inside ONE visible root (a board card or the visible detail row).
+// Reads every field of every constraint inside ONE visible root (the visible detail row). The detail names the awaited target ONCE in the
+// brief (runtime-state-ref); the one plain constraint that repeats it has no row, so its ref/href are the brief's. Next / Wakes on / Source /
+// observed of every constraint are read from the collapsed technical details.
 const values = (root: Locator): Promise<Seen[]> => root.evaluate((el) => {
   const text = (n: Element | null | undefined) => n?.textContent ?? null;
-  return Array.from(el.querySelectorAll('[data-testid="runtime-constraint"]')).map((li) => {
-    const refEl = li.querySelector('[data-testid="constraint-ref"]');
+  const brief = el.querySelector('[data-testid="runtime-state-ref"]');
+  const rows = Array.from(el.querySelectorAll('[data-testid="runtime-constraint"]'));
+  return Array.from(el.querySelectorAll('[data-testid="runtime-technical-item"]')).map((dl) => {
+    const key = dl.getAttribute("data-constraint-key");
+    const li = rows.find((x) => x.getAttribute("data-constraint-key") === key) ?? null;
+    // A row that repeats the brief target keeps its facts but not the link: its ref is the brief's (matched by the wake text).
+    const wakeText = text(dl.querySelector('[data-testid="constraint-wake"]')) ?? "";
+    const wakeHasBrief = !!brief && wakeText.toLowerCase().includes((brief.textContent ?? "").toLowerCase());
+    const refEl = li ? (li.querySelector('[data-testid="constraint-ref"]') ?? (wakeHasBrief ? brief : null)) : brief;
+    const q = (id: string) => text(dl.querySelector(`[data-testid="${id}"]`));
+    const lq = (id: string) => text(li?.querySelector(`[data-testid="${id}"]`));
     return {
-      cls: li.getAttribute("data-constraint-class"),
-      label: text(li.querySelector('[data-testid="constraint-class"]')),
-      reason: text(li.querySelector('[data-testid="constraint-reason"]')),
+      cls: dl.getAttribute("data-constraint-class"),
+      label: text(dl.querySelector("dt")),
+      reason: text(dl.querySelector("dd")),
       ref: text(refEl),
       href: refEl?.getAttribute("href") ?? null,
-      stale: li.getAttribute("data-constraint-stale"),
-      staleLabel: text(li.querySelector('[data-testid="constraint-stale"]')),
-      ci: text(li.querySelector('[data-testid="constraint-ci"]')),
-      compact: text(li.querySelector('[data-testid="constraint-who-wake"]')),
-      actor: text(li.querySelector('[data-testid="constraint-next-actor"]')),
-      wake: text(li.querySelector('[data-testid="constraint-wake"]')),
-      sourceTime: text(li.querySelector('[data-testid="constraint-source"]')),
-      labels: Array.from(li.querySelectorAll("dt")).map((d) => d.textContent ?? ""),
+      stale: dl.getAttribute("data-constraint-stale"),
+      staleLabel: lq("constraint-stale"),
+      ci: lq("constraint-ci"),
+      compact: null,
+      actor: q("constraint-next-actor"),
+      wake: q("constraint-wake"),
+      sourceTime: q("constraint-source"),
+      labels: Array.from(dl.querySelectorAll("dt")).map((d) => d.textContent ?? ""),
     };
   });
 });
-
 
 const checkAgainstWant = (id: string, lng: string, seen: Seen[], want: Want[]) => {
   const l = L[lng];
@@ -162,7 +172,7 @@ for (const lng of ["en-US", "ru-RU"]) for (const vp of [{ width: 1440, height: 9
       for (const id of Object.keys(STORIES)) {
         const card = page.locator(`[data-testid="task-card"][data-task-id="${id}"]`);
         await card.scrollIntoViewIfNeeded();
-        // the kanban tile carries the kind word only: no constraints, no Next / Wakes on / Source / observed, no raw diagnostics
+        // the kanban tile carries the brief only (kind + awaited target link): no constraints, no Next / Wakes on / Source / observed, no raw diagnostics
         await expect(card.getByTestId("runtime-constraint")).toHaveCount(0);
         await expect(card.getByTestId("constraint-who-wake")).toHaveCount(0);
         const tile = (await card.innerText()).toLowerCase();
@@ -179,15 +189,16 @@ for (const lng of ["en-US", "ru-RU"]) for (const vp of [{ width: 1440, height: 9
         if (id === "fixture-task-316") {
           // stale shown as stale; redacted write_acl leaks no ref/owner even though the payload carried them
           await expect(row.getByTestId("constraint-stale")).toHaveCount(1);
-          const redacted = row.locator('[data-constraint-class="write_acl"]');
+          const redacted = row.locator('[data-testid="runtime-constraint"][data-constraint-class="write_acl"]');
           await expect(redacted.getByTestId("constraint-ref")).toHaveCount(0);
           await expect(redacted).not.toContainText("deadbeef");
+          await expect(row).not.toContainText("deadbeef"); // not in the brief, rows or technical details either
         }
         if (id === "fixture-task-317") await expect(row.getByTestId("constraint-reason")).toHaveText("free text reason");
         if (id === "fixture-task-318") {
           // unsafe/long ref is plain text, never a link; unavailable CI shows neither scope nor position
           await expect(row.getByTestId("constraint-ref").first()).not.toHaveAttribute("href", /.*/);
-          await expect(row.locator('[data-constraint-class="ci_capacity"]')).not.toContainText("must-not-show");
+          await expect(row).not.toContainText("must-not-show");
         }
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
         expect(overflow, `${id} no horizontal scroll`).toBeLessThanOrEqual(0);

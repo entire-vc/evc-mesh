@@ -32,6 +32,13 @@ function clock(iso: string | null | undefined): string | null {
   return Number.isNaN(d.getTime()) ? null : localClock(d);
 }
 
+/** Server-supplied interpolation values are data: control characters are removed before they reach any translated text. */
+function cleanParams(p: Record<string, string> | null | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(p ?? {})) out[k] = safeText(v, Number.POSITIVE_INFINITY) ?? "";
+  return out;
+}
+
 /**
  * Text for the reason: the translation of `reason_code` when the web knows it,
  * otherwise the free-text `reason` (old records, codes newer than this build).
@@ -39,9 +46,9 @@ function clock(iso: string | null | undefined): string | null {
 export function runtimeReasonText(rs: Pick<RuntimeState, "reason" | "reason_code" | "reason_params">): string | null {
   if (rs.reason_code) {
     const key = `board:runtimeState.reasons.${rs.reason_code}`;
-    if (i18n.exists(key)) return i18n.t(key, { ...(rs.reason_params ?? {}) });
+    if (i18n.exists(key)) return i18n.t(key, cleanParams(rs.reason_params));
   }
-  return rs.reason ?? null;
+  return safeText(rs.reason, Number.POSITIVE_INFINITY);
 }
 
 const DIAGNOSTIC_TEXT = /\bUNKNOWN\b|\bHTTP\s*0\b|addressee\s*=\s*unknown/i;
@@ -86,14 +93,14 @@ export function runtimeStateText(rs: RuntimeState): string {
   switch (rs.kind) {
     case "working": {
       const at = clock(rs.since);
-      return `${rs.lane ? t("workingLane", { lane: rs.lane }) : t("working")}${at ? ` ${t("since", { time: at })}` : ""}`;
+      return `${safeText(rs.lane) ? t("workingLane", { lane: safeText(rs.lane) }) : t("working")}${at ? ` ${t("since", { time: at })}` : ""}`;
     }
     case "waiting": {
       const until = clock(rs.until);
       return `${t("waiting")}${reason ? `: ${reason}` : rs.ref ? ":" : ""}${until ? ` ${t("until", { time: until })}` : ""}`;
     }
     case "queued":
-      return `${rs.lane ? t("queuedLane", { lane: rs.lane }) : t("queued")}${rs.position ? `, ${t("position", { position: rs.position })}` : ""}`;
+      return `${safeText(rs.lane) ? t("queuedLane", { lane: safeText(rs.lane) }) : t("queued")}${rs.position ? `, ${t("position", { position: rs.position })}` : ""}`;
     case "stopped":
       return `${t("stopped")}${reason ? `: ${reason}` : ""}`;
   }
@@ -129,18 +136,20 @@ export function readableRuntimeState(task: Pick<Task, "runtime_state" | "assigne
 
 const KNOWN_CLASSES = ["mesh_dependency", "local_wait", "ci_capacity", "review_rejection", "expired_authority", "write_acl"];
 const MAX_TEXT = 240;
+/** The collapsed technical details show a reason in full: control characters are removed, length is not cut. */
+const FULL = Number.POSITIVE_INFINITY;
 
 /** Server-supplied text is data, never markup or an operation: cap its length and drop control characters. */
-function safeText(v: unknown): string | null {
+function safeText(v: unknown, max = MAX_TEXT): string | null {
   if (typeof v !== "string") return null;
   // eslint-disable-next-line no-control-regex
   const cleaned = v.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
   if (!cleaned) return null;
-  return cleaned.length > MAX_TEXT ? `${cleaned.slice(0, MAX_TEXT)}…` : cleaned;
+  return cleaned.length > max ? `${cleaned.slice(0, max)}…` : cleaned;
 }
 
 /** A ref is a link only when parseRuntimeRef recognises it; anything else is plain text, never an href. */
-function safeRef(ref: string | null | undefined): RuntimeRef | null {
+export function safeRef(ref: string | null | undefined): RuntimeRef | null {
   const text = safeText(ref);
   const parsed = parseRuntimeRef(text);
   if (!parsed || !text) return null;
@@ -151,12 +160,87 @@ function safeRef(ref: string | null | undefined): RuntimeRef | null {
   return parsed;
 }
 
+/** Constraints whose target the caller may not see: they never supply a target or a link, even if the payload carries a ref. */
+const HIDDEN_TARGET_CODES = new Set(["access_denied", "dependency_not_visible"]);
+
+/** One identity rule for "the same awaited thing": ids are hex, so the comparison ignores case. */
+export const sameTarget = (a: string | null | undefined, b: string | null | undefined): boolean => !!a && !!b && a.toLowerCase() === b.toLowerCase();
+
+export type WaitTargetKind = "card" | "mr" | "pipeline" | "decision";
+
+export interface WaitBrief {
+  kind: WaitTargetKind;
+  /** Link-or-text of the thing awaited; href is null when there is no safe page. */
+  ref: RuntimeRef;
+  /** Short visible label: `#00000000`, `!12`, `#9954`, `@name`. The full label is `ref.label`. */
+  short: string;
+  /** The sanitized ref exactly as the server sent it, for the collapsed technical details. */
+  raw: string;
+}
+
+/**
+ * The awaited thing as ONE structured target, or null when the data names none. Only well-formed refs count:
+ * free text is never promoted to a target (the neutral "Waiting" is the honest answer then). The state's own
+ * ref wins; a constraint's wake ref is used when the state carries none.
+ */
+export function waitBrief(rs: Pick<RuntimeState, "kind" | "ref" | "constraints">): WaitBrief | null {
+  if (rs.kind !== "waiting") return null;
+  // A constraint the caller may not see never names a target, and neither does a state-level ref that points at the same thing.
+  const cs = Array.isArray(rs.constraints) ? rs.constraints : [];
+  const hidden = new Set(cs.filter((c) => HIDDEN_TARGET_CODES.has(String(c?.reason_code))).map((c) => safeRef(c?.wake?.ref)?.label).filter((l): l is string => !!l));
+  const candidates = [rs.ref, ...cs.filter((c) => !HIDDEN_TARGET_CODES.has(String(c?.reason_code))).map((c) => c?.wake?.ref)];
+  for (const raw of candidates) {
+    const text = safeText(raw, FULL);
+    if (!text || isDiag(text)) continue;
+    const ref = safeRef(text);
+    if (!ref || [...hidden].some((h) => sameTarget(h, ref.label))) continue; // identity is case-insensitive: ids are hex
+    if (/^card:/.test(text) && ref.href) return { kind: "card", ref, short: ref.label, raw: text };
+    const mr = /^mr:[^!\s]+!(\d+)$/.exec(text);
+    if (mr && ref.href) return { kind: "mr", ref, short: `!${mr[1]}`, raw: text };
+    const pipe = /^pipeline:[^#\s]+#(\d+)$/.exec(text);
+    if (pipe && ref.href) return { kind: "pipeline", ref, short: `#${pipe[1]}`, raw: text };
+    const decision = /^decision:(@?[\w.-]{1,40})$/.exec(text);
+    if (decision?.[1]) return { kind: "decision", ref: { label: decision[1], href: null }, short: decision[1], raw: text };
+  }
+  return null;
+}
+
+/** "Waiting for MR" / "Waiting for task" / … — the words before the target; the target itself is rendered as a link. */
+export function waitBriefPrefix(kind: WaitTargetKind): string {
+  return i18n.t(`board:runtimeState.waitFor.${kind}`);
+}
+
+/** Reason shown beside the brief: a translated known code, or a SHORT free text. Long prose stays in technical details. */
+export function briefReason(rs: Pick<RuntimeState, "reason" | "reason_code" | "reason_params">): string | null {
+  const r = safeText(runtimeReasonText(rs), FULL);
+  if (!r || isDiag(r) || paramsDiag(rs.reason_params)) return null;
+  return r.length <= 60 ? r : null;
+}
+
+/** Full state reason for the collapsed technical details; an unreadable diagnostic is never shown. */
+export function stateReasonDetail(rs: Pick<RuntimeState, "reason" | "reason_code" | "reason_params">): string | null {
+  if (paramsDiag(rs.reason_params)) return null;
+  const r = safeText(runtimeReasonText(rs), FULL);
+  return r && !isDiag(r) ? r : null;
+}
+
+/** Kanban text for a waiting card: brief prefix (+ until). The target link follows separately. */
+export function waitingBoardText(rs: RuntimeState, brief: WaitBrief | null): string {
+  const until = clock(rs.until);
+  const base = brief ? waitBriefPrefix(brief.kind) : i18n.t("board:runtimeState.waiting");
+  return until ? `${base} ${i18n.t("board:runtimeState.until", { time: until })}` : base;
+}
+
 export interface ConstraintView {
   key: string;
   classKey: string;
   classLabel: string;
   reason: string | null;
+  /** The same reason without the display length cap (control characters still removed): for the collapsed technical details. */
+  reasonFull: string | null;
   ref: RuntimeRef | null;
+  /** Sanitized wake ref as sent; null when the ref is hidden or diagnostic. */
+  rawRef: string | null;
   /** Name of who unblocks it, or null when unknown. */
   nextActor: string | null;
   /** Exact wake predicate, or null when unknown. */
@@ -175,12 +259,16 @@ export function constraintView(c: OperationalConstraint, index = 0): ConstraintV
   const code = safeText(c.reason_code);
   const codeKey = `board:runtimeState.constraints.reasonCodes.${code}`;
   const baseReason = code && i18n.exists(codeKey)
-    ? i18n.t(codeKey, { ...(c.reason_params ?? {}) })
+    ? i18n.t(codeKey, cleanParams(c.reason_params))
     : runtimeReasonText({ reason: safeText(c.reason), reason_code: code, reason_params: c.reason_params ?? null });
   const unverifiedReason = constraintHasDiagnostic(c);
   const clean = (v: string | null | undefined): string | null => (isDiag(v) ? null : safeText(v));
   // The one reason every return path below uses: an unreadable diagnostic is never shown as a confirmed reason.
   const reason = unverifiedReason ? i18n.t("board:runtimeState.unverified") : baseReason;
+  const fullBase = code && i18n.exists(codeKey)
+    ? baseReason
+    : runtimeReasonText({ reason: safeText(c.reason, FULL), reason_code: code, reason_params: c.reason_params ?? null });
+  const reasonFull = unverifiedReason ? reason : safeText(fullBase, FULL);
   const wakeRaw = clean(c.wake?.predicate);
   const wake = wakeRaw && wakeRaw !== "unknown" ? wakeRaw : null;
   const actorName = c.next_actor && c.next_actor.kind !== "unknown" ? clean(c.next_actor.name) ?? clean(c.next_actor.id) : null;
@@ -201,13 +289,15 @@ export function constraintView(c: OperationalConstraint, index = 0): ConstraintV
       }
     : null;
   // A redacted constraint must not leak anything the server marked restricted, even if the payload carries it.
-  if (code === "access_denied") {
+  if (HIDDEN_TARGET_CODES.has(String(code))) {
     return {
       key: safeText(c.id) ?? `constraint-${index}`,
       classKey,
       classLabel: t(`classes.${classKey}`),
       reason,
+      reasonFull: reason,
       ref: null,
+      rawRef: null,
       nextActor: null,
       wake: null,
       source: null,
@@ -221,7 +311,9 @@ export function constraintView(c: OperationalConstraint, index = 0): ConstraintV
     classKey,
     classLabel: t(`classes.${classKey}`),
     reason,
-    ref: isDiag(c.wake?.ref) ? null : safeRef(c.wake?.ref),
+    reasonFull,
+    ref: isDiag(c.wake?.ref) || HIDDEN_TARGET_CODES.has(String(code)) ? null : safeRef(c.wake?.ref),
+    rawRef: isDiag(c.wake?.ref) || HIDDEN_TARGET_CODES.has(String(code)) ? null : safeText(c.wake?.ref, FULL),
     nextActor: actorName,
     wake,
     source,
