@@ -1055,7 +1055,22 @@ func main() {
 	projectHandler := handler.NewProjectHandler(projectService)
 	sessionRepo := postgres.NewSessionRepo(db)
 	taskHandler := handler.NewTaskHandlerWithSessions(taskService, sessionRepo).
-		WithCommentService(commentService)
+		WithCommentService(commentService).
+		WithDependencyReader(taskDependencyRepo)
+	// native review admission: no clock protocol is proven yet, so the repo gets
+	// none and reserve is denied by default; no trusted issuer signer is wired
+	// either, so issue is denied too (release gates OPEN).
+	// Issuer signer: absent = nil = receipts refused. A configured but invalid
+	// key file is fatal (fail closed). The clock stays nil: reserve remains denied.
+	var nativeSigner postgres.NativeSigner
+	if keyFile := os.Getenv("NATIVE_REVIEW_SIGNER_KEY_FILE"); keyFile != "" {
+		fs, serr := postgres.LoadFileSigner(keyFile)
+		if serr != nil {
+			log.Fatalf("NATIVE_REVIEW_SIGNER_KEY_FILE: %v", serr)
+		}
+		nativeSigner = fs
+	}
+	nativeReviewHandler := handler.NewNativeReviewHandler(postgres.NewNativeReviewRepo(db, nil, nativeSigner))
 	transitionReceiptHandler := handler.NewTransitionReceiptHandler(
 		service.NewTransitionReceiptService(postgres.NewTransitionReceiptRepo(db), taskRepo), taskService)
 	statusHandler := handler.NewTaskStatusHandler(taskStatusService)
@@ -1861,6 +1876,7 @@ func main() {
 	api.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/renew", runtimeHandler.RenewReservation)
 	api.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/release", runtimeHandler.ReleaseReservation)
 	api.POST("/workspaces/:ws_id/agent-grants", agentWorkspaceGrantHandler.Invite, rbac(mw.PermManageMembers))
+	api.PATCH("/workspaces/:ws_id/agent-grants/:grant_id", agentWorkspaceGrantHandler.UpdateRole, rbac(mw.PermManageMembers))
 	api.DELETE("/workspaces/:ws_id/agent-grants/:grant_id", agentWorkspaceGrantHandler.Revoke, rbac(mw.PermManageMembers))
 
 	// Workspace invite routes (email-link flow).
@@ -1980,6 +1996,13 @@ func main() {
 	api.POST("/tasks/:task_id/move", taskHandler.MoveTask, wsAccess, rbac(mw.PermUpdateTask))
 	api.POST("/tasks/:task_id/transitions/product-done", transitionReceiptHandler.ProductDone, wsAccess, rbac(mw.PermUpdateTask))
 	api.GET("/tasks/:task_id/transition-receipts", transitionReceiptHandler.ListReceipts, wsAccess)
+	api.POST("/native-review/receipts", nativeReviewHandler.IssueReceipt)
+	api.GET("/native-review/receipts/:receipt_id", nativeReviewHandler.GetReceipt)
+	api.POST("/native-review/authorities", nativeReviewHandler.CreateAuthority)
+	api.POST("/native-review/authorities/:authority_id/revoke", nativeReviewHandler.RevokeAuthority)
+	api.GET("/native-review/authorities/:authority_id/reservation", nativeReviewHandler.GetReservation)
+	api.POST("/native-review/deliveries", nativeReviewHandler.RecordDelivery)
+	api.POST("/native-review/reservations", nativeReviewHandler.Reserve)
 	api.POST("/tasks/:task_id/acceptance-intents", transitionReceiptHandler.RecordAcceptance, wsAccess, rbac(mw.PermUpdateTask))
 	api.GET("/tasks/:task_id/acceptance-intents", transitionReceiptHandler.ListAcceptances, wsAccess)
 	api.POST("/tasks/:task_id/acceptance-intents/:intent_id/revoke", transitionReceiptHandler.RevokeAcceptance, wsAccess, rbac(mw.PermUpdateTask))

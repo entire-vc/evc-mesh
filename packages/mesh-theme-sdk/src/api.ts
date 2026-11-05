@@ -116,6 +116,45 @@ export interface RuntimeState {
   position?: number | null;
   /** The publisher has gone quiet — the value may be out of date. */
   stale?: boolean;
+  /** Operational constraints (additive contract v1). Absent = legacy producer; [] = none known. */
+  constraints?: OperationalConstraint[] | null;
+}
+
+export type OperationalConstraintClass =
+  | "mesh_dependency"
+  | "local_wait"
+  | "ci_capacity"
+  | "review_rejection"
+  | "expired_authority"
+  | "write_acl";
+
+export interface OperationalConstraint {
+  /** Stable source/constraint identity, not a read timestamp. */
+  id: string;
+  /** Unknown classes must degrade safely; the union is open for that. */
+  class: OperationalConstraintClass | (string & {});
+  reason_code: string;
+  reason_params?: Record<string, string> | null;
+  /** Legacy/free-text fallback; never executable. */
+  reason?: string | null;
+  next_actor: { kind: "agent" | "human" | "unknown" | (string & {}); id?: string; name?: string };
+  wake: {
+    /** Exact existing predicate or the literal "unknown". */
+    predicate: string;
+    ref?: string | null;
+    target?: Record<string, unknown> | null;
+  };
+  source: { kind: string; ref?: string | null };
+  /** RFC3339 observation time (not render time). */
+  observed_at?: string | null;
+  stale?: boolean;
+  ci?: {
+    state: "capacity" | "manual_required" | "unavailable" | (string & {});
+    scope?: string | null;
+    position?: number | null;
+    reason?: string | null;
+    provider?: string | null;
+  } | null;
 }
 
 export interface Task {

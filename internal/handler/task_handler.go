@@ -42,6 +42,7 @@ type TaskHandler struct {
 	taskService    service.TaskService
 	sessionRepo    repository.AgentSessionRepository
 	commentService service.CommentService
+	depReader      repository.TaskDependencyRepository
 }
 
 // NewTaskHandler creates a new TaskHandler with the given service.
@@ -594,6 +595,7 @@ func (h *TaskHandler) GetByID(c echo.Context) error {
 			}
 			h.attachHumanGateInfo(c.Request().Context(), task)
 			h.attachStatusCategory(c.Request().Context(), task)
+			h.attachTaskConstraints(c, []*domain.Task{task})
 			decorateTask(c, task)
 			return c.JSON(http.StatusOK, task)
 		}
@@ -607,6 +609,7 @@ func (h *TaskHandler) GetByID(c echo.Context) error {
 
 	h.attachHumanGateInfo(c.Request().Context(), task)
 	h.attachStatusCategory(c.Request().Context(), task)
+	h.attachTaskConstraints(c, []*domain.Task{task})
 	decorateTask(c, task)
 	return c.JSON(http.StatusOK, task)
 }
@@ -625,6 +628,7 @@ func (h *TaskHandler) GetByShortID(c echo.Context) error {
 
 	h.attachHumanGateInfo(c.Request().Context(), task)
 	h.attachStatusCategory(c.Request().Context(), task)
+	h.attachTaskConstraints(c, []*domain.Task{task})
 	decorateTask(c, task)
 	return c.JSON(http.StatusOK, task)
 }
@@ -665,6 +669,7 @@ func (h *TaskHandler) SearchGlobal(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	h.attachTaskConstraints(c, taskPtrs(page.Items))
 	decorateTaskList(c, page.Items)
 	enforceListSizeCeiling(page)
 
@@ -1088,6 +1093,7 @@ func (h *TaskHandler) List(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	h.attachTaskConstraints(c, taskPtrs(page.Items))
 	decorateTaskList(c, page.Items)
 	enforceListSizeCeiling(page)
 
@@ -1211,6 +1217,7 @@ func (h *TaskHandler) ListSubtasks(c echo.Context) error {
 	// EnhancedTitleCell) would hide the glyph despite the text being right there
 	// in the same payload. decorateTaskList also fills in URL, which this
 	// endpoint never set.
+	h.attachTaskConstraints(c, taskPtrs(subtasks))
 	decorateTaskList(c, subtasks)
 
 	return c.JSON(http.StatusOK, map[string]any{"items": subtasks})
@@ -2166,4 +2173,13 @@ func handleError(c echo.Context, err error) error {
 
 	log.Printf("ERROR %s %s: %v", c.Request().Method, c.Request().URL.Path, err)
 	return c.JSON(http.StatusInternalServerError, apierror.InternalError(""))
+}
+
+// taskPtrs addresses every element of a page so the union can set its state in place.
+func taskPtrs(items []domain.Task) []*domain.Task {
+	out := make([]*domain.Task, len(items))
+	for i := range items {
+		out[i] = &items[i]
+	}
+	return out
 }

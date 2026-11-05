@@ -939,6 +939,23 @@ type AgentWorkspaceGrantRepository interface {
 	// each joined with the granting workspace's brief info, ordered by
 	// created_at — the GET /agents/:agent_id/workspaces listing.
 	ListActiveByAgent(ctx context.Context, agentID uuid.UUID) ([]domain.AgentWorkspaceGrantWithWorkspace, error)
+	// GetState reads revoked_at and role of one grant by primary key — the
+	// cache-hit freshness check. A vanished row reports revoked=true.
+	GetState(ctx context.Context, id uuid.UUID) (revoked bool, role string, err error)
+	// UpdateRoleWithAudit changes ONLY the role of an active grant identified
+	// by (id, workspaceID). One transaction: lock the row, re-check it is
+	// still active, update role, write the audit row. Same role is a no-op
+	// without a second audit row. Nothing else on the row is touched.
+	UpdateRoleWithAudit(ctx context.Context, id, workspaceID uuid.UUID, newRole string, actorID uuid.UUID, actorType domain.ActorType) (*GrantRoleUpdate, error)
+}
+
+// GrantRoleUpdate is the outcome of AgentWorkspaceGrantRepository.UpdateRoleWithAudit.
+type GrantRoleUpdate struct {
+	Found   bool // false: no such grant in this workspace
+	Revoked bool // true: grant exists but is revoked; nothing was changed
+	Changed bool // true: role was changed (and exactly one audit row written)
+	Grant   domain.AgentWorkspaceGrant
+	OldRole string
 }
 
 // AgentActivityLogFilter defines filtering options for listing agent activity log entries.

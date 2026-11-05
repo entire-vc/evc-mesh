@@ -178,6 +178,17 @@ Trade-off: a deploy that changes any initial module now invalidates the one
 initial chunk rather than a few small ones. Revert: revert the MR (restore the
 `icons-initial` group, drop `app-initial`, restore both ceilings).
 
+## `total_js_kb_gz` 736.9 → 739.0 for the shared constraints renderer
+
+The baseline measures 736.86 / login 173.53 against the 736.9
+ceiling, 0.04 KB of headroom. The change measures 738.90 /
+173.54, +2.04 KB gz (~0.28%); the only failure was the total ceiling. The growth is
+the one renderer for the six constraint classes shared by board and task detail,
+safe refs/fallbacks and the RU/EN strings; dropping any of it removes an AC. Local
+`vite build` + `check-bundle-budget.mjs` reproduces 738.9. The product lead approved the raise on 2026-11-04. Only `total_js_kb_gz` moves; login stays 173.6 and no
+other ceiling changes. Not covered: any total above 739.0, which needs a new signature.
+Revert: revert the renderer MR and restore 736.9.
+
 ## Proving the gate actually gates (do this again after touching the script)
 
 A budget check that can't go red isn't a check (a deliberate failure proves enforcement). Two

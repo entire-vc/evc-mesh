@@ -1,5 +1,5 @@
 import type { AssigneeType, Priority, DelegationLevel, ActorType, StatusCategory, FieldType, Task, TeamDirectoryAgent } from "@entire-vc/mesh-theme-sdk";
-export type { AssigneeType, Priority, DelegationLevel, ActorType, StatusCategory, FieldType, CustomFieldDefinition, DodCheckStatus, DodCheck, HumanGateInfo, FalseOpenSignal, RuntimeStateKind, RuntimeState, Task, TeamDirectoryAgent } from "@entire-vc/mesh-theme-sdk";
+export type { AssigneeType, Priority, DelegationLevel, ActorType, StatusCategory, FieldType, CustomFieldDefinition, DodCheckStatus, DodCheck, HumanGateInfo, FalseOpenSignal, RuntimeStateKind, RuntimeState, OperationalConstraint, OperationalConstraintClass, Task, TeamDirectoryAgent } from "@entire-vc/mesh-theme-sdk";
 
 // Enums
 

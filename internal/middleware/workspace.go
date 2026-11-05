@@ -493,7 +493,10 @@ func resolveProjectWorkspace(ctx context.Context, _ *sqlx.DB, projectRepo reposi
 // ExtensionInstanceAdminHandler answers 403 unless the caller is an instance
 // admin before it writes anything.
 var workspaceScopeHandlerCheckedRoutes = map[string]bool{
-	"/api/v1/ext/me/events/:delivery_id/redeliver": true, // extension-actor only: RedeliverExtensionEvent loads the delivery's subscription and answers 404 unless it belongs to the calling actor's own connection, and a connection belongs to one workspace
+	"/api/v1/native-review/receipts/:receipt_id":                  true, // NativeReviewRepo.ReadReceipt answers only the issuer, publisher, consumer, authority issuer or enrolling operator named by the enrollment, and anyone else gets the same receipt_not_found; an enrollment belongs to one workspace
+	"/api/v1/native-review/authorities/:authority_id/revoke":      true, // NativeReviewRepo.RevokeAuthority requires the caller to be the enrollment's authority issuer after taking the enrollment and guard locks; an enrollment belongs to one workspace
+	"/api/v1/native-review/authorities/:authority_id/reservation": true, // NativeReviewRepo.GetReservation answers only the enrolled consumer; an enrollment belongs to one workspace
+	"/api/v1/ext/me/events/:delivery_id/redeliver":                true, // extension-actor only: RedeliverExtensionEvent loads the delivery's subscription and answers 404 unless it belongs to the calling actor's own connection, and a connection belongs to one workspace
 	// :thread_id belongs to one user, not to a workspace: every AgentChatRepo query carries workspace_id, project_id and user_id = caller, so another user's, a deleted and a missing thread are the same 404 thread_not_found
 	"/api/v1/projects/:proj_id/chat/threads/:thread_id/messages":                                  true,
 	"/api/v1/projects/:proj_id/chat/threads/:thread_id/stop":                                      true,

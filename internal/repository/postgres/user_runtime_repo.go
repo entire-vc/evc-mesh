@@ -634,6 +634,13 @@ const admittedBindingSQL = `adm.enabled AND (SELECT cr.config->'bindings'->adm.b
 		FROM runtime_catalog_revisions cr WHERE cr.integration_id = adm.integration_id
 		ORDER BY cr.revision DESC LIMIT 1) = adm.agent_id::text`
 
+// admittedIdentitySQL additionally pins the latest catalog's binding to the
+// admission's receiving workspace and grant, so an admission row that outlived
+// a removed or rebound binding never leads a foreign-pool agent.
+const admittedIdentitySQL = `(SELECT cr.config->'bindings'->adm.binding_ref->'binding'
+		FROM runtime_catalog_revisions cr WHERE cr.integration_id = adm.integration_id
+		ORDER BY cr.revision DESC LIMIT 1) @> jsonb_build_object('workspace_id', adm.workspace_id::text, 'grant_id', adm.grant_id::text)`
+
 const effectiveControllerSQL = `LEFT JOIN LATERAL (
 		SELECT u.runner_id, u.runner_name, u.host, u.version, u.lease_expires_at FROM (
 			SELECT c.runner_id::text AS runner_id, c.runner_name::text AS runner_name, c.host::text AS host,
@@ -665,7 +672,9 @@ const effectiveControllerSQL = `LEFT JOIN LATERAL (
 // operatorAgentsSQL lists the agents of workspace $2 the user $1 operates, and,
 // when $3 (the caller is the workspace's owner or admin), every agent of the
 // workspace its runner drives: an enabled admission on the workspace's runner
-// integration. Agents of the same operator in other workspaces stay out.
+// integration, or an agent of the workspace admitted to a runner pool owned by
+// another workspace (the receiving admission: enabled binding, active exact
+// grant in $2). Agents of the same operator in other workspaces stay out.
 // No LIMIT: a workspace's agents are a bounded set, and a silent cut would hide
 // agents and runners from the screen without any signal.
 const operatorAgentsSQL = `SELECT a.id AS agent_id, a.name, a.operator_user_id, a.max_concurrent_tasks,
@@ -678,7 +687,9 @@ const operatorAgentsSQL = `SELECT a.id AS agent_id, a.name, a.operator_user_id, 
 		AND (a.operator_user_id=$1 OR ($3 AND EXISTS (SELECT 1 FROM runtime_binding_admissions adm
 			JOIN integration_configs ic ON ic.id=adm.integration_id
 			WHERE adm.agent_id=a.id AND ` + admittedBindingSQL + `
-				AND ic.workspace_id=$2 AND ic.provider IN ('runner','agent_runtime'))))
+				AND ic.provider IN ('runner','agent_runtime')
+				AND (ic.workspace_id=$2 OR (adm.workspace_id=$2 AND ` + admittedIdentitySQL + ` AND EXISTS (SELECT 1 FROM agent_workspace_grants g
+					WHERE g.id=adm.grant_id AND g.agent_id=a.id AND g.workspace_id=$2 AND g.revoked_at IS NULL))))))
 	ORDER BY a.name, a.id`
 
 // WorkspaceAdmin reports whether the user owns or administers the workspace;

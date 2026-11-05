@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -266,4 +267,74 @@ func (r *AgentWorkspaceGrantRepo) ListActiveByAgent(ctx context.Context, agentID
 		}
 	}
 	return result, nil
+}
+
+// GetState implements repository.AgentWorkspaceGrantRepository.
+func (r *AgentWorkspaceGrantRepo) GetState(ctx context.Context, id uuid.UUID) (revoked bool, role string, err error) {
+	const q = `SELECT revoked_at IS NOT NULL AS revoked, role::text AS role FROM agent_workspace_grants WHERE id = $1`
+	var row struct {
+		Revoked bool   `db:"revoked"`
+		Role    string `db:"role"`
+	}
+	if err = r.db.GetContext(ctx, &row, q, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return true, "", nil
+		}
+		return false, "", err
+	}
+	return row.Revoked, row.Role, nil
+}
+
+// UpdateRoleWithAudit implements repository.AgentWorkspaceGrantRepository.
+func (r *AgentWorkspaceGrantRepo) UpdateRoleWithAudit(ctx context.Context, id, workspaceID uuid.UUID, newRole string, actorID uuid.UUID, actorType domain.ActorType) (*repository.GrantRoleUpdate, error) {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const sel = `
+		SELECT id, agent_id, workspace_id, role, api_key_prefix, api_key_hash,
+		       COALESCE(api_key_sha256, '') AS api_key_sha256, invited_by, created_at, revoked_at
+		FROM agent_workspace_grants
+		WHERE id = $1 AND workspace_id = $2
+		FOR UPDATE
+	`
+	var g domain.AgentWorkspaceGrant
+	if err := tx.GetContext(ctx, &g, sel, id, workspaceID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return &repository.GrantRoleUpdate{}, nil
+		}
+		return nil, err
+	}
+	res := &repository.GrantRoleUpdate{Found: true, Grant: g, OldRole: g.Role}
+	if g.RevokedAt != nil {
+		res.Revoked = true
+		return res, nil
+	}
+	if g.Role == newRole {
+		return res, nil
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE agent_workspace_grants SET role = $2 WHERE id = $1 AND revoked_at IS NULL`, id, newRole); err != nil {
+		return nil, err
+	}
+	changes, _ := json.Marshal(map[string]any{
+		"agent_id": g.AgentID.String(),
+		"old_role": g.Role,
+		"new_role": newRole,
+	})
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO activity_log (id, workspace_id, entity_type, entity_id, action, actor_id, actor_type, changes, created_at)
+		VALUES ($1, $2, 'agent_workspace_grant', $3, 'agent_grant.role_changed', $4, $5, $6, NOW())`,
+		uuid.New(), workspaceID, id, actorID, actorType, changes); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	res.Changed = true
+	res.Grant.Role = newRole
+	return res, nil
 }

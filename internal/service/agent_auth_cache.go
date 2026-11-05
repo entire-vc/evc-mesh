@@ -357,6 +357,16 @@ func (c *cachedAgentAuth) stillValidUncoalesced(ctx context.Context, agent *doma
 	if agent.GrantID == nil {
 		return true
 	}
+	if stateChecker, ok := c.AgentService.(GrantStateChecker); ok {
+		// Revocation AND role: a role change committed by any process must
+		// apply to the very next request on a warm entry. A role mismatch
+		// reads as "not valid" so the caller evicts and re-authenticates.
+		revoked, role, err := stateChecker.GrantState(ctx, *agent.GrantID)
+		if err != nil || revoked {
+			return false
+		}
+		return role == "" || role == agent.WorkspaceRole
+	}
 	grantChecker, ok := c.AgentService.(GrantRevocationChecker)
 	if !ok {
 		return true

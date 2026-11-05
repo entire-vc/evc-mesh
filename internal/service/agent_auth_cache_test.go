@@ -980,3 +980,36 @@ func TestCachedAgentAuth_RequestAfterRevocationDoesNotJoinStaleCheck(t *testing.
 	assert.EqualValues(t, 2, counting.authCalls.Load(),
 		"the late request must see the revocation and fall through to a full Authenticate")
 }
+
+// A role change committed mid-TTL (PATCH agent-grants, possibly on another API
+// instance) must reach the very next request on a warm entry: the key keeps
+// working, but with the NEW role. Revoked stays denied.
+func TestCachedAgentAuth_WrappingRealAgentService_GrantRoleChangeAppliesImmediately(t *testing.T) {
+	f, homeWS := setupGrantAuthFixture()
+	agent, _ := seedHomeAgent(t, f, homeWS, "Role Agent")
+
+	guestWS := &domain.Workspace{ID: uuid.New(), Name: "Guest Co", Slug: "guest"}
+	f.svc.workspaceRepo.(*MockWorkspaceRepository).items[guestWS.ID] = guestWS
+	guestKey := seedGrant(t, f, agent.ID, guestWS, "admin", false)
+
+	cached := newFrozenCachedRealAgentService(f.svc, time.Hour)
+	ctx := context.Background()
+
+	first, err := cached.Authenticate(ctx, guestWS.Slug, guestKey)
+	require.NoError(t, err)
+	require.Equal(t, "admin", first.WorkspaceRole)
+
+	// Warm hit keeps the role while nothing changed.
+	hit, err := cached.Authenticate(ctx, guestWS.Slug, guestKey)
+	require.NoError(t, err)
+	require.Equal(t, "admin", hit.WorkspaceRole)
+
+	// Role change by "another process": InvalidateAgent is never called.
+	res, err := f.grantRepo.UpdateRoleWithAudit(ctx, *first.GrantID, guestWS.ID, domain.RoleViewer, uuid.New(), domain.ActorTypeUser)
+	require.NoError(t, err)
+	require.True(t, res.Changed)
+
+	after, err := cached.Authenticate(ctx, guestWS.Slug, guestKey)
+	require.NoError(t, err, "same key keeps working after a role change")
+	require.Equal(t, "viewer", after.WorkspaceRole, "warm entry must not serve the old role")
+}

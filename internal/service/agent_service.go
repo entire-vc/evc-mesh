@@ -708,6 +708,14 @@ func (s *agentService) IsGrantRevoked(ctx context.Context, grantID uuid.UUID) (b
 	return s.grantRepo.IsRevoked(ctx, grantID)
 }
 
+// GrantState implements GrantStateChecker (revocation + current role).
+func (s *agentService) GrantState(ctx context.Context, grantID uuid.UUID) (revoked bool, role string, err error) {
+	if s.grantRepo == nil {
+		return false, "", nil
+	}
+	return s.grantRepo.GetState(ctx, grantID)
+}
+
 // IsWorkspaceDeleted implements WorkspaceDeletionChecker: reports whether
 // workspaceID no longer resolves — soft-deleted or never existed, same
 // question workspaceRepo.GetByID already answers for every other caller.

@@ -250,6 +250,8 @@ func TestTaskOwnedRecordRoutes_NonMemberRefused(t *testing.T) {
 var notTaskOwnedParams = map[string]bool{
 	// workspace / project scope, guarded elsewhere
 	"ws_id": true, "proj_id": true,
+	// native-review ids: records of a trusted enrollment, authorized by the enrolled identity in the repository
+	"authority_id": true, "receipt_id": true,
 	// project-owned records reached only under /projects/:proj_id, guarded there
 	"status_id": true, "atr_id": true, "thread_id": true, "attachment_id": true,
 	// workspace configuration, identities and runtime

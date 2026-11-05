@@ -29,6 +29,48 @@
       "park": "припаркована",
       "blocker_in_backlog": "блокер лежит в backlog",
       "dependencies_unreadable": "блокер недоступен для чтения"
+    },
+    "constraints": {
+      "title": "Ограничения",
+      "more": "ещё {{count}}",
+      "classes": {
+        "mesh_dependency": "Зависимость",
+        "local_wait": "Ожидание",
+        "ci_capacity": "CI",
+        "review_rejection": "Ревью",
+        "expired_authority": "Полномочия",
+        "write_acl": "Доступ",
+        "unknown": "Ограничение"
+      },
+      "nextActor": "Следующий",
+      "nextActorUnknown": "неизвестно",
+      "wake": "Разбудит",
+      "wakeUnknown": "неизвестно",
+      "source": "Источник",
+      "observed": "замечено {{time}}",
+      "observedUnknown": "время неизвестно",
+      "ci": {
+        "capacity": "Ждёт свободный CI",
+        "manual_required": "Нужно ручное действие",
+        "unavailable": "Статус CI недоступен",
+        "scope": "область {{scope}}",
+        "position": "позиция {{position}}"
+      },
+      "restricted": "Подробности скрыты",
+      "unavailable": "Источник недоступен",
+      "less": "Свернуть",
+      "reasonCodes": {
+        "mesh_dependency": "Заблокировано другой карточкой",
+        "local_wait": "Ждёт события",
+        "ci_capacity": "Ждёт CI",
+        "review_rejection": "Ревью отклонило изменение",
+        "expired_authority": "Полномочия истекли",
+        "write_acl": "Нет права записи",
+        "dependency_unreleased": "Заблокировано другой карточкой",
+        "dependency_not_visible": "Заблокировано карточкой, к которой нет доступа",
+        "access_denied": "Подробности скрыты",
+        "source_unavailable": "Источник недоступен"
+      }
     }
   },
   "filter": {
