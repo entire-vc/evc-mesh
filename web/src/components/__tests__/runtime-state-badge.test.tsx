@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { TaskCard } from "@/components/task-card";
 import { RuntimeStateBadge } from "@/components/runtime-state-badge";
 import { RuntimeConstraints } from "@/components/runtime-constraints";
@@ -110,7 +110,7 @@ describe("TaskCard runtime_state", () => {
     const lane = "aaaaaaaa-1111-1111-1111-111111111111";
     const rs: RuntimeState = { kind: "working", since: "2026-10-10T10:00:00Z", lane, source: "checkout", stale: false } as RuntimeState;
     const a = render(<TaskCard task={makeTask({ runtime_state: rs })} />);
-    expect(screen.getByTestId("runtime-state").textContent).toMatch(/Being worked on by Developer Two/);
+    expect(screen.getByTestId("runtime-state").textContent).toBe("Working");
     expect(a.container.textContent).not.toContain(lane);
     a.unmount();
     const b = render(<TaskCard task={makeTask({ runtime_state: rs, assignee_id: "bbbbbbbb-2222-2222-2222-222222222222" })} />);
@@ -150,32 +150,17 @@ describe("RuntimeConstraints", () => {
     expect(screen.getByTestId("constraint-wake").textContent).toBe("card:#00000000");
   });
 
-  it("dependency and a distinct local WAIT are both visible on board and detail with the same values", () => {
+  it("dependency and a distinct local WAIT are both visible in detail", () => {
     const st = waiting([
       c({ id: "d", class: "mesh_dependency", reason_code: "mesh_dependency", wake: { predicate: "card:#aaaaaaaa", ref: "card:#aaaaaaaa" } }),
       c({ id: "w", class: "local_wait", reason_code: "local_wait", wake: { predicate: "mr:g/p!3", ref: "mr:g/p!3" } }),
     ]);
-    const board = render(<RuntimeConstraints state={st} variant="compact" />);
-    const boardText = screen.getAllByTestId("runtime-constraint").map((e) => e.querySelector("[data-testid=constraint-reason]")!.textContent);
-    board.unmount();
     render(<RuntimeConstraints state={st} variant="full" />);
-    const detailText = screen.getAllByTestId("runtime-constraint").map((e) => e.querySelector("[data-testid=constraint-reason]")!.textContent);
-    expect(boardText).toHaveLength(2);
-    expect(detailText).toEqual(boardText);
+    expect(screen.getAllByTestId("runtime-constraint")).toHaveLength(2);
   });
 
-  it("compact caps at two rows and says how many more; full shows all", () => {
-    const st = waiting([1, 2, 3, 4].map((i) => c({ id: `i${i}`, class: "local_wait" })));
-    const a = render(<RuntimeConstraints state={st} variant="compact" />);
-    expect(screen.getAllByTestId("runtime-constraint")).toHaveLength(2);
-    expect(screen.getByTestId("constraint-more").textContent).toContain("2");
-    // compact still answers who / which event
-    expect(screen.getAllByTestId("constraint-who-wake")).toHaveLength(2);
-    // "more" expands every constraint in place
-    fireEvent.click(screen.getByTestId("constraint-more"));
-    expect(screen.getAllByTestId("runtime-constraint")).toHaveLength(4);
-    a.unmount();
-    render(<RuntimeConstraints state={st} variant="full" />);
+  it("detail shows every constraint (no cap)", () => {
+    render(<RuntimeConstraints state={waiting([1, 2, 3, 4].map((i) => c({ id: `i${i}`, class: "local_wait" })))} variant="full" />);
     expect(screen.getAllByTestId("runtime-constraint")).toHaveLength(4);
   });
 
@@ -220,11 +205,6 @@ describe("RuntimeConstraints", () => {
     expect(text).not.toMatch(/SecretOwner|secret/);
     expect(screen.queryByTestId("constraint-ref")).toBeNull();
     expect(screen.queryByTestId("constraint-ci")).toBeNull();
-  });
-
-  it("compact row also shows source and observed time", () => {
-    render(<RuntimeConstraints variant="compact" state={waiting([c({ id: "o", class: "local_wait", source: { kind: "runner" } })])} />);
-    expect(screen.getByTestId("constraint-who-wake").textContent).toMatch(/runner · observed \d\d:\d\d/);
   });
 
   it("stale constraint is muted and labelled", () => {
@@ -301,5 +281,115 @@ describe("constraints=[] keeps legacy state visible", () => {
     render(<RuntimeStateBadge state={{ kind: "waiting", ref: "card:#00000000", reason: "human gate", constraints: [] }} />);
     expect(screen.getByTestId("runtime-state").textContent).toContain("human gate");
     expect(screen.getByTestId("runtime-state-ref").textContent).toBe("#00000000");
+  });
+});
+
+const DIAG = "Blocking path diagnostic UNKNOWN (HTTP 0); addressee=unknown; observed_at=2026-11-04T10:48:01.712+00:00 #00000000";
+const diagState: RuntimeState = {
+  kind: "waiting",
+  reason: DIAG,
+  ref: "card:#00000000",
+  constraints: [
+    { id: "k1", class: "mesh_dependency", reason: DIAG, reason_code: "x", next_actor: { kind: "unknown" }, wake: { predicate: "card", ref: "card:#00000000" }, source: { kind: "task_dependency", ref: "00000000" } } as OperationalConstraint,
+  ],
+} as RuntimeState;
+
+describe("kanban card hides service diagnostics; detail marks them unconfirmed", () => {
+  it("compact card: kind word only, none of the diagnostic details", () => {
+    const { container } = render(<TaskCard task={makeTask({ runtime_state: diagState })} />);
+    const text = container.textContent ?? "";
+    expect(screen.getByTestId("runtime-state").textContent).toBe("Waiting");
+    for (const bad of ["HTTP", "UNKNOWN", "addressee", "Wakes on", "Source", "Next", "observed", "#00000000"]) expect(text).not.toContain(bad);
+    expect(screen.queryByTestId("runtime-constraints")).toBeNull();
+  });
+
+  it("detail: unreadable diagnostic is shown as unconfirmed, raw HTTP 0 text is not", () => {
+    render(<RuntimeStateBadge state={diagState} variant="line" />);
+    expect(screen.getByTestId("runtime-state").textContent).toContain("Wait not confirmed");
+    expect(screen.getByTestId("runtime-state").textContent).not.toContain("HTTP 0");
+    render(<RuntimeConstraints state={diagState} variant="full" />);
+    expect(screen.getByTestId("constraint-reason").textContent).toContain("Wait not confirmed");
+  });
+
+  it("detail: a confirmed wait keeps its reason", () => {
+    render(<RuntimeStateBadge state={{ kind: "waiting", reason: "Review pending", ref: "card:#00000000" }} variant="line" />);
+    expect(screen.getByTestId("runtime-state").textContent).toContain("Review pending");
+    expect(screen.getByTestId("runtime-state").textContent).not.toContain("not confirmed");
+  });
+
+  it("detail: unreadable CI diagnostic never shows raw text, in reason or CI details", () => {
+    const st = { kind: "waiting", constraints: [{ id: "ci1", class: "ci_capacity", reason: "CI probe UNKNOWN (HTTP 0)", reason_code: "x", next_actor: { kind: "unknown" }, wake: { predicate: "unknown" }, ci: { state: "unavailable", reason: "HTTP 0 from provider" } } as OperationalConstraint] } as RuntimeState;
+    const { container } = render(<RuntimeConstraints state={st} variant="full" />);
+    expect(screen.getByTestId("constraint-reason").textContent).toContain("Wait not confirmed");
+    expect(container.textContent).not.toMatch(/HTTP 0|UNKNOWN/);
+  });
+
+  it("detail: a diagnostic only in ci.reason also marks the wait unconfirmed, on badge and constraint", () => {
+    const st = { kind: "waiting", reason: "Waiting for CI", constraints: [{ id: "ci2", class: "ci_capacity", reason: "Waiting for CI", reason_code: "x", next_actor: { kind: "unknown" }, wake: { predicate: "unknown" }, ci: { state: "capacity", reason: "provider UNKNOWN (HTTP 0)" } } as OperationalConstraint] } as RuntimeState;
+    const a = render(<RuntimeStateBadge state={st} variant="line" />);
+    expect(screen.getByTestId("runtime-state").textContent).toContain("Wait not confirmed");
+    a.unmount();
+    const { container } = render(<RuntimeConstraints state={st} variant="full" />);
+    expect(screen.getByTestId("constraint-reason").textContent).toContain("Wait not confirmed");
+    expect(container.textContent).not.toMatch(/HTTP 0|UNKNOWN/);
+  });
+
+  it("detail: a redacted (access_denied) constraint also never shows a raw diagnostic", () => {
+    const st = { kind: "waiting", constraints: [{ id: "r1", class: "write_acl", reason_code: "access_denied", reason: "probe UNKNOWN (HTTP 0)", next_actor: { kind: "unknown" }, wake: { predicate: "unknown" } } as OperationalConstraint] } as RuntimeState;
+    const { container } = render(<RuntimeConstraints state={st} variant="full" />);
+    expect(container.textContent).not.toMatch(/HTTP 0|UNKNOWN/);
+  });
+
+  it("detail: a diagnostic in ANY displayed constraint field (scope, source, actor, wake) is hidden and marks the wait unconfirmed", () => {
+    const base = { id: "f", class: "ci_capacity", reason: "Waiting for CI", reason_code: "x", next_actor: { kind: "unknown" }, wake: { predicate: "unknown" } };
+    const variants: OperationalConstraint[] = [
+      { ...base, ci: { state: "capacity", scope: "HTTP 0" } },
+      { ...base, source: { kind: "probe", ref: "UNKNOWN (HTTP 0)" } },
+      { ...base, next_actor: { kind: "agent", name: "addressee=unknown" } },
+      { ...base, wake: { predicate: "HTTP 0" } },
+    ] as OperationalConstraint[];
+    for (const v of variants) {
+      const st = { kind: "waiting", constraints: [v] } as RuntimeState;
+      const a = render(<RuntimeStateBadge state={st} variant="line" />);
+      expect(screen.getByTestId("runtime-state").textContent).toContain("Wait not confirmed");
+      a.unmount();
+      const { container, unmount } = render(<RuntimeConstraints state={st} variant="full" />);
+      expect(container.textContent, JSON.stringify(v)).not.toMatch(/HTTP 0|UNKNOWN|addressee=/);
+      unmount();
+    }
+  });
+
+  it("detail: the literal predicate/actor 'unknown' alone is not a diagnostic (a normal wait stays confirmed)", () => {
+    const st = { kind: "waiting", reason: "Review pending", constraints: [{ id: "n", class: "local_wait", reason: "Review pending", reason_code: "x", next_actor: { kind: "unknown" }, wake: { predicate: "unknown" } } as OperationalConstraint] } as RuntimeState;
+    render(<RuntimeStateBadge state={st} variant="line" />);
+    expect(screen.getByTestId("runtime-state").textContent).toContain("Review pending");
+  });
+
+  it("detail: a bare 'UNKNOWN' (any case) in reason / ci.reason / source is a diagnostic; only the literal wake predicate 'unknown' is not", () => {
+    const base = { id: "u", class: "local_wait", reason_code: "x", next_actor: { kind: "unknown" }, wake: { predicate: "unknown" } };
+    for (const v of [{ ...base, reason: "UNKNOWN" }, { ...base, reason: "ok", ci: { state: "capacity", reason: "Unknown" } }, { ...base, reason: "ok", source: { kind: "unknown" } }] as OperationalConstraint[]) {
+      const st = { kind: "waiting", constraints: [v] } as RuntimeState;
+      const a = render(<RuntimeStateBadge state={st} variant="line" />);
+      expect(screen.getByTestId("runtime-state").textContent, JSON.stringify(v)).toContain("Wait not confirmed");
+      a.unmount();
+    }
+  });
+
+  it("diagnostic inside reason_params marks the wait unconfirmed (top-level and constraint)", () => {
+    const top = { kind: "waiting", reason_code: "review_refeed_hold", reason_params: { minutes: "HTTP 0" } } as RuntimeState;
+    const a = render(<RuntimeStateBadge state={top} variant="line" />);
+    expect(screen.getByTestId("runtime-state").textContent).toContain("Wait not confirmed");
+    a.unmount();
+    const st = { kind: "waiting", constraints: [{ id: "p", class: "local_wait", reason_code: "review_refeed_hold", reason_params: { minutes: "UNKNOWN" }, next_actor: { kind: "unknown" }, wake: { predicate: "unknown" } } as unknown as OperationalConstraint] } as RuntimeState;
+    const { container } = render(<RuntimeConstraints state={st} variant="full" />);
+    expect(screen.getByTestId("constraint-reason").textContent).toContain("Wait not confirmed");
+    expect(container.textContent).not.toMatch(/HTTP 0|UNKNOWN/);
+  });
+
+  it("compact kind badge: stale state adds nothing beyond the kind word, including the tooltip", () => {
+    render(<RuntimeStateBadge state={{ kind: "waiting", stale: true, reason: "Review pending" } as RuntimeState} variant="kind" />);
+    const el = screen.getByTestId("runtime-state");
+    expect(el.textContent).toBe("Waiting");
+    expect(el.getAttribute("title")).toBe("Waiting");
   });
 });

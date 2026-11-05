@@ -579,6 +579,16 @@ type OperatorAgent struct {
 	MaxConcurrentTasks int                `json:"max_concurrent_tasks"`
 	RuntimeManager     bool               `json:"runtime_manager"`
 	Controller         *RuntimeController `json:"controller"`
+	// Receiving points at the pool owner's binding that admits this agent when the
+	// pool belongs to another workspace; the reader resolves the permitted profiles
+	// through GET /workspaces/:ws/runtime/bindings/:ref, which re-checks admission
+	// and grant. It carries no catalog content. Only for the receiving workspace's admin.
+	Receiving *ReceivingBindingRef `json:"receiving,omitempty"`
+}
+
+type ReceivingBindingRef struct {
+	ResourceOwnerWorkspaceID uuid.UUID `json:"resource_owner_workspace_id"`
+	BindingRef               string    `json:"binding_ref"`
 }
 
 type RunnerAgent struct {
@@ -612,6 +622,8 @@ type operatorAgentRow struct {
 	Version        *string    `db:"version"`
 	LeaseExpiresAt *time.Time `db:"lease_expires_at"`
 	Live           *bool      `db:"live"`
+	ReceivingOwner *uuid.UUID `db:"receiving_owner"`
+	ReceivingRef   *string    `db:"receiving_ref"`
 }
 
 // effectiveControllerSQL is a LEFT JOIN LATERAL fragment (alias ctl, outer alias
@@ -681,8 +693,16 @@ const operatorAgentsSQL = `SELECT a.id AS agent_id, a.name, a.operator_user_id, 
 		EXISTS (SELECT 1 FROM user_runtime_managers m
 			WHERE m.operator_user_id=a.operator_user_id AND m.agent_id=a.id AND m.revoked_at IS NULL) AS runtime_manager,
 		ctl.runner_id, ctl.runner_name, ctl.host, ctl.version, ctl.lease_expires_at,
-		(ctl.lease_expires_at > now()) AS live
+		(ctl.lease_expires_at > now()) AS live,
+		rcv.owner_ws AS receiving_owner, rcv.binding_ref AS receiving_ref
 	FROM agents a ` + effectiveControllerSQL + `
+	LEFT JOIN LATERAL (SELECT ic.workspace_id AS owner_ws, adm.binding_ref FROM runtime_binding_admissions adm
+		JOIN integration_configs ic ON ic.id=adm.integration_id
+		WHERE $3 AND adm.agent_id=a.id AND adm.workspace_id=a.workspace_id AND ic.workspace_id<>a.workspace_id
+			AND ic.provider IN ('runner','agent_runtime') AND ` + admittedBindingSQL + ` AND ` + admittedIdentitySQL + `
+			AND EXISTS (SELECT 1 FROM agent_workspace_grants g WHERE g.id=adm.grant_id AND g.agent_id=a.id
+				AND g.workspace_id=a.workspace_id AND g.revoked_at IS NULL)
+		ORDER BY adm.updated_at DESC, adm.binding_ref LIMIT 1) rcv ON true
 	WHERE a.workspace_id=$2 AND a.deleted_at IS NULL
 		AND (a.operator_user_id=$1 OR ($3 AND EXISTS (SELECT 1 FROM runtime_binding_admissions adm
 			JOIN integration_configs ic ON ic.id=adm.integration_id
@@ -784,6 +804,9 @@ func operatorAgents(rows []operatorAgentRow) []OperatorAgent {
 		if row.RunnerID != nil && row.LeaseExpiresAt != nil {
 			a.Controller = &RuntimeController{RunnerID: *row.RunnerID, Name: deref(row.RunnerName), Host: deref(row.Host),
 				Version: deref(row.Version), LeaseExpiresAt: *row.LeaseExpiresAt, Live: row.Live != nil && *row.Live}
+		}
+		if row.ReceivingOwner != nil && row.ReceivingRef != nil {
+			a.Receiving = &ReceivingBindingRef{ResourceOwnerWorkspaceID: *row.ReceivingOwner, BindingRef: *row.ReceivingRef}
 		}
 		out = append(out, a)
 	}

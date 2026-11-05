@@ -39,7 +39,7 @@ describe("board card block order", () => {
     expect(titleRow!.querySelector("svg.lucide-git-branch")).toBeNull(); // Alex 25.10: not beside the title
     expect(counters!.textContent).toMatch(/2/);
     expect(counters!.querySelector("svg.lucide-git-branch")).not.toBeNull();
-    expect(runtime!.textContent).toMatch(/Grace/);
+    expect(runtime!.textContent).toBe("Working");
     expect(labels!.textContent).toBe("lbl-x");
     expect(bottom).toBe(el.lastElementChild);
     expect(el.children).toHaveLength(5);

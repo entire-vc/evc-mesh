@@ -12,7 +12,7 @@ import type { Loaded } from "@/components/my-runner/use-load";
 import { apiErrorMessage } from "@/lib/api-error";
 import {
   agentState, bindingsByAgent, entrySchema, fieldErrorsByEntry, findSecretViolation, isForeignBinding, parseLimit, profileLabel, profilesByAgent,
-  saveResources, sectionEntries, setAgentLimit, setRuntimeManager, withEntry, type OperatorAgent, type ResourceDoc,
+  saveResources, sectionEntries, setAgentLimit, setRuntimeManager, withEntry, type OperatorAgent, type ResourceDoc, type RuntimeConfig,
 } from "@/lib/my-runner";
 
 /** Same threshold as the resource lists: below it the table is short enough to scan. */
@@ -112,6 +112,11 @@ function ExcludedNote({ reason, testId }: { reason: string; testId: string }) {
       {t(`resources.excluded.${reason}`, { defaultValue: t("resources.excluded.other", { reason }) })}
     </span>
   );
+}
+
+/** Labels of the profiles a valid receiving admission permits, for an agent with no entry in this workspace's own catalog. */
+function receivedProfiles({ receivingProfiles: r = {} }: OperatorAgent, t: (key: string) => string): string[] {
+  return Object.keys(r).map((n) => profileLabel(n, { profiles: r } as RuntimeConfig, t));
 }
 
 function AgentRow({ agent, me, profiles, off, excluded, canEdit, onEdit }: {
@@ -367,7 +372,7 @@ function AgentsTable({ agents, me, catalog, reload, onCatalogSaved }: {
               key={a.agent_id}
               agent={a}
               me={me}
-              profiles={profiles[a.agent_id] ?? []}
+              profiles={a.receiving ? receivedProfiles(a, t) : profiles[a.agent_id] ?? []} // receiving: only what the admission permits, never the local catalog
               off={offOf(a.agent_id)}
               excluded={bindings[a.agent_id] !== undefined ? excluded[bindings[a.agent_id]!] : undefined}
               canEdit={catalogEditable || (!!me && a.operator_user_id === me)}

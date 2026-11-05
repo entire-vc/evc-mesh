@@ -6,6 +6,7 @@ import {
   runtimeStaleNote,
   runtimeKindTone,
   runtimeStateText,
+  runtimeKindLabel,
 } from "@/lib/runtime-state";
 import type { RuntimeState, RuntimeStateKind } from "@/types";
 
@@ -19,7 +20,7 @@ const icons = {
 interface Props {
   state: RuntimeState;
   /** `badge` is the dense board form; `line` is the card-header row. */
-  variant?: "badge" | "line";
+  variant?: "badge" | "line" | "kind";
   className?: string;
 }
 
@@ -31,15 +32,16 @@ interface Props {
 export function RuntimeStateBadge({ state, variant = "badge", className }: Props) {
   useTranslation("board"); // re-render on language change; the texts come from runtime-state.ts
   const Icon = icons[state.kind];
-  const ref = parseRuntimeRef(state.ref);
-  const text = runtimeStateText(state);
-  const title = state.stale ? `${text} (${runtimeStaleNote()})` : text;
+  const compact = variant === "kind";
+  const ref = compact ? null : parseRuntimeRef(state.ref);
+  const text = compact ? runtimeKindLabel(state) : runtimeStateText(state);
+  const title = state.stale && !compact ? `${text} (${runtimeStaleNote()})` : text;
 
   return (
     <span
       className={cn(
         "inline-flex min-w-0 items-center gap-1 text-xs",
-        variant === "badge" && "max-w-full text-[11px]",
+        (variant === "badge" || compact) && "max-w-full text-[11px]",
         state.stale ? "text-muted-foreground opacity-60" : runtimeKindTone[state.kind],
         className,
       )}
@@ -67,7 +69,7 @@ export function RuntimeStateBadge({ state, variant = "badge", className }: Props
             {ref.label}
           </span>
         ))}
-      {state.stale && (
+      {state.stale && !compact && (
         <span className="shrink-0 italic" data-testid="runtime-state-stale">
           · {runtimeStaleNote()}
         </span>

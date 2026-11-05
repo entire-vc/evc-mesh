@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/cn";
 import { constraintViews, type ConstraintView } from "@/lib/runtime-state";
@@ -6,12 +5,10 @@ import type { RuntimeState } from "@/types";
 
 interface Props {
   state: RuntimeState;
-  /** `compact` is the board card; `full` is task detail. Same values, different density. */
-  variant?: "compact" | "full";
+  /** Task detail only: the kanban tile never renders constraints. */
+  variant?: "full";
   className?: string;
 }
-
-const COMPACT_LIMIT = 2;
 
 function RefLink({ view }: { view: ConstraintView }) {
   const ref = view.ref;
@@ -37,20 +34,17 @@ function RefLink({ view }: { view: ConstraintView }) {
 
 /**
  * All operational constraints of a card: why it stands, who lifts it, what wakes it.
- * Board and task detail render this one component, so they cannot disagree.
+ * Rendered in task detail only; the kanban tile shows the kind word and nothing else.
  */
-export function RuntimeConstraints({ state, variant = "compact", className }: Props) {
+export function RuntimeConstraints({ state, variant = "full", className }: Props) {
   const { t } = useTranslation("board");
-  const [expanded, setExpanded] = useState(false);
   const views = constraintViews(state);
   if (views.length === 0) return null;
-  const shown = variant === "compact" && !expanded ? views.slice(0, COMPACT_LIMIT) : views;
-  const hidden = views.length - shown.length;
   const unknown = t("runtimeState.constraints.nextActorUnknown");
 
   return (
     <ul className={cn("m-0 flex min-w-0 list-none flex-col gap-1 p-0", className)} data-testid="runtime-constraints" data-variant={variant}>
-      {shown.map((v) => (
+      {views.map((v) => (
         <li
           key={v.key}
           className={cn(
@@ -80,19 +74,6 @@ export function RuntimeConstraints({ state, variant = "compact", className }: Pr
               {[v.ci.label, ...v.ci.details].join(", ")}
             </div>
           )}
-          {variant === "compact" && (
-            <div className="min-w-0 break-all text-muted-foreground" data-testid="constraint-who-wake">
-              {t("runtimeState.constraints.nextActor")}: {v.nextActor ?? unknown}
-              {" · "}
-              {t("runtimeState.constraints.wake")}: {v.wake ?? t("runtimeState.constraints.wakeUnknown")}
-              {" · "}
-              {v.source ?? unknown}
-              {" · "}
-              {v.observedAt
-                ? t("runtimeState.constraints.observed", { time: v.observedAt })
-                : t("runtimeState.constraints.observedUnknown")}
-            </div>
-          )}
           {variant === "full" && (
             <dl className="m-0 mt-0.5 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2 text-muted-foreground">
               <dt>{t("runtimeState.constraints.nextActor")}</dt>
@@ -115,22 +96,6 @@ export function RuntimeConstraints({ state, variant = "compact", className }: Pr
           )}
         </li>
       ))}
-      {variant === "compact" && views.length > COMPACT_LIMIT && (
-        <li className="text-[11px]">
-          <button
-            type="button"
-            className="text-muted-foreground underline underline-offset-2"
-            aria-expanded={expanded}
-            onClick={(e) => {
-              e.stopPropagation();
-              setExpanded((v) => !v);
-            }}
-            data-testid="constraint-more"
-          >
-            {expanded ? t("runtimeState.constraints.less") : t("runtimeState.constraints.more", { count: hidden })}
-          </button>
-        </li>
-      )}
     </ul>
   );
 }

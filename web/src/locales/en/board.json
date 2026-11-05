@@ -9,6 +9,7 @@
     "queuedLane": "Queued in lane {{lane}}",
     "position": "position {{position}}",
     "stopped": "Stopped",
+    "unverified": "Wait not confirmed: diagnostic unavailable",
     "stale": "data is stale",
     "reasons": {
       "review_refeed_hold": "Reviewed; awaits commit",
@@ -32,7 +33,6 @@
     },
     "constraints": {
       "title": "Constraints",
-      "more": "+{{count}} more",
       "classes": {
         "mesh_dependency": "Dependency",
         "local_wait": "Wait",
@@ -58,7 +58,6 @@
       },
       "restricted": "Details are restricted",
       "unavailable": "Source unavailable",
-      "less": "Show less",
       "reasonCodes": {
         "mesh_dependency": "Blocked by another card",
         "local_wait": "Waiting for an event",

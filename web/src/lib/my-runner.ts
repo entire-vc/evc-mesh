@@ -44,6 +44,10 @@ export interface OperatorAgent {
   max_concurrent_tasks: number;
   runtime_manager: boolean;
   controller: RuntimeController | null;
+  /** The pool owner's binding that admits this agent when the pool is another workspace's. */
+  receiving?: { resource_owner_workspace_id: string; binding_ref: string } | null;
+  /** Profiles the valid receiving admission permits (client-resolved from the binding; never the owner's catalog). */
+  receivingProfiles?: Record<string, unknown>;
 }
 
 export interface OperatorRunner {
@@ -102,8 +106,19 @@ export const saveMyRuntime = (ifRevision: number, config: RuntimeConfig) =>
 export const getMyRuntimeHistory = (limit = 50) =>
   api<{ history: RuntimeHistoryEntry[] | null }>(`/api/v1/me/runtime/history?limit=${limit}`).then((r) => r.history ?? []);
 
+/**
+ * An agent admitted to another workspace's runner pool shows the profiles that admission
+ * permits, read through the receiving binding route (it re-checks admission and grant).
+ * Not enabled, refused or unreadable: no profiles, never a guessed one.
+ */
+export const receivingProfiles = (wsId: string, ref: NonNullable<OperatorAgent["receiving"]>): Promise<Record<string, unknown>> =>
+  api<{ enabled?: boolean; admission?: { enabled?: boolean; permitted_profiles?: string[] }; profiles?: Record<string, unknown> }>(
+    `/api/v1/workspaces/${encodeURIComponent(wsId)}/runtime/bindings/${encodeURIComponent(ref.binding_ref)}?resource_owner_workspace_id=${encodeURIComponent(ref.resource_owner_workspace_id)}`,
+  ).then((v) => Object.fromEntries(v.enabled && v.admission?.enabled ? (v.admission.permitted_profiles ?? []).filter((n) => v.profiles?.[n]).map((n) => [n, v.profiles![n]]) : []), () => ({}));
+
 export const getOperatorAgents = (workspaceId: string) =>
-  api<{ agents: OperatorAgent[] | null }>(`/api/v1/me/runtime/agents?workspace_id=${encodeURIComponent(workspaceId)}`).then((r) => r.agents ?? []);
+  api<{ agents: OperatorAgent[] | null }>(`/api/v1/me/runtime/agents?workspace_id=${encodeURIComponent(workspaceId)}`)
+    .then((r) => Promise.all((r.agents ?? []).map(async (a) => (a.receiving ? { ...a, receivingProfiles: await receivingProfiles(workspaceId, a.receiving) } : a))));
 
 export const getOperatorRunners = (workspaceId: string) =>
   api<{ runners: OperatorRunner[] | null }>(`/api/v1/me/runtime/runners?workspace_id=${encodeURIComponent(workspaceId)}`).then((r) => r.runners ?? []);

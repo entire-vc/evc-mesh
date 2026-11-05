@@ -1167,3 +1167,9 @@ Revert: restore 736.4 together with reverting the MR. Lead sign-off: the product
 loading / retry state (a few lines of JSX, three strings in en and ru) instead of reading the title as "not an admin" while the role is unknown; `login.initial_js_kb_gz` is unchanged.
 Main sat at the 736.6 ceiling (no headroom); the canonical bundle check measured 736.86 on the branch. The ceiling is the smallest 0.1 step above it.
 Revert: restore 736.6 together with reverting the MR. Lead sign-off: the product lead, requested on the delivery thread; does not cover growth above 736.9.
+
+`total_js_kb_gz` 739.0 → 739.4 (**+0.35 KB gz**, kanban tile shows the kind word only; unreadable runtime diagnostics marked "not confirmed" in task detail): a single
+diagnostic check (`constraintHasDiagnostic`) over every displayed constraint text field, the "not confirmed" string in en and ru, and the kind-only badge variant. The compact
+constraints variant (Next / Wakes on / Source line, "+N more" toggle) lost its only user and was deleted in the same MR, which is already netted out; `login.initial_js_kb_gz`
+is unchanged. Main sat at the 739.0 ceiling; local `pnpm build` + `check-bundle-budget` measured 739.35 on the branch. The ceiling is the smallest 0.1 step above it.
+Revert: restore 739.0 together with reverting the MR (re-check the budget if main moved). Product lead approval dated 2026-11-04; conditions: `perf-bundle` on the final HEAD measures total <= 739.4 and login <= 173.6; growth above 739.4 is not covered.
