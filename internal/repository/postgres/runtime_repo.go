@@ -459,14 +459,18 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 }
 
 // carryRuntimeAdmissions moves each receiver admission from the previous
-// catalog digest to the new one when the save left what that receiver approved
-// unchanged: its binding, the definitions of its permitted profiles, their
-// accounts, pools and controller host. Without it every catalog save read every
-// admission as disabled until the receiver granted it again, although most saves
-// touch other bindings. A binding whose projection changed keeps the old digest
-// and needs renewed approval, as before. The grant and its key fingerprint are
-// matched as in SetBindingPolicy, so a rotated key never inherits an admission.
-// The admission revision is the receiver's token and stays as is.
+// catalog digest to the new one, profile by profile. What a receiver approved is
+// its identity (agent, grant, key fingerprint, workspace) and the definition of
+// each admitted profile with its account, pools and controller host. A profile
+// whose projection is unchanged stays admitted; a profile that was removed from
+// the binding, or whose definition changed, drops out of the admitted set, and
+// the admission is carried with the surviving subset. Only when no admitted
+// profile survives is the admission left on the old digest, which needs renewed
+// approval as before. Adding a profile to the binding never widens the admitted
+// set. Policy, controller versions and unrelated bindings are outside the
+// projection, as in SetBindingPolicy. The grant and its key fingerprint are
+// matched in SQL, so a rotated key never inherits an admission. The admission
+// revision is the receiver's token and stays as is.
 func carryRuntimeAdmissions(ctx context.Context, tx *sqlx.Tx, connectionID uuid.UUID, previous []byte, catalog *domain.RuntimeCatalog, fingerprints map[string]string, oldDigest, digest string) error {
 	if len(previous) == 0 || oldDigest == digest {
 		return nil
@@ -478,50 +482,72 @@ func carryRuntimeAdmissions(ctx context.Context, tx *sqlx.Tx, connectionID uuid.
 		return nil
 	}
 	for ref, binding := range catalog.Bindings {
-		old, ok := runtimeBindingProjectionDigest(&before, ref)
-		if !ok {
+		var raw []byte
+		err := tx.GetContext(ctx, &raw, `SELECT permitted_profiles FROM runtime_binding_admissions WHERE integration_id=$1 AND binding_ref=$2 AND catalog_digest=$3 AND workspace_id=$4 AND agent_id=$5 AND grant_id=$6 AND grant_fingerprint=$7 FOR UPDATE`, connectionID, ref, oldDigest, binding.Binding.WorkspaceID, binding.Binding.AgentID, binding.Binding.GrantID, fingerprints[ref])
+		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
-		now, _ := runtimeBindingProjectionDigest(catalog, ref)
-		if old != now {
+		if err != nil {
+			return err
+		}
+		var admitted []string
+		if json.Unmarshal(raw, &admitted) != nil {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE runtime_binding_admissions SET catalog_digest=$3 WHERE integration_id=$1 AND binding_ref=$2 AND catalog_digest=$4 AND workspace_id=$5 AND agent_id=$6 AND grant_id=$7 AND grant_fingerprint=$8`, connectionID, ref, digest, oldDigest, binding.Binding.WorkspaceID, binding.Binding.AgentID, binding.Binding.GrantID, fingerprints[ref]); err != nil {
+		oldBinding, ok := before.Bindings[ref]
+		if !ok || oldBinding.Binding != binding.Binding {
+			continue
+		}
+		surviving := []string{}
+		for _, name := range admitted {
+			if !slices.Contains(binding.PermittedProfiles, name) {
+				continue
+			}
+			was, ok := runtimeProfileProjectionDigest(&before, name)
+			if !ok {
+				continue
+			}
+			if now, _ := runtimeProfileProjectionDigest(catalog, name); now == was {
+				surviving = append(surviving, name)
+			}
+		}
+		if len(surviving) == 0 {
+			continue
+		}
+		profiles, err := json.Marshal(surviving)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE runtime_binding_admissions SET catalog_digest=$3,permitted_profiles=$4 WHERE integration_id=$1 AND binding_ref=$2`, connectionID, ref, digest, profiles); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// runtimeBindingProjectionDigest hashes the part of a catalog one receiver
-// approved; ok is false when the catalog has no such binding. Map keys marshal
-// sorted, so equal content gives equal digests.
-func runtimeBindingProjectionDigest(catalog *domain.RuntimeCatalog, ref string) (string, bool) {
-	binding, ok := catalog.Bindings[ref]
+// runtimeProfileProjectionDigest hashes the part of a catalog one admitted
+// profile depends on: its definition, account, pools and controller host; ok is
+// false when the catalog does not define the profile. Map keys marshal sorted,
+// so equal content gives equal digests.
+func runtimeProfileProjectionDigest(catalog *domain.RuntimeCatalog, name string) (string, bool) {
+	profile, ok := catalog.Profiles[name]
 	if !ok {
 		return "", false
 	}
-	profiles := map[string]any{}
-	accounts := map[string]any{}
 	pools := map[string]any{}
-	hosts := map[string]string{}
-	for _, name := range binding.PermittedProfiles {
-		profile, ok := catalog.Profiles[name]
-		profiles[name] = map[string]any{"defined": ok, "profile": profile}
-		if !ok {
-			continue
-		}
-		hosts[profile.ControllerRef] = catalog.Controllers[profile.ControllerRef].Host
-		account, ok := catalog.Accounts[profile.AccountRef]
-		accounts[profile.AccountRef] = map[string]any{"defined": ok, "account": account}
-		for _, refs := range account.QuotaPoolsByMode {
-			for _, poolRef := range refs {
-				name, ok := catalog.ResolvePool(poolRef)
-				pools[poolRef] = map[string]any{"defined": ok, "name": name, "pool": catalog.Pools[name]}
-			}
+	account, accountOK := catalog.Accounts[profile.AccountRef]
+	for _, refs := range account.QuotaPoolsByMode {
+		for _, poolRef := range refs {
+			poolName, ok := catalog.ResolvePool(poolRef)
+			pools[poolRef] = map[string]any{"defined": ok, "name": poolName, "pool": catalog.Pools[poolName]}
 		}
 	}
-	data, err := json.Marshal(map[string]any{"binding": binding, "profiles": profiles, "accounts": accounts, "pools": pools, "hosts": hosts})
+	data, err := json.Marshal(map[string]any{
+		"profile":         profile,
+		"account":         map[string]any{"defined": accountOK, "account": account},
+		"pools":           pools,
+		"controller_host": catalog.Controllers[profile.ControllerRef].Host,
+	})
 	if err != nil {
 		return "", false
 	}

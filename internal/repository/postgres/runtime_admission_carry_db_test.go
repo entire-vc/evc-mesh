@@ -144,3 +144,66 @@ func TestRuntimeSaveDoesNotCarryAdmissionOfRotatedGrant(t *testing.T) {
 	require.Equal(t, second.Digest, f.admissionDigest(t, "worker-b"), "rotated key keeps the admission on the old digest")
 	require.False(t, f.bindingEnabled(t, "worker-b"))
 }
+
+func (f *runtimeFixture) admittedProfiles(t *testing.T, ref string) []string {
+	t.Helper()
+	var raw []byte
+	require.NoError(t, f.db.GetContext(context.Background(), &raw, `SELECT a.permitted_profiles FROM runtime_binding_admissions a JOIN integration_configs c ON c.id=a.integration_id WHERE c.workspace_id=$1 AND a.binding_ref=$2`, f.owner, ref))
+	var profiles []string
+	require.NoError(t, json.Unmarshal(raw, &profiles))
+	return profiles
+}
+
+// Removing a permitted profile from the binding narrows the admitted set to
+// the profiles that remain instead of disabling the whole admission (the
+// 2026-11-05 incident: a profile-set edit left 41 bindings denied).
+func TestRuntimeSaveNarrowsAdmissionWhenProfileRemovedFromBinding(t *testing.T) {
+	f := seedRuntime(t)
+	f.save(t, 0)
+	f.admit(t, "worker-b", "preferred", "reserve")
+
+	b := f.catalog.Bindings["worker-b"]
+	b.PermittedProfiles = []string{"preferred"}
+	b.Policy.PrimaryProfiles = []string{"preferred"}
+	b.Policy.QuotaEdges = map[string][]string{}
+	b.Policy.PreferredAccounts = map[string]string{"provider-a": "preferred"}
+	f.catalog.Bindings["worker-b"] = b
+	saved := f.save(t, 1)
+
+	require.True(t, f.bindingEnabled(t, "worker-b"))
+	require.Equal(t, saved.Digest, f.admissionDigest(t, "worker-b"))
+	require.Equal(t, []string{"preferred"}, f.admittedProfiles(t, "worker-b"))
+}
+
+// A profile added to the binding is not admitted by the save: the previously
+// admitted subset stays enabled and never grows.
+func TestRuntimeSaveKeepsAdmittedSubsetWhenProfileAddedToBinding(t *testing.T) {
+	f := seedRuntime(t)
+	f.twoReceivers(t)
+	f.save(t, 0)
+	f.admit(t, "worker-b", "preferred")
+
+	b := f.catalog.Bindings["worker-b"]
+	b.PermittedProfiles = []string{"preferred", "reserve"}
+	f.catalog.Bindings["worker-b"] = b
+	saved := f.save(t, 1)
+
+	require.True(t, f.bindingEnabled(t, "worker-b"))
+	require.Equal(t, saved.Digest, f.admissionDigest(t, "worker-b"))
+	require.Equal(t, []string{"preferred"}, f.admittedProfiles(t, "worker-b"))
+}
+
+// When one admitted profile changes its definition and another does not, the
+// changed one loses admission and the other keeps it.
+func TestRuntimeSaveDropsOnlyChangedProfileFromAdmission(t *testing.T) {
+	f := seedRuntime(t)
+	f.save(t, 0)
+	f.admit(t, "worker-b", "preferred", "reserve")
+
+	f.setProfileModel("reserve", "model-b")
+	saved := f.save(t, 1)
+
+	require.True(t, f.bindingEnabled(t, "worker-b"))
+	require.Equal(t, saved.Digest, f.admissionDigest(t, "worker-b"))
+	require.Equal(t, []string{"preferred"}, f.admittedProfiles(t, "worker-b"))
+}

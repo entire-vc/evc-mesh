@@ -86,3 +86,7 @@ createRoot(rootEl).render(
     <Toaster />
   </StrictMode>,
 );
+
+// Tell the boot guard in index.html (it also owns the lazy-chunk reload and
+// the one-shot retry flag) that the bundle started.
+Object.assign(window, { __meshBooted: true });

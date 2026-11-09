@@ -99,6 +99,11 @@ func (r *InstalledExtensionRepo) InsertCatalog(ctx context.Context, ext *domain.
 // transaction the release it leaves is sealed into previous_snapshot, so a
 // rollback can restore all of it. apierror.NotFound when no such row.
 func (r *InstalledExtensionRepo) UpdateCatalog(ctx context.Context, ext *domain.InstalledExtension, g domain.CatalogUpdateGuard) error {
+	// The unattended pass never moves the Runner: its installed version is the
+	// controller version the runtime is pinned to. Refused before any read.
+	if g.Auto && ext.ExtensionID == domain.RunnerExtensionID {
+		return apierror.Conflict("the runner is updated only explicitly, not by the automatic pass")
+	}
 	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return err

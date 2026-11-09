@@ -1344,7 +1344,9 @@ func TestDependencyCondition_ValidAndEvidenceSatisfied(t *testing.T) {
 	}{
 		{"legacy empty condition", TaskDependency{}, false},
 		{"task_done never evidence-satisfied", TaskDependency{Condition: DependencyConditionTaskDone, EvidenceURL: &url, ConditionMetAt: &met}, false},
-		{"met with evidence", TaskDependency{Condition: DependencyConditionAccessReady, EvidenceURL: &url, ConditionMetAt: &met}, true},
+		{"met with evidence", TaskDependency{Condition: DependencyConditionAccessReady, EvidenceURL: &url, ConditionMetAt: &met, EvidenceStatus: EvidenceTrusted}, true},
+		{"unverified legacy link never satisfies", TaskDependency{Condition: DependencyConditionAccessReady, EvidenceURL: &url, ConditionMetAt: &met, EvidenceStatus: EvidenceUnverified}, false},
+		{"revoked evidence never satisfies", TaskDependency{Condition: DependencyConditionAccessReady, EvidenceURL: &url, ConditionMetAt: &met, EvidenceStatus: EvidenceRevoked}, false},
 		{"met without evidence", TaskDependency{Condition: DependencyConditionAccessReady, ConditionMetAt: &met}, false},
 		{"blank evidence", TaskDependency{Condition: DependencyConditionAccessReady, EvidenceURL: &blank, ConditionMetAt: &met}, false},
 		{"evidence but not met", TaskDependency{Condition: DependencyConditionAccessReady, EvidenceURL: &url}, false},

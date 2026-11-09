@@ -63,6 +63,11 @@ type deliveryFacts struct {
 	// gated cards in every status, so a todo card that is gated is NOT reached.
 	Gated bool
 
+	// GateOwnerDecision is true when the task is gated, the recipient is the owner of
+	// the live ask, and the pending decision (HumanGateInfo.DecisionPending) is THIS
+	// comment. Only then is a gated card admitted to the owner for one bounded turn.
+	GateOwnerDecision bool
+
 	// Scheduled is true when the task's start_after lies in the future. The
 	// feeder skips such cards until then, whatever their status.
 	Scheduled bool
@@ -130,6 +135,15 @@ func decideDelivery(f deliveryFacts) (outcome, reason, channel, presence string)
 	// API returns, but the feeder drops it before the lane ever sees it — so it
 	// is not a reaching path, and reporting it as one would be the confident
 	// false "delivered" this record exists to eliminate.
+	// The one exception to "a gated card reaches nobody": the owner of the ask the
+	// addressee just answered. It must be checked before the thread_only branch,
+	// which would otherwise report a woken-nobody comment as delivered.
+	// A future start_after does not make this a false "delivered": the runner admits the
+	// same owner answer past the schedule (one bounded turn, the date itself untouched), so
+	// the schedule only holds ordinary work. Assignee-only, and only the live decision comment.
+	if f.GateOwnerDecision && f.IsAssignee {
+		return domain.DeliveryDelivered, domain.ReasonGateOwnerDecision, domain.ChannelGateOwner, p
+	}
 	if f.InTaskQueue && !f.Gated && !f.Scheduled {
 		return domain.DeliveryDelivered, domain.ReasonTaskQueue, domain.ChannelTaskQueue, p
 	}

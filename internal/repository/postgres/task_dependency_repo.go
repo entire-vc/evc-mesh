@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -37,7 +36,7 @@ func (r *TaskDependencyRepo) AtomicHierarchy() bool { return true }
 // condition_satisfied is the full verdict (evidence OR the blocker's own state
 // for the edge's condition), so every read joins the blocker; the join is LEFT
 // so an edge whose blocker row is gone is still returned.
-var taskDependencySelectCols = `d.id, d.task_id, d.depends_on_task_id, d.dependency_type, d.created_at, d.condition, d.evidence_url, d.condition_met_at, ` +
+var taskDependencySelectCols = `d.id, d.task_id, d.depends_on_task_id, d.dependency_type, d.created_at, d.condition, d.evidence_url, d.condition_met_at, d.criterion, d.generation, d.evidence_status, d.evidence_reason, d.evidence_head_sha, d.evidence_environment, d.evidence_link_id, d.evidence_actor_id, ` +
 	domain.DependencyReleasedSQL("d", "bt", "bts.category") + ` AS condition_satisfied`
 
 // taskDependencyJoins pairs with taskDependencySelectCols: the edge is d, its
@@ -59,15 +58,21 @@ func (r *TaskDependencyRepo) Create(ctx context.Context, dep *domain.TaskDepende
 		return err
 	}
 	const q = `
-		INSERT INTO task_dependencies (id, task_id, depends_on_task_id, dependency_type, created_at, condition, evidence_url, condition_met_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO task_dependencies (id, task_id, depends_on_task_id, dependency_type, created_at, condition, evidence_url, condition_met_at, criterion, evidence_status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`
 	if dep.Condition == "" {
 		dep.Condition = domain.DependencyConditionTaskDone
 	}
+	if dep.EvidenceStatus == "" {
+		dep.EvidenceStatus = domain.EvidenceNone
+		if dep.EvidenceURL != nil && dep.Condition != domain.DependencyConditionTaskDone {
+			dep.EvidenceStatus = domain.EvidenceUnverified
+		}
+	}
 	_, err = tx.ExecContext(ctx, q,
 		dep.ID, dep.TaskID, dep.DependsOnTaskID, dep.DependencyType, dep.CreatedAt,
-		dep.Condition, dep.EvidenceURL, dep.ConditionMetAt,
+		dep.Condition, dep.EvidenceURL, dep.ConditionMetAt, dep.Criterion, dep.EvidenceStatus,
 	)
 	if err != nil {
 		return err
@@ -109,15 +114,95 @@ func (r *TaskDependencyRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	return tx.Commit()
 }
 
-// UpdateCondition implements repository.TaskDependencyRepository.
-func (r *TaskDependencyRepo) UpdateCondition(ctx context.Context, id uuid.UUID, condition domain.DependencyCondition, evidenceURL *string, metAt *time.Time) (*domain.TaskDependency, error) {
-	q := `WITH d AS (UPDATE task_dependencies SET condition = $2, evidence_url = $3, condition_met_at = $4 WHERE id = $1 RETURNING *)
+// UpdateCondition implements repository.TaskDependencyRepository. A change of
+// condition or criterion bumps the generation and drops the old evidence;
+// evidence is stored only while the generation is still expectedGen (CAS).
+func (r *TaskDependencyRepo) UpdateCondition(ctx context.Context, id uuid.UUID, upd domain.DependencyConditionUpdate) (*domain.TaskDependency, error) {
+	if upd.ExpectedGeneration == nil {
+		return nil, errors.New("task dependency update requires expected generation")
+	}
+	var ev domain.DependencyEvidence
+	if upd.Evidence != nil {
+		ev = *upd.Evidence
+	}
+	status := domain.EvidenceNone
+	if upd.Evidence != nil {
+		status = ev.Status
+	}
+	nz := func(s string) *string {
+		if s == "" {
+			return nil
+		}
+		return &s
+	}
+	q := `WITH cur AS (SELECT id, (condition <> $2 OR criterion <> $3) AS changed FROM task_dependencies WHERE id = $1 FOR UPDATE),
+		d AS (UPDATE task_dependencies t SET condition = $2, criterion = $3,
+			generation = t.generation + CASE WHEN cur.changed THEN 1 ELSE 0 END,
+			evidence_url = CASE WHEN $11 THEN $4 WHEN cur.changed THEN NULL ELSE t.evidence_url END,
+			condition_met_at = CASE WHEN $11 THEN $5 WHEN cur.changed THEN NULL ELSE t.condition_met_at END,
+			evidence_status = CASE WHEN $11 THEN $6 WHEN cur.changed THEN 'none' ELSE t.evidence_status END,
+			evidence_reason = CASE WHEN $11 THEN $7 WHEN cur.changed THEN NULL ELSE t.evidence_reason END,
+			evidence_head_sha = CASE WHEN $11 THEN $8 WHEN cur.changed THEN NULL ELSE t.evidence_head_sha END,
+			evidence_environment = CASE WHEN $11 THEN $9 WHEN cur.changed THEN NULL ELSE t.evidence_environment END,
+			evidence_link_id = CASE WHEN $11 THEN $10 WHEN cur.changed THEN NULL ELSE t.evidence_link_id END,
+			evidence_actor_id = CASE WHEN $11 THEN $12 WHEN cur.changed THEN NULL ELSE t.evidence_actor_id END
+			FROM cur WHERE t.id = cur.id AND t.generation = $13 RETURNING t.*)
 		SELECT ` + taskDependencySelectCols + ` FROM d ` + taskDependencyJoins
 	var dep domain.TaskDependency
-	if err := r.db.GetContext(ctx, &dep, q, id, condition, evidenceURL, metAt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// The evidence was verified against a link read earlier. Lock that link row
+	// (a concurrent receipt change waits for this commit, and its drift trigger then
+	// sees the bound edge) and re-check the receipt below, so a link that moved in
+	// between cannot leave stale evidence trusted.
+	if upd.Evidence != nil && ev.LinkID != nil {
+		if _, lerr := tx.ExecContext(ctx, `SELECT 1 FROM vcs_links WHERE id = $1 FOR SHARE`, *ev.LinkID); lerr != nil {
+			return nil, lerr
 		}
+	}
+	err = tx.GetContext(ctx, &dep, q, id, upd.Condition, upd.Criterion,
+		nz(ev.URL), ev.MetAt, status, nz(ev.Reason), nz(ev.HeadSHA), nz(ev.Environment), ev.LinkID,
+		upd.Evidence != nil, ev.ActorID, upd.ExpectedGeneration)
+	if err == nil && upd.Evidence != nil && ev.LinkID != nil && status == domain.EvidenceTrusted {
+		var revoked int64
+		res, rerr := tx.ExecContext(ctx, `UPDATE task_dependencies d
+			SET evidence_status = 'revoked',
+			    evidence_reason = 'bound pr link moved to another HEAD/deploy or its SHIP/acceptance changed before the evidence was stored'
+			FROM vcs_links l
+			WHERE d.id = $1 AND l.id = d.evidence_link_id AND d.evidence_status = 'trusted'
+			  AND d.evidence_head_sha IS NOT NULL
+			  AND (COALESCE(l.metadata->>'head_sha', '') <> d.evidence_head_sha
+			    OR (d.condition = 'shipped' AND COALESCE(l.metadata->>'ship_sha', '') <> d.evidence_head_sha)
+			    OR (d.condition = 'deployed' AND (COALESCE(l.metadata->'deployed'->>'sha', '') <> d.evidence_head_sha
+			         OR COALESCE(l.metadata->'deployed'->>'environment', '') <> COALESCE(d.evidence_environment, '')))
+			    OR (d.condition = 'accepted' AND (COALESCE(l.metadata->'acceptance'->>'sha', '') <> d.evidence_head_sha
+			         OR COALESCE(l.metadata->'acceptance'->>'result', '') <> 'passed')))`, id)
+		if rerr != nil {
+			return nil, rerr
+		}
+		revoked, _ = res.RowsAffected()
+		if revoked > 0 {
+			if gerr := tx.GetContext(ctx, &dep, `SELECT `+taskDependencySelectCols+` FROM `+taskDependencyFrom+` WHERE d.id = $1`, id); gerr != nil {
+				return nil, gerr
+			}
+		}
+	}
+	if err == nil {
+		if cerr := tx.Commit(); cerr != nil {
+			return nil, cerr
+		}
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		var exists bool
+		if qerr := r.db.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM task_dependencies WHERE id = $1)`, id); qerr == nil && exists {
+			return nil, domain.ErrStaleDependencyGeneration
+		}
+		return nil, nil
+	}
+	if err != nil {
 		return nil, err
 	}
 	return &dep, nil
@@ -231,11 +316,12 @@ func (r *TaskDependencyRepo) DeployedTasks(ctx context.Context, taskIDs []uuid.U
 	if len(taskIDs) == 0 {
 		return out, nil
 	}
-	const q = `SELECT DISTINCT dv.task_id FROM vcs_links dv
+	q := `SELECT DISTINCT dv.task_id FROM vcs_links dv
 		WHERE dv.task_id = ANY($1::uuid[])
 		  AND dv.link_type = 'pr'
 		  AND COALESCE(dv.metadata->'deployed'->>'sha', '') <> ''
-		  AND dv.metadata->'deployed'->>'at' IS NOT NULL`
+		  AND dv.metadata->'deployed'->>'at' IS NOT NULL
+		  AND dv.metadata->'deployed'->>'environment' = '` + domain.VCSEnvProd + `'`
 	var ids []uuid.UUID
 	if err := r.db.SelectContext(ctx, &ids, q, pq.Array(taskIDs)); err != nil {
 		return nil, err

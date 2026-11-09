@@ -106,6 +106,13 @@ func TestInstalledExtensionRepo_UpdateCatalog_Refusals(t *testing.T) {
 	require.Error(t, repo.UpdateCatalog(ctx, newCatalogTarget(), domain.CatalogUpdateGuard{FromVersion: "1", FromCommitSHA: "other"}))
 	require.NoError(t, mock.ExpectationsWereMet())
 
+	// the unattended pass never moves the runner: refused before any query
+	repo, mock = newInstalledExtensionRepoMock(t)
+	runner := newCatalogTarget()
+	runner.ExtensionID = domain.RunnerExtensionID
+	require.Error(t, repo.UpdateCatalog(ctx, runner, domain.CatalogUpdateGuard{FromVersion: "1", FromCommitSHA: "c1", Auto: true}))
+	require.NoError(t, mock.ExpectationsWereMet())
+
 	// the unattended pass: the target is the commit an admin rolled back from
 	repo, mock = newInstalledExtensionRepoMock(t)
 	mock.ExpectBegin()

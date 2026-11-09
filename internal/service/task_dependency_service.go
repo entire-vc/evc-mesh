@@ -2,9 +2,9 @@ package service
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -19,6 +19,17 @@ type taskDependencyService struct {
 	activityRepo repository.ActivityLogRepository
 	projectRepo  repository.ProjectRepository
 	resolver     DependencyResolver
+	vcsLinks     func(ctx context.Context, taskID uuid.UUID) ([]domain.VCSLink, error)
+}
+
+// WithDependencyVCSLinks wires the reader of a blocker's pr links, the records
+// delivery evidence is verified against. Without it only manual attestation can
+// make evidence trusted.
+func WithDependencyVCSLinks(svc TaskDependencyService, f func(ctx context.Context, taskID uuid.UUID) ([]domain.VCSLink, error)) TaskDependencyService {
+	if s, ok := svc.(*taskDependencyService); ok {
+		s.vcsLinks = f
+	}
+	return svc
 }
 
 // DependencyResolver is told when an edge became satisfied by evidence, so the
@@ -30,7 +41,18 @@ type DependencyResolver interface {
 // UpdateDependencyConditionInput is a partial update: nil fields are kept.
 type UpdateDependencyConditionInput struct {
 	Condition   *domain.DependencyCondition
+	Criterion   *string
 	EvidenceURL *string
+	// Evidence claim fields: compared with the blocker's own records, never fetched.
+	EvidenceCriterion string
+	HeadSHA           string
+	Environment       string
+	Attest            bool
+	// ActorID/ActorAuthorized: who writes and whether they may attest for the blocker.
+	ActorID         *uuid.UUID
+	ActorAuthorized bool
+	// ExpectedGeneration is the edge generation the caller read (CAS).
+	ExpectedGeneration *int64
 }
 
 // WithDependencyResolver wires the auto-transition hook into a service built by
@@ -135,12 +157,17 @@ func (s *taskDependencyService) Create(ctx context.Context, dep *domain.TaskDepe
 	if dep.EvidenceURL != nil && strings.TrimSpace(*dep.EvidenceURL) == "" {
 		dep.EvidenceURL = nil
 	}
+	// A URL sent at creation is only a link: trust comes from a verified
+	// evidence write (UpdateCondition), never from the URL's presence.
 	dep.ConditionMetAt = nil
-	if dep.Condition != domain.DependencyConditionTaskDone && dep.EvidenceURL != nil {
-		now := timeNow()
-		dep.ConditionMetAt = &now
-	} else if dep.Condition == domain.DependencyConditionTaskDone {
+	dep.Generation = 1
+	dep.EvidenceStatus = domain.EvidenceNone
+	dep.Criterion = strings.TrimSpace(dep.Criterion)
+	if dep.Condition == domain.DependencyConditionTaskDone {
 		dep.EvidenceURL = nil
+		dep.Criterion = ""
+	} else if dep.EvidenceURL != nil {
+		dep.EvidenceStatus = domain.EvidenceUnverified
 	}
 	dep.ConditionSatisfied = dep.EvidenceSatisfied()
 	dep.Warning = ""
@@ -274,31 +301,69 @@ func (s *taskDependencyService) UpdateCondition(ctx context.Context, id uuid.UUI
 	if dep.DependencyType != domain.DependencyTypeBlocks && condition != domain.DependencyConditionTaskDone {
 		return nil, apierror.BadRequest("condition applies to blocks dependencies only")
 	}
-	evidence := dep.EvidenceURL
-	if in.EvidenceURL != nil {
-		evidence = in.EvidenceURL
-	}
-	if evidence != nil && strings.TrimSpace(*evidence) == "" {
-		evidence = nil
+	criterion := dep.Criterion
+	if in.Criterion != nil {
+		criterion = strings.TrimSpace(*in.Criterion)
 	}
 	if condition == domain.DependencyConditionTaskDone {
-		if evidence != nil {
+		if in.EvidenceURL != nil && strings.TrimSpace(*in.EvidenceURL) != "" {
 			return nil, apierror.BadRequest("evidence_url needs a condition other than task_done")
 		}
-		evidence = nil
+		criterion = ""
 	}
-	var metAt *time.Time
-	if evidence != nil {
-		// Keep the original met-time when the same evidence is re-sent.
-		if dep.ConditionMetAt != nil && dep.Condition == condition && dep.EvidenceURL != nil && *dep.EvidenceURL == *evidence {
-			metAt = dep.ConditionMetAt
-		} else {
-			now := timeNow()
-			metAt = &now
+	upd := domain.DependencyConditionUpdate{Condition: condition, Criterion: criterion, ExpectedGeneration: in.ExpectedGeneration}
+	if condition != dep.Condition || criterion != dep.Criterion {
+		// Changing what the edge waits for is a decision about the generation the
+		// caller saw: the server never substitutes a fresh one for it.
+		if in.ExpectedGeneration == nil {
+			return nil, apierror.BadRequest("expected_generation is required to change condition or criterion")
 		}
+	} else if upd.ExpectedGeneration == nil {
+		// Evidence-only or an unchanged re-send: verified against the current
+		// edge in this request, written with CAS on the generation just read.
+		g := dep.Generation
+		upd.ExpectedGeneration = &g
 	}
-	updated, err := s.depRepo.UpdateCondition(ctx, id, condition, evidence, metAt)
+	if upd.ExpectedGeneration != nil && *upd.ExpectedGeneration != dep.Generation {
+		return nil, apierror.Conflict("dependency condition changed since it was read; re-read and resend")
+	}
+	if in.EvidenceURL != nil && strings.TrimSpace(*in.EvidenceURL) == "" {
+		// An explicit blank clears the evidence and re-arms the edge.
+		upd.Evidence = &domain.DependencyEvidence{Status: domain.EvidenceNone}
+	}
+	if in.EvidenceURL != nil && strings.TrimSpace(*in.EvidenceURL) != "" {
+		next := *dep
+		next.Condition, next.Criterion = condition, criterion
+		claim := domain.EvidenceClaim{URL: *in.EvidenceURL, Criterion: in.EvidenceCriterion, HeadSHA: in.HeadSHA, Environment: in.Environment, Attest: in.Attest}
+		var links []domain.VCSLink
+		if s.vcsLinks != nil && (condition == domain.DependencyConditionShipped || condition == domain.DependencyConditionDeployed || condition == domain.DependencyConditionAccepted) {
+			var lerr error
+			if links, lerr = s.vcsLinks(ctx, dep.DependsOnTaskID); lerr != nil {
+				return nil, lerr
+			}
+		}
+		ev := domain.VerifyDependencyEvidence(next, claim, links, in.ActorAuthorized)
+		if ev.Status == domain.EvidenceInvalid {
+			return nil, apierror.BadRequest("evidence invalid: " + ev.Reason)
+		}
+		ev.ActorID = in.ActorID
+		if ev.Status == domain.EvidenceTrusted {
+			// Same receipt re-sent for the same generation keeps its met-time.
+			if dep.ConditionMetAt != nil && dep.EvidenceStatus == domain.EvidenceTrusted && dep.Condition == condition &&
+				dep.Criterion == criterion && dep.EvidenceURL != nil && *dep.EvidenceURL == ev.URL {
+				ev.MetAt = dep.ConditionMetAt
+			} else {
+				now := timeNow()
+				ev.MetAt = &now
+			}
+		}
+		upd.Evidence = &ev
+	}
+	updated, err := s.depRepo.UpdateCondition(ctx, id, upd)
 	if err != nil {
+		if errors.Is(err, domain.ErrStaleDependencyGeneration) {
+			return nil, apierror.Conflict("dependency condition changed since it was read; re-read and resend the evidence")
+		}
 		return nil, err
 	}
 	if updated == nil {

@@ -323,6 +323,24 @@ type HumanGateInfo struct {
 	// found a marker), and conclude the gate is unclearable — the silent
 	// no-op that has cost the fleet a gate at least five times.
 	ClearPath HumanGateClearPath `json:"clear_path,omitempty"`
+
+	// DecisionPending is true when the ask's ADDRESSEE (a human user, or the agent
+	// named by the live marker itself) has answered after the live marker and the
+	// owner has not yet acted on it. It is the one fact that admits a gated owner
+	// to a single bounded turn: read the answer, then withdraw (or continue).
+	// It never clears anything and never widens who may clear: a non-addressee
+	// comment, a quote, a service comment or a comment older than the live marker
+	// leaves it false. Task dependency delivery fix.
+	DecisionPending bool `json:"decision_pending"`
+	// DecisionCommentID identifies the answer DecisionPending refers to. A caller
+	// that has already acted on this id must not act on it again (repeat event).
+	DecisionCommentID *uuid.UUID `json:"decision_comment_id,omitempty"`
+	// DecisionAuthorName names who answered.
+	DecisionAuthorName string `json:"decision_author_name,omitempty"`
+	// NextAction is the one verifiable step for the caller, in words a receipt can
+	// show: it differs for owner / non-owner / stale so "gate cleared" is never
+	// claimed from a comment alone.
+	NextAction string `json:"next_action,omitempty"`
 }
 
 // HumanGateClearPath is the door open to a gate's owner. The two values are not
@@ -415,6 +433,21 @@ type TaskDependency struct {
 	Condition      DependencyCondition `json:"condition" db:"condition"`
 	EvidenceURL    *string             `json:"evidence_url,omitempty" db:"evidence_url"`
 	ConditionMetAt *time.Time          `json:"condition_met_at,omitempty" db:"condition_met_at"`
+	// Criterion is the text of what this edge waits for ("" = the condition
+	// name). Evidence must name it. Generation counts changes of condition or
+	// criterion: evidence is bound to the generation it was recorded for.
+	Criterion  string `json:"criterion,omitempty" db:"criterion"`
+	Generation int64  `json:"generation" db:"generation"`
+	// EvidenceStatus separates trusted evidence (the only one that releases the
+	// edge) from a bare link (unverified), a receipt the blocker does not show
+	// yet (pending), a contradicting one (invalid) and a trusted one whose
+	// subject moved on (revoked).
+	EvidenceStatus      EvidenceStatus `json:"evidence_status" db:"evidence_status"`
+	EvidenceReason      *string        `json:"evidence_reason,omitempty" db:"evidence_reason"`
+	EvidenceHeadSHA     *string        `json:"evidence_head_sha,omitempty" db:"evidence_head_sha"`
+	EvidenceEnvironment *string        `json:"evidence_environment,omitempty" db:"evidence_environment"`
+	EvidenceLinkID      *uuid.UUID     `json:"evidence_link_id,omitempty" db:"evidence_link_id"`
+	EvidenceActorID     *uuid.UUID     `json:"evidence_actor_id,omitempty" db:"evidence_actor_id"`
 	// ConditionSatisfied is the full verdict "this edge no longer holds the
 	// dependent", computed on read by DependencyReleasedSQL (the Go twin is
 	// TaskDependency.Released): the evidence half OR the blocker's own state
@@ -455,6 +488,7 @@ func (c DependencyCondition) Valid() bool {
 // Readers that decide "does this edge still hold the dependent" use Released.
 func (d TaskDependency) EvidenceSatisfied() bool {
 	return d.Condition != "" && d.Condition != DependencyConditionTaskDone &&
+		d.EvidenceStatus == EvidenceTrusted &&
 		d.ConditionMetAt != nil && d.EvidenceURL != nil && strings.TrimSpace(*d.EvidenceURL) != ""
 }
 
@@ -462,13 +496,15 @@ func (d TaskDependency) EvidenceSatisfied() bool {
 // EvidenceSatisfied for the task_dependencies row aliased as alias. It is the
 // evidence half only; DependencyReleasedSQL adds the blocker's own state.
 func DependencySatisfiedSQL(alias string) string {
-	return "(" + alias + ".condition <> 'task_done' AND " + alias + ".condition_met_at IS NOT NULL AND COALESCE(btrim(" + alias + ".evidence_url), '') <> '')"
+	return "(" + alias + ".condition <> 'task_done' AND " + alias + ".evidence_status = 'trusted' AND " + alias + ".condition_met_at IS NOT NULL AND COALESCE(btrim(" + alias + ".evidence_url), '') <> '')"
 }
 
 // BlockerState is what Released reads off the blocker task. Category is the
 // category of the blocker's status ("" when unknown); IsShipped is tasks.is_shipped;
-// HasDeployment is true when any pr link of the blocker records a deploy
-// (metadata.deployed with sha and at).
+// HasDeployment is true when any pr link of the blocker records a deploy to the
+// canonical prod environment (metadata.deployed with sha, at and environment
+// "prod"). A deploy to staging, an empty or an unknown environment (including
+// the legacy spelling "production") does not count.
 type BlockerState struct {
 	Category      StatusCategory
 	IsShipped     bool
@@ -521,7 +557,8 @@ func (d TaskDependency) Released(b BlockerState) bool {
 // writing its own copy.
 func DependencyReleasedSQL(edge, blocker, category string) string {
 	deployed := "EXISTS (SELECT 1 FROM vcs_links dv WHERE dv.task_id = " + blocker + ".id AND dv.link_type = 'pr'" +
-		" AND COALESCE(dv.metadata->'deployed'->>'sha', '') <> '' AND dv.metadata->'deployed'->>'at' IS NOT NULL)"
+		" AND COALESCE(dv.metadata->'deployed'->>'sha', '') <> '' AND dv.metadata->'deployed'->>'at' IS NOT NULL" +
+		" AND dv.metadata->'deployed'->>'environment' = '" + VCSEnvProd + "')"
 	return "COALESCE(" + edge + ".dependency_type <> 'blocks' OR " + DependencySatisfiedSQL(edge) + " OR (CASE " + edge + ".condition" +
 		" WHEN 'shipped' THEN (" + blocker + ".is_shipped OR " + category + " = 'done')" +
 		" WHEN 'deployed' THEN (" + blocker + ".is_shipped OR " + deployed + ")" +

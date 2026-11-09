@@ -97,10 +97,22 @@ type installFixture struct {
 
 func newInstallFixture(t *testing.T, mutate func(e *Entry, cat *Catalog)) *installFixture {
 	t.Helper()
+	return newInstallFixtureAs(t, "", mutate)
+}
+
+// newInstallFixtureAs is newInstallFixture for an extension of the given id
+// ("" keeps the testdata one).
+func newInstallFixtureAs(t *testing.T, extID string, mutate func(e *Entry, cat *Catalog)) *installFixture {
+	t.Helper()
 	raw, err := os.ReadFile("testdata/mesh-ext-hello.json")
 	require.NoError(t, err)
 	var mf map[string]any
 	require.NoError(t, json.Unmarshal(raw, &mf))
+	if extID != "" {
+		mf["id"] = extID
+		raw, err = json.Marshal(mf)
+		require.NoError(t, err)
+	}
 	id, ver := mf["id"].(string), mf["version"].(string)
 
 	f := &installFixture{t: t, artifact: tarGz(t, map[string][]byte{"mesh-extension.json": raw, "README.md": []byte("x")}), store: &installMem{rows: map[string]*domain.InstalledExtension{}}, journal: &memJournal{}}

@@ -280,6 +280,96 @@ type VCSDelivery struct {
 	Deployed          *VCSDeployed   `json:"deployed,omitempty"`
 	Acceptance        *VCSAcceptance `json:"acceptance,omitempty"`
 	IsShipped         bool           `json:"is_shipped"`
+	// States separates the four delivery facts a consumer must not conflate:
+	// merged, independently reviewed, installed in production, accepted.
+	States VCSDeliveryStates `json:"states"`
+}
+
+// Values of a VCSDeliveryStates field. "unknown" means no evidence is recorded
+// (never read it as "no" or "yes"); "stale" means evidence exists but for
+// another commit than the one that was merged; "na" means the fact does not
+// apply to this kind of link.
+const (
+	DeliveryStateYes     = "yes"
+	DeliveryStateNo      = "no"
+	DeliveryStateUnknown = "unknown"
+	DeliveryStateStale   = "stale"
+	DeliveryStateNA      = "na"
+	// DeliveryStatePassed / Failed are the acceptance results.
+	DeliveryStatePassed = "passed"
+	DeliveryStateFailed = "failed"
+)
+
+// VCSDeliveryStates is the per-fact state of one link. is_shipped is true only
+// when Installed is "yes"; merge plus a green SHIP never implies it.
+type VCSDeliveryStates struct {
+	Merged    string `json:"merged"`
+	Reviewed  string `json:"reviewed"`
+	Installed string `json:"installed"`
+	Accepted  string `json:"accepted"`
+}
+
+// DeliveryStates derives the four states from the link. Task-level
+// applicability (research / docs / source-only work that needs no install) is
+// not knowable from a link: such a task simply keeps installed=unknown.
+func (l VCSLink) DeliveryStates() VCSDeliveryStates {
+	st := VCSDeliveryStates{
+		Merged: DeliveryStateNA, Reviewed: DeliveryStateNA,
+		Installed: DeliveryStateUnknown, Accepted: DeliveryStateUnknown,
+	}
+	if l.LinkType == VCSLinkTypePR {
+		switch l.Status {
+		case VCSLinkStatusMerged:
+			st.Merged = DeliveryStateYes
+		case VCSLinkStatusOpen, VCSLinkStatusClosed:
+			st.Merged = DeliveryStateNo
+		default:
+			// no recorded status: absent evidence, not "not merged"
+			st.Merged = DeliveryStateUnknown
+		}
+		head, ship := l.HeadSHA(), l.ShipSHA()
+		switch {
+		case ship == "" || head == "":
+			// no SHIP, or no current head to compare it with: not stale, unknown
+			st.Reviewed = DeliveryStateUnknown
+		case head == ship:
+			st.Reviewed = DeliveryStateYes
+		default:
+			st.Reviewed = DeliveryStateStale
+		}
+	}
+	merged := l.metaString(VCSLinkMetaMergedSHA)
+	if d := l.Deployed(); d != nil {
+		switch {
+		case d.Environment != VCSEnvProd:
+			// recorded only outside prod: not installed in production, not stale
+			st.Installed = DeliveryStateNo
+		case merged == "":
+			// a prod deploy with no merged sha to compare it with
+		case d.SHA == merged:
+			st.Installed = DeliveryStateYes
+		default:
+			st.Installed = DeliveryStateStale
+		}
+	}
+	if a := l.Acceptance(); a != nil {
+		// An acceptance counts only when bound to the commit it covers: the
+		// merged commit once merged, the current head before that. A receipt
+		// without a sha cannot be bound, so it stays unknown.
+		current := l.HeadSHA()
+		if l.Status == VCSLinkStatusMerged {
+			current = merged
+		}
+		switch {
+		case a.SHA == "" || current == "":
+			// unknown: nothing to bind the result to
+		case a.SHA != current:
+			st.Accepted = DeliveryStateStale
+		case a.Result == DeliveryStatePassed || a.Result == DeliveryStateFailed:
+			st.Accepted = a.Result
+		}
+	}
+	return st
 }
 
 func (l VCSLink) metaObject(key string, dst any) bool {
@@ -318,16 +408,13 @@ func (l VCSLink) CIVerdict() *VCSCIVerdict {
 	return &v
 }
 
-// IsShipped reports whether the change is live in production. Once a link carries
-// merged_sha or deployed it is judged only by them: deployed.sha equal to
-// merged_sha in production. Merged without a matching production deploy is not shipped.
-// A link with neither key predates these fields and keeps the old rule
-// (merged + independent SHIP + green pipeline on the head).
+// IsShipped reports whether the change is installed in production: deployed.sha equal
+// to merged_sha with environment prod. Merge, an independent SHIP and a green
+// pipeline are separate facts (see DeliveryStates) and never make a link
+// shipped: a link without install evidence reads false, not "delivered".
+// The terminal task.is_shipped flag is a different contract and is untouched.
 func (l VCSLink) IsShipped() bool {
 	merged, dep := l.metaString(VCSLinkMetaMergedSHA), l.Deployed()
-	if merged == "" && dep == nil {
-		return l.IsMergedShippedGreen()
-	}
 	return merged != "" && dep != nil && dep.SHA == merged && dep.Environment == VCSEnvProd
 }
 
@@ -340,6 +427,7 @@ func (l VCSLink) Delivery() VCSDelivery {
 		Deployed:          l.Deployed(),
 		Acceptance:        l.Acceptance(),
 		IsShipped:         l.IsShipped(),
+		States:            l.DeliveryStates(),
 	}
 }
 

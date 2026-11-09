@@ -260,7 +260,7 @@ func linkWaitTarget(ctx context.Context, tx *sqlx.Tx, workspaceID uuid.UUID, w *
 	// this wait is about to create.
 	err := tx.GetContext(ctx, &target, `SELECT bp.workspace_id, `+domain.DependencyReleasedSQL("d", "bt", "bts.category")+` AS released
 		FROM (SELECT 'blocks'::dependency_type AS dependency_type, $2::text AS condition,
-		             NULL::text AS evidence_url, NULL::timestamptz AS condition_met_at) d,
+		             NULL::text AS evidence_url, NULL::timestamptz AS condition_met_at, 'none'::text AS evidence_status) d,
 		     tasks bt
 		JOIN projects bp ON bp.id = bt.project_id
 		JOIN task_statuses bts ON bts.id = bt.status_id

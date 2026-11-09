@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 
@@ -20,6 +21,11 @@ type DependencyHandler struct {
 	depService  service.TaskDependencyService
 	taskService service.TaskService
 	graphReader repository.DependencyGraphReader
+	// vcsLinks feeds blocker review evidence (head_sha/ship_sha of the blocker's
+	// PR links) into the next-action projection; nil disables the feed.
+	proposals BindingProposalStore
+	resolver  service.DependencyResolver
+	vcsLinks  func(ctx context.Context, taskID uuid.UUID) ([]domain.VCSLink, error)
 }
 
 // NewDependencyHandler creates a new DependencyHandler with the given services.
@@ -33,6 +39,45 @@ func (h *DependencyHandler) WithGraphReader(reader repository.DependencyGraphRea
 	return h
 }
 
+// WithVCSLinks wires the blocker's PR links so the projection can refuse a
+// released edge whose recorded SHIP is not for the blocker's current head.
+func (h *DependencyHandler) WithVCSLinks(f func(ctx context.Context, taskID uuid.UUID) ([]domain.VCSLink, error)) *DependencyHandler {
+	h.vcsLinks = f
+	return h
+}
+
+// blockerEvidence returns the current head and the independent verdict of the
+// blocker's live (not closed) pr links. Only a recorded SHIP is positive: a link
+// with a head but no ship_sha means no SHIP was given (a DO-NOT-SHIP is not
+// stored anywhere, so it looks the same), and that is reported as a non-SHIP
+// verdict so the projection never treats such a done blocker as released.
+// Multiple links: any link whose verdict is not SHIP for its own head wins.
+func (h *DependencyHandler) blockerEvidence(c echo.Context, blocker uuid.UUID) (string, *domain.ReviewVerdict) {
+	if h.vcsLinks == nil || !middleware.MayAccessTask(c, blocker) {
+		return "", nil
+	}
+	links, err := h.vcsLinks(c.Request().Context(), blocker)
+	if err != nil {
+		return "", nil
+	}
+	var head string
+	var v *domain.ReviewVerdict
+	for _, l := range links {
+		if l.LinkType != domain.VCSLinkTypePR || l.Status == domain.VCSLinkStatusClosed || l.HeadSHA() == "" {
+			continue
+		}
+		cand := &domain.ReviewVerdict{Verdict: "SHIP", SHA: l.ShipSHA()}
+		if l.ShipSHA() == "" {
+			cand = &domain.ReviewVerdict{Verdict: "NO-SHIP-RECORDED"}
+		}
+		negative := cand.Verdict != "SHIP" || cand.SHA != l.HeadSHA()
+		if v == nil || (negative && (v.Verdict == "SHIP" && v.SHA == head)) {
+			head, v = l.HeadSHA(), cand
+		}
+	}
+	return head, v
+}
+
 // createDependencyRequest represents the JSON body for creating a dependency.
 type createDependencyRequest struct {
 	DependsOnTaskID uuid.UUID             `json:"depends_on_task_id"`
@@ -40,13 +85,22 @@ type createDependencyRequest struct {
 	// Condition defaults to task_done; EvidenceURL with another condition marks
 	// the edge satisfied at creation.
 	Condition   domain.DependencyCondition `json:"condition"`
+	Criterion   string                     `json:"criterion"`
 	EvidenceURL *string                    `json:"evidence_url"`
 }
 
 // updateDependencyRequest is the PATCH body; omitted fields are kept.
 type updateDependencyRequest struct {
 	Condition   *domain.DependencyCondition `json:"condition"`
+	Criterion   *string                     `json:"criterion"`
 	EvidenceURL *string                     `json:"evidence_url"`
+	// Claim bound to the criterion: compared with the blocker's own records.
+	EvidenceCriterion string `json:"evidence_criterion"`
+	HeadSHA           string `json:"head_sha"`
+	Environment       string `json:"environment"`
+	Attest            bool   `json:"attest"`
+	// ExpectedGeneration is the edge generation the caller read (CAS).
+	ExpectedGeneration *int64 `json:"expected_generation"`
 }
 
 // dependencyListResponse is returned by List. It replaces the old bare-array
@@ -80,6 +134,44 @@ func (h *DependencyHandler) List(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, dependencyListResponse{Outgoing: outgoing, Incoming: incoming})
+}
+
+// NextAction handles GET /tasks/:task_id/next-action: the versioned projection
+// of what may proceed now (prep) versus what still waits for a real prerequisite
+// (final acceptance). Derived from existing edges on read; nothing is stored.
+func (h *DependencyHandler) NextAction(c echo.Context) error {
+	taskID, err := uuid.Parse(c.Param("task_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+	}
+	p, err := h.projection(c, taskID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, p)
+}
+
+// projection builds the next-action projection of taskID for this caller.
+func (h *DependencyHandler) projection(c echo.Context, taskID uuid.UUID) (domain.NextActionProjection, error) {
+	// ListByTaskBothDirections: "outgoing" are the edges where this task is the
+	// dependent (task_id = taskID), i.e. what it REQUIRES; "incoming" are edges
+	// where it is the blocker (depends_on_task_id = taskID), i.e. what it PRODUCES.
+	outgoing, incoming, err := h.depService.ListByTaskBothDirections(c.Request().Context(), taskID)
+	if err != nil {
+		return domain.NextActionProjection{}, err
+	}
+	var in []domain.NextActionEdge
+	for _, d := range outgoing {
+		head, verdict := h.blockerEvidence(c, d.DependsOnTaskID)
+		in = append(in, domain.NextActionEdge{Edge: d.TaskDependency, BlockerHead: head, Verdict: verdict})
+	}
+	var out []domain.TaskDependency
+	for _, d := range incoming {
+		if middleware.MayAccessTask(c, d.TaskID) {
+			out = append(out, d.TaskDependency)
+		}
+	}
+	return domain.BuildNextAction(taskID, in, out), nil
 }
 
 func hideUnreachableRelatedTask(c echo.Context, dep *domain.EnrichedTaskDependency, related uuid.UUID) {
@@ -125,6 +217,7 @@ func (h *DependencyHandler) Create(c echo.Context) error {
 		DependsOnTaskID: req.DependsOnTaskID,
 		DependencyType:  depType,
 		Condition:       req.Condition,
+		Criterion:       req.Criterion,
 		EvidenceURL:     req.EvidenceURL,
 	}
 
@@ -151,7 +244,7 @@ func (h *DependencyHandler) Update(c echo.Context) error {
 	if bindErr := c.Bind(&req); bindErr != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
-	if req.Condition == nil && req.EvidenceURL == nil {
+	if req.Condition == nil && req.EvidenceURL == nil && req.Criterion == nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("condition or evidence_url is required"))
 	}
 	ctx := c.Request().Context()
@@ -169,7 +262,25 @@ func (h *DependencyHandler) Update(c echo.Context) error {
 	if !belongs {
 		return c.JSON(http.StatusNotFound, apierror.NotFound("TaskDependency"))
 	}
-	dep, err := h.depService.UpdateCondition(ctx, depID, service.UpdateDependencyConditionInput{Condition: req.Condition, EvidenceURL: req.EvidenceURL})
+	// Authority: attesting a criterion or recording a receipt needs access to the
+	// blocker, the card the evidence is about; the writer is stored on the edge.
+	var actor *uuid.UUID
+	if id, aerr := middleware.GetAgentID(c); aerr == nil {
+		actor = &id
+	} else if id, uerr := middleware.GetUserID(c); uerr == nil {
+		actor = &id
+	}
+	authorized := false
+	for i := range deps {
+		if deps[i].ID == depID {
+			authorized = actor != nil && middleware.MayAccessTask(c, deps[i].DependsOnTaskID)
+		}
+	}
+	dep, err := h.depService.UpdateCondition(ctx, depID, service.UpdateDependencyConditionInput{
+		Condition: req.Condition, Criterion: req.Criterion, EvidenceURL: req.EvidenceURL,
+		EvidenceCriterion: req.EvidenceCriterion, HeadSHA: req.HeadSHA, Environment: req.Environment, Attest: req.Attest,
+		ActorID: actor, ActorAuthorized: authorized, ExpectedGeneration: req.ExpectedGeneration,
+	})
 	if err != nil {
 		return handleError(c, err)
 	}

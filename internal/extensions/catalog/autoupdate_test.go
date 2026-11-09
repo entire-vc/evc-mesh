@@ -116,3 +116,35 @@ func TestAutoUpdateTimer_UnsafeSourcesFailSafely(t *testing.T) {
 	assert.Equal(t, "0.0.9", h.store.rows[h.id()].Version)
 	assert.Equal(t, 0, h.changes)
 }
+
+// The Runner is installed separately; the bulk pass must not move its row (and
+// with it the desired controller version), while other extensions still update
+// and an explicit update of the Runner still works.
+func TestAutoUpdateTimer_RunnerIsManualOnly(t *testing.T) {
+	ctx := context.Background()
+
+	// positive control: the same fixture under an ordinary id is auto-updated
+	ctl := newInstallFixtureAs(t, "ordinary-ext", nil)
+	ctl.installedAt("0.0.9", true)
+	timerService(ctl, true).AutoUpdateOnce(ctx)
+	require.Equal(t, "0.1.0", ctl.store.rows[ctl.id()].Version, "control extension is auto-updated")
+
+	f := newInstallFixtureAs(t, domain.RunnerExtensionID, nil)
+	f.installedAt("0.0.9", true)
+	timerService(f, true).AutoUpdateOnce(ctx)
+	row := f.store.rows[domain.RunnerExtensionID]
+	assert.Equal(t, "0.0.9", row.Version, "auto pass leaves the installed runner version")
+	assert.Equal(t, "old", row.CommitSHA)
+	assert.Equal(t, 0, f.changes)
+
+	res, err := f.inst.UpdateAll(ctx, nil)
+	require.NoError(t, err)
+	require.Len(t, res, 1)
+	assert.Equal(t, repoinstall.OutcomeUpToDate, res[0].Outcome)
+	assert.Empty(t, res[0].Error)
+
+	got, err := f.inst.Update(ctx, nil, domain.RunnerExtensionID, "")
+	require.NoError(t, err)
+	assert.Equal(t, repoinstall.OutcomeUpdated, got.Outcome, "explicit update still applies")
+	assert.Equal(t, "0.1.0", f.store.rows[domain.RunnerExtensionID].Version)
+}

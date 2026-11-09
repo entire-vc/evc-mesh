@@ -88,6 +88,12 @@ const (
 	// assigning changes nothing until the gate is answered.
 	ReasonTaskGated = "task_gated"
 
+	// ReasonGateOwnerDecision — the task is frozen by a human gate, the recipient is
+	// the OWNER of the live ask, and this comment is an answer from the ask's
+	// addressee. The gate still holds ordinary work, but the owner is admitted to
+	// one bounded turn to act on that answer (withdraw the marker). Task dependency delivery fix.
+	ReasonGateOwnerDecision = "gate_owner_decision"
+
 	// ReasonTaskScheduled — the task is the recipient's, but its start_after
 	// lies in the future: the feeder will not hand it over before then.
 	ReasonTaskScheduled = "task_scheduled"
@@ -114,7 +120,9 @@ const (
 	// ChannelThread — the comment is in the recipient's own active card, no
 	// push and no queue entry. See ReasonThreadOnly.
 	ChannelThread = "thread"
-	ChannelNone   = "none"
+	// ChannelGateOwner — the bounded gate-owner admission, see ReasonGateOwnerDecision.
+	ChannelGateOwner = "gate_owner"
+	ChannelNone      = "none"
 )
 
 // Recipient kinds.
@@ -162,11 +170,12 @@ type CommentDeliveryOutcome struct {
 // changes, and the author concludes the system is broken (#ed60c795 — "assign
 // it" shown on a card that was already the recipient's own).
 var hintsByReason = map[string]string{
-	ReasonNoQueuePath:   "recipient is alive but this task isn't in their queue — it is assigned to someone else or not in todo",
-	ReasonNotAssignee:   "recipient is alive but this task is assigned to someone else — assign it to them if they should act on it",
-	ReasonThreadOnly:    "the comment is in the thread of their active card, but it starts no turn for their lane (only the mention event reaches their stream, which does not act on events) — they will see it when they next read the card; ping them another way if it is urgent",
-	ReasonTaskGated:     "this task is frozen by an armed human gate — they won't pick it up until the gate is answered",
-	ReasonTaskScheduled: "this task is scheduled for later (start_after) — they won't pick it up before that date",
+	ReasonNoQueuePath:       "recipient is alive but this task isn't in their queue — it is assigned to someone else or not in todo",
+	ReasonNotAssignee:       "recipient is alive but this task is assigned to someone else — assign it to them if they should act on it",
+	ReasonThreadOnly:        "the comment is in the thread of their active card, but it starts no turn for their lane (only the mention event reaches their stream, which does not act on events) — they will see it when they next read the card; ping them another way if it is urgent",
+	ReasonTaskGated:         "this task is frozen by an armed human gate — they won't pick it up until the gate is answered",
+	ReasonGateOwnerDecision: "the gate owner is admitted to one bounded turn to act on the answer; ordinary work stays held until the owner withdraws the ask (GET task human_gate=false is the proof)",
+	ReasonTaskScheduled:     "this task is scheduled for later (start_after) — they won't pick it up before that date",
 }
 
 // ApplyHint sets Hint from o.Reason, in place. Safe to call on a row that

@@ -332,6 +332,14 @@ var workspaceParamResolvers = []workspaceParamResolver{
 	                           JOIN tasks t ON d.task_id = t.id AND t.deleted_at IS NULL
 	                           JOIN projects p ON t.project_id = p.id
 	                          WHERE d.id = $1`)},
+	// A binding proposal belongs to an edge of a task; the workspace is the one of
+	// that task's project, exactly as for :dep_id.
+	{param: "proposal_id", resolve: uuidResolver(`SELECT p.workspace_id
+	                           FROM dependency_binding_proposals bp
+	                           JOIN task_dependencies d ON d.id = bp.edge_id
+	                           JOIN tasks t ON d.task_id = t.id AND t.deleted_at IS NULL
+	                           JOIN projects p ON t.project_id = p.id
+	                          WHERE bp.id = $1`)},
 	{param: "invite_id", resolve: uuidResolver(`SELECT workspace_id FROM user_invites WHERE id = $1`)},
 	// A project's agent members are always agents of the project's own workspace —
 	// projectMemberService.AddAgentMember refuses anything else — so the agent's

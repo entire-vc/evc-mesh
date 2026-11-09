@@ -486,7 +486,7 @@ func TestBacklogPromotionAdvisory_EvidenceSatisfiedEdge_ClearsDep(t *testing.T) 
 	url, met := "https://mesh.example/e", time.Now()
 	require.NoError(t, h.depRepo.Create(context.Background(), &domain.TaskDependency{
 		ID: uuid.New(), TaskID: released.ID, DependsOnTaskID: monitor.ID, DependencyType: domain.DependencyTypeBlocks,
-		Condition: domain.DependencyConditionAccessReady, EvidenceURL: &url, ConditionMetAt: &met, CreatedAt: time.Now(),
+		Condition: domain.DependencyConditionAccessReady, EvidenceURL: &url, ConditionMetAt: &met, EvidenceStatus: domain.EvidenceTrusted, CreatedAt: time.Now(),
 	}))
 
 	decisions, err := h.svc.SweepAdvisory(context.Background())

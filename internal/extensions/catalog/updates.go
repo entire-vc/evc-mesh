@@ -217,6 +217,13 @@ func (in *Installer) update(ctx context.Context, actor *uuid.UUID, id, consentSH
 		res.Outcome = repoinstall.OutcomeUpToDate
 		return res, nil
 	}
+	// The Runner is installed separately from the catalog row; moving the row
+	// moves the desired controller version out from under a pinned runtime.
+	// It only changes on an explicit update.
+	if auto && id == domain.RunnerExtensionID {
+		res.Outcome = repoinstall.OutcomeUpToDate
+		return res, nil
+	}
 	if auto {
 		if skipped, serr := in.Store.SkippedCommit(ctx, id); serr != nil {
 			return nil, serr

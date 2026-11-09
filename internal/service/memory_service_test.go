@@ -2626,7 +2626,7 @@ func (m *mockTaskDepRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.TaskD
 func (m *mockTaskDepRepo) ListDependents(_ context.Context, _ uuid.UUID) ([]domain.TaskDependency, error) {
 	return nil, nil
 }
-func (m *mockTaskDepRepo) UpdateCondition(_ context.Context, _ uuid.UUID, _ domain.DependencyCondition, _ *string, _ *time.Time) (*domain.TaskDependency, error) {
+func (m *mockTaskDepRepo) UpdateCondition(_ context.Context, _ uuid.UUID, _ domain.DependencyConditionUpdate) (*domain.TaskDependency, error) {
 	return nil, nil
 }
 func (m *mockTaskDepRepo) Exists(_ context.Context, _, _ uuid.UUID) (bool, error) { return false, nil }

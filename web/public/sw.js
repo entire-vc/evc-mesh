@@ -21,21 +21,74 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+// Only a complete, same-origin success is worth keeping. A 404/5xx/opaque
+// response stored here would be served back as a "successful" page the next
+// time the network fails, and a poisoned /assets/ entry would keep the app
+// from booting.
+function isCacheable(response) {
+  return response.status === 200 && response.type === 'basic';
+}
+
+// A failed fetch for an app asset or page may be the browser's HTTP cache
+// replaying an old error (a deploy window can 404 a hashed file, and the
+// server marks /assets/* immutable for a year). Retry ONCE, bypassing the HTTP
+// cache; the successful answer replaces the poisoned entry. Bounded: one retry,
+// no loop, and only for same-origin navigations and /assets/.
+async function fetchWithRecovery(request) {
+  let response = null;
+  let failure = null;
+  try {
+    response = await fetch(request);
+    if (response.ok) return response;
+  } catch (err) {
+    failure = err;
+  }
+  const url = new URL(request.url);
+  const retriable =
+    url.origin === self.location.origin &&
+    (request.mode === 'navigate' || url.pathname.startsWith('/assets/'));
+  if (retriable) {
+    try {
+      const fresh = await fetch(request.url, {
+        cache: 'reload',
+        credentials: 'same-origin',
+      });
+      if (fresh.ok) return fresh;
+      if (!response) response = fresh;
+    } catch (err) {
+      failure = failure || err;
+    }
+  }
+  if (response) return response;
+  throw failure;
+}
+
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   // Network-first for API calls — never serve stale API responses
   if (event.request.url.includes('/api/')) return;
 
   event.respondWith(
-    fetch(event.request)
+    fetchWithRecovery(event.request)
       .then((response) => {
-        const clone = response.clone();
-        caches
-          .open(CACHE_NAME)
-          .then((cache) => cache.put(event.request, clone));
+        if (isCacheable(response)) {
+          const clone = response.clone();
+          event.waitUntil(
+            caches
+              .open(CACHE_NAME)
+              .then((cache) => cache.put(event.request, clone))
+              .catch(() => {})
+          );
+        }
         return response;
       })
-      .catch(() => caches.match(event.request))
+      .catch(() =>
+        // Offline: serve a stored success, otherwise a plain network error —
+        // never a stored failure and never `undefined`.
+        caches
+          .match(event.request)
+          .then((hit) => (hit && hit.ok ? hit : Response.error()))
+      )
   );
 });
 

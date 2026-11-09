@@ -656,7 +656,7 @@ func TestParkedWaitTypedEdgeFollowsItsCondition(t *testing.T) {
 	parked409(t, err)
 
 	_, err = f.repo.db.Exec(`INSERT INTO vcs_links(id,task_id,provider,link_type,external_id,url,metadata) VALUES($1,$2,'gitlab','pr','7','https://git.example/mr/7',$3::jsonb)`,
-		uuid.New(), blocker, `{"deployed":{"sha":"0123456789abcdef0123456789abcdef01234567","environment":"production","at":"2026-10-25T10:00:00Z"}}`)
+		uuid.New(), blocker, `{"deployed":{"sha":"0123456789abcdef0123456789abcdef01234567","environment":"prod","at":"2026-10-25T10:00:00Z"}}`)
 	require.NoError(t, err)
 	r, err := f.repo.ReleaseParkedWait(f.ctx, f.id, f.request(), "")
 	require.NoError(t, err)
