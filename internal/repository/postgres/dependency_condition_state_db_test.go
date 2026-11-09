@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -26,7 +27,7 @@ func TestDependencyConditionState_SQLReadersAgreeWithGoPredicate(t *testing.T) {
 		deployed string // "" none, else the metadata.deployed JSON stored on a link
 		linkType string // link_type of that link; "" means pr
 	}
-	const deployedMeta = `{"deployed":{"sha":"0123456789abcdef0123456789abcdef01234567","environment":"production","at":"2026-10-25T10:00:00Z"}}`
+	const deployedMeta = `{"deployed":{"sha":"0123456789abcdef0123456789abcdef01234567","environment":"prod","at":"2026-10-25T10:00:00Z"}}`
 	blockers := []blockerCase{
 		{name: "open", category: "in_progress"},
 		{name: "done", category: "done"},
@@ -36,6 +37,10 @@ func TestDependencyConditionState_SQLReadersAgreeWithGoPredicate(t *testing.T) {
 		{name: "open+deployed", category: "in_progress", deployed: deployedMeta},
 		{name: "done+deployed", category: "done", deployed: deployedMeta},
 		{name: "cancelled+deployed", category: "cancelled", deployed: deployedMeta},
+		// only the canonical prod environment releases a `deployed` edge by blocker state
+		{name: "open+deployed to staging", category: "in_progress", deployed: `{"deployed":{"sha":"0123456789abcdef0123456789abcdef01234567","environment":"staging","at":"2026-10-25T10:00:00Z"}}`},
+		{name: "open+deployed to legacy production", category: "in_progress", deployed: `{"deployed":{"sha":"0123456789abcdef0123456789abcdef01234567","environment":"production","at":"2026-10-25T10:00:00Z"}}`},
+		{name: "open+deployed without environment", category: "in_progress", deployed: `{"deployed":{"sha":"0123456789abcdef0123456789abcdef01234567","at":"2026-10-25T10:00:00Z"}}`},
 		{name: "deploy sha without at", category: "in_progress", deployed: `{"deployed":{"sha":"0123456789abcdef0123456789abcdef01234567","environment":"production"}}`},
 		// a deploy record on a non-pr link is not a delivery of the card's change
 		{name: "open+deployed on commit link", category: "in_progress", deployed: deployedMeta, linkType: "commit"},
@@ -147,7 +152,7 @@ func TestDependencyConditionState_ReaperAndEvidenceStillRelease(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, open, "an accepted edge on an open blocker holds its dependent")
 
-	f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type,condition,evidence_url,condition_met_at) VALUES($1,$2,$3,'blocks','deployed','https://mesh.example/e',now())`, uuid.New(), evidenced, blocker)
+	f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type,condition,evidence_url,condition_met_at,evidence_status) VALUES($1,$2,$3,'blocks','deployed','https://mesh.example/e',now(),'trusted')`, uuid.New(), evidenced, blocker)
 	edges, err := repo.ListByTask(ctx, evidenced)
 	require.NoError(t, err)
 	assert.True(t, edges[0].ConditionSatisfied, "evidence still releases a typed edge whatever the blocker")
@@ -156,4 +161,90 @@ func TestDependencyConditionState_ReaperAndEvidenceStillRelease(t *testing.T) {
 	open, err = repo.HasOpenBlockedDependents(ctx, blocker)
 	require.NoError(t, err)
 	assert.False(t, open, "only the evidence-released edge remains")
+}
+
+// Trusted evidence is revoked when the receipt it was bound to stops holding:
+// the pr link moves to another HEAD, loses its SHIP, or its acceptance turns
+// negative while the HEAD stays the same.
+func TestTaskDependencyDB_TrustedEvidenceRevokedOnReceiptDrift(t *testing.T) {
+	cases := []struct {
+		name, condition, before, after string
+	}{
+		{"accepted -> failed verdict", "accepted", `{"head_sha":"h1","acceptance":{"result":"passed","sha":"h1"}}`, `{"head_sha":"h1","acceptance":{"result":"failed","sha":"h1"}}`},
+		{"accepted -> other sha", "accepted", `{"head_sha":"h1","acceptance":{"result":"passed","sha":"h1"}}`, `{"head_sha":"h1","acceptance":{"result":"passed","sha":"h0"}}`},
+		{"shipped -> SHIP removed", "shipped", `{"head_sha":"h1","ship_sha":"h1"}`, `{"head_sha":"h1"}`},
+		{"shipped -> new HEAD", "shipped", `{"head_sha":"h1","ship_sha":"h1"}`, `{"head_sha":"h2","ship_sha":"h1"}`},
+		{"deployed -> other environment", "deployed", `{"head_sha":"h1","deployed":{"sha":"h1","environment":"prod"}}`, `{"head_sha":"h1","deployed":{"sha":"h1","environment":"staging"}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newGraphDBFixture(t, 2)
+			ids := f.ids(t)
+			blocker, waiting := ids[0], ids[1]
+			link, edge := uuid.New(), uuid.New()
+			f.exec(t, `INSERT INTO vcs_links(id,task_id,provider,link_type,external_id,url,metadata) VALUES($1,$2,'gitlab','pr','1','https://git.example/mr/1',$3::jsonb)`, link, blocker, tc.before)
+			env := "prod"
+			f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type,condition,evidence_url,condition_met_at,evidence_status,evidence_head_sha,evidence_environment,evidence_link_id)
+				VALUES($1,$2,$3,'blocks',$4,'https://mesh.example/e',now(),'trusted','h1',$5,$6)`, edge, waiting, blocker, tc.condition, env, link)
+			repo := postgres.NewTaskDependencyRepo(f.db)
+			got, err := repo.GetByID(context.Background(), edge)
+			require.NoError(t, err)
+			require.True(t, got.ConditionSatisfied, "trusted evidence releases before the drift")
+
+			f.exec(t, `UPDATE vcs_links SET metadata=$2::jsonb WHERE id=$1`, link, tc.after)
+			got, err = repo.GetByID(context.Background(), edge)
+			require.NoError(t, err)
+			assert.Equal(t, domain.EvidenceRevoked, got.EvidenceStatus)
+			assert.False(t, got.ConditionSatisfied, "revoked evidence no longer releases")
+		})
+	}
+}
+
+// Evidence verified against a link that moved on before the edge write must not
+// end up trusted: the write re-checks the receipt under a lock on the link row.
+func TestTaskDependencyDB_EvidenceStoredAfterLinkMovedIsRevoked(t *testing.T) {
+	f := newGraphDBFixture(t, 2)
+	ids := f.ids(t)
+	blocker, waiting := ids[0], ids[1]
+	link, edge := uuid.New(), uuid.New()
+	// The link already moved to h2; the verifier saw h1.
+	f.exec(t, `INSERT INTO vcs_links(id,task_id,provider,link_type,external_id,url,metadata) VALUES($1,$2,'gitlab','pr','1','https://git.example/mr/1',$3::jsonb)`,
+		link, blocker, `{"head_sha":"h2","ship_sha":"h1"}`)
+	f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type,condition) VALUES($1,$2,$3,'blocks','shipped')`, edge, waiting, blocker)
+	repo := postgres.NewTaskDependencyRepo(f.db)
+	cur, err := repo.GetByID(context.Background(), edge)
+	require.NoError(t, err)
+	gen := cur.Generation
+	now := time.Now()
+	got, err := repo.UpdateCondition(context.Background(), edge, domain.DependencyConditionUpdate{
+		Condition: domain.DependencyCondition("shipped"), Criterion: cur.EffectiveCriterion(),
+		ExpectedGeneration: &gen,
+		Evidence: &domain.DependencyEvidence{URL: "https://git.example/mr/1", Status: domain.EvidenceTrusted,
+			HeadSHA: "h1", LinkID: &link, MetAt: &now},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, domain.EvidenceRevoked, got.EvidenceStatus)
+	assert.False(t, got.ConditionSatisfied, "stale receipt must not release the edge")
+}
+
+// Deleting the pr link a trusted receipt is bound to revokes the evidence.
+func TestTaskDependencyDB_TrustedEvidenceRevokedWhenLinkDeleted(t *testing.T) {
+	f := newGraphDBFixture(t, 2)
+	ids := f.ids(t)
+	blocker, waiting := ids[0], ids[1]
+	link, edge := uuid.New(), uuid.New()
+	f.exec(t, `INSERT INTO vcs_links(id,task_id,provider,link_type,external_id,url,metadata) VALUES($1,$2,'gitlab','pr','1','https://git.example/mr/1',$3::jsonb)`,
+		link, blocker, `{"head_sha":"h1","ship_sha":"h1"}`)
+	f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type,condition,evidence_url,condition_met_at,evidence_status,evidence_head_sha,evidence_link_id)
+		VALUES($1,$2,$3,'blocks','shipped','https://mesh.example/e',now(),'trusted','h1',$4)`, edge, waiting, blocker, link)
+	repo := postgres.NewTaskDependencyRepo(f.db)
+	got, err := repo.GetByID(context.Background(), edge)
+	require.NoError(t, err)
+	require.True(t, got.ConditionSatisfied)
+
+	f.exec(t, `DELETE FROM vcs_links WHERE id=$1`, link)
+	got, err = repo.GetByID(context.Background(), edge)
+	require.NoError(t, err)
+	assert.Equal(t, domain.EvidenceRevoked, got.EvidenceStatus)
+	assert.False(t, got.ConditionSatisfied, "evidence without its receipt no longer releases")
 }

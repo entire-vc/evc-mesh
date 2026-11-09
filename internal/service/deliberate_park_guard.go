@@ -28,7 +28,14 @@ type activityStatusChange struct {
 		Old string `json:"old"`
 		New string `json:"new"`
 	} `json:"status"`
+	Source string `json:"source"`
 }
+
+// leaseReaperSourcePrefix marks moves written by checkoutLeaseReaper.parkTask
+// (Source "lease_reaper.unleased" / "lease_reaper.expired"). That park is a
+// system idle-park whose own comment promises "monitor-promotion lifts it back to
+// todo when the due_date arrives" (explicit park fix), so it is not a deliberate demotion.
+const leaseReaperSourcePrefix = "lease_reaper."
 
 // deliberateParkActivityPageSize bounds how far back wasDeliberatelyParkedFromBacklog
 // looks for the most recent task.moved entry. mesh-intake-sweep.py fetches the task's
@@ -101,6 +108,12 @@ func wasDeliberatelyParkedFromBacklog(
 		// A task.moved entry with no readable status change (e.g. a pure position
 		// reorder) proves nothing about a demotion — fall through as "never resolved
 		// a status move" rather than guessing.
+		return false, nil
+	}
+
+	// A park written by the lease reaper keeps its due_date promise. Only the LAST
+	// move counts: if the owner moved the card afterwards, that move is what we read.
+	if strings.HasPrefix(lastMove.Source, leaseReaperSourcePrefix) || strings.HasPrefix(changes.Source, leaseReaperSourcePrefix) {
 		return false, nil
 	}
 

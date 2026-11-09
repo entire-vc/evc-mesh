@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "task_id": "00000000-0000-0000-0000-000000000003",
+  "generation": "v1:df60aa92da2e8390",
+  "stages": [
+    {
+      "stage": "prep",
+      "ready": true
+    },
+    {
+      "stage": "final_acceptance",
+      "ready": false,
+      "blocked_by": [
+        {
+          "edge_id": "00000000-0000-0000-0000-000000000002",
+          "from_task": "00000000-0000-0000-0000-000000000004",
+          "condition": "deployed",
+          "gates": [
+            "final_acceptance"
+          ],
+          "released": false,
+          "owner": "Developer One"
+        }
+      ]
+    }
+  ],
+  "next_action": "continue_prep",
+  "requires": [
+    {
+      "edge_id": "00000000-0000-0000-0000-000000000001",
+      "from_task": "00000000-0000-0000-0000-000000000002",
+      "condition": "contract_ready",
+      "gates": [
+        "prep",
+        "final_acceptance"
+      ],
+      "released": true,
+      "owner": "Lead"
+    },
+    {
+      "edge_id": "00000000-0000-0000-0000-000000000002",
+      "from_task": "00000000-0000-0000-0000-000000000004",
+      "condition": "deployed",
+      "gates": [
+        "final_acceptance"
+      ],
+      "released": false,
+      "owner": "Developer One"
+    }
+  ],
+  "produces": [
+    {
+      "edge_id": "00000000-0000-0000-0000-000000000003",
+      "to_task": "00000000-0000-0000-0000-000000000005",
+      "condition": "accepted"
+    }
+  ],
+  "authority": "owner via regular API/comment path; human and security gates unchanged"
+}

@@ -502,7 +502,7 @@ func TestDependencyGraphDB_ConditionEvidenceReleasesMonitorBlocker(t *testing.T)
 
 	released := ids[1:16]
 	for _, dep := range released {
-		f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type,condition,evidence_url,condition_met_at) VALUES($1,$2,$3,'blocks','access_ready','https://mesh.example/evidence',now())`, uuid.New(), dep, monitor)
+		f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type,condition,evidence_url,condition_met_at,evidence_status) VALUES($1,$2,$3,'blocks','access_ready','https://mesh.example/evidence',now(),'trusted')`, uuid.New(), dep, monitor)
 	}
 	plain, noEvidence := ids[16], ids[17]
 	f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type) VALUES($1,$2,$3,'blocks')`, uuid.New(), plain, monitor)
@@ -539,17 +539,41 @@ func TestDependencyGraphDB_ConditionEvidenceReleasesMonitorBlocker(t *testing.T)
 	id := uuid.New()
 	f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type) VALUES($1,$2,$3,'blocks')`, id, plain, monitor)
 	url, now := "https://mesh.example/e2", time.Now()
-	upd, err := repo.UpdateCondition(ctx, id, domain.DependencyConditionDeployed, &url, &now)
+	gen1 := int64(1)
+	upd, err := repo.UpdateCondition(ctx, id, domain.DependencyConditionUpdate{
+		Condition: domain.DependencyConditionDeployed, Criterion: "deployed", ExpectedGeneration: &gen1,
+		Evidence: &domain.DependencyEvidence{URL: url, Status: domain.EvidenceTrusted, MetAt: &now},
+	})
 	require.NoError(t, err)
 	require.NotNil(t, upd)
 	assert.True(t, upd.ConditionSatisfied)
+	assert.Equal(t, int64(2), upd.Generation, "a changed condition/criterion starts a new generation")
+
+	// CAS: evidence recorded for an older generation is refused.
+	staleGen := int64(1)
+	_, err = repo.UpdateCondition(ctx, id, domain.DependencyConditionUpdate{
+		Condition: domain.DependencyConditionDeployed, Criterion: "deployed", ExpectedGeneration: &staleGen,
+		Evidence: &domain.DependencyEvidence{URL: url, Status: domain.EvidenceTrusted, MetAt: &now},
+	})
+	assert.ErrorIs(t, err, domain.ErrStaleDependencyGeneration)
+
 	assert.Equal(t, 0, graphFixtureNode(t, f.read(t, uuid.Nil), plain).UnfinishedBlockers)
+
+	// Changing the criterion drops the evidence.
+	_, err = repo.UpdateCondition(ctx, id, domain.DependencyConditionUpdate{Condition: domain.DependencyConditionDeployed, Criterion: "deployed to prod"})
+	assert.Error(t, err, "a write without expected generation is refused")
+	gen2 := int64(2)
+	re, err := repo.UpdateCondition(ctx, id, domain.DependencyConditionUpdate{Condition: domain.DependencyConditionDeployed, Criterion: "deployed to prod", ExpectedGeneration: &gen2})
+	require.NoError(t, err)
+	assert.False(t, re.ConditionSatisfied)
+	assert.Equal(t, domain.EvidenceNone, re.EvidenceStatus)
+	assert.Equal(t, 1, graphFixtureNode(t, f.read(t, uuid.Nil), plain).UnfinishedBlockers, "a re-armed edge holds again")
 }
 
 func TestTaskDependencyDB_UpdateConditionUnknownEdge(t *testing.T) {
 	f := newGraphDBFixture(t, 1)
 	url := "https://mesh.example/e"
-	got, err := postgres.NewTaskDependencyRepo(f.db).UpdateCondition(context.Background(), uuid.New(), domain.DependencyConditionDeployed, &url, nil)
+	got, err := postgres.NewTaskDependencyRepo(f.db).UpdateCondition(context.Background(), uuid.New(), domain.DependencyConditionUpdate{Condition: domain.DependencyConditionDeployed, ExpectedGeneration: new(int64), Evidence: &domain.DependencyEvidence{URL: url}})
 	require.NoError(t, err)
 	assert.Nil(t, got, "an unknown edge is (nil, nil), like GetByID")
 }

@@ -26,7 +26,7 @@ func TestTaskDependencyReleased(t *testing.T) {
 	}
 	evidenced := func(c DependencyCondition) TaskDependency {
 		d := edge(c)
-		d.EvidenceURL, d.ConditionMetAt = &url, &met
+		d.EvidenceURL, d.ConditionMetAt, d.EvidenceStatus = &url, &met, EvidenceTrusted
 		return d
 	}
 
@@ -94,7 +94,7 @@ func TestTaskDependencyNeedsDeploymentLookup(t *testing.T) {
 	url, met := "https://mesh.example/e", time.Now()
 	assert.True(t, TaskDependency{DependencyType: DependencyTypeBlocks, Condition: DependencyConditionDeployed}.NeedsDeploymentLookup())
 	assert.False(t, TaskDependency{DependencyType: DependencyTypeBlocks, Condition: DependencyConditionAccepted}.NeedsDeploymentLookup())
-	assert.False(t, TaskDependency{DependencyType: DependencyTypeBlocks, Condition: DependencyConditionDeployed, EvidenceURL: &url, ConditionMetAt: &met}.NeedsDeploymentLookup(),
+	assert.False(t, TaskDependency{DependencyType: DependencyTypeBlocks, Condition: DependencyConditionDeployed, EvidenceURL: &url, ConditionMetAt: &met, EvidenceStatus: EvidenceTrusted}.NeedsDeploymentLookup(),
 		"evidence already releases it: no vcs_links query")
 }
 

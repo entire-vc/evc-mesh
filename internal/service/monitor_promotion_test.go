@@ -74,8 +74,15 @@ func newMonitorHarness() *monitorHarness {
 // backlog_promotion_advisory_test.go's addMove — same event shape, same reader.
 func (h *monitorHarness) addMove(t *testing.T, task *domain.Task, oldName, newName string, when time.Time) {
 	t.Helper()
+	h.addMoveFrom(t, task, oldName, newName, "", when)
+}
+
+// addMoveFrom is addMove with the move's source (e.g. "lease_reaper.unleased").
+func (h *monitorHarness) addMoveFrom(t *testing.T, task *domain.Task, oldName, newName, source string, when time.Time) {
+	t.Helper()
 	changes, err := json.Marshal(map[string]any{
 		"status": map[string]string{"old": oldName, "new": newName},
+		"source": source,
 	})
 	if err != nil {
 		t.Fatalf("marshal changes: %v", err)
@@ -697,12 +704,60 @@ func TestBacklogPromotion_EvidenceSatisfiedEdgeOnDeletedBlocker_Promoted(t *test
 	met := time.Now()
 	if err := h.depRepo.Create(context.Background(), &domain.TaskDependency{
 		ID: uuid.New(), TaskID: task.ID, DependsOnTaskID: uuid.New(), DependencyType: domain.DependencyTypeBlocks,
-		Condition: domain.DependencyConditionAccessReady, EvidenceURL: &evidence, ConditionMetAt: &met,
+		Condition: domain.DependencyConditionAccessReady, EvidenceURL: &evidence, ConditionMetAt: &met, EvidenceStatus: domain.EvidenceTrusted,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	if n := h.sweep(t); n != 1 {
 		t.Errorf("an evidence-satisfied edge must release the card even if its blocker is gone, got n=%d", n)
+	}
+}
+
+// explicit park fix: the lease reaper's own idle-park promises a due_date lift; guard 5 must
+// not read it as a deliberate demotion.
+func TestBacklogPromotion_ReaperPark_PastDue_Promoted(t *testing.T) {
+	h := newMonitorHarness()
+	projectID := uuid.New()
+	backlog := h.addStatus(t, projectID, domain.StatusCategoryBacklog)
+	h.addStatus(t, projectID, domain.StatusCategoryTodo)
+
+	task := h.addTask(t, projectID, backlog.ID, []string{"kind:monitor"}, hourAgo())
+	h.addMoveFrom(t, task, "review", "backlog", "lease_reaper.unleased", time.Now().Add(-2*time.Hour))
+
+	if n := h.sweep(t); n != 1 {
+		t.Errorf("a reaper park past due_date must be promoted, got n=%d", n)
+	}
+}
+
+// Manual move to backlog (no source) with no edges still skips, as before.
+func TestBacklogPromotion_ManualDemote_PastDue_StillSkipped(t *testing.T) {
+	h := newMonitorHarness()
+	projectID := uuid.New()
+	backlog := h.addStatus(t, projectID, domain.StatusCategoryBacklog)
+	h.addStatus(t, projectID, domain.StatusCategoryTodo)
+
+	task := h.addTask(t, projectID, backlog.ID, []string{"kind:monitor"}, hourAgo())
+	h.addMoveFrom(t, task, "in_progress", "backlog", "mcp", time.Now().Add(-2*time.Hour))
+
+	if n := h.sweep(t); n != 0 {
+		t.Errorf("a manual demotion must stay parked, got n=%d", n)
+	}
+}
+
+// Reaper parked it, then the owner moved it back to backlog themselves: the LAST
+// move decides, so it is a deliberate park and must not be lifted.
+func TestBacklogPromotion_ReaperPark_ThenOwnerDemote_Skipped(t *testing.T) {
+	h := newMonitorHarness()
+	projectID := uuid.New()
+	backlog := h.addStatus(t, projectID, domain.StatusCategoryBacklog)
+	h.addStatus(t, projectID, domain.StatusCategoryTodo)
+
+	task := h.addTask(t, projectID, backlog.ID, []string{"kind:monitor"}, hourAgo())
+	h.addMoveFrom(t, task, "in_progress", "backlog", "lease_reaper.unleased", time.Now().Add(-3*time.Hour))
+	h.addMoveFrom(t, task, "todo", "backlog", "mcp", time.Now().Add(-2*time.Hour))
+
+	if n := h.sweep(t); n != 0 {
+		t.Errorf("owner's later demotion must win over the earlier reaper park, got n=%d", n)
 	}
 }

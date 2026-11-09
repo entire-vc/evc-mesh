@@ -1196,7 +1196,7 @@ func (m *MockTaskDependencyRepository) Exists(_ context.Context, taskID, depends
 	return false, nil
 }
 
-func (m *MockTaskDependencyRepository) UpdateCondition(_ context.Context, id uuid.UUID, condition domain.DependencyCondition, evidenceURL *string, metAt *time.Time) (*domain.TaskDependency, error) {
+func (m *MockTaskDependencyRepository) UpdateCondition(_ context.Context, id uuid.UUID, upd domain.DependencyConditionUpdate) (*domain.TaskDependency, error) {
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
 	}
@@ -1209,7 +1209,23 @@ func (m *MockTaskDependencyRepository) UpdateCondition(_ context.Context, id uui
 	// Replace, never mutate: a caller holding the pointer GetByID returned must
 	// still see the edge as it was, like a real row read.
 	next := *dep
-	next.Condition, next.EvidenceURL, next.ConditionMetAt = condition, evidenceURL, metAt
+	if upd.ExpectedGeneration != nil && *upd.ExpectedGeneration != next.Generation {
+		return nil, domain.ErrStaleDependencyGeneration
+	}
+	if next.Condition != upd.Condition || next.Criterion != upd.Criterion {
+		next.Generation++
+		next.EvidenceURL, next.ConditionMetAt, next.EvidenceStatus = nil, nil, domain.EvidenceNone
+	}
+	next.Condition, next.Criterion = upd.Condition, upd.Criterion
+	if e := upd.Evidence; e != nil {
+		next.EvidenceURL = nil
+		if e.URL != "" {
+			u := e.URL
+			next.EvidenceURL = &u
+		}
+		next.ConditionMetAt, next.EvidenceStatus = e.MetAt, e.Status
+		next.EvidenceHeadSHA, next.EvidenceLinkID, next.EvidenceActorID = &e.HeadSHA, e.LinkID, e.ActorID
+	}
 	next.ConditionSatisfied = next.EvidenceSatisfied()
 	m.items[id] = &next
 	out := next
@@ -2503,10 +2519,17 @@ func (m *MockAgentService) SetGetByIDResult(a *domain.Agent, err error) {
 	m.getByIDOutput, m.getByIDErr, m.getByIDSet = a, err, true
 }
 
-func (m *MockAgentService) GetByID(_ context.Context, _ uuid.UUID) (*domain.Agent, error) {
+func (m *MockAgentService) GetByID(_ context.Context, id uuid.UUID) (*domain.Agent, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if !m.getByIDSet {
+		// Agents registered through AddAgent are found by ID; an unknown ID still
+		// panics so a test that never wired the lookup keeps failing loudly.
+		for _, a := range m.bySlug {
+			if a.ID == id {
+				return a, nil
+			}
+		}
 		panic("MockAgentService.GetByID not implemented")
 	}
 	return m.getByIDOutput, m.getByIDErr

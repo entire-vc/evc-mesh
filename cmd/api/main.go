@@ -737,6 +737,7 @@ func main() {
 		service.WithCommentContextCacheInvalidator(ctxCacheSvc),
 		service.WithCommentNotificationService(notificationService),
 		service.WithCommentTaskService(taskService),
+		service.WithCommentRulesService(rulesService),
 		service.WithHumanGateDecisionRepo(humanGateDecisionRepo),
 		service.WithCommentExternalRefRepo(taskExternalRefRepo),
 		service.WithCommentDependencyRepo(taskDependencyRepo),
@@ -745,6 +746,7 @@ func main() {
 		service.WithCommentTextGateParsing(cfg.HumanGate.CommentTextParsing),
 	)
 	depService := service.WithDependencyResolver(service.NewTaskDependencyService(taskDependencyRepo, taskRepo, activityLogRepo, projectRepo), autoTransitionSvc)
+	depService = service.WithDependencyVCSLinks(depService, vcsLinkRepo.ListByTask)
 	activityLogService := service.NewActivityLogService(activityLogRepo)
 	// Built here, not beside secretMaterializationService above: every
 	// issuance is journaled, so it needs the activity service.
@@ -1082,7 +1084,7 @@ func main() {
 	documentAttachmentHandler := handler.NewDocumentAttachmentHandler(documentAttachmentService)
 	documentCommentHandler := handler.NewDocumentCommentHandler(documentCommentService)
 	documentWatchHandler := handler.NewDocumentWatchHandler(documentWatchService)
-	depHandler := handler.NewDependencyHandler(depService, taskService).WithGraphReader(taskDependencyRepo)
+	depHandler := handler.NewDependencyHandler(depService, taskService).WithGraphReader(taskDependencyRepo).WithVCSLinks(vcsLinkRepo.ListByTask).WithBindingProposals(postgres.NewBindingProposalRepo(db)).WithConditionResolver(autoTransitionSvc)
 	agentHandler := handler.NewAgentHandlerWithEvents(agentService, taskService, taskStatusService, agentNotifyRedis, agentEventsRepo, sessionRepo)
 	agentControllerRepo := postgres.NewAgentControllerRepo(db)
 	agentHandler.SetControllerRepo(agentControllerRepo)
@@ -2084,10 +2086,14 @@ func main() {
 
 	// Dependency routes.
 	api.GET("/tasks/:task_id/dependencies", depHandler.List, wsAccess)
+	api.GET("/tasks/:task_id/next-action", depHandler.NextAction, wsAccess)
+	api.POST("/tasks/:task_id/dependencies/:dep_id/binding-proposals", depHandler.ProposeBinding, wsAccess, rbac(mw.PermUpdateTask))
+	api.POST("/tasks/:task_id/dependencies/:dep_id/binding-proposals/:proposal_id/confirm", depHandler.ConfirmBinding, wsAccess, rbac(mw.PermUpdateTask))
 	api.POST("/tasks/:task_id/dependencies", depHandler.Create, wsAccess, rbac(mw.PermUpdateTask))
 	api.PATCH("/tasks/:task_id/dependencies/:dep_id", depHandler.Update, wsAccess, rbac(mw.PermUpdateTask))
 	api.DELETE("/tasks/:task_id/dependencies/:dep_id", depHandler.Delete, wsAccess, rbac(mw.PermUpdateTask))
 	api.GET("/projects/:proj_id/dependency-graph", depHandler.DependencyGraph, projAccess)
+	api.GET("/projects/:proj_id/dependency-findings", depHandler.DependencyFindings, projAccess)
 
 	// Comment routes.
 	api.GET("/tasks/:task_id/comments", commentHandler.List, wsAccess)

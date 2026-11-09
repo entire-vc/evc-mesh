@@ -869,6 +869,7 @@ type commentService struct {
 	wsPublisher    WSPublisher
 	taskSvc        TaskService
 	hgdRepo        repository.HumanGateDecisionRepository
+	rulesSvc       RulesService
 	depRepo        repository.TaskDependencyRepository
 	followUpRoots  repository.ClosedFollowUpRootRepository
 	// followUpPending parks a finding whose delivery failed on a read/write
@@ -965,6 +966,12 @@ func WithCommentNotificationService(ns NotificationService) CommentServiceOption
 // enforcement step is skipped entirely.
 func WithCommentTaskService(ts TaskService) CommentServiceOption {
 	return func(s *commentService) { s.taskSvc = ts }
+}
+
+// WithCommentRulesService supplies the team directory / assignment rules used to confirm
+// that a decision comes from the project's lead (task dependency delivery fix). Nil refuses the lead path.
+func WithCommentRulesService(r RulesService) CommentServiceOption {
+	return func(s *commentService) { s.rulesSvc = r }
 }
 
 // WithHumanGateDecisionRepo injects the repository backing the third
@@ -1252,13 +1259,20 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 			s.liftParkedCardOnAssigneeMention(ctx, comment, task, wsID)
 			s.notifyMentions(ctx, comment, task, "", wsID)
 		}
+		// Task dependency delivery fix: an addressee's answer reaches the gate owner whether or not it
+		// @-mentions them; record that receipt here, independent of the mention path.
+		if wakes {
+			s.recordGateOwnerDelivery(ctx, comment, task)
+		}
 		if !s.textGateOff {
 			// Server-side enforcement: "❓ Blocking @user" → auto-move task to triage + arm gate.
 			s.enforceBlockingTriage(ctx, comment, task, wsID)
 			// Symmetric release: user comment after a prior blocking marker → clear human_gate.
 			s.releaseHumanGate(ctx, comment, task, wsID)
 			// Symmetric release: the SAME agent who raised a still-live ask withdraws it.
+			wasGated := task.HumanGate
 			s.releaseHumanGateOnWithdrawal(ctx, comment, task, wsID)
+			comment.GateReceipt = s.gateWithdrawalReceipt(ctx, comment, task, wasGated)
 			// General triage EXIT: human user responds on a non-gated triage task → in_progress.
 			s.enforceTriageExit(ctx, comment, task, wsID)
 		}
@@ -1568,6 +1582,14 @@ func (s *commentService) notifyMentions(
 	taskInTodo := statusCategory == string(domain.StatusCategoryTodo)
 	taskGated := task.HumanGate
 	taskScheduled := task.StartAfter != nil && task.StartAfter.After(now)
+	// Task dependency delivery fix: on a gated card the owner of the live ask is reachable by one
+	// path only — an answer from the ask's addressee. Resolved once per comment.
+	var gateInfo *domain.HumanGateInfo
+	if taskGated {
+		if gi, gerr := s.GetHumanGateOwner(ctx, task.ID); gerr == nil {
+			gateInfo = gi
+		}
+	}
 
 	seenID := make(map[uuid.UUID]bool)
 	var dbRows []domain.CommentMention
@@ -1624,8 +1646,11 @@ func (s *commentService) notifyMentions(
 					IsAssignee:      taskAssignedToAgent(task, agent.ID),
 					StatusCategory:  statusCategory,
 					Gated:           taskGated,
-					Scheduled:       taskScheduled,
-					Presence:        agent.ComputedStatus(presence.IsConnected(agent.ID)),
+					GateOwnerDecision: gateInfo != nil && gateInfo.DecisionPending &&
+						gateInfo.DecisionCommentID != nil && *gateInfo.DecisionCommentID == comment.ID &&
+						gateInfo.OwnerAgentID != nil && *gateInfo.OwnerAgentID == agent.ID,
+					Scheduled: taskScheduled,
+					Presence:  agent.ComputedStatus(presence.IsConnected(agent.ID)),
 				}, now))
 				dbRows = append(dbRows, domain.CommentMention{
 					CommentID:     comment.ID,
@@ -2648,6 +2673,25 @@ type humanGateMarkerScan struct {
 	// only that "no marker found" cannot be trusted to mean "no marker exists".
 	// Load-bearing only for the gate_author fallback; see ownerFromGateAuthor.
 	threadTruncated bool
+
+	// markerSlugs are the handles the live marker itself addresses (the people or
+	// agents whose answer the ask waits for) — task dependency delivery fix.
+	markerSlugs []string
+	// afterMarker holds, in thread order, every comment posted AFTER the live marker.
+	// A later marker resets it, so it only ever answers "what happened since the
+	// ask that is live now".
+	afterMarker []gateAnswerCandidate
+}
+
+// gateAnswerCandidate is the minimum a decision check needs about one comment.
+type gateAnswerCandidate struct {
+	id         uuid.UUID
+	authorID   uuid.UUID
+	authorType domain.ActorType
+	authorName string
+	body       string
+	createdAt  time.Time
+	note       bool // metadata.wakes=false: a note, never an answer
 }
 
 // scanHumanGateOwnership finds who owns taskID's currently-live human_gate
@@ -2740,8 +2784,17 @@ func (s *commentService) scanHumanGateOwnership(ctx context.Context, taskID uuid
 					lastRawArmAt = c.CreatedAt
 				}
 				if !hasBlockingMarker(c.Body) {
+					if scan.found {
+						cand := gateAnswerCandidate{id: c.ID, authorID: c.AuthorID, authorType: c.AuthorType, body: c.Body, createdAt: c.CreatedAt, note: !domain.CommentWakes(c.Metadata)}
+						if c.AuthorName != nil {
+							cand.authorName = *c.AuthorName
+						}
+						scan.afterMarker = append(scan.afterMarker, cand)
+					}
 					continue
 				}
+				scan.markerSlugs = blockingMarkerSlugs(c.Body)
+				scan.afterMarker = nil
 				// an internal ticket's soleMarkerAuthor scan intentionally counts EVERY
 				// marker-bearing comment ever posted on this thread, negated or not —
 				// unlike the "who owns it right now" scan just below, which only cares
@@ -2842,6 +2895,8 @@ func (s *commentService) GetHumanGateOwner(ctx context.Context, taskID uuid.UUID
 	info.OwnerName = scan.markerAuthorName
 	info.MarkerCommentID = &markerID
 	info.MarkerCreatedAt = &markerAt
+
+	s.applyGateDecision(ctx, info, scan, taskID)
 
 	gapRequired := !scan.soleMarkerAuthor || scan.rawArmPrecedesMarker
 	if gapRequired && timeNow().Sub(scan.markerCreatedAt) < minReaffirmToWithdrawalGap {

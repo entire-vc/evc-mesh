@@ -126,6 +126,14 @@ func (s *autoTransitionService) parentTransitionCandidate(ctx context.Context, t
 	if (fromReview && !hasUmbrellaLabel(parent.Labels)) || (!fromReview && status.Category != domain.StatusCategoryInProgress) {
 		return nil, uuid.Nil, nil
 	}
+	// Completing component/reviewer subtasks does not satisfy the parent's
+	// remaining delivery checks. An explicit handoff to review stays available.
+	if !fromReview {
+		if match := postMergeACMatch(parent); match != "" {
+			log.Printf("[auto-transition] holding parent %s: post_merge_ac_pending (%s)", taskID, match)
+			return nil, uuid.Nil, nil
+		}
+	}
 	subtasks, err := s.taskRepo.ListSubtasks(ctx, taskID)
 	if err != nil {
 		return nil, uuid.Nil, err

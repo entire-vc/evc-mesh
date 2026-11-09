@@ -102,6 +102,11 @@ type Comment struct {
 	// appears when there is something to say.
 	Delivery []CommentDeliveryOutcome `json:"delivery,omitempty" db:"-"`
 
+	// GateReceipt is set only on a comment that reads as a human_gate withdrawal on a
+	// gated task: what the server actually did with it. "cleared" is the ONLY value
+	// that says the gate came down; a comment alone never implies it. Task dependency delivery fix.
+	GateReceipt *GateReceipt `json:"gate_receipt,omitempty" db:"-"`
+
 	// URL is the canonical deep-link straight to this comment: the task's
 	// /t/<taskID> URL plus the ?comment=<id> focus parameter the web client
 	// already understands (task-panel.tsx opens the comments tab on it,
@@ -109,4 +114,19 @@ type Comment struct {
 	// highlights it). Computed per-response by the handler, never stored,
 	// hence db:"-" and omitempty.
 	URL string `json:"url,omitempty" db:"-"`
+}
+
+// Gate receipt outcomes.
+const (
+	GateReceiptCleared  = "cleared"   // this comment lifted the gate
+	GateReceiptNoOp     = "no_op"     // the gate was not raised, nothing to do
+	GateReceiptNotOwner = "not_owner" // the author does not own the live ask
+	GateReceiptStale    = "stale"     // the author owns it but the gate stayed (gap, ambiguity, re-armed)
+)
+
+// GateReceipt reports the result of a withdrawal-shaped comment with a verifiable next step.
+type GateReceipt struct {
+	Outcome    string `json:"outcome"`
+	Reason     string `json:"reason,omitempty"`
+	NextAction string `json:"next_action"`
 }

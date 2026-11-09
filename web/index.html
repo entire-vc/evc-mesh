@@ -136,6 +136,109 @@
         root.setAttribute("data-static-shell", id);
       })();
     </script>
+    <script id="boot-guard">
+      // Boot guard: runs before the module entry, so it still works when the
+      // entry (or one of its static imports) fails to load, which no code
+      // inside the bundle can handle. main.tsx sets window.__meshBooted.
+      // Recovery is bounded: ONE targeted cache-bypassing refetch of the failed
+      // file plus ONE reload per tab session, then a visible panel with the
+      // failing URL/stage and a manual Reload. It never clears storage or
+      // cookies and never touches the session.
+      (function () {
+        var FLAG = "mesh-boot-retry";
+        var done = false;
+        function clean(u) {
+          try { var x = new URL(u, location.href); return x.origin === location.origin ? x.pathname : x.origin + x.pathname; }
+          catch (e) { return "unknown"; }
+        }
+        function panel(stage, url, status) {
+          var root = document.getElementById("root");
+          if (!root || window.__meshBooted) return;
+          var box = document.createElement("div");
+          box.setAttribute("role", "alert");
+          box.setAttribute("data-boot-failure", stage);
+          box.style.cssText = "display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px;font-family:system-ui,sans-serif;text-align:center";
+          var inner = document.createElement("div");
+          inner.style.cssText = "max-width:420px";
+          var h = document.createElement("h1");
+          h.style.cssText = "font-size:18px;font-weight:600;margin:0 0 8px";
+          h.textContent = "Mesh could not start";
+          var p = document.createElement("p");
+          p.style.cssText = "font-size:14px;opacity:.75;margin:0 0 16px";
+          p.textContent = "A part of the app failed to load. Your session and data are untouched.";
+          var d = document.createElement("p");
+          d.style.cssText = "font:12px ui-monospace,monospace;opacity:.6;margin:0 0 16px;word-break:break-all";
+          d.setAttribute("data-boot-detail", "");
+          d.textContent = stage + (url ? " " + url : "") + (status ? " HTTP " + status : "");
+          var b = document.createElement("button");
+          b.type = "button";
+          b.textContent = "Reload";
+          b.style.cssText = "height:36px;padding:0 16px;border-radius:8px;border:1px solid currentColor;background:transparent;color:inherit;cursor:pointer;font-size:14px";
+          b.onclick = function () { location.reload(); };
+          inner.appendChild(h); inner.appendChild(p); inner.appendChild(d); inner.appendChild(b);
+          box.appendChild(inner);
+          root.textContent = "";
+          root.removeAttribute("data-static-shell");
+          root.appendChild(box);
+        }
+        function fail(stage, url) {
+          if (done || window.__meshBooted) return;
+          done = true;
+          var shown = url ? clean(url) : "";
+          var retried = false;
+          try { retried = sessionStorage.getItem(FLAG) === "1"; } catch (e) {}
+          if (retried || !window.fetch) { diagnose(stage, url, shown); return; }
+          // Reload only if the one-shot flag really persisted; otherwise the
+          // next load could not see it and the repair would loop.
+          var armed = false;
+          try { sessionStorage.setItem(FLAG, "1"); armed = sessionStorage.getItem(FLAG) === "1"; } catch (e) {}
+          if (!armed) { diagnose(stage, url, shown); return; }
+          // Overwrite a poisoned HTTP-cache entry, then reload once.
+          var bust = url ? fetch(url, { cache: "reload", credentials: "same-origin" }) : fetch(location.pathname, { cache: "reload", credentials: "same-origin" });
+          bust.then(function () { location.reload(); }, function () { diagnose(stage, url, shown); });
+        }
+        function diagnose(stage, url, shown) {
+          if (!url || !window.fetch) { panel(stage, shown); return; }
+          fetch(url, { cache: "no-store", credentials: "same-origin" }).then(
+            function (r) { panel(stage, shown, r.status); },
+            function () { panel(stage, shown, "network-error"); }
+          );
+        }
+        window.__meshBootFail = fail;
+        // Booting clears the one-shot retry flag, so a later failure can repair again.
+        var booted = false;
+        Object.defineProperty(window, "__meshBooted", {
+          configurable: true,
+          get: function () { return booted; },
+          set: function (v) {
+            booted = !!v;
+            if (booted) { try { sessionStorage.removeItem(FLAG); } catch (e) {} }
+          }
+        });
+        // A failed asset is acted on after a short grace period, so a request
+        // that is merely slow to report (or deliberately blocked by a test
+        // harness that wants the static shell) does not flash the panel.
+        window.addEventListener("error", function (e) {
+          var t = e && e.target;
+          if (t && (t.tagName === "SCRIPT" || t.tagName === "LINK") && (t.src || t.href)) {
+            var u = t.src || t.href;
+            if (clean(u).indexOf("/assets/") === 0) setTimeout(function () { fail("asset-load-failed", u); }, 3000);
+          }
+        }, true);
+        // vite:preloadError: a lazy chunk vanished (deploy under an open tab).
+        // One reload per minute picks up the new index.html; no loop.
+        window.addEventListener("vite:preloadError", function (e) {
+          var K = "mesh-chunk-reload";
+          try {
+            if (Date.now() - Number(sessionStorage.getItem(K) || 0) < 60000) return;
+            sessionStorage.setItem(K, String(Date.now()));
+          } catch (err) { return; }
+          e.preventDefault();
+          location.reload();
+        });
+        setTimeout(function () { fail("boot-timeout"); }, 20000);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

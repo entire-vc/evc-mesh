@@ -60,11 +60,11 @@ func TestVCSLink_IsShipped(t *testing.T) {
 	assert.False(t, mk(`{"deployed":{"sha":"`+m+`","environment":"prod"}}`).IsShipped(), "no merged_sha: fail closed")
 	assert.False(t, mk(`{}`).IsShipped())
 
-	// Legacy link without the new keys keeps the old merged+ship+green rule.
+	// Legacy link without the new keys: merge + SHIP + green is not install evidence.
 	ok := "success"
 	legacy := mk(`{"head_sha":"` + m + `","ship_sha":"` + m + `","pipeline_sha":"` + m + `"}`)
 	legacy.PipelineStatus = &ok
-	assert.True(t, legacy.IsShipped())
+	assert.False(t, legacy.IsShipped(), "merged+SHIP+green without a prod deploy is not shipped")
 }
 
 func TestPatchMetadata_DeployedIsIdempotent(t *testing.T) {

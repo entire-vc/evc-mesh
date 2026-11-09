@@ -606,6 +606,17 @@ dependency edge of this card. Reporting the same sha and env again is safe: the 
 `deployed_at` stands. The link must be a `pr` link of `task_id` (link ids are in `get_task`
 `vcs_links` and in the `add_vcs_link` result).
 
+**Reading a link's delivery state.** `delivery.states` gives four separate facts:
+`merged`, `reviewed` (independent SHIP bound to the current head), `installed` (deploy of
+the merged sha in production) and `accepted` (owner's acceptance result, counted only when its `sha` equals the merged sha, or the current head before merge; a receipt without `sha` stays `unknown`). Values: `yes` / `no`,
+`passed` / `failed` (acceptance), `unknown` (no evidence recorded: not "no", not "yes"),
+`stale` (evidence is for another commit than the merged one / the current head; a prod deploy of another sha is `stale`, a deploy recorded only outside prod is `no`) and `na`
+(does not apply, e.g. merge on a commit link). The link's `is_shipped`
+(`delivery.is_shipped`) is true only when `installed` is `yes`: merge plus a green SHIP
+never makes it true. Docs/research work that needs no install keeps `installed=unknown`;
+that is not a failure. `task.is_shipped` is a different, terminal flag on the card (it
+protects a finished task from being moved off done) and is not derived from these states.
+
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `task_id` | string | **Yes** | -- | Task ID |
@@ -1232,7 +1243,7 @@ records `get_project_knowledge` returns.
     "project_id": "550e8400-...",
     "key": "canonical-deploy-target",
     "category": "deploy",
-    "value": "mesh-api runs under systemd on prod-host, not docker. `systemctl restart mesh-api`.",
+    "value": "mesh-api runs under systemd in production-host, not docker. `systemctl restart mesh-api`.",
     "tags": ["kind:canonical"]
   }
 }

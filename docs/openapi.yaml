@@ -2471,6 +2471,48 @@ paths:
         "204":
           description: Deleted
 
+  /api/v1/tasks/{task_id}/next-action:
+    get:
+      summary: Versioned next-action projection (stages, requires, produces, generation)
+      description: >
+        Derived on read from existing blocks edges (no second status store).
+        prep and final_acceptance are reported separately; deployed/accepted/shipped
+        edges gate only final_acceptance. `generation` changes only when an input
+        changes; consumers wake only on a new generation. Schema version 1;
+        fixture: internal/domain/testdata/next_action_fixture_v1.json.
+      parameters:
+        - {name: task_id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200': {description: NextActionProjection}
+  /api/v1/tasks/{task_id}/dependencies/{dep_id}/binding-proposals:
+    post:
+      summary: Propose moving a blocks edge to another condition (suggestion only)
+      description: >
+        Body: new_condition, sources[], scope, base_generation (from next-action).
+        Records the proposal; never changes the edge.
+      parameters:
+        - {name: task_id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: dep_id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '201': {description: Stored proposal}
+        '422': {description: Missing sources/scope/generation or no change}
+  /api/v1/tasks/{task_id}/dependencies/{dep_id}/binding-proposals/{proposal_id}/confirm:
+    post:
+      summary: Confirm a binding proposal (dependent card owner only)
+      description: >
+        Only the dependent card's assignee, never the proposer; refused while a
+        human gate is held; base_generation must equal the current next-action
+        generation (409 otherwise); applies once (409 on replay). Changes the
+        condition through the regular update path without evidence, so the edge
+        is not marked satisfied.
+      parameters:
+        - {name: task_id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: dep_id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: proposal_id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200': {description: Updated dependency}
+        '403': {description: Not the owner, proposer, or human gate held}
+        '409': {description: Stale generation or already applied}
   /api/v1/projects/{proj_id}/dependency-graph:
     parameters:
       - name: proj_id
@@ -2503,6 +2545,52 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/TaskDependency"
+  /api/v1/projects/{proj_id}/dependency-findings:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Dependencies]
+      summary: Diagnose blocking-edge problems (loops, AND blockers, diamonds)
+      description: |
+        Advisory, read-only. Computed from the same actor-scoped snapshot as
+        dependency-graph, so restricted tasks keep identity and connectivity
+        only. An edge counts as holding only while its full released verdict
+        (evidence or the blocker's own state for the condition) is false.
+        Nothing here deletes, retargets or satisfies an edge; `action` is for
+        the named `owner`. `version` is the schema version (currently 1) and
+        `revision` the graph revision the findings were computed from, so a
+        consumer can tell a stale diagnosis from a current one.
+      responses:
+        "200":
+          description: Findings
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, revision, findings]
+                properties:
+                  version: {type: integer, example: 1}
+                  revision: {type: string}
+                  findings:
+                    type: array
+                    items:
+                      type: object
+                      required: [kind, tasks, action]
+                      properties:
+                        kind:
+                          type: string
+                          enum: [hard_cycle, semantic_loop, and_blockers, diamond]
+                        tasks: {type: array, items: {type: string, format: uuid}}
+                        edges: {type: array, items: {type: string, format: uuid}}
+                        action: {type: string}
+                        owner: {type: string}
+        "400": {description: Invalid proj_id}
+        "403": {description: Workspace or actor context missing}
 
   # ------------------------------------------------------------------
   # Custom Fields

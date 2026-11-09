@@ -56,8 +56,9 @@ func TestTaskDependencyService_Create_NoWarningWithCondition(t *testing.T) {
 	}
 	require.NoError(t, svc.Create(context.Background(), dep))
 	assert.Empty(t, dep.Warning, "an edge that names its own condition is not the deadlock shape")
-	require.NotNil(t, dep.ConditionMetAt)
-	assert.True(t, dep.ConditionSatisfied)
+	assert.Nil(t, dep.ConditionMetAt, "a URL at creation is only a link")
+	assert.False(t, dep.ConditionSatisfied)
+	assert.Equal(t, domain.EvidenceUnverified, dep.EvidenceStatus)
 }
 
 func TestTaskDependencyService_Create_ConditionValidation(t *testing.T) {
@@ -84,11 +85,17 @@ func TestTaskDependencyService_UpdateCondition(t *testing.T) {
 	require.NoError(t, svc.Create(ctx, dep))
 
 	cond := domain.DependencyConditionAccessReady
-	_, err := svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{Condition: &cond})
+	_, err := svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{ExpectedGeneration: genOf(depRepo, dep.ID), Condition: &cond})
 	require.NoError(t, err)
 	assert.False(t, depRepo.items[dep.ID].EvidenceSatisfied(), "condition without evidence does not release")
 
+	// A bare URL is only a link; a criterion-bound authorized attestation releases.
 	got, err := svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{EvidenceURL: strPtr("https://mesh.example/e")})
+	require.NoError(t, err)
+	assert.False(t, got.ConditionSatisfied, "URL alone never satisfies")
+	assert.Equal(t, domain.EvidenceUnverified, got.EvidenceStatus)
+	got, err = svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{EvidenceURL: strPtr("https://mesh.example/e"),
+		EvidenceCriterion: "access_ready", Attest: true, ActorAuthorized: true})
 	require.NoError(t, err)
 	assert.True(t, got.ConditionSatisfied)
 	assert.NotNil(t, got.ConditionMetAt)
@@ -99,7 +106,7 @@ func TestTaskDependencyService_UpdateCondition(t *testing.T) {
 	assert.Nil(t, got.ConditionMetAt)
 
 	task := domain.DependencyConditionTaskDone
-	_, err = svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{Condition: &task, EvidenceURL: strPtr("https://mesh.example/e")})
+	_, err = svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{ExpectedGeneration: genOf(depRepo, dep.ID), Condition: &task, EvidenceURL: strPtr("https://mesh.example/e")})
 	require.Error(t, err, "evidence on a task_done edge is meaningless")
 
 	_, err = svc.UpdateCondition(ctx, uuid.New(), UpdateDependencyConditionInput{Condition: &cond})
@@ -115,7 +122,7 @@ func (r *resolverSpy) CheckDependencyResolution(_ context.Context, id uuid.UUID)
 
 func TestTaskDependencyService_UpdateCondition_NotifiesResolver(t *testing.T) {
 	ctx := context.Background()
-	svc, _, taskRepo := setupTaskDependencyService()
+	svc, depRepo, taskRepo := setupTaskDependencyService()
 	spy := &resolverSpy{}
 	WithDependencyResolver(svc, spy)
 	a, b := uuid.New(), uuid.New()
@@ -125,10 +132,10 @@ func TestTaskDependencyService_UpdateCondition_NotifiesResolver(t *testing.T) {
 	require.NoError(t, svc.Create(ctx, dep))
 
 	cond := domain.DependencyConditionAccessReady
-	_, err := svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{Condition: &cond})
+	_, err := svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{ExpectedGeneration: genOf(depRepo, dep.ID), Condition: &cond})
 	require.NoError(t, err)
 	assert.Empty(t, spy.resolved, "no evidence yet: nothing was released")
-	_, err = svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{EvidenceURL: strPtr("https://mesh.example/e")})
+	_, err = svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{EvidenceURL: strPtr("https://mesh.example/e"), EvidenceCriterion: "access_ready", Attest: true, ActorAuthorized: true})
 	require.NoError(t, err)
 	assert.Equal(t, []uuid.UUID{b}, spy.resolved, "the dependents of the blocker are re-evaluated")
 }
@@ -145,7 +152,7 @@ func TestHasUnresolvedBlockers_EvidenceReleasesMonitorEdges(t *testing.T) {
 	for i := 0; i < 15; i++ {
 		edge := domain.TaskDependency{
 			TaskID: uuid.New(), DependsOnTaskID: monitor, DependencyType: domain.DependencyTypeBlocks,
-			Condition: domain.DependencyConditionAccessReady, EvidenceURL: &evidence, ConditionMetAt: &met,
+			Condition: domain.DependencyConditionAccessReady, EvidenceURL: &evidence, ConditionMetAt: &met, EvidenceStatus: domain.EvidenceTrusted,
 		}
 		assert.False(t, hasUnresolvedBlockers([]domain.TaskDependency{edge}, catStates(cats)))
 	}
@@ -195,7 +202,7 @@ func TestTaskDependencyService_UpdateCondition_Branches(t *testing.T) {
 	// relates_to edges carry no condition.
 	rel := &domain.TaskDependency{TaskID: a, DependsOnTaskID: b, DependencyType: domain.DependencyTypeRelatesTo}
 	require.NoError(t, svc.Create(ctx, rel))
-	_, err := svc.UpdateCondition(ctx, rel.ID, UpdateDependencyConditionInput{Condition: &cond})
+	_, err := svc.UpdateCondition(ctx, rel.ID, UpdateDependencyConditionInput{ExpectedGeneration: genOf(depRepo, rel.ID), Condition: &cond})
 	require.Error(t, err)
 
 	// Invalid condition.
@@ -206,23 +213,23 @@ func TestTaskDependencyService_UpdateCondition_Branches(t *testing.T) {
 	// Re-sending the same evidence keeps the original met-time.
 	dep := &domain.TaskDependency{TaskID: b, DependsOnTaskID: a, DependencyType: domain.DependencyTypeBlocks}
 	require.NoError(t, svc.Create(ctx, dep))
-	first, err := svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{Condition: &cond, EvidenceURL: strPtr("https://mesh.example/e")})
+	first, err := svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{ExpectedGeneration: genOf(depRepo, dep.ID), Condition: &cond, EvidenceURL: strPtr("https://mesh.example/e"), EvidenceCriterion: "access_ready", Attest: true, ActorAuthorized: true})
 	require.NoError(t, err)
 	timeNow = func() time.Time { return frozenTime.Add(time.Hour) }
-	again, err := svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{EvidenceURL: strPtr("https://mesh.example/e")})
+	again, err := svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{EvidenceURL: strPtr("https://mesh.example/e"), EvidenceCriterion: "access_ready", Attest: true, ActorAuthorized: true})
 	require.NoError(t, err)
 	assert.Equal(t, first.ConditionMetAt, again.ConditionMetAt)
-	changed, err := svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{EvidenceURL: strPtr("https://mesh.example/e2")})
+	changed, err := svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{EvidenceURL: strPtr("https://mesh.example/e2"), EvidenceCriterion: "access_ready", Attest: true, ActorAuthorized: true})
 	require.NoError(t, err)
 	assert.NotEqual(t, first.ConditionMetAt, changed.ConditionMetAt, "new evidence is a new observation")
 
 	// Back to task_done drops the evidence; a store failure is returned.
 	done := domain.DependencyConditionTaskDone
-	_, err = svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{Condition: &done, EvidenceURL: strPtr("")})
+	_, err = svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{ExpectedGeneration: genOf(depRepo, dep.ID), Condition: &done, EvidenceURL: strPtr("")})
 	require.NoError(t, err)
 	assert.Nil(t, depRepo.items[dep.ID].EvidenceURL)
 	depRepo.errToReturn = assert.AnError
-	_, err = svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{Condition: &cond})
+	_, err = svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{ExpectedGeneration: genOf(depRepo, dep.ID), Condition: &cond})
 	require.Error(t, err)
 }
 
@@ -249,24 +256,65 @@ func TestTaskDependencyService_Create_ConditionNormalisation(t *testing.T) {
 	assert.Nil(t, dep2.EvidenceURL)
 }
 
-func TestTaskDependencyService_Create_SatisfiedEdgeNotifiesResolver(t *testing.T) {
+func TestTaskDependencyService_Create_URLOnlyEdgeIsNotSatisfied(t *testing.T) {
 	ctx := context.Background()
 	svc, _, taskRepo := setupTaskDependencyService()
 	spy := &resolverSpy{}
 	WithDependencyResolver(svc, spy)
-	a, b, c := uuid.New(), uuid.New(), uuid.New()
+	a, c := uuid.New(), uuid.New()
 	addTask(taskRepo, a)
-	addTask(taskRepo, b)
 	addTask(taskRepo, c)
-
-	plain := &domain.TaskDependency{TaskID: a, DependsOnTaskID: b, DependencyType: domain.DependencyTypeBlocks}
-	require.NoError(t, svc.Create(ctx, plain))
-	assert.Empty(t, spy.resolved, "an unsatisfied edge releases nothing")
-
-	met := &domain.TaskDependency{
+	dep := &domain.TaskDependency{
 		TaskID: a, DependsOnTaskID: c, DependencyType: domain.DependencyTypeBlocks,
 		Condition: domain.DependencyConditionAccessReady, EvidenceURL: strPtr("https://mesh.example/e"),
 	}
-	require.NoError(t, svc.Create(ctx, met))
-	assert.Equal(t, []uuid.UUID{c}, spy.resolved, "an edge born satisfied re-evaluates the blocker's dependents")
+	require.NoError(t, svc.Create(ctx, dep))
+	assert.Empty(t, spy.resolved, "a URL at creation releases nothing")
+	assert.False(t, dep.ConditionSatisfied)
+}
+
+func genOf(r *MockTaskDependencyRepository, id uuid.UUID) *int64 {
+	g := r.items[id].Generation
+	return &g
+}
+
+func TestTaskDependencyService_UpdateCondition_GenerationContract(t *testing.T) {
+	ctx := context.Background()
+	svc, depRepo, taskRepo := setupTaskDependencyService()
+	a, b := uuid.New(), uuid.New()
+	addTask(taskRepo, a)
+	addTask(taskRepo, b)
+	dep := &domain.TaskDependency{TaskID: a, DependsOnTaskID: b, DependencyType: domain.DependencyTypeBlocks}
+	require.NoError(t, svc.Create(ctx, dep))
+	cond := domain.DependencyConditionAccessReady
+
+	// Changing the condition without the caller's generation is refused, never defaulted.
+	_, err := svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{Condition: &cond})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "expected_generation is required")
+	assert.Equal(t, domain.DependencyConditionTaskDone, depRepo.items[dep.ID].Condition, "nothing was written")
+
+	// A stale generation is a conflict.
+	stale := int64(99)
+	_, err = svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{Condition: &cond, ExpectedGeneration: &stale})
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 409, apiErr.Code)
+
+	// The generation the caller saw is accepted and advances the edge.
+	got, err := svc.UpdateCondition(ctx, dep.ID, UpdateDependencyConditionInput{Condition: &cond, ExpectedGeneration: genOf(depRepo, dep.ID)})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), got.Generation)
+
+	// Evidence-only and an unchanged re-send need no generation...
+	same := domain.DependencyConditionAccessReady
+	ev := UpdateDependencyConditionInput{Condition: &same, EvidenceURL: strPtr("https://mesh.example/e"), EvidenceCriterion: "access_ready", Attest: true, ActorAuthorized: true}
+	got, err = svc.UpdateCondition(ctx, dep.ID, ev)
+	require.NoError(t, err)
+	assert.True(t, got.ConditionSatisfied)
+	// ...but a generation that was passed and is stale is always rejected.
+	ev.ExpectedGeneration = &stale
+	_, err = svc.UpdateCondition(ctx, dep.ID, ev)
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 409, apiErr.Code)
 }

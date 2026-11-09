@@ -282,7 +282,7 @@ type TaskDependencyRepository interface {
 	Exists(ctx context.Context, taskID, dependsOnTaskID uuid.UUID) (bool, error)
 	// UpdateCondition sets the edge's condition, evidence and met-time and
 	// returns the stored row, or (nil, nil) when the edge does not exist.
-	UpdateCondition(ctx context.Context, id uuid.UUID, condition domain.DependencyCondition, evidenceURL *string, metAt *time.Time) (*domain.TaskDependency, error)
+	UpdateCondition(ctx context.Context, id uuid.UUID, upd domain.DependencyConditionUpdate) (*domain.TaskDependency, error)
 	// DeployedTasks returns the subset of taskIDs with a VCS link that records a
 	// deploy (metadata.deployed with sha and at) — the "deployed" input of
 	// domain.TaskDependency.Released.
