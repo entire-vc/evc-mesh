@@ -225,7 +225,7 @@ type moveTaskRequest struct {
 	Reason             string     `json:"reason,omitempty"`
 	SessionID          *uuid.UUID `json:"session_id,omitempty"`
 	CorrelationID      *uuid.UUID `json:"correlation_id,omitempty"`
-	Source             string     `json:"source,omitempty"` // "mcp" | "api" | "ui"
+	Source             string     `json:"source,omitempty"` // producer: "mcp", "api", "ui", "mesh-runner", ...; server-reserved values are refused
 }
 
 // bindStrictJSON decodes the JSON request body into out, refusing any field
@@ -1180,6 +1180,11 @@ func (h *TaskHandler) MoveTask(c echo.Context) error {
 	}
 	if input.Source == "" {
 		input.Source = "api"
+	} else if !service.ValidClientMoveSource(input.Source) {
+		// Server-written sources (auto_transition, checkout, lease_reaper.*, ...)
+		// would forge the audit trail and, for auto_transition, change the move.
+		return c.JSON(http.StatusBadRequest, apierror.BadRequestWithDetails(
+			"invalid source: must match ^[a-z0-9][a-z0-9._/-]{0,63}$ and not be a server-reserved value", input.Source))
 	}
 
 	moveCtx, moveWarnings := service.ContextWithMoveWarnings(c.Request().Context())

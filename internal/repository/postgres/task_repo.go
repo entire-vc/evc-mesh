@@ -1742,6 +1742,32 @@ const LiveWaitMarkerMaxAge = 48 * time.Hour
 //     indented with a no-break space is a declaration to the fleet only.
 const liveMarkerLineRE = `(?in)^[[:space:]]*(⏳[[:blank:]]*WAIT\M|↻ NEXT([[:blank:]]*:|[[:space:]]*$))`
 
+// liveRuntimeStateSQL is true for a card whose controller currently says it holds it:
+// a runtime_state of kind working, waiting or queued that is live by the same rule
+// ResolveRuntimeState applies on read (domain/runtime_state.go) — refreshed within
+// RuntimeStateStaleAfter ($3), or written from a declared wait (ref LIKE $4, kept by the
+// wait itself), and in both cases not past its own `until`.
+//
+// This is the authority on "is this card waiting", and it comes before the comment
+// marker below. The marker is a guess from text: it reads only the LATEST non-system
+// comment, so any later comment by anyone — an FYI, a reviewer's note, another lane's
+// answer — erased a standing wait and the card was parked with a due_date a day out
+// (runtime wait regression); and it expires after LiveWaitMarkerMaxAge whatever the card waits for.
+// The controller's own state has neither flaw: the runner republishes it on every pass
+// for as long as its attempt holds the card, and stops when the attempt ends or the
+// runner is gone, after which this exemption lapses on its own.
+//
+// `stopped` is deliberately not exempt: it means nobody is going to move the card.
+// A state with no updated_at (NULL in three-valued logic) claims nothing: the caller
+// wraps this in COALESCE(..., false), so an incomplete record never holds a card.
+// The marker exemption stays for drivers that publish no runtime state.
+const liveRuntimeStateSQL = `t.runtime_state IS NOT NULL
+		      AND t.runtime_state->>'kind' IN ('working', 'waiting', 'queued')
+		      AND ((t.runtime_state->>'updated_at')::timestamptz > now() - $3::interval
+		           OR t.runtime_state->>'ref' LIKE $4)
+		      AND (t.runtime_state->>'until' IS NULL
+		           OR (t.runtime_state->>'until')::timestamptz > now())`
+
 // FindStaleUnleasedInProgress returns in_progress tasks that hold NO checkout at
 // all and have been untouched for olderThan.
 //
@@ -1782,7 +1808,12 @@ const liveMarkerLineRE = `(?in)^[[:space:]]*(⏳[[:blank:]]*WAIT\M|↻ NEXT([[:b
 // by any route", which is the quantity the grace window was always meant to
 // measure.
 //
-// A card whose latest non-system comment carries a canonical outcome marker at the
+// A card with a live runtime_state of kind working/waiting/queued is NOT abandoned,
+// whatever its comments say: see liveRuntimeStateSQL. That is the controller's own
+// statement and is checked first.
+//
+// For drivers that publish no runtime state, the text fallback remains:
+// a card whose latest non-system comment carries a canonical outcome marker at the
 // start of any of its lines (`⏳ WAIT …` / `↻ NEXT …`, see liveMarkerLineRE) is NOT
 // abandoned, even with no checkout: the fleet rules
 // make release_task the LAST step after a WAIT, so "in_progress, no lease, quiet" is
@@ -1837,6 +1868,7 @@ func (r *TaskRepo) FindStaleUnleasedInProgress(ctx context.Context, olderThan ti
 		        COALESCE((SELECT max(a.created_at)  FROM artifacts a WHERE a.task_id  = t.id), t.updated_at),
 		        COALESCE((SELECT max(v.created_at)  FROM vcs_links v WHERE v.task_id  = t.id), t.updated_at)
 		      ) < now() - $1::interval
+		  AND NOT COALESCE((` + liveRuntimeStateSQL + `), false)
 		  AND NOT EXISTS (
 		      SELECT 1
 		      FROM (
@@ -1852,7 +1884,8 @@ func (r *TaskRepo) FindStaleUnleasedInProgress(ctx context.Context, olderThan ti
 	var rows []taskRow
 	iv := fmt.Sprintf("%d seconds", int64(olderThan.Seconds()))
 	waitCap := fmt.Sprintf("%d seconds", int64(LiveWaitMarkerMaxAge.Seconds()))
-	if err := r.db.SelectContext(ctx, &rows, q, iv, waitCap); err != nil {
+	stale := fmt.Sprintf("%d seconds", int64(domain.RuntimeStateStaleAfter.Seconds()))
+	if err := r.db.SelectContext(ctx, &rows, q, iv, waitCap, stale, domain.WaitRuntimeRefPrefix+"%"); err != nil {
 		return nil, err
 	}
 	return taskRowsToSlice(rows), nil

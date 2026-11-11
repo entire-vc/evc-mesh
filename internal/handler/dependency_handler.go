@@ -310,6 +310,20 @@ func (h *DependencyHandler) Delete(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid dependency_id"))
 	}
 
+	// expected_generation makes the delete a compare-and-delete. Absent: the
+	// legacy unconditional delete. Present it must be one positive integer.
+	var expectedGen *int64
+	if vals, ok := c.QueryParams()["expected_generation"]; ok {
+		if len(vals) != 1 {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("expected_generation must be given once"))
+		}
+		g, perr := strconv.ParseInt(vals[0], 10, 64)
+		if perr != nil || g <= 0 {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("expected_generation must be a positive integer"))
+		}
+		expectedGen = &g
+	}
+
 	ctx := c.Request().Context()
 	deps, err := h.depService.ListByTask(ctx, taskID)
 	if err != nil {
@@ -324,6 +338,15 @@ func (h *DependencyHandler) Delete(c echo.Context) error {
 	}
 	if !belongs {
 		return c.JSON(http.StatusNotFound, apierror.NotFound("TaskDependency"))
+	}
+
+	if expectedGen != nil {
+		// The generation is checked by the storage DELETE itself; the membership
+		// read above only decides 404 early.
+		if err := h.depService.DeleteIfGeneration(ctx, taskID, depID, *expectedGen); err != nil {
+			return handleError(c, err)
+		}
+		return c.NoContent(http.StatusNoContent)
 	}
 
 	if err := h.depService.Delete(ctx, depID); err != nil {

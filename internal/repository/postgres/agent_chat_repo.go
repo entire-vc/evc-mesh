@@ -830,3 +830,21 @@ func (r *AgentChatRepo) ServedAgents(ctx context.Context, project uuid.UUID, age
 	}
 	return out, nil
 }
+
+// OwnThreadIDs keeps the ids among ids that are the caller's own live threads
+// in this project: the same visibility rule as GetThread.
+func (r *AgentChatRepo) OwnThreadIDs(ctx context.Context, ws, project, user uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]bool, error) {
+	out := make(map[uuid.UUID]bool, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var own []uuid.UUID
+	if err := r.db.SelectContext(ctx, &own, `SELECT t.id FROM ext_agent_chat_threads t WHERE `+chatOwnThread+` AND t.id = ANY($4::uuid[])`,
+		ws, project, user, pq.Array(ids)); err != nil {
+		return nil, err
+	}
+	for _, id := range own {
+		out[id] = true
+	}
+	return out, nil
+}

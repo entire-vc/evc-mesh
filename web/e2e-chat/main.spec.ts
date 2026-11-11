@@ -112,9 +112,9 @@ for (const h of HARNESSES) {
       });
     });
 
-    // A reply of one block arrives as one delta on either harness: the interactive transcript holds
-    // whole blocks only and Codex writes its final message in one piece. S04 asks for text before
-    // completed; the multi-block stream is S04b.
+    // A reply of one block arrives as one delta on either harness: the interactive transcript (Claude)
+    // and the rollout (Codex) hold whole messages only. S04 asks for text before completed; the
+    // multi-block stream is S04b.
     test(`S04 ${h}: streaming: text arrives as delta(s) before completed, final carries the code`, async () => {
       await step("S04", h, async () => {
         // Deltas are collected from the WS frames of this page, from the first message on.
@@ -158,37 +158,29 @@ for (const h of HARNESSES) {
     });
 
     test(`S06 ${h}: Stop on a long running turn ends cancelled and frozen`, async () => {
-      // codex delivers its reply in one piece at turn end (S04b), so no delta marks the turn as running
-      // (jobs 414033, 414785). Its shell call does: the rollout writes the call before the command runs,
-      // and the bridge relays it at once as chat.turn.tool. Stop then lands before any reply text.
-      const byTurn = h === "codex";
+      // Both harnesses stream each message as it is written, so the opening sentence of the long turn is
+      // a real delta before the long step. Stop waits for it: a tool frame alone would let Stop land
+      // before any text and leave nothing partial to keep.
       await step("S06", h, async () => {
         await A.page.getByTestId("chat-input").fill(`${RUN_ID} ${holdTurnPrompt(h)}`);
-        // Stop is pressed only after the server has shown the turn at work: a real delta (claude) or
-        // tool call (codex), not a guess. The offset is taken before the send: the frame can land
-        // while the click is still resolving.
+        // Stop is pressed only after the server has shown a real delta of the reply, not a guess. The
+        // offset is taken before the send: the frame can land while the click is still resolving.
         const before = A.frames.length;
         const sentAt = Date.now();
         await A.page.getByTestId("chat-send").click();
-        if (byTurn) {
-          await waitTurnFrame(() => history(A, x, threadId), threadId, 3, "a tool call of the long turn",
-            () => A.frames.slice(before).find((f) => f.event === "chat.turn.tool" && f.thread_id === threadId));
-        } else {
-          await waitTurnFrame(() => history(A, x, threadId), threadId, 3, "a delta of the long reply",
-            () => A.frames.slice(before).find((f) => f.event === "chat.message.delta" && (f.textLen ?? 0) > 0));
-        }
+        await waitTurnFrame(() => history(A, x, threadId), threadId, 3, "a delta of the long reply",
+          () => A.frames.slice(before).find((f) => f.event === "chat.message.delta" && f.thread_id === threadId && (f.textLen ?? 0) > 0));
         // Stop exists only while the turn runs: each reloaded frame must still be mid-turn. A turn that is
         // already over fails here by name, not as a missing button after the reload.
-        await expectTurnRunning(A, x, threadId, 3, sentAt, byTurn);
+        await expectTurnRunning(A, x, threadId, 3, sentAt);
         await snap(A, `streaming-${h}`, undefined, undefined, [A.page.getByTestId("chat-stop")]);
-        await expectTurnRunning(A, x, threadId, 3, sentAt, byTurn);
+        await expectTurnRunning(A, x, threadId, 3, sentAt);
         await expect(A.page.getByTestId("chat-stop"), "the turn is still running when Stop is pressed").toBeVisible({ timeout: 15_000 });
         await A.page.getByTestId("chat-stop").click();
 
         const msg = await waitAssistantDone(A, x, threadId, 3, 120_000);
         expect(msg.status, "cancelled, not done").toBe("cancelled");
-        // codex: the reply row is created by the cancel itself and may be empty; claude keeps what streamed.
-        if (!byTurn) expect(msg.body.length, "the partial body is kept").toBeGreaterThan(0);
+        expect(msg.body.length, "the partial body is kept").toBeGreaterThan(0);
         await expect(A.page.getByText("stopped", { exact: true }).last()).toBeVisible();
         await snap(A, `cancelled-${h}`, undefined, undefined, [A.page.getByText("stopped", { exact: true })]);
 
@@ -200,7 +192,7 @@ for (const h of HARNESSES) {
           snaps.push({ body: m.body, status: m.status });
           await new Promise((r) => setTimeout(r, 2500));
         }
-        assertFrozen(snaps, "cancelled", !byTurn);
+        assertFrozen(snaps, "cancelled", true);
         assertNoDeltaAfter(A.frames, msg.id, terminalSeq);
 
         // The session stays usable: the next short message finishes.
@@ -212,7 +204,6 @@ for (const h of HARNESSES) {
     });
 
     test(`S04b ${h}: a reply of several blocks streams them one by one`, async () => {
-      test.skip(h === "codex", "codex rollout delivers the final message in one piece at turn end");
       await step("S04b", h, async () => {
         const multi = await newChatViaUi(A, x, h);
         await A.page.goto(chatUrl(x, multi));

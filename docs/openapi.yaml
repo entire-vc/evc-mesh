@@ -2466,10 +2466,30 @@ paths:
                 $ref: "#/components/schemas/TaskDependency"
     delete:
       tags: [Dependencies]
-      summary: Remove a dependency
+      summary: Remove a dependency (optionally compare-and-delete on generation)
+      description: |
+        With `expected_generation` the delete is atomic: the edge of this source task is removed only
+        if it is still at that generation (the predicate is part of the storage DELETE). A different
+        generation answers 409 and changes nothing. Without it the legacy unconditional delete runs.
+        New clients should always send it.
+      parameters:
+        - name: expected_generation
+          in: query
+          required: false
+          description: Positive integer, given once; the `generation` the caller read from the edge.
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
       responses:
         "204":
           description: Deleted
+        "400":
+          description: expected_generation is not a single positive integer
+        "404":
+          description: No such edge for this source task
+        "409":
+          description: The edge exists with a different generation; nothing was deleted
 
   /api/v1/tasks/{task_id}/next-action:
     get:
@@ -5173,6 +5193,61 @@ paths:
                 $ref: "#/components/schemas/Error"
         "404":
           description: Link not found on this task, or not a pr link
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/tasks/{task_id}/vcs-links/{link_id}/sync:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: link_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [VCSLinks]
+      summary: Re-read a GitLab MR link's HEAD and head pipeline from GitLab
+      description: |
+        For an MR link added after the merge, which no webhook will reach. Reads the MR the link
+        names from the workspace's configured GitLab host and, when GitLab reports it merged,
+        stores its head commit as head_sha and its head pipeline as pipeline_status/pipeline_sha
+        (the pipeline only when it ran on that head). Never changes the link status, ship_sha,
+        ci_verdict, acceptance, deployed or implementation_sha, never creates links and never
+        moves the task. A repeat with nothing new writes nothing (changed=false). Requires the
+        same permission as creating a VCS link.
+      operationId: syncVCSLink
+      responses:
+        "200":
+          description: Sync outcome
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  link:
+                    $ref: "#/components/schemas/VCSLink"
+                  changed:
+                    type: boolean
+                  reason:
+                    type: string
+                    description: Why nothing (or only the head) was stored.
+                    enum: [not_gitlab_delivery_mr, unparseable_url, external_id_mismatch, url_mismatch, not_merged, no_head_sha, no_pipeline, pipeline_sha_mismatch, unknown_pipeline_status, older_pipeline_stored, unchanged]
+        "404":
+          description: Link not found on this task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: No GitLab integration for the workspace, or GitLab did not answer; nothing was stored
           content:
             application/json:
               schema:

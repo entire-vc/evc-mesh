@@ -30,6 +30,8 @@ type turnStoreStub struct {
 	commitErr          error
 	committed          []*domain.TurnCommand
 	notes              []string
+	notHeld            bool
+	holdErr            error
 }
 
 func (s *turnStoreStub) CommitTurn(_ context.Context, cmd *domain.TurnCommand) (*domain.TurnCommandResult, error) {
@@ -43,6 +45,10 @@ func (s *turnStoreStub) CommitTurn(_ context.Context, cmd *domain.TurnCommand) (
 func (s *turnStoreStub) AddNote(_ context.Context, _, _ uuid.UUID, _ domain.ActorType, body string) (uuid.UUID, error) {
 	s.notes = append(s.notes, body)
 	return uuid.New(), nil
+}
+
+func (s *turnStoreStub) HoldsCheckout(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
+	return !s.notHeld, s.holdErr
 }
 
 func (s *turnStoreStub) TaskScope(context.Context, uuid.UUID) (projectID, workspaceID uuid.UUID, err error) {
@@ -88,6 +94,17 @@ func (h *turnHooksStub) AfterTurn(_ context.Context, _ uuid.UUID, kind domain.Tu
 type gitLabStub struct {
 	mrs       map[string]string
 	pipelines map[string]string
+	// hidden projects: this access cannot read them at all (GitLab answers 404).
+	hidden map[string]bool
+	// blind: the project lookup itself fails (transport, 5xx).
+	blind bool
+}
+
+func (g gitLabStub) ProjectVisible(_ context.Context, path string) (bool, error) {
+	if g.blind {
+		return false, errors.New("502")
+	}
+	return !g.hidden[path], nil
 }
 
 func (g gitLabStub) GetMergeRequestState(_ context.Context, path string, iid int) (gitlabapi.MergeRequestState, error) {
@@ -511,4 +528,47 @@ func TestTurnHooksFor(t *testing.T) {
 	err := (&taskService{}).ensureAssigneeProjectMember(ctx, task.ProjectID, &agent, domain.AssigneeType("bot"))
 	require.ErrorAs(t, err, &unresolved, "control: the shared check refuses an untyped principal")
 	assert.NoError(t, hooks.CheckHandoffAssignee(context.Background(), task.ProjectID, uuid.Nil), "a nil principal is a no-op")
+}
+
+// A project of another GitLab group: the workspace's access cannot read it, the
+// lane that asks can. The wait is recorded unverified instead of refused, so
+// the lane is not pushed back to a marker line.
+func TestTurnCommandService_WaitForProjectTheWorkspaceCannotRead(t *testing.T) {
+	hiddenGitLab := func(blind bool) GitLabCheckerSource {
+		g := gitLabStub{mrs: map[string]string{}, pipelines: map[string]string{},
+			hidden: map[string]bool{"other/p": true}, blind: blind}
+		return func(context.Context, uuid.UUID) (gitlabapi.MergeRequestChecker, bool) { return g, true }
+	}
+	pipe := WaitForInput{On: "pipeline", ProjectPath: ptr("other/p"), PipelineID: ptr(int64(700)), Until: ptr("finished")}
+	mr := WaitForInput{On: "mr", Provider: ptr("gitlab"), ProjectPath: ptr("other/p"), MRIID: ptr(7), Until: ptr("merged")}
+
+	for name, in := range map[string]WaitForInput{"pipeline": pipe, "merge request": mr} {
+		t.Run(name+" is recorded unverified", func(t *testing.T) {
+			e := newTurnEnv(hiddenGitLab(false))
+			_, err := e.svc.WaitFor(e.ctx, e.task, in)
+			require.NoError(t, err)
+			require.Len(t, e.store.committed, 1)
+			assert.Contains(t, e.store.committed[0].CommentBody, "Not confirmed here")
+		})
+		t.Run(name+" stays refused when GitLab gives no answer about the project", func(t *testing.T) {
+			e := newTurnEnv(hiddenGitLab(true))
+			_, err := e.svc.WaitFor(e.ctx, e.task, in)
+			assert.Equal(t, domain.CodeInvalidTarget, outcomeCode(t, err))
+			assert.Empty(t, e.store.committed)
+		})
+	}
+
+	t.Run("a linked merge request of a hidden project uses the link and says it is unverified", func(t *testing.T) {
+		e := newTurnEnv(hiddenGitLab(false))
+		e.links.byTask = []domain.VCSLink{{ID: uuid.New(), TaskID: e.task, Provider: domain.VCSProviderGitLab,
+			LinkType: domain.VCSLinkTypePR, URL: "https://git.example.com/other/p/-/merge_requests/7", Status: domain.VCSLinkStatusMerged}}
+		_, err := e.svc.WaitFor(e.ctx, e.task, mr)
+		assert.Equal(t, domain.CodeAlreadyMet, outcomeCode(t, err), "the card's own link says it is merged")
+	})
+
+	t.Run("a visible project with a missing object is still refused", func(t *testing.T) {
+		e := newTurnEnv(liveGitLab())
+		_, err := e.svc.WaitFor(e.ctx, e.task, WaitForInput{On: "pipeline", ProjectPath: ptr("g/p"), PipelineID: ptr(int64(999)), Until: ptr("finished")})
+		assert.Equal(t, domain.CodeInvalidTarget, outcomeCode(t, err))
+	})
 }

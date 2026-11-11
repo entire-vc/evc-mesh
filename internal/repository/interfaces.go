@@ -277,6 +277,12 @@ type TaskDependencyRepository interface {
 	// that needs the edge's type and endpoints before the row goes away.
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.TaskDependency, error)
 	Delete(ctx context.Context, id uuid.UUID) error
+	// DeleteIfGeneration deletes the edge only when it hangs off taskID and is
+	// still at generation gen: the predicate is part of the DELETE, not a prior
+	// read. No such edge for taskID -> apierror NotFound; the edge exists with
+	// another generation -> domain.ErrStaleDependencyGeneration, nothing is
+	// deleted and no trigger runs.
+	DeleteIfGeneration(ctx context.Context, taskID, id uuid.UUID, gen int64) error
 	ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
 	ListDependents(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
 	Exists(ctx context.Context, taskID, dependsOnTaskID uuid.UUID) (bool, error)
@@ -1374,8 +1380,8 @@ type VCSLinkRepository interface {
 	SetPipelineStatus(ctx context.Context, id uuid.UUID, pipelineID int64, status, sha string) (written bool, err error)
 	// MergeMetadata shallow-merges patch (a JSON object) into the link's
 	// metadata (jsonb ||): keys in patch are set, every other existing key is
-	// kept. Scoped to taskID and link_type=pr in the same statement. Returns
-	// the updated link, or nil when no pr link with that id exists on that task.
+	// kept. Scoped to taskID and link_type pr or commit in the same statement.
+	// Returns the updated link, or nil when no such link exists on that task.
 	MergeMetadata(ctx context.Context, taskID, id uuid.UUID, patch json.RawMessage) (*domain.VCSLink, error)
 }
 
@@ -2342,6 +2348,15 @@ type TaskWaitRepository interface {
 
 	// Resolve ends an active wait. Returns false when it was already resolved.
 	Resolve(ctx context.Context, id uuid.UUID, resolution domain.WaitResolution) (bool, error)
+
+	// GetForTask returns a wait of the task (active or not) and the task's
+	// workspace; (nil, Nil, nil) when the task has no such wait.
+	GetForTask(ctx context.Context, taskID, waitID uuid.UUID) (*domain.TaskWait, uuid.UUID, error)
+
+	// ResolveWithCause ends a wait of the task, recording who and why, and
+	// clears the task's runtime_state written from it. An already resolved
+	// wait comes back unchanged with resolved=false; a missing one is NotFound.
+	ResolveWithCause(ctx context.Context, taskID, waitID uuid.UUID, resolution domain.WaitResolution, cause string, by uuid.UUID) (w *domain.TaskWait, resolved bool, err error)
 }
 
 // TurnOutcomeRepository manages turn_outcomes. Append-only by design: there is

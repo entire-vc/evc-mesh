@@ -70,6 +70,8 @@ type stubVCSLinkService struct {
 	resolveWorkspaceCalls []uuid.UUID
 	resolveTaskID         uuid.UUID
 	resolveRef            service.TaskRef
+	syncCalls             [][2]uuid.UUID
+	syncReturnErr         error
 }
 
 func (s *stubVCSLinkService) Create(_ context.Context, input domain.CreateVCSLinkInput) (*domain.VCSLink, bool, error) {
@@ -85,6 +87,16 @@ func (s *stubVCSLinkService) Create(_ context.Context, input domain.CreateVCSLin
 	}
 	link := &domain.VCSLink{ID: uuid.New(), TaskID: input.TaskID}
 	return link, created, s.createReturnErr
+}
+
+func (s *stubVCSLinkService) SyncLink(_ context.Context, taskID, linkID uuid.UUID) (*service.VCSLinkSyncResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.syncCalls = append(s.syncCalls, [2]uuid.UUID{taskID, linkID})
+	if s.syncReturnErr != nil {
+		return nil, s.syncReturnErr
+	}
+	return &service.VCSLinkSyncResult{Link: &domain.VCSLink{ID: linkID, TaskID: taskID}, Changed: true}, nil
 }
 
 func (s *stubVCSLinkService) PatchShipSHAByURL(_ context.Context, ws uuid.UUID, mrURL, sha string, mayAccessTask func(uuid.UUID) bool) ([]domain.VCSLink, error) {

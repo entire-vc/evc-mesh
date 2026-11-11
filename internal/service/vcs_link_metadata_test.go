@@ -21,7 +21,7 @@ func (r *fakeVCSLinkRepo) MergeMetadata(_ context.Context, taskID, id uuid.UUID,
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	l := r.links[id]
-	if l == nil || l.TaskID != taskID || l.LinkType != domain.VCSLinkTypePR {
+	if l == nil || l.TaskID != taskID || l.LinkType != domain.VCSLinkTypePR && l.LinkType != domain.VCSLinkTypeCommit {
 		return nil, nil
 	}
 	merged := map[string]json.RawMessage{}
@@ -53,7 +53,7 @@ func TestPatchMetadata_MergesWithoutClobberingOtherKeys(t *testing.T) {
 	got, err := svc.PatchMetadata(context.Background(), link.TaskID, link.ID, map[string]any{"ship_sha": ship})
 	require.NoError(t, err)
 
-	var meta map[string]string
+	var meta map[string]any // ship_set is an object
 	require.NoError(t, json.Unmarshal(got.Metadata, &meta))
 	assert.Equal(t, ship, meta["ship_sha"])
 	assert.Equal(t, strings.Repeat("a", 40), meta["head_sha"], "head_sha must survive")
@@ -150,9 +150,9 @@ func TestPatchMetadata_NotFound(t *testing.T) {
 	require.ErrorAs(t, err, &apiErr, "link on another task")
 	assert.Equal(t, http.StatusNotFound, apiErr.Code)
 
-	svc, _, commit := patchMetaSetup(domain.VCSLinkTypeCommit)
-	_, err = svc.PatchMetadata(ctx, commit.TaskID, commit.ID, ship)
-	require.ErrorAs(t, err, &apiErr, "non-pr link")
+	svc, _, branch := patchMetaSetup(domain.VCSLinkTypeBranch)
+	_, err = svc.PatchMetadata(ctx, branch.TaskID, branch.ID, ship)
+	require.ErrorAs(t, err, &apiErr, "neither a pr nor a commit link")
 	assert.Equal(t, http.StatusNotFound, apiErr.Code)
 }
 

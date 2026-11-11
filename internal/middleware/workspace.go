@@ -205,6 +205,15 @@ var workspaceParamResolvers = []workspaceParamResolver{
 	                                JOIN tasks t ON dr.task_id = t.id AND t.deleted_at IS NULL
 	                                JOIN projects p ON t.project_id = p.id
 	                               WHERE dr.id = $1`)},
+	// A task wait (typed outcomes) names its tenant through its card.
+	// POST /tasks/:task_id/waits/:wait_id/resolve is the route; the handler
+	// also refuses a wait of another card. No notFoundResource, for the
+	// :att_id reason below.
+	{param: "wait_id", resolve: uuidResolver(`SELECT p.workspace_id
+	                        FROM task_waits w
+	                        JOIN tasks t ON w.task_id = t.id AND t.deleted_at IS NULL
+	                        JOIN projects p ON t.project_id = p.id
+	                       WHERE w.id = $1`)},
 	{param: "view_id", resolve: uuidResolver(`SELECT p.workspace_id
 	                            FROM saved_views v
 	                            JOIN projects p ON v.project_id = p.id
@@ -508,6 +517,8 @@ var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	// :thread_id belongs to one user, not to a workspace: every AgentChatRepo query carries workspace_id, project_id and user_id = caller, so another user's, a deleted and a missing thread are the same 404 thread_not_found
 	"/api/v1/projects/:proj_id/chat/threads/:thread_id/messages":                                  true,
 	"/api/v1/projects/:proj_id/chat/threads/:thread_id/stop":                                      true,
+	"/api/v1/projects/:proj_id/chat/threads/:thread_id/runtime":                                   true,
+	"/api/v1/projects/:proj_id/chat/runners/:runner_id/sessions":                                  true, // :runner_id is a runner's self-chosen id, not a row: AgentControllerRepo.RunnerChatSnapshots joins agents with workspace_id = the project's workspace, and entries list only the caller's own threads of :proj_id
 	"/api/v1/runner/chat/runners/:runner_id":                                                      true, // ChatRunnerRepo.RevokeRunner matches the runner id and the calling agent in one UPDATE (404 otherwise), and an agent belongs to one workspace
 	"/api/v1/host-local-qa/v1/deliveries/:delivery_id":                                            true, // HostLocalQARepo.Get matches the delivery id, the key's workspace and the sending agent in one SELECT, and answers anyone else with 404
 	"/api/v1/runner/host-local-qa/v1/deliveries/:delivery_id/ack":                                 true, // HostLocalQARepo.Ack matches the delivery to the key's workspace, agent and verified runner bearer in SQL, then every binding field of the body; every mismatch is the same 403
@@ -521,6 +532,7 @@ var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/runner/chat/turns/:id/start":                                                         true, // runner-only: ChatRunnerRepo.StartTurn pins the turn to the key's workspace and agent in SQL, and answers an unknown or foreign turn with the same 404
 	"/api/v1/runner/chat/turns/:id/session-token":                                                 true, // runner-only: ChatRunnerRepo.SessionContext pins the turn to the key's workspace and agent in SQL, and answers an unknown or foreign turn with the same 404
 	"/api/v1/runner/chat/turns/:id/lease":                                                         true, // runner-only: ChatRunnerRepo.RenewLease pins the turn to the key's workspace and agent in SQL, and answers an unknown or foreign turn with the same 404
+	"/api/v1/runner/chat/turns/:id/attachments/:attachment_id/download-url":                       true, // runner-only: ChatRunnerRepo.HeldTurnAttachment pins the turn to the key's workspace and agent and the holding runner id in SQL (an unknown or foreign turn is the same 404), and the attachment to that turn's own message
 	"/api/v1/runner/chat/turns/:id/events":                                                        true, // runner-only: ChatTurnEventsRepo.ApplyEvents serves only a turn of the key's own agent (ServesAgent), held by the calling runner id with the current claim_token, and answers an unknown or foreign turn with the same 404
 	"/api/v1/workspaces/:ws_id/chat/audit/threads/:thread_id":                                     true, // ChatAuditRepo.ThreadAudit keys the thread by workspace_id = :ws_id in SQL after the owner/admin check on that same workspace, and answers a thread of another workspace with 404
 	"/api/v1/workspaces/:ws_id/chat/audit/threads/:thread_id/events":                              true, // ChatAuditRepo.ThreadEvents keys the thread by workspace_id = :ws_id in SQL after the owner/admin check on that same workspace, and answers a thread of another workspace with 404

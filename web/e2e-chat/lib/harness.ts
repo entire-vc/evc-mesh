@@ -200,16 +200,77 @@ function tapWebSocket(): void {
   Object.defineProperty(window, "WebSocket", { configurable: true, get: () => current, set: (W: typeof WebSocket) => { current = wrap(W); } });
 }
 
+/**
+ * The API rate-limits every actor to MESH_RATE_LIMIT_API_RPM (600) requests per fixed
+ * minute bucket (limiter "api", key user:<id>, internal/middleware/ratelimit_redis.go) and
+ * answers 429 with Retry-After = seconds to the next bucket. A full ~25 min run can spend an
+ * actor's bucket, so a 429 is waited out here (the next bucket is empty) instead of failing
+ * the step. Only 429 is retried; every other status passes through untouched.
+ */
+export async function retryOn429<T extends { status: number; headers?: Record<string, string> }>(
+  call: () => Promise<T>, tries = 3, sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+): Promise<T> {
+  let res = await call();
+  for (let i = 1; i < tries && res.status === 429; i++) {
+    const ra = Number(res.headers?.["retry-after"]);
+    const wait = Number.isFinite(ra) && ra > 0 ? Math.min(ra, 65) : 15;
+    await sleep((wait + 1) * 1000);
+    res = await call();
+  }
+  return res;
+}
+
+/**
+ * An access token lives ~15 min; S07-expiry waits longer than that. A 401 is answered by one fresh login
+ * and one repeat of the call; a second 401 passes through, so a real auth failure still fails the step.
+ */
+export async function withReauth<T extends { status: number }>(call: () => Promise<T>, relogin: () => Promise<void>): Promise<T> {
+  const res = await call();
+  if (res.status !== 401) return res;
+  await relogin();
+  return call();
+}
+
+/** Soft budget under the 600 requests per minute actor limit: past it, the next call waits for the next minute bucket. */
+export const API_SOFT_BUDGET = 480;
+
+/** Resolves when `count` for the current minute bucket is under the soft budget; sleeps to the next bucket otherwise. */
+export async function waitForBudget(count: () => number, now: () => number = Date.now, sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))): Promise<void> {
+  while (count() >= API_SOFT_BUDGET) await sleep(60_000 - (now() % 60_000) + 500);
+}
+
+/** Requests per fixed minute bucket, the way the api limiter counts them; `peak` is the busiest bucket. */
+export function minuteCounter(now: () => number = Date.now) {
+  const perMinute = new Map<number, number>();
+  return {
+    bump: () => { const m = Math.floor(now() / 60_000); perMinute.set(m, (perMinute.get(m) ?? 0) + 1); },
+    used: () => perMinute.get(Math.floor(now() / 60_000)) ?? 0,
+    peak: () => Math.max(0, ...perMinute.values()),
+  };
+}
+
 /** One real login and one isolated browser context per actor; storage is never shared. */
 export async function openActor(browser: Browser, id: ActorId): Promise<Actor> {
   const c = cfg();
   const context = await browser.newContext({ baseURL: c.baseURL, viewport: { width: 1440, height: 900 }, permissions: ["clipboard-read", "clipboard-write"] });
   let page: Page | undefined;
+  // Counts the requests the per-actor "api" limiter sees: the page's own (UI clicks), /auth/me and the harness's api()/fetch() calls.
+  const { bump, used, peak: peakOf } = minuteCounter();
+  // An upper bound: a request fulfilled by a context.route never reaches the limiter but is counted here. Over-counting only
+  // makes the pacing earlier, never later, so it is the safe side for a budget guard.
+  context.on("request", (r) => { if (r.url().includes("/api/v1/")) bump(); });
   try {
-    const { accessToken } = await loginWithRetry(context.request, c.email(id), c.password(id));
-    const me = await context.request.get("/api/v1/auth/me", { headers: { Authorization: `Bearer ${accessToken}` } });
-    if (me.status() !== 200) throw new SetupFail(`actor ${id}: /auth/me answered ${me.status()}`);
-    const who = (await me.json()) as { id?: string; email?: string };
+    let { accessToken } = await loginWithRetry(context.request, c.email(id), c.password(id));
+    const relogin = async () => { accessToken = (await loginWithRetry(context.request, c.email(id), c.password(id))).accessToken; };
+    // /auth/login is not counted: it runs on its own limiter (auth-login, 5/min per IP), not on the per-actor "api" budget.
+    const meRes = await retryOn429(async () => {
+      await waitForBudget(used);
+      bump();
+      const r = await context.request.get("/api/v1/auth/me", { headers: { Authorization: `Bearer ${accessToken}` } });
+      return { status: r.status(), headers: r.headers(), json: () => r.json() };
+    });
+    if (meRes.status !== 200) throw new SetupFail(`actor ${id}: /auth/me answered ${meRes.status}`);
+    const who = (await meRes.json()) as { id?: string; email?: string };
     if (!who.id) throw new SetupFail(`actor ${id}: /auth/me carries no user id`);
     if (who.email?.toLowerCase() !== c.email(id).toLowerCase()) throw new SetupFail(`actor ${id}: session belongs to another user`);
     // Frames are taken inside the page, from every socket the app opens, as the app
@@ -224,22 +285,33 @@ export async function openActor(browser: Browser, id: ActorId): Promise<Actor> {
     page = await context.newPage();
     const f1 = new F1();
     f1.attach(page);
-    const auth = { Authorization: `Bearer ${accessToken}` };
     const req: APIRequestContext = context.request;
     return {
-      id, userId: who.id, token: accessToken, context, page, f1, frames,
+      id, userId: who.id, get token() { return accessToken; }, context, page, f1, frames,
       async fetch(method, path, body) {
-        return page!.evaluate(async ([m, u, b, t]) => {
+        // A relative URL parses only against an origin: a page still on about:blank is moved to the app first.
+        if (!/^https?:/.test(page!.url())) await page!.goto(c.baseURL, { waitUntil: "commit" });
+        await waitForBudget(used);
+        return withReauth(() => retryOn429(() => page!.evaluate(async ([m, u, b, t]) => {
           const r = await fetch(u as string, { method: m as string, headers: { Authorization: `Bearer ${t}`, ...(b ? { "Content-Type": "application/json" } : {}) }, body: b ? (b as string) : undefined, redirect: "manual" });
-          return { status: r.status === 0 ? 302 : r.status, text: await r.text().catch(() => "") };
-        }, [method, path, body === undefined ? "" : JSON.stringify(body), accessToken]);
+          return { status: r.status === 0 ? 302 : r.status, text: await r.text().catch(() => ""), headers: { "retry-after": r.headers.get("retry-after") ?? "" } };
+        }, [method, path, body === undefined ? "" : JSON.stringify(body), accessToken])), relogin);
       },
       async api(method, path, body, opts) {
-        const res = await req.fetch(path, { method, headers: auth, data: body as never, maxRedirects: opts?.maxRedirects });
-        const text = await res.text().catch(() => "");
-        return { status: res.status(), text, json: () => JSON.parse(text), headers: res.headers(), bytes: () => res.body() };
+        const res = await withReauth(() => retryOn429(async () => {
+          await waitForBudget(used);
+          bump();
+          const r = await req.fetch(path, { method, headers: { Authorization: `Bearer ${accessToken}` }, data: body as never, maxRedirects: opts?.maxRedirects });
+          return { status: r.status(), headers: r.headers(), r };
+        }), relogin);
+        const text = await res.r.text().catch(() => "");
+        return { status: res.status, text, json: () => JSON.parse(text), headers: res.headers, bytes: () => res.r.body() };
       },
-      close: () => context.close(),
+      close: () => {
+        const peak = peakOf();
+        row("RATE", id, "PASS", `peak at most ${peak} API requests in one minute (limit 600 per actor; routed requests are counted too)`);
+        return context.close();
+      },
     };
   } catch (e) {
     await context.close();

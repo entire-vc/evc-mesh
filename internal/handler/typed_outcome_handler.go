@@ -8,13 +8,14 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
-// TypedOutcomeHandler serves the runner's reads of typed turn outcomes:
-// /tasks/:task_id/turn-outcomes and /tasks/:task_id/wait
-// (docs/api/typed-outcomes.md §Reads).
+// TypedOutcomeHandler serves the runner's side of typed turn outcomes: the
+// reads /tasks/:task_id/turn-outcomes and /tasks/:task_id/wait, and the
+// resolve /tasks/:task_id/waits/:wait_id/resolve (docs/api/typed-outcomes.md).
 type TypedOutcomeHandler struct {
 	outcomes service.TypedOutcomeService
 	tasks    taskIDResolver
@@ -78,4 +79,31 @@ func (h *TypedOutcomeHandler) GetActiveWait(c echo.Context) error {
 		})
 	}
 	return c.JSON(http.StatusOK, w)
+}
+
+// ResolveWait handles POST /tasks/:task_id/waits/:wait_id/resolve — the
+// runner marks a wait ended by the event it observed
+// (docs/api/typed-outcomes.md §Resolving a wait).
+func (h *TypedOutcomeHandler) ResolveWait(c echo.Context) error {
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.tasks)
+	if err != nil {
+		return handleError(c, err)
+	}
+	waitID, err := uuid.Parse(c.Param("wait_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid wait id"))
+	}
+	var in service.ResolveWaitInput
+	if err = c.Bind(&in); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+	by := service.WaitResolver{}
+	by.AgentID, _ = mw.GetAgentID(c)
+	by.AuthWorkspaceID, _ = mw.GetAgentAuthWorkspaceID(c)
+	_, by.Connector = mw.GetOAuthConnectorUserID(c)
+	w, resolved, err := h.outcomes.ResolveWait(c.Request().Context(), taskID, waitID, by, in)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, map[string]any{"wait": w, "resolved": resolved})
 }

@@ -37,6 +37,22 @@ type fakeRunnerStore struct {
 	active    []postgres.ChatActiveTurn
 	activeErr error
 	activeRun uuid.UUID
+	att       *postgres.ChatTurnAttachment
+	attErr    error
+	attCalls  int
+	attArgs   heldAttachmentArgs
+}
+
+type heldAttachmentArgs struct {
+	workspace, runner, turn, attachment uuid.UUID
+	agents                              []uuid.UUID
+}
+
+func (f *fakeRunnerStore) HeldTurnAttachment(_ context.Context, ws uuid.UUID, agents []uuid.UUID,
+	runner, turn, attachment uuid.UUID) (*postgres.ChatTurnAttachment, error) {
+	f.attCalls++
+	f.attArgs = heldAttachmentArgs{workspace: ws, runner: runner, turn: turn, attachment: attachment, agents: agents}
+	return f.att, f.attErr
 }
 
 func (f *fakeRunnerStore) ClaimTurns(_ context.Context, p postgres.ChatClaimParams) ([]postgres.ChatClaimedTurn, error) {

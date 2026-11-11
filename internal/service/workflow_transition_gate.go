@@ -57,32 +57,66 @@ type ShipEvidenceDiagnosis struct {
 	Reasons []string           `json:"reasons"`
 }
 
-// ShipEvidenceLink is one delivery MR link and the facts it lacks.
+// ShipEvidenceLink is one delivery link (MR, or commit on a card without MR
+// links) and the facts it lacks.
 type ShipEvidenceLink struct {
-	LinkID     uuid.UUID `json:"link_id"`
-	ExternalID string    `json:"external_id"`
-	URL        string    `json:"url"`
-	Reasons    []string  `json:"reasons"`
+	LinkID     uuid.UUID          `json:"link_id"`
+	LinkType   domain.VCSLinkType `json:"link_type"`
+	ExternalID string             `json:"external_id"`
+	URL        string             `json:"url"`
+	Reasons    []string           `json:"reasons"`
 }
 
-// ReasonNoDeliveryLink: the card has no delivery MR link at all.
+// ReasonNoDeliveryLink: the card has neither a delivery MR link nor a commit link.
 const ReasonNoDeliveryLink = "no_delivery_link"
+
+// judgedLink is one delivery link and the facts it lacks.
+type judgedLink struct {
+	link domain.VCSLink
+	gaps []string
+}
+
+// judgeDeliveryLinks is the one selection both the gate and its diagnosis
+// read. Review-subject and relates_to links are never the card's delivery.
+// While the card has any delivery MR link, only MR links are judged (by
+// ShipEvidenceGaps) and every one must pass: a commit link never softens the
+// MR rule. Without MR links (a repository with no merge requests by design)
+// the commit links are judged by CommitShipGaps and one passing is enough.
+func judgeDeliveryLinks(links []domain.VCSLink, authorID *uuid.UUID) (judged []judgedLink, commitMode bool) {
+	var commits []domain.VCSLink
+	for _, l := range links {
+		if l.IsReviewSubject() || l.IsRelatesTo() {
+			continue
+		}
+		switch l.LinkType {
+		case domain.VCSLinkTypePR:
+			judged = append(judged, judgedLink{link: l, gaps: l.ShipEvidenceGaps()})
+		case domain.VCSLinkTypeCommit:
+			commits = append(commits, l)
+		}
+	}
+	if len(judged) > 0 {
+		return judged, false
+	}
+	for _, l := range commits {
+		judged = append(judged, judgedLink{link: l, gaps: l.CommitShipGaps(authorID)})
+	}
+	return judged, true
+}
 
 // diagnoseMergedShipped lists, for every delivery link (same selection as
 // mergedShippedEvidence), what is missing. Reasons is the first-seen-order
 // union across links. Links that already prove delivery are listed with no reasons.
-func diagnoseMergedShipped(links []domain.VCSLink) *ShipEvidenceDiagnosis {
+func diagnoseMergedShipped(links []domain.VCSLink, authorID *uuid.UUID) *ShipEvidenceDiagnosis {
 	d := &ShipEvidenceDiagnosis{Pattern: actorPatternAuthorIfMergedShipped, Links: []ShipEvidenceLink{}, Reasons: []string{}}
 	seen := map[string]bool{}
-	for _, l := range links {
-		if l.LinkType != domain.VCSLinkTypePR || l.IsReviewSubject() || l.IsRelatesTo() {
-			continue
-		}
-		gaps := l.ShipEvidenceGaps()
+	judged, _ := judgeDeliveryLinks(links, authorID)
+	for _, j := range judged {
+		l, gaps := j.link, j.gaps
 		if gaps == nil {
 			gaps = []string{}
 		}
-		d.Links = append(d.Links, ShipEvidenceLink{LinkID: l.ID, ExternalID: l.ExternalID, URL: l.URL, Reasons: gaps})
+		d.Links = append(d.Links, ShipEvidenceLink{LinkID: l.ID, LinkType: l.LinkType, ExternalID: l.ExternalID, URL: l.URL, Reasons: gaps})
 		for _, g := range gaps {
 			if !seen[g] {
 				seen[g] = true
@@ -110,7 +144,11 @@ func (d *ShipEvidenceDiagnosis) apiError(violation string) *apierror.Error {
 	var parts []string
 	for _, l := range d.Links {
 		if len(l.Reasons) > 0 {
-			parts = append(parts, fmt.Sprintf("MR %s: %s", l.ExternalID, strings.Join(l.Reasons, ",")))
+			kind := "MR"
+			if l.LinkType == domain.VCSLinkTypeCommit {
+				kind = "commit"
+			}
+			parts = append(parts, fmt.Sprintf("%s %s: %s", kind, l.ExternalID, strings.Join(l.Reasons, ",")))
 		}
 	}
 	if len(d.Links) == 0 {
@@ -178,7 +216,7 @@ func evaluateTransitionGate(fromStatus, toStatus string, actor transitionActor, 
 		if !isTransitionActorAllowed(actor, task, links, actors) {
 			if hasActorPattern(actors, actorPatternAuthorIfMergedShipped) && actor.ID != uuid.Nil {
 				if a := taskAuthorID(task); a != nil && *a == actor.ID {
-					diag = diagnoseMergedShipped(links)
+					diag = diagnoseMergedShipped(links, a)
 				}
 			}
 			return enfMode, fmt.Sprintf(
@@ -224,18 +262,20 @@ func hasActorPattern(allowed []string, p string) bool {
 // delivery. Review-subject links point at someone else's MR and are skipped; a
 // MR closed without merge is NOT skipped — it is unproven delivery, so the
 // author must unlink an abandoned MR before the pattern lets them through.
-func mergedShippedEvidence(links []domain.VCSLink) bool {
-	n := 0
-	for _, l := range links {
-		if l.LinkType != domain.VCSLinkTypePR || l.IsReviewSubject() || l.IsRelatesTo() {
-			continue
+// A card without MR links proves delivery by one commit link whose ship_sha
+// names that commit and was written by someone other than authorID.
+func mergedShippedEvidence(links []domain.VCSLink, authorID *uuid.UUID) bool {
+	judged, commitMode := judgeDeliveryLinks(links, authorID)
+	for _, j := range judged {
+		ok := len(j.gaps) == 0
+		if commitMode && ok {
+			return true
 		}
-		n++
-		if !l.IsMergedShippedGreen() {
+		if !commitMode && !ok {
 			return false
 		}
 	}
-	return n > 0
+	return !commitMode && len(judged) > 0
 }
 
 // isConditionalActorPattern reports whether p depends on the task (not just actor type).
@@ -279,7 +319,7 @@ func isTransitionActorAllowed(actor transitionActor, task *domain.Task, links []
 				return true
 			}
 		case actorPatternAuthorIfMergedShipped:
-			if same(taskAuthorID(task)) && mergedShippedEvidence(links) {
+			if author := taskAuthorID(task); same(author) && mergedShippedEvidence(links, author) {
 				return true
 			}
 		case actorPatternNotAuthor:

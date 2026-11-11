@@ -1152,6 +1152,23 @@ func (m *MockTaskDependencyRepository) Delete(_ context.Context, id uuid.UUID) e
 	return nil
 }
 
+func (m *MockTaskDependencyRepository) DeleteIfGeneration(_ context.Context, taskID, id uuid.UUID, gen int64) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	dep, ok := m.items[id]
+	if !ok || dep.TaskID != taskID {
+		return apierror.NotFound("TaskDependency")
+	}
+	if dep.Generation != gen {
+		return domain.ErrStaleDependencyGeneration
+	}
+	delete(m.items, id)
+	return nil
+}
+
 func (m *MockTaskDependencyRepository) ListByTask(_ context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error) {
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
@@ -3595,7 +3612,7 @@ func (m *MockVCSLinkRepository) MergeMetadata(_ context.Context, taskID, id uuid
 	defer m.mu.Unlock()
 	for i := range m.items {
 		l := &m.items[i]
-		if l.ID != id || l.TaskID != taskID || l.LinkType != domain.VCSLinkTypePR {
+		if l.ID != id || l.TaskID != taskID || l.LinkType != domain.VCSLinkTypePR && l.LinkType != domain.VCSLinkTypeCommit {
 			continue
 		}
 		merged := map[string]json.RawMessage{}

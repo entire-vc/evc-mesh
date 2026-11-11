@@ -826,6 +826,13 @@ func main() {
 			}
 			return gitlabapi.NewClient(cfg.BaseURL, cfg.Token), true
 		}), // lets add_vcs_link without status learn that an MR already merged/closed (same resolution as the done gate)
+		service.WithVCSMREvidenceSource(func(ctx context.Context, ws uuid.UUID) (gitlabapi.MergeRequestEvidenceSource, bool) {
+			cfg, _, ok := vcsIntegrationResolver.ResolveGitLab(ctx, ws)
+			if !ok || cfg.BaseURL == "" || cfg.Token == "" {
+				return nil, false
+			}
+			return gitlabapi.NewClient(cfg.BaseURL, cfg.Token), true
+		}), // fills HEAD and head pipeline of an MR linked after its merge (no webhook will reach it)
 		service.WithVCSDependencyResolver(autoTransitionSvc), // a recorded deploy releases dependents waiting on a "deployed" edge
 		service.WithVCSProjectRepo(projectRepo),              // scopes webhook task-ref resolution to the workspace whose secret validated the request
 	)
@@ -1088,7 +1095,7 @@ func main() {
 	agentHandler := handler.NewAgentHandlerWithEvents(agentService, taskService, taskStatusService, agentNotifyRedis, agentEventsRepo, sessionRepo)
 	agentControllerRepo := postgres.NewAgentControllerRepo(db)
 	agentHandler.SetControllerRepo(agentControllerRepo)
-	agentControllerHandler := handler.NewAgentControllerHandler(agentControllerRepo)
+	agentControllerHandler := handler.NewAgentControllerHandler(agentControllerRepo).WithChatSnapshots(agentControllerRepo)
 	// Closed first thing on SIGTERM so SSE streams and long-polls end before
 	// e.Shutdown, which would otherwise wait on them until its deadline.
 	httpShutdownCh := make(chan struct{})
@@ -1158,7 +1165,8 @@ func main() {
 	chatThreadDeleteRepo := postgres.NewChatThreadDeleteRepo(db, chatObjects)
 	chatThreadDeleteHandler := handler.NewChatThreadDeleteHandler(chatThreadDeleteRepo).WithEvents(chatEvents)
 	agentChatHandler := handler.NewAgentChatHandler(postgres.NewAgentChatRepo(db), integrationRepo, projectIntegrationRepo).WithEvents(chatEvents).
-		WithAttachments(postgres.NewChatAttachmentRepo(db), chatAttachmentStore).WithRunnerHints(agentNotifyRedis)
+		WithAttachments(postgres.NewChatAttachmentRepo(db), chatAttachmentStore).WithRunnerHints(agentNotifyRedis).
+		WithRunnerSnapshots(agentControllerRepo)
 	chatAuditHandler := handler.NewChatAuditHandler(postgres.NewChatAuditRepo(db))
 	chatRunnerRepo := postgres.NewChatRunnerRepo(db)
 	chatRunnerHandler := handler.NewChatRunnerHandler(chatRunnerRepo)
@@ -1928,6 +1936,10 @@ func main() {
 	api.GET("/projects/:proj_id/chat/threads/:thread_id/messages", agentChatHandler.ListMessages, projAccess)
 	api.POST("/projects/:proj_id/chat/threads/:thread_id/messages", agentChatHandler.SendMessage, projAccess)
 	api.POST("/projects/:proj_id/chat/threads/:thread_id/stop", agentChatHandler.StopTurn, projAccess)
+	// Read-only runner runtime (runner-chat-protocol §12): the latest chat-session
+	// snapshot a runner sent with its controller announce.
+	api.GET("/projects/:proj_id/chat/threads/:thread_id/runtime", agentChatHandler.ThreadRuntime, projAccess)
+	api.GET("/projects/:proj_id/chat/runners/:runner_id/sessions", agentChatHandler.RunnerSessions, projAccess)
 	api.GET("/projects/:proj_id/chat/settings", agentChatHandler.GetProjectSettings, projAccess, mw.RequireUserAuth())
 	api.PUT("/projects/:proj_id/chat/settings", agentChatHandler.PutProjectSettings, projAccess, mw.RequireUserAuth(), rbac(mw.PermManageWebhooks))
 	api.GET("/workspaces/:ws_id/chat/settings", agentChatHandler.GetWorkspaceSettings, mw.RequireUserAuth(), rbac(mw.PermManageWebhooks))
@@ -1944,6 +1956,7 @@ func main() {
 	api.GET("/runner/chat/turns/active", chatClaimHandler.Active)
 	api.POST("/runner/chat/turns/:id/start", chatTurnStartHandler.Start)
 	api.POST("/runner/chat/turns/:id/lease", chatClaimHandler.RenewLease)
+	api.GET("/runner/chat/turns/:id/attachments/:attachment_id/download-url", chatClaimHandler.AttachmentDownloadURL)
 	api.POST("/runner/chat/turns/:id/session-token", chatTurnStartHandler.SessionToken)
 	api.POST("/runner/chat/turns/:id/events", chatRunnerEventsHandler.Events)
 	// Orders and recovery history for the chat runner (agent key, protocol §8, §9).
@@ -2051,9 +2064,16 @@ func main() {
 	api.PUT("/tasks/:task_id/external-ref", taskExternalRefHandler.Put, wsAccess, rbac(mw.PermUpdateTask))
 	// Runner reads of typed turn outcomes: latest outcomes of a session, the active wait.
 	typedOutcomeHandler := handler.NewTypedOutcomeHandler(
-		service.NewTypedOutcomeService(postgres.NewTaskWaitRepo(db), postgres.NewTurnOutcomeRepo(db)), taskService)
+		service.NewTypedOutcomeService(postgres.NewTaskWaitRepo(db), postgres.NewTurnOutcomeRepo(db),
+			service.WithControllerCheck(func(ctx context.Context, ws uuid.UUID, by service.WaitResolver) (bool, error) {
+				return runtimeRepo.IsController(ctx, ws, postgres.RuntimeActor{
+					AgentID: by.AgentID, AuthWorkspaceID: by.AuthWorkspaceID, Connector: by.Connector})
+			})), taskService)
 	api.GET("/tasks/:task_id/turn-outcomes", typedOutcomeHandler.ListTurnOutcomes, wsAccess)
 	api.GET("/tasks/:task_id/wait", typedOutcomeHandler.GetActiveWait, wsAccess)
+	// The runner (the wait's own agent, or the workspace's controller) marks a
+	// wait ended by the event it observed.
+	api.POST("/tasks/:task_id/waits/:wait_id/resolve", typedOutcomeHandler.ResolveWait, wsAccess, rbac(mw.PermUpdateTask))
 	// Turn-ending commands: ask an agent, answer it, finish a card with a typed result.
 	if cmds, ok := taskService.(service.TypedOutcomeCommands); ok {
 		typedCommandHandler := handler.NewTypedOutcomeCommandHandler(cmds, taskService)
@@ -2077,11 +2097,12 @@ func main() {
 			return nil, false
 		}
 		return githubapi.NewClient(cfg.Token), true
-	}), taskService)
+	}).WithHumanGate(commentService, taskService), taskService)
 	api.POST("/tasks/:task_id/wait", turnCommandHandler.WaitFor, wsAccess, rbac(mw.PermUpdateTask))
 	api.POST("/tasks/:task_id/next", turnCommandHandler.ContinueNext, wsAccess, rbac(mw.PermUpdateTask))
 	api.POST("/tasks/:task_id/handoff", turnCommandHandler.HandOff, wsAccess, rbac(mw.PermUpdateTask))
 	api.POST("/tasks/:task_id/notes", turnCommandHandler.AddNote, wsAccess, rbac(mw.PermAddComment))
+	api.POST("/tasks/:task_id/ask-human", turnCommandHandler.AskHuman, wsAccess, rbac(mw.PermUpdateTask))
 	api.GET("/workspaces/:ws_id/tasks", taskHandler.SearchGlobal, wsAccess)
 
 	// Dependency routes.
@@ -2303,6 +2324,7 @@ func main() {
 	api.DELETE("/vcs-links/:link_id", vcsLinkHandler.Delete, rbac(mw.PermUpdateTask))
 	api.PATCH("/tasks/:task_id/vcs-links/:link_id/metadata", vcsLinkHandler.PatchMetadata, rbac(mw.PermUpdateTask))
 	api.POST("/tasks/:task_id/vcs-links/:link_id/deployment", vcsLinkHandler.RecordDeployment, rbac(mw.PermUpdateTask))
+	api.POST("/tasks/:task_id/vcs-links/:link_id/sync", vcsLinkHandler.Sync, rbac(mw.PermUpdateTask))
 	api.PATCH("/vcs-links/ship-sha", vcsLinkHandler.PatchShipSHAByURL, rbac(mw.PermUpdateTask))
 
 	// OAuth 2.0 Authorization Server (task MCP-OAuth 1/5). Public — no auth:

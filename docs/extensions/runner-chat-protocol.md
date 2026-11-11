@@ -40,6 +40,7 @@ States: `queued → claimed → streaming → done | failed | cancelled | expire
 | `GET /runner/chat/claim?agents=<uuid>[&timeout=1..120][&max=1..5]` | agent key + runner id | `200 {protocol, turns[], commands:[], server_time}`; `204` on timeout or server shutdown. Defaults: timeout 30, max 1; out-of-range values are clamped, not rejected (timeout to 1..120, max to at most 5). `Cache-Control: no-store`. | `chat_protocol_unsupported` 400; `agents is required` / non-UUID / `>50 agents` / non-integer `timeout`, non-integer or non-positive `max` 400; `chat_agent_not_served` 403; `X-Chat-Runner-Id must be a UUID` 400; 401 non-agent credential; 403 OAuth connector. |
 | `GET /runner/chat/turns/active` | agent key + `X-Chat-Protocol: 1` + runner id | `200 {protocol, turns[]}`: the `claimed`/`streaming` turns this runner id holds for the key's agent, each `{turn_id, thread_id, agent_id, state, attempt, claim_token, lease_until, execution_epoch}`; `turns` is `[]` when none. Used after a restart to resume (`lease`/`start`/`events` with the returned `claim_token`) or abandon. | `chat_protocol_unsupported` 400; `X-Chat-Runner-Id must be a UUID` 400; 401 non-agent credential; 403 OAuth connector. |
 | `POST /runner/chat/turns/:id/lease` `{claim_token}` | agent key + runner id | `200 {lease_until, state, cancel_requested, execution_epoch}` | `chat_turn_not_found` 404 (also for a foreign or malformed id: no existence oracle); `chat_not_claim_holder` 403; `chat_stale_claim` 409; `chat_lease_expired` 409; `chat_turn_terminal` 409; missing `claim_token` 400. |
+| `GET /runner/chat/turns/:id/attachments/:attachment_id/download-url` (no body, no `claim_token`) | agent key + `X-Chat-Protocol: 1` + runner id | `200 {download_url}`: a fresh presigned link (5 min) to an uploaded attachment of the turn's user message, for when the link from the claim is missing, expired or refused. `Cache-Control: no-store`. | `chat_turn_not_found` 404 (also for a malformed id, a foreign turn, one held by another runner id, or one no longer `claimed`/`streaming`: no existence oracle); `not_found` 404 with `details: attachment_not_found` for an attachment that is not an uploaded file of that turn's message; `service_unavailable` 503 when object storage is not configured or cannot presign; `chat_protocol_unsupported` 400; `X-Chat-Runner-Id must be a UUID` 400; 401 non-agent credential; 403 OAuth connector. |
 | `POST /runner/chat/turns/:id/events` `{claim_token, events[]}` | agent key + runner id | `200 {applied_seq, state, cancel_requested, lease_until, execution_epoch, ignored[]}` | `chat_batch_too_large` 413 (>256 KiB); `chat_rate_limited` 429 + `Retry-After`; `chat_seq_gap` 409; `chat_not_started` 409; `chat_not_claim_holder` 403; `chat_stale_claim` 409; `chat_turn_terminal` 409; `chat_turn_not_found` 404; empty `events` / bad JSON / unknown `stop_reason` 400. |
 | `POST /runner/chat/runners` `{name}` | agent key | `201 {runner_id, agent_id, name, created_at, token}`: the token is shown only here | `chat_runner_forbidden` 403 for a non-agent caller. |
 | `DELETE /runner/chat/runners/:runner_id` | agent key | `204` | `chat_runner_forbidden` 403; 400 bad id. |
@@ -137,8 +138,8 @@ These are open work; do not rely on or promise them.
   delta.
 - **No live streaming to the browser guaranteed by this contract.** The runner posts `text_delta`
   batches and Mesh stores them; real-time token streaming and its latency are not promised.
-- **No capacity reporting.** Mesh does not know how many turns a runner can take; a claim returns
-  what is queued up to `max`.
+- **No capacity-aware claim.** A claim returns what is queued up to `max`; the slot counts a runner
+  reports in its snapshot (§12) are shown, not used for scheduling.
 - **Write-workspace is Codex-only.** With the runner's `chat_workspace="write"` a Codex chat gets a
   slot from the repo pool and writes inside `workspace-write` (the runner implementation;
   canary on an isolated instance, rolled back). The other harness refuses with
@@ -158,3 +159,51 @@ Each row of §3 maps to a test: `internal/handler/chat_claim_handler_test.go`,
 counterparts. Offline expiry (§6) and recovery of a queued turn by a returning runner are
 exercised end to end against the published app by `web/e2e-chat/s07.spec.ts` (job
 `agent-chat-e2e`). Last checked against `origin/main` at the commit this page was merged on.
+
+## 12. Chat-session snapshot and thread runtime
+
+A runner may attach the state of its chat sessions to the controller announce it already sends
+(`POST /agents/me/controller`, agent key, every 60 s and again right after a reap or a
+`stop_session`). Mesh keeps the latest snapshot per (agent, runner) and serves it read-only, so a
+test or an operator can see whether a thread still has a live process and a held slot.
+
+**Announce body** (new fields optional; without `sessions` the announce works as before and the
+stored snapshot is not touched; `null` is the same as absent):
+
+```json
+{
+  "runner_id": "…", "name": "…", "host": "…", "version": "…",
+  "sessions": [
+    {"thread_id": "<uuid>", "agent": "<mesh-agent-uuid>", "process_alive": true, "slot_held": true, "busy": false,
+     "last_end_at": "2026-11-10T19:59:00Z"}
+  ],
+  "slots": {"max_per_agent": 3, "used": 1},
+  "reported_at": "2026-11-10T20:00:00Z"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `sessions[]` | The runner-wide chat snapshot, repeated in each agent announce (daemon sessions are not listed). Stopped sessions remain for 10 min with `process_alive=false, slot_held=false`. `[]` = no chat session. At most 256 entries; `thread_id` must be a UUID and appear once. |
+| `agent` | The Mesh agent id of the session. |
+| `process_alive`, `slot_held` | The harness process runs; the session holds a chat slot. These are independent. When `slot_held` is absent, a listed session defaults to `true` for older senders. |
+| `busy`, `last_end_at` | A turn is running now; when the last turn ended. |
+| `slots` | `max_per_agent` and `used`, both ≥ 0, both optional. |
+| `reported_at` | The runner's clock when it built the snapshot; informational. Defaults to the server's time. |
+
+A malformed snapshot is `400` and changes nothing. The snapshot is stored only while the sender
+holds the agent's live controller lease (a `409` announce stores nothing); the `200` answer then
+carries `chat_snapshot_saved`.
+
+**Freshness.** `received_at` is the database clock at the write. A snapshot older than
+`2 × ANNOUNCE_EVERY = 120 s` is not fresh: its state is **unknown** (`null`), never
+`process_alive=false`. A silent runner is not a stopped process.
+
+| Endpoint | Auth | Success | Errors |
+|---|---|---|---|
+| `GET /projects/:proj_id/chat/threads/:thread_id/runtime` | same as `GET …/chat/threads/:thread_id` (user token, chat gate, own thread) | `200 {thread_id, agent_id, runner_id, fresh, process_alive, slot_held, busy, last_end_at, reported_at, received_at, age_seconds, fresh_for_seconds}` from the newest snapshot of the thread's agent. Fresh and the thread listed → its reported values (including `slot_held`); fresh and not listed → `process_alive=false, slot_held=false`; stale → `fresh=false` and the three state fields `null`; no snapshot → `runner_id=null`, `fresh=false`, state `null`. `Cache-Control: no-store`. | Another user's, another project's, a deleted or a missing thread → `404 thread_not_found`; a project of another workspace → the chat gate's `403`/`404`. |
+| `GET /projects/:proj_id/chat/runners/:runner_id/sessions` | same chat gate on `:proj_id` | `200 {runner_id, fresh, fresh_for_seconds, agents:[{agent_id, fresh, reported_at, received_at, age_seconds, slots:{max_per_agent, used}, sessions_total, alive_total, sessions[]}]}` for the agents of this workspace the runner reported. Counts cover all sessions in that runner snapshot and are `null` when stale; `sessions[]` lists only the caller's own threads in this project. | No snapshot of that runner for an agent of this workspace → `404`; `runner_id` empty or over 128 chars → `400`. |
+
+Tests: `internal/handler/chat_runtime_handler_db_test.go` (storage, freshness, access; CI step
+`chat-runtime-tests.log` in job `test`), `agent_controller_handler_test.go` (parsing),
+`internal/repository/postgres/agent_controller_chat_snapshots_migration_db_test.go` (down/up).

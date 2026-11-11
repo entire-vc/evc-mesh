@@ -25,6 +25,7 @@ var taskProjectChildParams = map[string]string{
 	// Decisions answer a question asked on a task; answering or revoking one
 	// acts on that task.
 	"decision_request_id": `SELECT t.project_id FROM decision_requests d JOIN tasks t ON t.id = d.task_id WHERE d.id = $1 AND t.deleted_at IS NULL`,
+	"wait_id":             `SELECT t.project_id FROM task_waits w JOIN tasks t ON t.id = w.task_id WHERE w.id = $1 AND t.deleted_at IS NULL`,
 	"decision_id":         `SELECT t.project_id FROM human_gate_decisions d JOIN tasks t ON t.id = d.task_id WHERE d.id = $1 AND t.deleted_at IS NULL`,
 	// A binding proposal is a suggestion about one edge of a task.
 	"proposal_id": `SELECT t.project_id FROM dependency_binding_proposals bp JOIN task_dependencies d ON d.id = bp.edge_id JOIN tasks t ON t.id = d.task_id WHERE bp.id = $1 AND t.deleted_at IS NULL`,

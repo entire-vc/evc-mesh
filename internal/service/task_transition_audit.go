@@ -13,12 +13,24 @@ func transitionSource(source, reason string) string {
 	switch source {
 	case "api", "ui", "mcp", "lease_reaper.expired", "lease_reaper.unleased", "checkout", "auto_transition.parent", "auto_transition.dependency", "dispatcher.session_exit", "fiddler.recovery", "verify_driver", "queue_balancer":
 		return source
+	case "finish_task", "monitor_due_sweep", "human_gate_release":
+		// Server-reserved names the service itself passes to MoveTask
+		// (typed_outcome_commands.go, monitor_promotion.go,
+		// human_gate_triage_return.go). The move handler refuses them from a
+		// client, so reaching here means the server wrote them.
+		return source
 	case "auto_transition":
 		if reason == "blocking_dep_resolved" {
 			return "auto_transition.dependency"
 		}
 		return "auto_transition.parent"
 	default:
+		// A producer the client declared (the handler admits only
+		// ValidClientMoveSource) is kept, so "mesh-runner" is not folded into
+		// "api". A reserved name with no case above still records "api".
+		if ValidClientMoveSource(source) {
+			return source
+		}
 		return "api"
 	}
 }

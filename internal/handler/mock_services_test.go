@@ -285,6 +285,7 @@ func (m *MockCommentService) ReconcileClosedFollowUpPending(ctx context.Context)
 type MockTaskDependencyService struct {
 	CreateFunc                   func(ctx context.Context, dep *domain.TaskDependency) error
 	DeleteFunc                   func(ctx context.Context, id uuid.UUID) error
+	DeleteIfGenerationFunc       func(ctx context.Context, taskID, id uuid.UUID, gen int64) error
 	ListByTaskFunc               func(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
 	ListByTaskBothDirectionsFunc func(ctx context.Context, taskID uuid.UUID) (outgoing, incoming []domain.EnrichedTaskDependency, err error)
 	CheckCycleFunc               func(ctx context.Context, taskID, dependsOnTaskID uuid.UUID) (bool, error)
@@ -308,6 +309,13 @@ func (m *MockTaskDependencyService) UpdateCondition(ctx context.Context, id uuid
 func (m *MockTaskDependencyService) Delete(ctx context.Context, id uuid.UUID) error {
 	if m.DeleteFunc != nil {
 		return m.DeleteFunc(ctx, id)
+	}
+	return nil
+}
+
+func (m *MockTaskDependencyService) DeleteIfGeneration(ctx context.Context, taskID, id uuid.UUID, gen int64) error {
+	if m.DeleteIfGenerationFunc != nil {
+		return m.DeleteIfGenerationFunc(ctx, taskID, id, gen)
 	}
 	return nil
 }
