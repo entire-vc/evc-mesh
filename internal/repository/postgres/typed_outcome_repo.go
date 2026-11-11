@@ -10,6 +10,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 // Typed turn outcomes (migration 20261028001, docs/api/typed-outcomes.md).
@@ -23,7 +24,8 @@ var (
 const taskWaitCols = `id, task_id, agent_id, session_id, kind, target_task_id, target_condition,
 	vcs_link_id, provider, project_path, mr_iid, pipeline_id, required_jobs, until_state,
 	until_at, decision_request_id, human_gate_ref, note, event_ref, evidence_source, evidence_why,
-	until_at_offset, evidence_status, created_at, resolved_at, resolution`
+	until_at_offset, evidence_status, after_sha, after_pipeline_id, after_status, registration,
+	registration_ref, addressee, question, created_at, resolved_at, resolution, resolved_by, resolve_cause`
 
 // TaskWaitRepo implements repository.TaskWaitRepository.
 type TaskWaitRepo struct {
@@ -73,6 +75,63 @@ func (r *TaskWaitRepo) Resolve(ctx context.Context, id uuid.UUID, resolution dom
 	}
 	n, err := res.RowsAffected()
 	return n == 1, err
+}
+
+// GetForTask returns the wait with its card's workspace, or (nil, Nil, nil)
+// when the wait does not exist on that card.
+func (r *TaskWaitRepo) GetForTask(ctx context.Context, taskID, waitID uuid.UUID) (*domain.TaskWait, uuid.UUID, error) {
+	var row struct {
+		domain.TaskWait
+		WorkspaceID uuid.UUID `db:"workspace_id"`
+	}
+	err := r.db.GetContext(ctx, &row, `SELECT `+taskWaitCols+`,
+		       (SELECT p.workspace_id FROM tasks t JOIN projects p ON p.id = t.project_id
+		         WHERE t.id = task_waits.task_id) AS workspace_id
+		  FROM task_waits WHERE id = $1 AND task_id = $2`, waitID, taskID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, uuid.Nil, nil
+	}
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	return &row.TaskWait, row.WorkspaceID, nil
+}
+
+// ResolveWithCause ends the wait on its card with resolution, recording who
+// ended it and why, and clears the card's runtime_state when that state is
+// the one this wait wrote (ref wait:<id>) — in one transaction. An already
+// resolved wait is returned unchanged with resolved=false.
+func (r *TaskWaitRepo) ResolveWithCause(ctx context.Context, taskID, waitID uuid.UUID, resolution domain.WaitResolution, cause string, by uuid.UUID) (*domain.TaskWait, bool, error) {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var w domain.TaskWait
+	err = tx.GetContext(ctx, &w, `SELECT `+taskWaitCols+` FROM task_waits WHERE id = $1 AND task_id = $2 FOR UPDATE`, waitID, taskID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, apierror.NotFound("Wait")
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if w.ResolvedAt != nil {
+		return &w, false, nil
+	}
+	err = tx.GetContext(ctx, &w, `UPDATE task_waits SET resolved_at = now(), resolution = $2, resolve_cause = $3, resolved_by = $4
+		 WHERE id = $1 RETURNING `+taskWaitCols, waitID, resolution, cause, by)
+	if err != nil {
+		return nil, false, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE tasks SET runtime_state = NULL, updated_at = now()
+		 WHERE id = $1 AND runtime_state->>'ref' = $2`, taskID, domain.WaitRuntimeRefPrefix+waitID.String()); err != nil {
+		return nil, false, err
+	}
+	err = tx.Commit()
+	if err != nil {
+		return nil, false, err
+	}
+	return &w, true, nil
 }
 
 const turnOutcomeCols = `id, task_id, agent_id, session_id, turn_id, kind, wait_id, result_kind, note, created_at`

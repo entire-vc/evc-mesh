@@ -89,3 +89,65 @@ func TestHandleMR_MergedFromReview_PostMergeAC_StillDone(t *testing.T) {
 	assert.True(t, res.Transitioned)
 	assert.Equal(t, "done", res.NewStatus)
 }
+
+// A card whose runner reports it as held is left in place by the merge: the
+// executor waiting for this merge is woken by it and moves the card itself.
+func TestHandleMR_MergedFromInProgress_HeldByController_StaysInProgress(t *testing.T) {
+	for _, kind := range []domain.RuntimeKind{domain.RuntimeKindWaiting, domain.RuntimeKindWorking, domain.RuntimeKindQueued} {
+		t.Run(string(kind), func(t *testing.T) {
+			h := newHarness(t)
+			task := h.makeTask(t, domain.StatusCategoryInProgress)
+			task.RuntimeState = &domain.RuntimeState{Kind: kind, Source: domain.RuntimeStateSourceExplicit}
+
+			res, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), mergedMREvent(446, task.ID, "MESH-"+task.ID.String()))
+			require.NoError(t, err)
+			assert.False(t, res.Transitioned)
+			assert.Equal(t, "held_by_controller", res.Reason)
+			assert.Equal(t, h.statusIDs[domain.StatusCategoryInProgress], h.taskRepo.tasks[task.ID].StatusID)
+			assert.Empty(t, h.taskSvc.moveCalls, "MoveTask must not be called")
+
+			require.Len(t, h.commentSvc.created, 1)
+			body := h.commentSvc.created[0].Body
+			assert.Contains(t, body, "MR !446 merged")
+			assert.Contains(t, body, "its runner holds it ("+string(kind)+")")
+			assert.NotContains(t, body, "moved to review")
+
+			links, _ := h.repo.ListByTask(context.Background(), task.ID)
+			require.Len(t, links, 1)
+			assert.Equal(t, domain.VCSLinkStatusMerged, links[0].Status)
+		})
+	}
+}
+
+// Nobody live claims the card: the merge moves it to review as before.
+func TestHandleMR_MergedFromInProgress_NotHeld_MovesToReview(t *testing.T) {
+	cases := map[string]*domain.RuntimeState{
+		"no runtime state": nil,
+		"stale state":      {Kind: domain.RuntimeKindWaiting, Stale: true},
+		"stopped":          {Kind: domain.RuntimeKindStopped},
+	}
+	for name, rs := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			task := h.makeTask(t, domain.StatusCategoryInProgress)
+			task.RuntimeState = rs
+
+			res, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), mergedMREvent(447, task.ID, "MESH-"+task.ID.String()))
+			require.NoError(t, err)
+			assert.True(t, res.Transitioned)
+			assert.Equal(t, "review", res.NewStatus)
+		})
+	}
+}
+
+// The guard is for in_progress only: a card in review still closes on merge.
+func TestHandleMR_MergedFromReview_HeldByController_StillDone(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryReview)
+	task.RuntimeState = &domain.RuntimeState{Kind: domain.RuntimeKindWaiting}
+
+	res, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), mergedMREvent(448, task.ID, "MESH-"+task.ID.String()))
+	require.NoError(t, err)
+	assert.True(t, res.Transitioned)
+	assert.Equal(t, "done", res.NewStatus)
+}

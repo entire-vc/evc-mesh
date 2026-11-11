@@ -147,7 +147,8 @@ const (
 
 const (
 	parkedCommentFmt = "🅿️ The task sat in in_progress **without a checkout** and without signs of work " +
-		"(no comment, artifact, VCS link or status update within the idle window; the last " +
+		"(no comment, artifact, VCS link or status update within the idle window; no controller " +
+		"reports it as working, waiting or queued; the last " +
 		"comment has no line starting with `⏳ WAIT`/`↻ NEXT`, or it is older than 48 h; " +
 		"no open task depends on it) — **parked in backlog** " +
 		"with a `due_date` in %d h and the `kind:monitor` label.\n\n" +

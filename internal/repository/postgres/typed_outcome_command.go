@@ -136,8 +136,8 @@ func (r *TurnCommandRepo) CommitTurn(ctx context.Context, cmd *domain.TurnComman
 			return nil, apierror.Conflict("a person pinned this card's assignee; only a person can reassign it")
 		}
 		var ok bool
-		err = tx.GetContext(ctx, &ok, `SELECT EXISTS(SELECT 1 FROM agents
-			WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL)`, *cmd.HandoffTo, task.WorkspaceID)
+		err = tx.GetContext(ctx, &ok, `SELECT EXISTS(SELECT 1 FROM agents a
+			WHERE a.id = $1 AND a.deleted_at IS NULL AND `+workspaceAgentSQL+`)`, *cmd.HandoffTo, task.WorkspaceID)
 		if err != nil {
 			return nil, err
 		}
@@ -150,6 +150,13 @@ func (r *TurnCommandRepo) CommitTurn(ctx context.Context, cmd *domain.TurnComman
 			return nil, err
 		}
 	case domain.TurnOutcomeNext:
+		// The caller is working the card again: a wait it still has here is
+		// over, whether or not the runner resolved it on waking it.
+		_, err = tx.ExecContext(ctx, `UPDATE task_waits SET resolved_at = now(), resolution = 'superseded',
+			resolve_cause = 'continue_next' WHERE task_id = $1 AND agent_id = $2 AND resolved_at IS NULL`, cmd.TaskID, cmd.AgentID)
+		if err != nil {
+			return nil, err
+		}
 	default:
 		return nil, fmt.Errorf("unsupported turn command %q", cmd.Kind)
 	}
@@ -168,12 +175,16 @@ func (r *TurnCommandRepo) CommitTurn(ctx context.Context, cmd *domain.TurnComman
 		return nil, err
 	}
 
-	meta := map[string]any{"typed_outcome": map[string]any{"kind": outcome.Kind, "outcome_id": outcome.ID}}
-	if outcome.WaitID != nil {
-		meta["typed_outcome"].(map[string]any)["wait_id"] = *outcome.WaitID
-	}
-	if res.CommentID, err = insertComment(ctx, tx, cmd.TaskID, cmd.AgentID, domain.ActorTypeAgent, cmd.CommentBody, meta); err != nil {
-		return nil, err
+	if cmd.CommentID != nil {
+		res.CommentID = *cmd.CommentID
+	} else {
+		meta := map[string]any{"typed_outcome": map[string]any{"kind": outcome.Kind, "outcome_id": outcome.ID}}
+		if outcome.WaitID != nil {
+			meta["typed_outcome"].(map[string]any)["wait_id"] = *outcome.WaitID
+		}
+		if res.CommentID, err = insertComment(ctx, tx, cmd.TaskID, cmd.AgentID, domain.ActorTypeAgent, cmd.CommentBody, meta); err != nil {
+			return nil, err
+		}
 	}
 	err = r.step("comment")
 	if err != nil {
@@ -300,14 +311,18 @@ func declareWaitTx(ctx context.Context, tx *sqlx.Tx, w *domain.TaskWait) error {
 			(task_id, agent_id, session_id, kind, target_task_id, target_condition,
 			 vcs_link_id, provider, project_path, mr_iid, pipeline_id, required_jobs,
 			 until_state, until_at, decision_request_id, human_gate_ref, note,
-			 event_ref, evidence_source, evidence_why, until_at_offset, evidence_status)
+			 event_ref, evidence_source, evidence_why, until_at_offset, evidence_status,
+			 after_sha, after_pipeline_id, after_status, registration, registration_ref,
+			 addressee, question)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-			$18, $19, $20, $21, $22)
+			$18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
 		RETURNING id, created_at`,
 		w.TaskID, w.AgentID, w.SessionID, w.Kind, w.TargetTaskID, w.TargetCondition,
 		w.VCSLinkID, w.Provider, w.ProjectPath, w.MRIID, w.PipelineID, w.RequiredJobs,
 		w.Until, w.UntilAt, w.DecisionRequestID, w.HumanGateRef, w.Note,
 		w.EventRef, w.Source, w.Why, w.UntilAtOffset, w.EvidenceStatus,
+		w.AfterSHA, w.AfterPipelineID, w.AfterStatus, w.Registration, w.RegistrationRef,
+		w.Addressee, w.Question,
 	).Scan(&w.ID, &w.CreatedAt)
 }
 
@@ -379,6 +394,16 @@ func insertComment(ctx context.Context, tx *sqlx.Tx, taskID, authorID uuid.UUID,
 	return id, err
 }
 
+// HoldsCheckout reports whether agentID holds a live checkout of the card.
+// CommitTurn checks the same under the row lock; this is the early read
+// ask_human makes before it posts the question.
+func (r *TurnCommandRepo) HoldsCheckout(ctx context.Context, taskID, agentID uuid.UUID) (bool, error) {
+	var held bool
+	err := r.db.GetContext(ctx, &held, `SELECT EXISTS(SELECT 1 FROM tasks WHERE id = $1 AND deleted_at IS NULL
+		AND checked_out_by = $2 AND checkout_expires > now())`, taskID, agentID)
+	return held, err
+}
+
 // TaskScope returns the card's project and workspace.
 func (r *TurnCommandRepo) TaskScope(ctx context.Context, taskID uuid.UUID) (projectID, workspaceID uuid.UUID, err error) {
 	var row struct {
@@ -393,6 +418,13 @@ func (r *TurnCommandRepo) TaskScope(ctx context.Context, taskID uuid.UUID) (proj
 	return row.ProjectID, row.WorkspaceID, err
 }
 
+// workspaceAgentSQL is true for an agent “a“ of the workspace bound as $2: its
+// home workspace, or a workspace it holds an active grant in. A guest agent
+// (a lead that serves several workspaces) is in the team directory of each and
+// takes a hand-off or a question there like a home agent.
+const workspaceAgentSQL = `(a.workspace_id = $2 OR EXISTS (SELECT 1 FROM agent_workspace_grants g
+			WHERE g.agent_id = a.id AND g.workspace_id = $2 AND g.revoked_at IS NULL))`
+
 // ResolveAgent finds an agent of the workspace directory by id, slug or name
 // (case-insensitive). An ambiguous name is not found.
 func (r *TurnCommandRepo) ResolveAgent(ctx context.Context, workspaceID uuid.UUID, to string) (id uuid.UUID, name string, found bool, err error) {
@@ -403,10 +435,10 @@ func (r *TurnCommandRepo) ResolveAgent(ctx context.Context, workspaceID uuid.UUI
 		ID   uuid.UUID `db:"id"`
 		Name string    `db:"name"`
 	}
-	err = r.db.SelectContext(ctx, &rows, `SELECT id, name FROM agents
-		WHERE workspace_id = $1 AND deleted_at IS NULL
-		  AND (id::text = lower($2) OR lower(slug) = lower($2) OR lower(name) = lower($2))
-		LIMIT 2`, workspaceID, to)
+	err = r.db.SelectContext(ctx, &rows, `SELECT a.id, a.name FROM agents a
+		WHERE a.deleted_at IS NULL AND `+workspaceAgentSQL+`
+		  AND (a.id::text = lower($1) OR lower(a.slug) = lower($1) OR lower(a.name) = lower($1))
+		LIMIT 2`, to, workspaceID)
 	if err != nil {
 		return uuid.Nil, "", false, err
 	}

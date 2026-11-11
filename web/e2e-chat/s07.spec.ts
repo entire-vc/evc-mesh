@@ -63,7 +63,26 @@ async function sendOffline(text: string): Promise<{ threadId: string; turnId: st
   return { threadId, turnId: sent.turnId! };
 }
 
+test("S07-control: a relative fetch on a page without origin fails; Actor.fetch opens the origin first", async ({ browser }) => {
+  const blank = await C.context.newPage();
+  try {
+    const raw = await blank.evaluate(() => fetch("/api/v1/auth/me").then(() => "ok", (e: Error) => String(e)));
+    expect(raw, "red control: the raw relative fetch on about:blank is rejected").toMatch(/Failed to parse URL|Invalid URL/);
+  } finally {
+    await blank.close();
+  }
+  const fresh = await openActor(browser, "C");
+  try {
+    expect(fresh.page.url(), "positive control: a fresh actor page has no origin").not.toMatch(/^https?:/);
+    const me = await fresh.fetch("GET", "/api/v1/auth/me");
+    expect(me.status, "Actor.fetch reaches the API from a fresh page").toBe(200);
+  } finally {
+    await fresh.close();
+  }
+});
+
 test.beforeAll(async ({ browser }) => {
+  test.setTimeout(15 * 60_000);
   A = await openActor(browser, "A");
   C = await openActor(browser, "C");
   x = await resolveCtx(C);
@@ -71,7 +90,28 @@ test.beforeAll(async ({ browser }) => {
   const offered = ((await A.api("GET", `/api/v1/projects/${x.projectId}/chat/agents`)).json() as { items: Array<{ agent_id: string; presence: string }> }).items;
   if (offered.find((i) => i.agent_id === agentId("offline"))?.presence !== "offline") throw new SetupFail("the offline agent fixture is not offered as offline: S07 would not exercise the queue");
   runner = await TestRunner.start(C, agentId("offline"), `e2e-chat-${RUN_ID}-s07`, 2 * 3600);
+  await drainStaleQueue(runner);
 });
+
+/**
+ * The offline fixture agent belongs to these specs alone, and an earlier run that died before its
+ * claim leaves its queued turn behind (it expires only after the TTL). Those turns are closed here
+ * so S07-recovery still asserts that ITS claim carries nothing but its own turn.
+ */
+async function drainStaleQueue(r: TestRunner): Promise<void> {
+  // No bound of its own: every claim closes what it took, so the loop ends when the queue is empty;
+  // a queue that never empties is stopped by the beforeAll timeout below.
+  for (;;) {
+    const { turns } = await r.claim(1);
+    if (turns.length === 0) return;
+    for (const t of turns) {
+      const started = await r.start(t.turn_id, t.claim_token);
+      if (started.status !== 200) throw new SetupFail(`draining stale turn ${t.turn_id}: start answered ${started.status} ${started.code}`);
+      const done = await r.events(t.turn_id, t.claim_token, [{ seq: 1, type: "final", text: "stale turn of an earlier e2e run", stop_reason: "end_turn" }]);
+      if (done.status !== 200) throw new SetupFail(`draining stale turn ${t.turn_id}: final answered ${done.status} ${done.code}`);
+    }
+  }
+}
 
 test.afterAll(async () => {
   const errors: string[] = [];

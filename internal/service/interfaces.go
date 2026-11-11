@@ -335,6 +335,9 @@ type TaskStatusService interface {
 type TaskDependencyService interface {
 	Create(ctx context.Context, dep *domain.TaskDependency) error
 	Delete(ctx context.Context, id uuid.UUID) error
+	// DeleteIfGeneration is Delete as a compare-and-delete on the edge of taskID:
+	// 404 when the edge is not taskID's, 409 when its generation is not gen.
+	DeleteIfGeneration(ctx context.Context, taskID, id uuid.UUID, gen int64) error
 	// UpdateCondition changes an edge's condition and/or evidence. A
 	// non-task_done edge with evidence is marked met now; clearing the evidence
 	// un-marks it. Returns the stored edge.
@@ -1145,11 +1148,13 @@ type VCSLinkService interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.VCSLink, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.VCSLink, error)
-	// PatchMetadata merges fleet-writable keys into a pr link's metadata
-	// without replacing the keys it does not name. Only domain.AgentWritableVCSMetadataKeys
-	// (ship_sha, 40 lowercase hex) are accepted; anything else — head_sha
-	// included — is apierror.BadRequest. A link that is missing, on another
-	// task, or not link_type=pr is NotFound.
+	// PatchMetadata merges fleet-writable keys into a pr or commit link's
+	// metadata without replacing the keys it does not name. Only
+	// domain.AgentWritableVCSMetadataKeys are accepted (a commit link: ship_sha
+	// only); anything else — head_sha and ship_set included — is
+	// apierror.BadRequest. A changed ship_sha is stamped ship_set from the
+	// caller. A link that is missing, on another task, or neither pr nor
+	// commit is NotFound.
 	PatchMetadata(ctx context.Context, taskID, linkID uuid.UUID, patch map[string]any) (*domain.VCSLink, error)
 	// PatchShipSHAByURL writes ship_sha onto every pr link of the workspace
 	// that names exactly this MR/PR url, so a caller that knows only the MR
@@ -1159,6 +1164,12 @@ type VCSLinkService interface {
 	// reach (project membership), so the url cannot be used to write into a
 	// project the caller is not in; nil applies no such filter.
 	PatchShipSHAByURL(ctx context.Context, workspaceID uuid.UUID, mrURL, shipSHA string, mayAccessTask func(taskID uuid.UUID) bool) ([]domain.VCSLink, error)
+	// SyncLink re-reads one GitLab MR link of taskID from GitLab and stores
+	// the merged MR's head commit and head pipeline (the pipeline only when it
+	// ran on that head). For a link added after the merge, which no webhook
+	// will reach. Never creates links, changes a link's status or moves the
+	// card; a link that is not on taskID is NotFound.
+	SyncLink(ctx context.Context, taskID, linkID uuid.UUID) (*VCSLinkSyncResult, error)
 	// HandleGitHubPullRequestEvent resolves a GitHub PR webhook payload to a
 	// task, upserts the corresponding vcs_link, and on action=closed applies
 	// the auto transition policy: in_progress → review, review → done. When

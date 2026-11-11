@@ -28,6 +28,7 @@ type TurnCommandStore interface {
 	AddNote(ctx context.Context, taskID, authorID uuid.UUID, authorType domain.ActorType, body string) (uuid.UUID, error)
 	TaskScope(ctx context.Context, taskID uuid.UUID) (projectID, workspaceID uuid.UUID, err error)
 	ResolveAgent(ctx context.Context, workspaceID uuid.UUID, to string) (id uuid.UUID, name string, found bool, err error)
+	HoldsCheckout(ctx context.Context, taskID, agentID uuid.UUID) (bool, error)
 }
 
 // TurnVCSLinks reads the card's own VCS links.
@@ -73,7 +74,39 @@ type WaitForInput struct {
 	EventRef *string
 	Source   *string
 	Why      *string
-	Note     string
+	// AfterSHA, AfterPipelineID and AfterStatus are the explicit baseline of an
+	// mr or pipeline wait, and the reviewed head of a merge wait.
+	AfterSHA        *string
+	AfterPipelineID *int64
+	AfterStatus     *string
+	// Registration and RegistrationRef name a registered wait.
+	Registration    *string
+	RegistrationRef *string
+	Note            string
+}
+
+// waitKindsHint is the refusal text for an unknown wait_for kind.
+const waitKindsHint = "on must be card, mr, pipeline, time, merge or registered; " +
+	"a question to an agent is ask_agent, to a person ask_human"
+
+// strayField names a field added with the merge and registered kinds that the
+// chosen kind does not read. Such a field is refused, never dropped: an agent
+// that sent it meant something the wait would not record.
+func (in WaitForInput) strayField() string {
+	baseline := map[string]bool{"mr": true, "pipeline": true, "merge": true}[in.On]
+	switch {
+	case !baseline && in.AfterSHA != nil:
+		return "after_sha"
+	case !baseline && in.AfterPipelineID != nil:
+		return "after_pipeline_id"
+	case !baseline && in.AfterStatus != nil:
+		return "after_status"
+	case in.On != string(domain.TaskWaitRegistered) && in.Registration != nil:
+		return "registration"
+	case in.On != string(domain.TaskWaitRegistered) && in.RegistrationRef != nil:
+		return "registration_ref"
+	}
+	return ""
 }
 
 // TurnCommandService runs the commands.
@@ -83,7 +116,10 @@ type TurnCommandService struct {
 	hooks  TurnHooks
 	gitlab GitLabCheckerSource
 	github GitHubCheckerSource
-	now    func() time.Time
+	// humanGate and tasks serve ask_human (WithHumanGate).
+	humanGate TurnHumanGate
+	tasks     TurnTaskReader
+	now       func() time.Time
 }
 
 // NewTurnCommandService creates the service. links, hooks and gitlab may be
@@ -130,13 +166,39 @@ func (s *TurnCommandService) WaitFor(ctx context.Context, taskID uuid.UUID, in W
 		return nil, err
 	}
 	w := &domain.TaskWait{TaskID: taskID, AgentID: agentID, Kind: domain.TaskWaitKind(in.On), Note: strings.TrimSpace(in.Note)}
+	if f := in.strayField(); f != "" {
+		return nil, refuse(domain.CodeInvalidTarget, f+" is not a field of an on="+in.On+" wait")
+	}
+	baseline := func() {
+		w.AfterSHA, w.AfterPipelineID, w.AfterStatus = trimmed(in.AfterSHA), in.AfterPipelineID, trimmed(in.AfterStatus)
+	}
 	switch w.Kind {
 	case domain.TaskWaitCard:
 		w.TargetTaskID, w.TargetCondition = in.TargetTaskID, in.TargetCondition
 	case domain.TaskWaitMR:
 		w.VCSLinkID, w.Provider, w.ProjectPath, w.MRIID, w.Until = in.VCSLinkID, in.Provider, in.ProjectPath, in.MRIID, in.Until
+		baseline()
+		// jobs=[…] narrows a CI wait to those jobs; an mr wait until merged has
+		// no CI part and keeps ignoring the field, as it always did.
+		if in.Until != nil && *in.Until != domain.WaitUntilMerged {
+			w.RequiredJobs = in.RequiredJobs
+		}
 	case domain.TaskWaitPipeline:
 		w.ProjectPath, w.PipelineID, w.RequiredJobs, w.Until = in.ProjectPath, in.PipelineID, in.RequiredJobs, in.Until
+		w.Provider = in.Provider
+		baseline()
+	case domain.TaskWaitMerge:
+		// Until and jobs are copied only so that Validate refuses them.
+		w.Provider, w.ProjectPath, w.MRIID, w.Until, w.RequiredJobs = in.Provider, in.ProjectPath, in.MRIID, in.Until, in.RequiredJobs
+		baseline()
+		if w.Provider == nil {
+			gitlab := string(domain.VCSProviderGitLab)
+			w.Provider = &gitlab
+		}
+	case domain.TaskWaitRegistered:
+		// Until and jobs are copied only so that Validate refuses them.
+		w.Registration, w.RegistrationRef = trimmed(in.Registration), trimmed(in.RegistrationRef)
+		w.Until, w.RequiredJobs = in.Until, in.RequiredJobs
 	case domain.TaskWaitTime:
 		// Until is copied only so a relative "6h" is refused, not dropped.
 		w.UntilAt, w.Until = in.UntilAt, in.Until
@@ -146,8 +208,8 @@ func (s *TurnCommandService) WaitFor(ctx context.Context, taskID uuid.UUID, in W
 			w.UntilAtOffset = &off
 		}
 	default:
-		// decision and human waits have their own commands (ask_agent, set_human_gate).
-		return nil, refuse(domain.CodeInvalidTarget, "on must be card, mr, pipeline or time")
+		// decision and human waits have their own commands (ask_agent, ask_human).
+		return nil, refuse(domain.CodeInvalidTarget, waitKindsHint)
 	}
 	_, workspaceID, err := s.store.TaskScope(ctx, taskID)
 	if err != nil {
@@ -163,17 +225,25 @@ func (s *TurnCommandService) WaitFor(ctx context.Context, taskID uuid.UUID, in W
 	if err != nil {
 		return nil, err
 	}
+	unverified := false
 	switch w.Kind {
-	case domain.TaskWaitMR:
-		err = s.checkMR(ctx, workspaceID, w)
+	case domain.TaskWaitMR, domain.TaskWaitMerge:
+		unverified, err = s.checkMR(ctx, workspaceID, w)
 	case domain.TaskWaitPipeline:
-		err = s.checkPipeline(ctx, workspaceID, w)
+		// A GitHub Actions run is recorded as given: the server has no
+		// Actions client to confirm it.
+		if w.Provider == nil || *w.Provider != string(domain.VCSProviderGitHub) {
+			unverified, err = s.checkPipeline(ctx, workspaceID, w)
+		}
 	}
 	if err != nil {
 		return nil, err
 	}
 	what := describeWait(w)
 	body := "Waiting on " + what + "."
+	if unverified {
+		body += " Not confirmed here: this workspace's GitLab access cannot read the project; the runner watches it with the lane's own access."
+	}
 	if w.Note != "" {
 		body += "\n\n" + w.Note
 	}
@@ -323,15 +393,34 @@ func mrCoordinates(link *domain.VCSLink) (projectPath string, iid int, ok bool) 
 	return "", 0, false
 }
 
+// projectHidden reports that the checker's GitLab access cannot read the
+// project at all, as opposed to the project being readable and the object
+// missing. Only a definite "not visible" counts: a checker that cannot say, or
+// a GitLab that gave no answer, leaves the refusal in place.
+func projectHidden(ctx context.Context, checker any, projectPath string) bool {
+	v, ok := checker.(interface {
+		ProjectVisible(context.Context, string) (bool, error)
+	})
+	if !ok {
+		return false
+	}
+	visible, err := v.ProjectVisible(ctx, projectPath)
+	return err == nil && !visible
+}
+
 // checkMR confirms the MR exists and is still open: live from GitLab when the
 // workspace has a client, else from a link of this card. Neither → refused,
-// a wait on an MR nobody can see would never end.
-func (s *TurnCommandService) checkMR(ctx context.Context, workspaceID uuid.UUID, w *domain.TaskWait) error {
+// a wait on an MR nobody can see would never end. One case is neither: the
+// workspace's GitLab access cannot read the project (another group), while the
+// lane that asks can and the runner observes the wait with the lane's access.
+// Such a wait is recorded unverified (true) instead of pushing the lane back
+// to a marker line.
+func (s *TurnCommandService) checkMR(ctx context.Context, workspaceID uuid.UUID, w *domain.TaskWait) (bool, error) {
 	var link *domain.VCSLink
 	if s.links != nil {
 		links, err := s.links.ListByTask(ctx, w.TaskID)
 		if err != nil {
-			return err
+			return false, err
 		}
 		for i := range links {
 			l := &links[i]
@@ -346,28 +435,34 @@ func (s *TurnCommandService) checkMR(ctx context.Context, workspaceID uuid.UUID,
 		w.VCSLinkID = &link.ID
 	}
 	if *w.Provider == string(domain.VCSProviderGitHub) {
-		return s.checkPullRequest(ctx, workspaceID, w, link)
+		return false, s.checkPullRequest(ctx, workspaceID, w, link)
 	}
 	target := fmt.Sprintf("MR %s!%d", *w.ProjectPath, *w.MRIID)
+	hidden := false
 	if *w.Provider == string(domain.VCSProviderGitLab) && s.gitlab != nil {
 		if checker, ok := s.gitlab(ctx, workspaceID); ok {
 			state, err := checker.GetMergeRequestState(ctx, *w.ProjectPath, *w.MRIID)
-			if err != nil {
-				return refuse(domain.CodeInvalidTarget, target+" was not found on GitLab")
+			switch {
+			case err == nil && (state.Merged || state.State == "closed"):
+				return false, refuse(domain.CodeAlreadyMet, target+" is already "+state.State)
+			case err == nil:
+				return false, nil
+			case !projectHidden(ctx, checker, *w.ProjectPath):
+				return false, refuse(domain.CodeInvalidTarget, target+" was not found on GitLab")
 			}
-			if state.Merged || state.State == "closed" {
-				return refuse(domain.CodeAlreadyMet, target+" is already "+state.State)
-			}
-			return nil
+			hidden = true
 		}
 	}
 	if link == nil {
-		return refuse(domain.CodeInvalidTarget, target+" is neither linked to this card nor visible on GitLab")
+		if hidden {
+			return true, nil
+		}
+		return false, refuse(domain.CodeInvalidTarget, target+" is neither linked to this card nor visible on GitLab")
 	}
 	if link.Status == domain.VCSLinkStatusMerged || link.Status == domain.VCSLinkStatusClosed {
-		return refuse(domain.CodeAlreadyMet, target+" is already "+string(link.Status))
+		return false, refuse(domain.CodeAlreadyMet, target+" is already "+string(link.Status))
 	}
-	return nil
+	return hidden, nil
 }
 
 // checkPullRequest confirms a GitHub PR exists and is still open: live from
@@ -400,7 +495,10 @@ func (s *TurnCommandService) checkPullRequest(ctx context.Context, workspaceID u
 
 var terminalPipelineStatuses = []string{"success", "failed", "canceled", "skipped"}
 
-func (s *TurnCommandService) checkPipeline(ctx context.Context, workspaceID uuid.UUID, w *domain.TaskWait) error {
+// checkPipeline confirms the pipeline exists and has not finished. A pipeline of
+// a project this workspace's GitLab access cannot read is recorded unverified
+// (true), as in checkMR.
+func (s *TurnCommandService) checkPipeline(ctx context.Context, workspaceID uuid.UUID, w *domain.TaskWait) (bool, error) {
 	target := fmt.Sprintf("pipeline %s#%d", *w.ProjectPath, *w.PipelineID)
 	var checker gitlabapi.MergeRequestChecker
 	ok := false
@@ -411,16 +509,19 @@ func (s *TurnCommandService) checkPipeline(ctx context.Context, workspaceID uuid
 		GetPipelineStatus(context.Context, string, int) (string, error)
 	})
 	if !ok || !hasPipelines {
-		return refuse(domain.CodeInvalidTarget, "GitLab is not configured for this workspace; "+target+" cannot be confirmed")
+		return false, refuse(domain.CodeInvalidTarget, "GitLab is not configured for this workspace; "+target+" cannot be confirmed")
 	}
 	status, err := pipelines.GetPipelineStatus(ctx, *w.ProjectPath, int(*w.PipelineID))
 	if err != nil {
-		return refuse(domain.CodeInvalidTarget, target+" was not found on GitLab")
+		if projectHidden(ctx, checker, *w.ProjectPath) {
+			return true, nil
+		}
+		return false, refuse(domain.CodeInvalidTarget, target+" was not found on GitLab")
 	}
 	if slices.Contains(terminalPipelineStatuses, status) {
-		return refuse(domain.CodeAlreadyMet, target+" has already finished: "+status)
+		return false, refuse(domain.CodeAlreadyMet, target+" has already finished: "+status)
 	}
-	return nil
+	return false, nil
 }
 
 // describeWait is the human-readable target, used in the comment and as the
@@ -434,17 +535,45 @@ func describeWait(w *domain.TaskWait) string {
 		}
 		return fmt.Sprintf("card %s (%s)", w.TargetTaskID.String()[:8], cond)
 	case domain.TaskWaitMR:
-		return fmt.Sprintf("MR %s!%d until %s", *w.ProjectPath, *w.MRIID, *w.Until)
-	case domain.TaskWaitPipeline:
-		s := fmt.Sprintf("pipeline %s#%d until %s", *w.ProjectPath, *w.PipelineID, *w.Until)
+		s := fmt.Sprintf("MR %s!%d until %s", *w.ProjectPath, *w.MRIID, *w.Until)
 		if len(w.RequiredJobs) > 0 {
 			s += " (jobs: " + strings.Join(w.RequiredJobs, ", ") + ")"
 		}
-		return s
+		return s + describeBaseline(w)
+	case domain.TaskWaitPipeline:
+		what := "pipeline"
+		if w.Provider != nil && *w.Provider == string(domain.VCSProviderGitHub) {
+			what = "GitHub Actions run"
+		}
+		s := fmt.Sprintf("%s %s#%d until %s", what, *w.ProjectPath, *w.PipelineID, *w.Until)
+		if len(w.RequiredJobs) > 0 {
+			s += " (jobs: " + strings.Join(w.RequiredJobs, ", ") + ")"
+		}
+		return s + describeBaseline(w)
+	case domain.TaskWaitMerge:
+		return fmt.Sprintf("the merge gate of MR %s!%d at %s", *w.ProjectPath, *w.MRIID, (*w.AfterSHA)[:12])
+	case domain.TaskWaitRegistered:
+		return fmt.Sprintf("registered %s %s", *w.Registration, *w.RegistrationRef)
+	case domain.TaskWaitHuman:
+		return "@" + *w.Addressee + "'s answer"
 	case domain.TaskWaitTime:
 		return "time until " + w.UntilAt.UTC().Format(time.RFC3339)
 	}
 	return string(w.Kind)
+}
+
+// describeBaseline is the `after` part of an mr or pipeline wait, "" without one.
+func describeBaseline(w *domain.TaskWait) string {
+	if w.AfterSHA == nil {
+		return ""
+	}
+	s := " after " + (*w.AfterSHA)[:12]
+	if w.AfterPipelineID != nil {
+		s += fmt.Sprintf(" (pipeline %d %s)", *w.AfterPipelineID, *w.AfterStatus)
+	} else if w.AfterStatus != nil {
+		s += " (" + *w.AfterStatus + ")"
+	}
+	return s
 }
 
 func truncateNote(s string) string {

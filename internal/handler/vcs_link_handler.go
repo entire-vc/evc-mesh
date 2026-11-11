@@ -395,6 +395,26 @@ func (h *VCSLinkHandler) RecordDeployment(c echo.Context) error {
 	return c.JSON(http.StatusOK, link)
 }
 
+// Sync handles POST /tasks/:task_id/vcs-links/:link_id/sync. It re-reads the
+// GitLab MR the link names and stores the merged MR's HEAD and head pipeline,
+// for a link added after the merge that no webhook will reach. Responds with
+// {link, changed, reason}; a link that is not on this task is 404.
+func (h *VCSLinkHandler) Sync(c echo.Context) error {
+	taskID, err := uuid.Parse(c.Param("task_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+	}
+	linkID, err := uuid.Parse(c.Param("link_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid link_id"))
+	}
+	res, err := h.vcsService.SyncLink(c.Request().Context(), taskID, linkID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, res)
+}
+
 // PatchShipSHAByURL handles PATCH /vcs-links/ship-sha.
 // Body: {"url":"<MR/PR url>","ship_sha":"<40 hex lowercase>"}. For callers
 // that know the MR but not the card (MR text carries no card id).

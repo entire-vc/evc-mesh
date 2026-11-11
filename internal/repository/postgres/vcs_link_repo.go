@@ -501,7 +501,7 @@ func (r *VCSLinkRepo) MergeMetadata(ctx context.Context, taskID, id uuid.UUID, p
 		    THEN jsonb_set(COALESCE(metadata, '{}'::jsonb) || $3::jsonb, '{deployed,at}', metadata->'deployed'->'at')
 		    ELSE COALESCE(metadata, '{}'::jsonb) || $3::jsonb
 		  END
-		WHERE id = $1 AND task_id = $2 AND link_type = 'pr'
+		WHERE id = $1 AND task_id = $2 AND link_type IN ('pr', 'commit')
 		RETURNING ` + vcsLinkSelectCols
 	var row vcsLinkRow
 	if err := r.db.GetContext(ctx, &row, q, id, taskID, []byte(patch)); err != nil {

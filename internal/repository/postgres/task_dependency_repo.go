@@ -93,6 +93,37 @@ func (r *TaskDependencyRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain
 	return &dep, nil
 }
 
+// DeleteIfGeneration is the compare-and-delete: the source task and generation
+// are predicates of the DELETE itself, under the same workspace graph lock that
+// condition updates take, so a concurrent condition change cannot slip between
+// the check and the delete.
+func (r *TaskDependencyRepo) DeleteIfGeneration(ctx context.Context, taskID, id uuid.UUID, gen int64) error {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(ctx, `SELECT completion_graph_lock(p.workspace_id) FROM task_dependencies d JOIN tasks t ON t.id=d.task_id JOIN projects p ON p.id=t.project_id WHERE d.id=$1 AND d.task_id=$2`, id, taskID); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM task_dependencies WHERE id = $1 AND task_id = $2 AND generation = $3`, id, taskID, gen)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		var cur int64
+		qerr := tx.GetContext(ctx, &cur, `SELECT generation FROM task_dependencies WHERE id = $1 AND task_id = $2`, id, taskID)
+		if errors.Is(qerr, sql.ErrNoRows) {
+			return apierror.NotFound("TaskDependency")
+		}
+		if qerr != nil {
+			return qerr
+		}
+		return domain.ErrStaleDependencyGeneration
+	}
+	return tx.Commit()
+}
+
 func (r *TaskDependencyRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {

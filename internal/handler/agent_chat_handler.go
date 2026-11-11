@@ -34,6 +34,8 @@ type AgentChatHandler struct {
 	atts     *postgres.ChatAttachmentRepo
 	store    ChatAttachmentStore
 	hints    *redis.Client
+
+	snapshots repository.ChatRunnerSnapshotRepository
 }
 
 // WithAttachments lets SendMessage confirm a presigned upload by looking the

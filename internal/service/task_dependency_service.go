@@ -417,6 +417,22 @@ func (s *taskDependencyService) hasParentCycle(ctx context.Context, taskID, newP
 // the task is parented permanently. PATCH cannot help either; parent_task_id is
 // accepted on create but not on updateTaskRequest.
 func (s *taskDependencyService) Delete(ctx context.Context, id uuid.UUID) error {
+	return s.deleteEdge(ctx, id, func() error { return s.depRepo.Delete(ctx, id) })
+}
+
+// DeleteIfGeneration deletes the edge only at the expected generation; the
+// hierarchy undo below runs only after the delete succeeded.
+func (s *taskDependencyService) DeleteIfGeneration(ctx context.Context, taskID, id uuid.UUID, gen int64) error {
+	return s.deleteEdge(ctx, id, func() error {
+		err := s.depRepo.DeleteIfGeneration(ctx, taskID, id, gen)
+		if errors.Is(err, domain.ErrStaleDependencyGeneration) {
+			return apierror.Conflict("dependency changed since it was read (generation mismatch); re-read and retry")
+		}
+		return err
+	})
+}
+
+func (s *taskDependencyService) deleteEdge(ctx context.Context, id uuid.UUID, del func() error) error {
 	// Read the edge before deleting it — afterwards its type and endpoints are gone.
 	// A read failure must not block the delete: the edge removal is what the caller
 	// asked for, and leaving it in place because we could not check its type would
@@ -426,7 +442,7 @@ func (s *taskDependencyService) Delete(ctx context.Context, id uuid.UUID) error 
 		dep = nil
 	}
 
-	if err := s.depRepo.Delete(ctx, id); err != nil {
+	if err := del(); err != nil {
 		return err
 	}
 

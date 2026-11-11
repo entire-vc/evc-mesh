@@ -46,6 +46,10 @@ type vcsLinkService struct {
 	// githubEvidence resolves a per-workspace GitHub client to read a merged
 	// PR's head commit and checks; nil disables that sync.
 	githubEvidence func(ctx context.Context, workspaceID uuid.UUID) (githubapi.PullRequestEvidenceSource, bool)
+	// mrEvidence resolves a per-workspace GitLab client to read a merged MR's
+	// head commit and head pipeline for a link no webhook reached; nil
+	// disables that sync.
+	mrEvidence func(ctx context.Context, workspaceID uuid.UUID) (gitlabapi.MergeRequestEvidenceSource, bool)
 }
 
 // WithVCSGitHubEvidenceSource lets the PR-merged webhook store the PR's head
@@ -233,7 +237,9 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 		if err != nil {
 			return nil, false, wrapVCSLinkRepoErr(err)
 		}
-		return link, created, nil
+		// A merged MR's HEAD and pipeline arrive only by webhook, and none
+		// will come for a merge that happened before this link existed.
+		return s.syncCreatedGitLabLink(ctx, link), created, nil
 	}
 
 	if explicitStatus {
@@ -256,7 +262,9 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 		if err != nil {
 			return nil, false, wrapVCSLinkRepoErr(err)
 		}
-		return link, created, nil
+		// A merged MR's HEAD and pipeline arrive only by webhook, and none
+		// will come for a merge that happened before this link existed.
+		return s.syncCreatedGitLabLink(ctx, link), created, nil
 	}
 
 	if err := s.repo.Create(ctx, link); err != nil {
@@ -345,6 +353,11 @@ func (s *vcsLinkService) Delete(ctx context.Context, id uuid.UUID) error {
 // key by key. Writes are idempotent per (link, key): a value equal to the
 // stored one is not rewritten, and re-reporting the same deployed sha and
 // environment keeps the original deployed.at.
+//
+// A commit link (a repository without merge requests) takes ship_sha only: it
+// has no MR, CI or deploy semantics. Every write that changes ship_sha, on pr
+// and commit links alike, is stamped ship_set {by_id, by_type, at} from the
+// caller, so the gate can tell an independent SHIP from the author's own.
 func (s *vcsLinkService) PatchMetadata(ctx context.Context, taskID, linkID uuid.UUID, patch map[string]any) (*domain.VCSLink, error) {
 	if len(patch) == 0 {
 		return nil, apierror.BadRequest("metadata patch is empty")
@@ -353,9 +366,11 @@ func (s *vcsLinkService) PatchMetadata(ctx context.Context, taskID, linkID uuid.
 	if err != nil {
 		return nil, fmt.Errorf("get vcs link: %w", err)
 	}
-	if existing == nil || existing.TaskID != taskID || existing.LinkType != domain.VCSLinkTypePR {
+	if existing == nil || existing.TaskID != taskID ||
+		existing.LinkType != domain.VCSLinkTypePR && existing.LinkType != domain.VCSLinkTypeCommit {
 		return nil, apierror.NotFound("VCSLink")
 	}
+	commit := existing.LinkType == domain.VCSLinkTypeCommit
 	var stored map[string]json.RawMessage
 	if len(existing.Metadata) > 0 {
 		_ = json.Unmarshal(existing.Metadata, &stored)
@@ -364,6 +379,9 @@ func (s *vcsLinkService) PatchMetadata(ctx context.Context, taskID, linkID uuid.
 	for k, v := range patch {
 		if !domain.AgentWritableVCSMetadataKeys[k] {
 			return nil, apierror.BadRequest("metadata key " + strconv.Quote(k) + " is not writable; allowed: ship_sha, implementation_sha, merged_sha, ci_verdict, deployed, acceptance, role")
+		}
+		if commit && k != domain.VCSLinkMetaShipSHA {
+			return nil, apierror.BadRequest("metadata key " + strconv.Quote(k) + " is not writable on a commit link; allowed: ship_sha")
 		}
 		val, vErr := normalizeVCSMetadataValue(k, v, existing)
 		if vErr != nil {
@@ -385,8 +403,13 @@ func (s *vcsLinkService) PatchMetadata(ctx context.Context, taskID, linkID uuid.
 		// card's description) is stamped by the first PATCH that names it;
 		// an existing stamp stands.
 		if _, stamped := stored[domain.VCSLinkMetaRoleSet]; !stamped {
-			out[domain.VCSLinkMetaRoleSet] = roleSetStamp(ctx, time.Now())
+			out[domain.VCSLinkMetaRoleSet] = actorStamp(ctx, time.Now())
 		}
+	}
+	if _, changed := out[domain.VCSLinkMetaShipSHA]; changed {
+		// Restamped on every new value (an unchanged one is skipped above), so
+		// the stamp always names whoever wrote the ship_sha that is stored.
+		out[domain.VCSLinkMetaShipSet] = actorStamp(ctx, time.Now())
 	}
 	if len(out) == 0 {
 		return existing, nil
@@ -506,8 +529,8 @@ func normalizeVCSMetadataValue(key string, v any, existing *domain.VCSLink) (any
 	return nil, apierror.BadRequest("metadata key " + strconv.Quote(key) + " is not writable")
 }
 
-// roleSetStamp records who set role on a link and when.
-func roleSetStamp(ctx context.Context, at time.Time) map[string]any {
+// actorStamp records who wrote a metadata value and when (role_set, ship_set).
+func actorStamp(ctx context.Context, at time.Time) map[string]any {
 	actorID, actorType := actorctx.FromContext(ctx)
 	stamp := map[string]any{"at": at.UTC().Format(time.RFC3339)}
 	if actorType != "" {
@@ -1296,6 +1319,18 @@ func (s *vcsLinkService) applyPRTransitionPolicy(ctx context.Context, taskID uui
 			}
 			return PRHandleResult{TaskID: taskID, OldStatus: currentStatus.Slug, Reason: "post_merge_ac_pending"}, nil
 		}
+		// A card its controller holds is not moved from under it. The executor that
+		// waits for this very merge is woken by the merge and decides the status
+		// itself; moving the card to review first took it out of the lane's working
+		// statuses, the runner ended the attempt as "task left the agent while
+		// waiting" and started a second one.
+		if kind := controllerHolds(task); kind != "" {
+			body := fmt.Sprintf("🤖 Auto: %s merged (commit %#q). Task stays in %#q: its runner holds it (%s) and the assignee decides the next status.", refLabel, mergeRefLabel, currentStatus.Slug, kind)
+			if cerr := s.postSystemComment(ctx, taskID, body, source); cerr != nil {
+				log.Printf("[vcs-webhook] post comment failed task=%s: %v", taskID, cerr)
+			}
+			return PRHandleResult{TaskID: taskID, OldStatus: currentStatus.Slug, Reason: "held_by_controller"}, nil
+		}
 		targetSlug = "review"
 	case domain.StatusCategoryReview:
 		// A merge closes a card in review only when nobody else still has to
@@ -1342,6 +1377,21 @@ func (s *vcsLinkService) applyPRTransitionPolicy(ctx context.Context, taskID uui
 		Transitioned: true,
 		Reason:       "transitioned",
 	}, nil
+}
+
+// controllerHolds returns the runtime kind when a controller currently holds
+// the card: a live state of kind working, waiting or queued, either published
+// by the runner or derived from a live checkout. A stale state, a stopped one
+// and a card nobody reported on return "".
+func controllerHolds(t *domain.Task) string {
+	if t == nil || t.RuntimeState == nil || t.RuntimeState.Stale {
+		return ""
+	}
+	switch t.RuntimeState.Kind {
+	case domain.RuntimeKindWorking, domain.RuntimeKindWaiting, domain.RuntimeKindQueued:
+		return string(t.RuntimeState.Kind)
+	}
+	return ""
 }
 
 // prBinding says whether the task a payload resolved to is the PR/MR's own

@@ -154,7 +154,7 @@ export async function waitAssistantDone(a: Actor, x: Ctx, threadId: string, nth:
     const h = await history(a, x, threadId);
     const m = h.items.filter((i) => i.role === "assistant")[nth - 1];
     return m && ["done", "failed", "cancelled"].includes(m.status) ? m : false;
-  }, ms, 1000));
+  }, ms, 2000));
 }
 
 /** The nth reply once it has text, streaming or done; a reply that ended without text fails at once. */

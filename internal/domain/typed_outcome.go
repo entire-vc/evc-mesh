@@ -3,8 +3,11 @@ package domain
 import (
 	"encoding/json"
 	"net/url"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -44,9 +47,62 @@ const (
 	TaskWaitTime     TaskWaitKind = "time"
 	TaskWaitDecision TaskWaitKind = "decision"
 	TaskWaitHuman    TaskWaitKind = "human"
+	// TaskWaitMerge is the runner's merge gate on a GitLab MR at the reviewed
+	// head (after_sha): the runner merges and wakes the agent when merged or blocked.
+	TaskWaitMerge TaskWaitKind = "merge"
+	// TaskWaitRegistered is an event of a runner-owned registration the server
+	// cannot observe: Registration names its sub-kind, RegistrationRef the entry.
+	TaskWaitRegistered TaskWaitKind = "registered"
 )
 
-// Until states. MR waits take merged|green|changed, pipeline waits finished|green.
+// Registrations a registered wait may name, with the shape of their ref.
+// Card-scoped ones are armed for the waiting card itself: their ref is the
+// card's 8-hex short id.
+const (
+	RegistrationOpsReview = "ops-review" // 64-hex registered request id
+	RegistrationGmail     = "gmail"      // gmr_<12 hex>
+	RegistrationReceipt   = "receipt"    // this card's 8-hex id
+	RegistrationLifecycle = "lifecycle"  // this card's 8-hex id
+	RegistrationStall     = "stall"      // this card's 8-hex id
+	RegistrationRecovery  = "recovery"   // this card's 8-hex id
+	RegistrationQueue     = "queue"      // this card's 8-hex id
+	RegistrationNative    = "native"     // 64-hex registration
+)
+
+var (
+	registrationRefShape = map[string]*regexp.Regexp{
+		RegistrationOpsReview: regexp.MustCompile(`^[0-9a-f]{64}$`),
+		RegistrationNative:    regexp.MustCompile(`^[0-9a-f]{64}$`),
+		RegistrationGmail:     regexp.MustCompile(`^gmr_[0-9a-f]{12}$`),
+	}
+	cardScopedRegistrations = []string{RegistrationReceipt, RegistrationLifecycle, RegistrationStall, RegistrationRecovery, RegistrationQueue}
+	headSHA                 = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+)
+
+// Registrations lists every registration a registered wait accepts.
+func Registrations() []string {
+	return []string{RegistrationOpsReview, RegistrationGmail, RegistrationReceipt, RegistrationLifecycle,
+		RegistrationStall, RegistrationRecovery, RegistrationQueue, RegistrationNative}
+}
+
+// CardScopedRegistration reports whether a registration is armed for the
+// waiting card itself, so its ref is that card's short id.
+func CardScopedRegistration(r string) bool { return slices.Contains(cardScopedRegistrations, r) }
+
+// CIBaselineStatuses are the pipeline states a CI baseline (after_status) may
+// name: GitLab's pipeline statuses and GitHub's spelling "cancelled".
+var CIBaselineStatuses = []string{"created", "waiting_for_resource", "preparing", "pending", "running",
+	"success", "failed", "canceled", "cancelled", "skipped", "manual", "scheduled"}
+
+// MRBaselineOpened is the only baseline status of an mr wait until merged:
+// the head the agent saw on the still-open MR.
+const MRBaselineOpened = "opened"
+
+// MaxHumanQuestionLen bounds the question of a human wait: the gate keeps at
+// most this much of the ask as its reason.
+const MaxHumanQuestionLen = 2000
+
+// Until states. MR waits take merged|green|changed, pipeline waits finished|green|changed.
 const (
 	WaitUntilMerged   = "merged"
 	WaitUntilGreen    = "green"
@@ -85,6 +141,9 @@ const (
 	CodeMissingResultKind = "missing_result_kind"
 	CodeMissingEvidence   = "missing_evidence"
 	CodeNoActiveWait      = "no_active_wait"
+	// CodeGateNotArmed: ask_human posted the question but the human gate did
+	// not arm (the comment-text gate is off, or the ask was suppressed).
+	CodeGateNotArmed = "gate_not_armed"
 )
 
 // OutcomeError is a refusal the agent sees in the same turn: Code is one of the
@@ -118,17 +177,44 @@ type TaskWait struct {
 	// A time wait's evidence: the external event, where its deadline is
 	// published, why the card must wait for it, and the offset until_at was
 	// given in. EvidenceStatus is always "unverified" (see TimeEvidenceUnverified).
-	EventRef          *string         `json:"event_ref,omitempty" db:"event_ref"`
-	Source            *string         `json:"source,omitempty" db:"evidence_source"`
-	Why               *string         `json:"why,omitempty" db:"evidence_why"`
-	UntilAtOffset     *string         `json:"until_at_offset,omitempty" db:"until_at_offset"`
-	EvidenceStatus    *string         `json:"evidence_status,omitempty" db:"evidence_status"`
-	DecisionRequestID *uuid.UUID      `json:"decision_request_id,omitempty" db:"decision_request_id"`
-	HumanGateRef      *string         `json:"human_gate_ref,omitempty" db:"human_gate_ref"`
-	Note              string          `json:"note" db:"note"`
-	CreatedAt         time.Time       `json:"created_at" db:"created_at"`
-	ResolvedAt        *time.Time      `json:"resolved_at,omitempty" db:"resolved_at"`
-	Resolution        *WaitResolution `json:"resolution,omitempty" db:"resolution"`
+	EventRef          *string    `json:"event_ref,omitempty" db:"event_ref"`
+	Source            *string    `json:"source,omitempty" db:"evidence_source"`
+	Why               *string    `json:"why,omitempty" db:"evidence_why"`
+	UntilAtOffset     *string    `json:"until_at_offset,omitempty" db:"until_at_offset"`
+	EvidenceStatus    *string    `json:"evidence_status,omitempty" db:"evidence_status"`
+	DecisionRequestID *uuid.UUID `json:"decision_request_id,omitempty" db:"decision_request_id"`
+	HumanGateRef      *string    `json:"human_gate_ref,omitempty" db:"human_gate_ref"`
+	// The baseline an mr, pipeline or merge wait was declared against (`after=`):
+	// the head SHA, and for a CI baseline the pipeline and its status then.
+	AfterSHA        *string `json:"after_sha,omitempty" db:"after_sha"`
+	AfterPipelineID *int64  `json:"after_pipeline_id,omitempty" db:"after_pipeline_id"`
+	AfterStatus     *string `json:"after_status,omitempty" db:"after_status"`
+	// A registered wait's sub-kind and its opaque reference.
+	Registration    *string `json:"registration,omitempty" db:"registration"`
+	RegistrationRef *string `json:"registration_ref,omitempty" db:"registration_ref"`
+	// A human wait's person (username) and question.
+	Addressee  *string         `json:"addressee,omitempty" db:"addressee"`
+	Question   *string         `json:"question,omitempty" db:"question"`
+	Note       string          `json:"note" db:"note"`
+	CreatedAt  time.Time       `json:"created_at" db:"created_at"`
+	ResolvedAt *time.Time      `json:"resolved_at,omitempty" db:"resolved_at"`
+	Resolution *WaitResolution `json:"resolution,omitempty" db:"resolution"`
+	// Who ended the wait through the resolve route, and what ended it.
+	ResolvedBy   *uuid.UUID `json:"resolved_by,omitempty" db:"resolved_by"`
+	ResolveCause *string    `json:"resolve_cause,omitempty" db:"resolve_cause"`
+}
+
+// MaxResolveCauseLen bounds the cause the resolver gives.
+const MaxResolveCauseLen = 200
+
+// ResolvableByRoute reports whether the resolve route may set r: every
+// resolution but superseded, which only a newer wait of the same agent sets.
+func (r WaitResolution) ResolvableByRoute() bool {
+	switch r {
+	case WaitResolutionMet, WaitResolutionCancelled, WaitResolutionExpired, WaitResolutionInvalid:
+		return true
+	}
+	return false
 }
 
 // Validate checks the shape of a wait about to be declared: its kind has a
@@ -157,13 +243,36 @@ func (w *TaskWait) Validate(now time.Time) error {
 		if w.Until == nil || !oneOfStr(*w.Until, WaitUntilMerged, WaitUntilGreen, WaitUntilChanged) {
 			return outcomeErr(CodeInvalidTarget, "an mr wait needs until: merged, green or changed")
 		}
+		return validateBaseline(w)
 	case TaskWaitPipeline:
 		if emptyStr(w.ProjectPath) || w.PipelineID == nil {
 			return outcomeErr(CodeInvalidTarget, "a pipeline wait needs project_path and pipeline_id")
 		}
-		if w.Until == nil || !oneOfStr(*w.Until, WaitUntilFinished, WaitUntilGreen) {
-			return outcomeErr(CodeInvalidTarget, "a pipeline wait needs until: finished or green")
+		if w.Until == nil || !oneOfStr(*w.Until, WaitUntilFinished, WaitUntilGreen, WaitUntilChanged) {
+			return outcomeErr(CodeInvalidTarget, "a pipeline wait needs until: finished, green or changed")
 		}
+		if w.Provider != nil && !oneOfStr(*w.Provider, "gitlab", "github") {
+			return outcomeErr(CodeInvalidTarget, "a pipeline wait's provider is gitlab or github")
+		}
+		if w.Provider != nil && *w.Provider == "github" && strings.Count(*w.ProjectPath, "/") != 1 {
+			return outcomeErr(CodeInvalidTarget, "a GitHub pipeline wait needs project_path owner/repo and the Actions run id as pipeline_id")
+		}
+		return validateBaseline(w)
+	case TaskWaitMerge:
+		if emptyStr(w.ProjectPath) || !strings.Contains(*w.ProjectPath, "/") || w.MRIID == nil || *w.MRIID < 1 {
+			return outcomeErr(CodeInvalidTarget, "a merge wait needs project_path (group/project) and mr_iid")
+		}
+		if w.Provider != nil && *w.Provider != "gitlab" {
+			return outcomeErr(CodeInvalidTarget, "a merge wait is GitLab only: the runner's merge gate reads the configured GitLab")
+		}
+		if w.AfterSHA == nil || !headSHA.MatchString(*w.AfterSHA) {
+			return outcomeErr(CodeInvalidTarget, "a merge wait needs after_sha: the full 40 or 64 hex-digit SHA of the reviewed head")
+		}
+		if w.Until != nil || w.AfterPipelineID != nil || w.AfterStatus != nil || len(w.RequiredJobs) > 0 {
+			return outcomeErr(CodeInvalidTarget, "a merge wait takes project_path, mr_iid and after_sha only")
+		}
+	case TaskWaitRegistered:
+		return validateRegistration(w)
 	case TaskWaitTime:
 		if w.Until != nil {
 			return outcomeErr(CodeNaiveTime, "a time wait takes an absolute until_at, not a relative until")
@@ -183,8 +292,72 @@ func (w *TaskWait) Validate(now time.Time) error {
 		if emptyStr(w.HumanGateRef) {
 			return outcomeErr(CodeInvalidTarget, "a human wait needs human_gate_ref")
 		}
+		if emptyStr(w.Addressee) || emptyStr(w.Question) {
+			return outcomeErr(CodeInvalidTarget, "a human wait needs the person asked and the question")
+		}
+		if utf8.RuneCountInString(*w.Question) > MaxHumanQuestionLen {
+			return outcomeErr(CodeInvalidTarget, "question is longer than 2000 characters")
+		}
 	default:
 		return outcomeErr(CodeInvalidTarget, "unknown wait kind")
+	}
+	return nil
+}
+
+// validateBaseline checks the explicit baseline of an mr or pipeline wait
+// (`after=<sha>:opened` or `after=<sha>:<pipeline>:<status>`). No baseline is
+// fine: the runner takes the state at the moment the wait is declared.
+func validateBaseline(w *TaskWait) error {
+	if w.AfterSHA == nil && w.AfterPipelineID == nil && w.AfterStatus == nil {
+		return nil
+	}
+	if w.AfterSHA == nil || !headSHA.MatchString(*w.AfterSHA) {
+		return outcomeErr(CodeInvalidTarget, "a baseline needs after_sha: the full 40 or 64 hex-digit head SHA")
+	}
+	switch *w.Until {
+	case WaitUntilMerged:
+		if w.AfterPipelineID != nil || w.AfterStatus == nil || *w.AfterStatus != MRBaselineOpened {
+			return outcomeErr(CodeInvalidTarget, "the baseline of until=merged is after_sha with after_status opened, no after_pipeline_id")
+		}
+	case WaitUntilGreen, WaitUntilChanged:
+		if w.AfterPipelineID == nil || *w.AfterPipelineID < 1 || w.AfterStatus == nil || !slices.Contains(CIBaselineStatuses, *w.AfterStatus) {
+			return outcomeErr(CodeInvalidTarget, "a CI baseline needs after_sha, after_pipeline_id and after_status (a pipeline status: "+
+				strings.Join(CIBaselineStatuses, ", ")+")")
+		}
+		if w.Kind == TaskWaitPipeline && *w.AfterPipelineID != *w.PipelineID {
+			return outcomeErr(CodeInvalidTarget, "the baseline's after_pipeline_id must be the awaited pipeline_id")
+		}
+	default:
+		return outcomeErr(CodeInvalidTarget, "until="+*w.Until+" takes no baseline; drop after_sha, after_pipeline_id and after_status")
+	}
+	return nil
+}
+
+// validateRegistration checks a registered wait: a known sub-kind and a ref
+// of its shape. A card-scoped registration is armed for this card, so its ref
+// is this card's short id and is filled in when omitted.
+func validateRegistration(w *TaskWait) error {
+	if emptyStr(w.Registration) || !slices.Contains(Registrations(), *w.Registration) {
+		return outcomeErr(CodeInvalidTarget, "registration must be one of "+strings.Join(Registrations(), ", "))
+	}
+	reg := *w.Registration
+	if CardScopedRegistration(reg) {
+		own := w.TaskID.String()[:8]
+		if w.RegistrationRef == nil || *w.RegistrationRef == "" {
+			w.RegistrationRef = &own
+		}
+		if *w.RegistrationRef != own {
+			return outcomeErr(CodeInvalidTarget, "a "+reg+" registration is armed for this card: registration_ref is its 8-hex id "+own)
+		}
+	} else if w.RegistrationRef == nil || !registrationRefShape[reg].MatchString(*w.RegistrationRef) {
+		shape := "64 hex digits"
+		if reg == RegistrationGmail {
+			shape = "gmr_ and 12 hex digits"
+		}
+		return outcomeErr(CodeInvalidTarget, "a "+reg+" wait needs registration_ref: "+shape)
+	}
+	if w.Until != nil || w.AfterSHA != nil || w.AfterPipelineID != nil || w.AfterStatus != nil || len(w.RequiredJobs) > 0 {
+		return outcomeErr(CodeInvalidTarget, "a registered wait takes registration and registration_ref only")
 	}
 	return nil
 }
@@ -289,6 +462,9 @@ type TurnCommand struct {
 	Note      string
 	// CommentBody is the server-written, human-readable comment of the turn.
 	CommentBody string
+	// CommentID, when set, is the turn's comment already written through the
+	// comment service (ask_human's question): no second comment is added.
+	CommentID *uuid.UUID
 	// RuntimeReason is the short text put on the card's runtime_state.
 	RuntimeReason string
 }

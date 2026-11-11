@@ -270,6 +270,8 @@ var declaredBodyTenantFields = map[string]string{
 	"project_integration_handler.go:teamRelayResponse.project_id":            "benign: a response struct, never bound from a request",
 	"workspace_secrets.go:secretResponse.project_id":                         "benign: a response struct, never bound from a request",
 	"workspace_secrets.go:secretResponse.agent_id":                           "benign: a response struct, never bound from a request",
+	"chat_runtime_handler.go:chatThreadRuntime.agent_id":                     "benign: a response struct, never bound from a request",
+	"chat_runtime_handler.go:chatRunnerAgentSnapshot.agent_id":               "benign: a response struct, never bound from a request",
 	"agent_workspace_grant_handler.go:inviteAgentGrantResponse.agent_id":     "benign: a response struct, never bound from a request",
 	"agent_workspace_grant_handler.go:inviteAgentGrantResponse.workspace_id": "response: a response struct, never bound from a request — see the workspace_id-specific test for why this needs its own prefix instead of benign:",
 

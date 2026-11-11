@@ -44,6 +44,8 @@ type ChatRunnerStore interface {
 	RenewLease(ctx context.Context, workspaceID uuid.UUID, agentIDs []uuid.UUID, runnerID, turnID uuid.UUID,
 		claimToken string, leaseSeconds int) (*postgres.ChatLease, error)
 	ActiveTurns(ctx context.Context, workspaceID uuid.UUID, agentIDs []uuid.UUID, runnerID uuid.UUID) ([]postgres.ChatActiveTurn, error)
+	HeldTurnAttachment(ctx context.Context, workspaceID uuid.UUID, agentIDs []uuid.UUID,
+		runnerID, turnID, attachmentID uuid.UUID) (*postgres.ChatTurnAttachment, error)
 }
 
 // ChatClaimHandler serves /runner/chat/*: the runner side of Chat with Agent
@@ -320,6 +322,38 @@ func (h *ChatClaimHandler) Active(c echo.Context) error {
 	}
 	noStore(c)
 	return c.JSON(http.StatusOK, map[string]any{"protocol": chatProtocolVersion, "turns": items})
+}
+
+// AttachmentDownloadURL handles
+// GET /runner/chat/turns/:id/attachments/:attachment_id/download-url: a fresh
+// presigned link to an attachment of a turn this runner holds, for when the link
+// that came with the claim is missing, expired or refused. Same key, TTL, mime
+// and file name as the claim response.
+func (h *ChatClaimHandler) AttachmentDownloadURL(c echo.Context) error {
+	caller, err := h.authorize(c)
+	if err != nil {
+		return runnerError(c, err)
+	}
+	turnID, terr := uuid.Parse(c.Param("id"))
+	attID, aerr := uuid.Parse(c.Param("attachment_id"))
+	if terr != nil || aerr != nil || turnID == uuid.Nil || attID == uuid.Nil {
+		// Same answer as an unknown turn: no existence oracle.
+		return c.JSON(http.StatusNotFound, &apierror.Error{Code: http.StatusNotFound, ErrorCode: postgres.ChatErrTurnNotFound, Message: "turn not found"})
+	}
+	if h.store == nil {
+		return runnerError(c, apierror.ServiceUnavailable("object storage is not configured"))
+	}
+	ctx := c.Request().Context()
+	att, err := h.repo.HeldTurnAttachment(ctx, caller.workspaceID, []uuid.UUID{caller.agentID}, caller.runnerID, turnID, attID)
+	if err != nil {
+		return runnerError(c, err)
+	}
+	url, err := h.store.GetPresignedURL(ctx, chatAttachmentKey(att.WorkspaceID, att.ID), chatDownloadTTL, att.Mime, att.FileName)
+	if err != nil {
+		return runnerError(c, apierror.ServiceUnavailable("object storage is unavailable"))
+	}
+	noStore(c)
+	return c.JSON(http.StatusOK, map[string]any{"download_url": url})
 }
 
 // runtimeForRunner exposes exactly the four fields of §4.2 thread_runtime, null

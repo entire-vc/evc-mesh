@@ -1,11 +1,28 @@
 # Typed turn outcomes — data model and command API
 
-Status: implementation contract. The schema (migration
-`20261028001_typed_outcomes.sql`), the two reads and the commands `wait_for`,
-`continue_next`, `hand_off` and `add_note` are implemented; `ask_agent`,
-`answer_decision` and `finish_task` are planned. Routes, bodies, responses and
-error codes are fixed here so the server handlers, the MCP tools and the runner
-can be built in parallel against the same contract.
+Status: implementation contract. The schema (migrations
+`20261028001_typed_outcomes.sql`, `20261110100_task_waits_typed_kinds.sql`,
+`20261110200_task_waits_resolve.sql`), the two reads, the eight commands and the
+resolve route are implemented. Routes, bodies, responses and error codes are
+fixed here so the server handlers, the MCP tools and the runner can be built in
+parallel against the same contract.
+
+Every end-of-turn form of the runner's marker grammar has a typed equivalent:
+
+| marker line | typed command |
+|---|---|
+| `⏳ WAIT card:#<8hex> [until=<cond>]` | `wait_for` `on: card` |
+| `⏳ WAIT mr:[<provider>:]<project>!<iid> [until=… after=…] [jobs=[…]]` | `wait_for` `on: mr` (+ baseline) |
+| `⏳ WAIT pipeline:[<provider>:]<project>#<id> [until=… after=…] [jobs=[…]]` | `wait_for` `on: pipeline` (+ baseline, `provider: github`) |
+| `⏳ WAIT merge:<project>!<iid> after=<sha>` | `wait_for` `on: merge` |
+| `⏳ WAIT ops-review:… / gmail:… / receipt:… / lifecycle:… / stall:… / recovery:… / queue:… / native:…` | `wait_for` `on: registered` |
+| `⏳ WAIT <ISO>: external=<ref> source=<src> <why>` | `wait_for` `on: time` (`event_ref`, `source`, `why`) |
+| `⏳ WAIT decision:@<agent>` | `ask_agent` |
+| `❓ Blocking @<person>: <question>` | `ask_human` |
+| `↻ NEXT[: note]` | `continue_next` |
+
+A time wait's `source=card:#<8hex>` has no typed form: a card is not a source
+(below); cite a `comment:<uuid>` on that card instead.
 
 An agent's turn ends with a command, not with a marker line in a comment. The
 command validates its input on the server, writes the state, writes a
@@ -30,24 +47,36 @@ returns the reason in the same turn.
 | `id` | uuid | |
 | `task_id`, `agent_id` | uuid | the waiting card and agent |
 | `session_id` | string ≤ 200, nullable | runner session that declared it |
-| `kind` | `card` \| `mr` \| `pipeline` \| `time` \| `decision` \| `human` | |
+| `kind` | `card` \| `mr` \| `pipeline` \| `time` \| `decision` \| `human` \| `merge` \| `registered` | |
 | `target_task_id`, `target_condition` | uuid, dependency condition | `card`; condition defaults to `task_done` |
-| `vcs_link_id`, `provider`, `project_path`, `mr_iid` | | `mr`; coordinates are stored even when a link is given |
-| `project_path`, `pipeline_id`, `required_jobs[]` | | `pipeline` |
-| `until` | string | `mr`: `merged` \| `green` \| `changed`; `pipeline`: `finished` \| `green` |
+| `vcs_link_id`, `provider`, `project_path`, `mr_iid` | | `mr`; coordinates are stored even when a link is given. `merge`: `provider` is always `gitlab`, no link |
+| `provider`, `project_path`, `pipeline_id`, `required_jobs[]` | | `pipeline`; `provider` is `gitlab` (or absent, read as gitlab) \| `github` (an Actions run: `owner/repo`, run id). `required_jobs` also on `mr` with `until` `green` \| `changed` |
+| `until` | string | `mr`: `merged` \| `green` \| `changed`; `pipeline`: `finished` \| `green` \| `changed` |
+| `after_sha` | 40 or 64 lowercase hex | `merge`: the reviewed head (required). `mr`/`pipeline`: the baseline head (optional) |
+| `after_pipeline_id`, `after_status` | int64, string | baseline of `mr`/`pipeline` (see `wait_for`); absent without a baseline |
+| `registration`, `registration_ref` | string, string ≤ 200 | `registered`: the sub-kind and its reference |
+| `addressee`, `question` | string ≤ 200, string ≤ 2000 | `human`: the person's username and the question |
 | `until_at` | timestamp | `time` |
 | `event_ref`, `source`, `why` | string ≤ 500 | `time`: the external event, where its deadline is published, what happens at `until_at` |
 | `until_at_offset` | string | `time`: the offset `until_at` was given in (`Z`, `+03:00`) |
 | `evidence_status` | `unverified`, `legacy` | `time`: `unverified` — the server checks shape and Mesh receipts, not the deadline itself; `legacy` — declared before evidence was required, no evidence fields, can only be resolved |
 | `decision_request_id` | uuid | `decision` |
-| `human_gate_ref` | string ≤ 200 | `human` |
+| `human_gate_ref` | string ≤ 200 | `human`: `comment:<uuid>`, the `❓ Blocking` comment the gate was armed from |
 | `note` | string ≤ 500 | |
 | `created_at`, `resolved_at` | timestamp | |
 | `resolution` | `met` \| `superseded` \| `cancelled` \| `expired` \| `invalid` | set together with `resolved_at` |
+| `resolved_by`, `resolve_cause` | uuid, string ≤ 200 | who ended the wait through the resolve route and why; `resolve_cause` is also `continue_next` or `card closed` when the server ended it |
+
+Fields that do not apply to a row's kind are absent from its JSON (all are
+`omitempty` except `required_jobs`, always an array, and `note`, always a string).
 
 One active wait per `(task_id, agent_id)`, enforced by the partial unique index
 `task_waits_one_active`. A new wait resolves the previous one as `superseded`
-in the same transaction.
+in the same transaction. Waits also end without the runner: `continue_next`
+supersedes the caller's own wait on the card (`resolve_cause = continue_next`),
+`finish_task` and `hand_off` cancel it, and a trigger cancels every active wait
+of a card moved to a `done` or `cancelled` status or deleted, by any path
+(`resolve_cause = card closed`).
 
 ### `turn_outcomes`
 
@@ -140,6 +169,8 @@ Common to all commands:
   | `not_an_agent` | the addressee of `ask_agent` or `hand_off` is not an agent of the directory |
   | `missing_result_kind` | `finish_task` without a valid `result_kind` |
   | `missing_evidence` | `finish_task` without evidence; a `time` wait without `event_ref` / `source` / `why`, or with a receipt that does not qualify |
+  | `gate_addressee_required`, `gate_addressee_not_human`, `repeat_ask_refused`, `gate_marker_required` | `ask_human`: the same refusals `set_human_gate` gives an agent key |
+  | `gate_not_armed` | `ask_human` posted the question but the gate did not arm |
 
   Generic codes keep their meaning: `400 bad_request` (malformed body),
   `403 forbidden`, `404 not_found` (card or request), `409 conflict` (the caller
@@ -149,11 +180,14 @@ Common to all commands:
 
 ```json
 {
-  "on": "card | mr | pipeline | time",
+  "on": "card | mr | pipeline | time | merge | registered",
   "target_task_id": "uuid",            "target_condition": "task_done | shipped | deployed | accepted | ...",
-  "vcs_link_id": "uuid",               "provider": "gitlab", "project_path": "group/project", "mr_iid": 12,
+  "vcs_link_id": "uuid",               "provider": "gitlab | github", "project_path": "group/project", "mr_iid": 12,
   "pipeline_id": 7001,                 "required_jobs": ["test"],
   "until": "merged | green | changed | finished",
+  "after_sha": "40 or 64 hex",         "after_pipeline_id": 7001, "after_status": "running | opened | ...",
+  "registration": "ops-review | gmail | receipt | lifecycle | stall | recovery | queue | native",
+  "registration_ref": "string",
   "until_at": "2026-10-29T06:00:00Z",
   "event_ref": "nightly-export",       "source": "https://… | comment:<uuid> | artifact:<uuid>",
   "why": "what happens at until_at",
@@ -161,7 +195,11 @@ Common to all commands:
 }
 ```
 
-Only the fields of the chosen `on` are read. For `mr`, either `vcs_link_id` (a
+Only the fields of the chosen `on` are read, with one exception: the fields
+added with `merge` and `registered` (`after_sha`, `after_pipeline_id`,
+`after_status`, `registration`, `registration_ref`) are refused with
+`invalid_target` on a kind that does not read them, never silently dropped.
+`on: decision` and `on: human` are refused: they have their own commands. For `mr`, either `vcs_link_id` (a
 link of this card) or `provider` + `project_path` + `mr_iid` (a link of this card
 or an MR of the project) names the target. For `card` a `blocks` dependency with
 `target_condition` is created or reused. Writes the wait (superseding the
@@ -183,6 +221,44 @@ How the target is confirmed:
 - `pipeline` — live from the workspace's GitLab only; without it the target
   cannot be confirmed and is `invalid_target`. `success`, `failed`, `canceled`
   and `skipped` are `already_met`.
+- `merge` — the runner's merge gate (`⏳ WAIT merge:`): `project_path`
+  (`group/project`, at least one `/`), `mr_iid` ≥ 1 and `after_sha` (the
+  reviewed head, 40 or 64 lowercase hex) are required; `provider` may be
+  omitted or `gitlab` (stored as `gitlab`); `until`, `required_jobs` and the
+  other baseline fields are refused. The MR is confirmed exactly as for `mr`
+  (merged or closed is `already_met`). The head SHA itself is not compared
+  with GitLab: the merge gate does that when it runs. Only a runner with the
+  merge gate enabled can act on it.
+- `registered` — a runner-owned registration the server cannot observe.
+  `registration` is one of the allow-list below; `registration_ref` must have
+  its shape. Nothing else is read; `until`, `required_jobs` and baseline fields
+  are refused.
+
+  | `registration` | `registration_ref` |
+  |---|---|
+  | `ops-review` | 64 lowercase hex (registered request id) |
+  | `native` | 64 lowercase hex (registration) |
+  | `gmail` | `gmr_` + 12 lowercase hex |
+  | `receipt`, `lifecycle`, `stall`, `recovery`, `queue` | this card's 8-hex short id (the first 8 chars of its UUID); optional, filled in when omitted, anything else refused |
+
+  The server checks the shape only; the runner checks that the registration
+  exists and is armed.
+- baseline (`after=`) on `mr` and `pipeline` — optional. Without it the runner
+  takes the state at the moment of the wait (as before).
+  - `until: merged` (mr): `after_sha` + `after_status: "opened"`, no
+    `after_pipeline_id` (`after=<sha>:opened`).
+  - `until: green | changed`: `after_sha` + `after_pipeline_id` + `after_status`,
+    a pipeline status: `created`, `waiting_for_resource`, `preparing`,
+    `pending`, `running`, `success`, `failed`, `canceled`, `cancelled`,
+    `skipped`, `manual`, `scheduled` (`after=<sha>:<pipeline>:<status>`). On a
+    `pipeline` wait `after_pipeline_id` must equal `pipeline_id`.
+  - `until: finished` takes no baseline.
+  Grammar `until=success` is `green`, `until=change` is `changed`.
+  `required_jobs` is recorded on an `mr` wait only with `green` / `changed`.
+- `pipeline` with `provider: github` — a GitHub Actions run: `project_path`
+  is `owner/repo`, `pipeline_id` the run id. The server has no Actions client:
+  the run is recorded without confirmation. Any other provider is
+  `invalid_target`; an absent provider stays absent and means GitLab.
 - `time` — only against a known external event whose source states the
   deadline: a published job start, an approved measurement window, a provider
   `Retry-After` or quota reset. A generic retry, poll or backoff has no such
@@ -199,7 +275,7 @@ The card's `runtime_state` becomes `waiting` with `ref = "wait:<wait id>"` and,
 for `time`, `until = until_at`. Such a state is not refreshed by the runner, so
 it reads stale only after its `until`, not after the usual 15 minutes.
 A timer cannot ask anyone to act: a wait on another agent is `ask_agent`, on a
-person `ask_human` (the existing `set_human_gate`, which records a `human` wait).
+person `ask_human` (command 8).
 
 ### 2. `continue_next` — `POST /api/v1/tasks/:task_id/next`
 
@@ -208,7 +284,8 @@ person `ask_human` (the existing `set_human_gate`, which records a `human` wait)
 ```
 
 Writes an outcome `next` and the comment; the card stays with the caller and the
-checkout is extended. `200` — envelope with `outcome`, `released: false`.
+checkout is extended. A wait the caller still has on the card is resolved as
+`superseded` (`resolve_cause: continue_next`). `200` — envelope with `outcome`, `released: false`.
 Errors: `409 conflict` when the caller does not hold the checkout.
 
 ### 3. `ask_agent` — `POST /api/v1/tasks/:task_id/decision-requests`
@@ -292,6 +369,84 @@ Errors: `not_an_agent`; `409 conflict` when a person pinned the assignee
 
 Writes a comment with `metadata.wakes = false`: no delivery, no wake, no outcome,
 the checkout is untouched. `201` — `{ "comment_id": "uuid" }`.
+
+### 8. `ask_human` — `POST /api/v1/tasks/:task_id/ask-human`
+
+The typed form of `❓ Blocking @<person>: <question>`.
+
+```json
+{
+  "to": "alex",
+  "question": "≤ 2000 chars",
+  "recommended_default": "one line ≤ 500: what you do if nobody answers (optional)",
+  "deadline": "2026-11-12T09:00:00Z (optional, future)",
+  "soft": false,
+  "canonical_key": "one line ≤ 500 (optional)",
+  "supersedes": "one line ≤ 500 (optional): what the previous answered ask did not cover"
+}
+```
+
+`to` is the person's username (`@` ignored, lowercased; letters, digits and
+hyphens). In order:
+
+1. Input checks: `400` on a missing/long question, a `[soft]` tag inside the
+   question (send `soft: true`), a past `deadline`, a multi-line optional field.
+2. `409 conflict` when the caller does not hold the card's checkout.
+3. The checks `set_human_gate` runs for an agent key: `to` must be a person of
+   the workspace (`gate_addressee_not_human`), and the previous ask must not
+   already be answered unless `supersedes` names something new, nor a live
+   recorded decision exist under `canonical_key` (`repeat_ask_refused`). Nothing
+   is written on a refusal.
+4. The question is posted, authored by the caller, through the comment service
+   as the marker line itself:
+   `❓ Blocking @<to>: <question on one line>[ [soft]]`, then the lines
+   `Default: …`, `Deadline: …`, `supersedes: …` when given; metadata
+   `{"command":"ask_human","canonical_key":…,"supersedes":…}`. The gate is
+   armed, the person notified, the card triaged and later released (answer,
+   recorded decision, withdrawal, soft timeout) exactly as for a hand-written
+   marker.
+5. If the card's gate is not armed by the caller afterwards (comment-text gates
+   off, an ask suppressed by policy), `422 gate_not_armed`; the posted comment
+   stays as the record, no wait is written.
+6. One transaction: the caller's `human` wait (`human_gate_ref:
+   "comment:<id>"`, `addressee`, `question`, `note: "asked @<to>"`), an outcome
+   `wait`, `runtime_state` waiting with `ref: "wait:<id>"`, checkout released.
+   The question is the turn's only comment.
+
+`201` — envelope with `outcome`, `wait`, `comment_id` (the question), `released: true`.
+The wait is not met by the server: the runner observes the gate (`human_gate`
+false on the card) and resolves the wait.
+
+## Resolving a wait — `POST /api/v1/tasks/:task_id/waits/:wait_id/resolve`
+
+The runner observes the events and wakes the agent; this route records that a
+wait ended.
+
+```json
+{ "resolution": "met | cancelled | expired | invalid", "cause": "1–200 chars" }
+```
+
+`resolution` defaults to `met`; `superseded` is set only by a newer wait or
+`continue_next`. `cause` says what ended it (`"MR g/p!12 merged"`).
+
+Caller: an agent key (X-Agent-Key, the identity the runner already uses for
+`/tasks/:task_id/runtime-state`) that is either the wait's own `agent_id` — the
+lane key — or a controller of the card's workspace: a key presented for that
+workspace whose agent holds the active reporter grant of a controller in the
+workspace's runtime catalog (the key `…/runtime/controllers/:ref/report` takes).
+A person, an OAuth connector or any other agent gets `403`. Route guards:
+workspace membership and `update_task`, like `runtime-state`.
+
+In one transaction: `resolved_at`, `resolution`, `resolve_cause`, `resolved_by`
+(the caller) are written, and the card's `runtime_state` is cleared if its
+`ref` is `wait:<this id>`. No comment is written.
+
+`200` — `{"wait": <task_waits row>, "resolved": true}`. A repeat on an ended
+wait with the same resolution is `200` with `resolved: false` and the stored
+row (cause and author unchanged): safe to retry. Errors: `400` (bad
+resolution, missing or long cause, malformed id), `403`, `404 not_found` (no
+such wait on this card), `409 conflict` (the wait already ended with another
+resolution, e.g. superseded by a newer wait: the runner lost the race).
 
 ## `start_after` — provenance, evidence and compare-clear
 

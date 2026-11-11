@@ -244,7 +244,20 @@ const (
 	// set it there and when.
 	VCSLinkMetaRole    = "role"
 	VCSLinkMetaRoleSet = "role_set"
+
+	// ship_set records who wrote the current ship_sha and when, in the same
+	// {by_id, by_type, at} form as role_set. Mesh restamps it on every write
+	// that changes ship_sha; no agent writes it. A commit link proves delivery
+	// only through it: the SHIP must come from someone other than the author.
+	VCSLinkMetaShipSet = "ship_set"
 )
+
+// VCSActorStamp is who wrote a metadata value and when (role_set, ship_set).
+type VCSActorStamp struct {
+	ByID   string `json:"by_id,omitempty"`
+	ByType string `json:"by_type,omitempty"`
+	At     string `json:"at,omitempty"`
+}
 
 // VCSEnvProd is the environment whose deploy makes a link shipped.
 const VCSEnvProd = "prod"
@@ -515,6 +528,61 @@ func (l VCSLink) ShipEvidenceGaps() []string {
 	}
 	if l.PipelineStatus == nil || *l.PipelineStatus != "success" {
 		gaps = append(gaps, ShipGapPipelineNotGreen)
+	}
+	return gaps
+}
+
+// Reasons a commit link fails to prove delivery for a card without MR links
+// (a repository that has no merge requests by design). Stable machine values.
+const (
+	ShipGapNotCommit     = "not_a_commit_link"
+	ShipGapNotFullSHA    = "not_full_sha"
+	ShipGapByAuthor      = "ship_by_author"
+	ShipGapWriterUnknown = "ship_writer_unknown"
+)
+
+// ShipSet is the stamp of the last ship_sha write, nil when none.
+func (l VCSLink) ShipSet() *VCSActorStamp {
+	var st VCSActorStamp
+	if !l.metaObject(VCSLinkMetaShipSet, &st) {
+		return nil
+	}
+	return &st
+}
+
+// CommitShipGaps lists every fact missing for this commit link to prove
+// delivery of a card authored by authorID; empty means it does. The commit
+// itself is the delivered artifact: external_id must be its full sha, ship_sha
+// must name exactly that commit, and the ship_sha write must be stamped by
+// someone other than the author. An unknown author cannot be excluded, so it
+// fails closed as ship_by_author. Order is stable.
+func (l VCSLink) CommitShipGaps(authorID *uuid.UUID) []string {
+	if l.LinkType != VCSLinkTypeCommit {
+		return []string{ShipGapNotCommit}
+	}
+	var gaps []string
+	sha, ship := strings.TrimSpace(l.ExternalID), l.ShipSHA()
+	full := IsFullCommitSHA(sha)
+	if !full {
+		gaps = append(gaps, ShipGapNotFullSHA)
+	}
+	if ship == "" {
+		return append(gaps, ShipGapMissingShipSHA)
+	}
+	if full && ship != sha {
+		gaps = append(gaps, ShipGapStaleShipSHA)
+	}
+	by := uuid.Nil
+	if st := l.ShipSet(); st != nil {
+		if id, err := uuid.Parse(st.ByID); err == nil {
+			by = id
+		}
+	}
+	switch {
+	case by == uuid.Nil:
+		gaps = append(gaps, ShipGapWriterUnknown)
+	case authorID == nil || *authorID == by:
+		gaps = append(gaps, ShipGapByAuthor)
 	}
 	return gaps
 }

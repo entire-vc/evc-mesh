@@ -76,6 +76,34 @@ type mergeRequestResponse struct {
 	State string `json:"state"`
 }
 
+// ProjectVisible reports whether this client's token can read the project at
+// all. GitLab answers 404 both for an object that does not exist and for a
+// project the token may not see; asking for the project itself tells the two
+// apart. An error means GitLab gave no usable answer (transport, 5xx).
+func (c *Client) ProjectVisible(ctx context.Context, projectPath string) (bool, error) {
+	endpoint := fmt.Sprintf("%s/api/v4/projects/%s", c.baseURL, urlpkg.PathEscape(projectPath))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Accept", "application/json")
+	if c.token != "" {
+		req.Header.Set("PRIVATE-TOKEN", c.token)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound, http.StatusForbidden, http.StatusUnauthorized:
+		return false, nil
+	}
+	return false, fmt.Errorf("gitlab project %s: unexpected status %d", projectPath, resp.StatusCode)
+}
+
 // GetPipelineStatus verifies the exact pipeline on the configured GitLab host.
 // No caller-supplied host or reported status is trusted.
 func (c *Client) GetPipelineStatus(ctx context.Context, projectPath string, id int) (string, error) {
@@ -219,4 +247,65 @@ func (c *Client) GetMergeRequestHeadPipeline(ctx context.Context, projectPath st
 		return HeadPipeline{}, false, nil
 	}
 	return HeadPipeline{ID: body.HeadPipeline.ID, Status: body.HeadPipeline.Status, SHA: body.HeadPipeline.SHA}, true, nil
+}
+
+// MergeRequestEvidence is what GitLab itself says about a merge request: its
+// state, the head commit and the head pipeline. Read from the configured host
+// only, so it can be stored as the link's synced HEAD and pipeline.
+type MergeRequestEvidence struct {
+	State        string // "opened" | "closed" | "merged" | "locked"
+	SHA          string // head commit of the MR (sha field)
+	WebURL       string // GitLab's canonical URL of this MR
+	HeadPipeline *HeadPipeline
+}
+
+// MergeRequestEvidenceSource reads MergeRequestEvidence. Implemented by
+// *Client; tests substitute a fake.
+type MergeRequestEvidenceSource interface {
+	GetMergeRequestEvidence(ctx context.Context, projectPath string, iid int) (MergeRequestEvidence, error)
+}
+
+// GetMergeRequestEvidence reads state, sha, web_url and head_pipeline from one
+// GET /api/v4/projects/:id/merge_requests/:iid. HeadPipeline is nil when the
+// MR has no pipeline.
+func (c *Client) GetMergeRequestEvidence(ctx context.Context, projectPath string, iid int) (MergeRequestEvidence, error) {
+	endpoint := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%d", c.baseURL, urlpkg.PathEscape(projectPath), iid)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
+	if err != nil {
+		return MergeRequestEvidence{}, fmt.Errorf("build gitlab mr request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if c.token != "" {
+		req.Header.Set("PRIVATE-TOKEN", c.token)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return MergeRequestEvidence{}, fmt.Errorf("gitlab mr request %s!%d: %w", projectPath, iid, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return MergeRequestEvidence{}, fmt.Errorf("gitlab mr request %s!%d: unexpected status %d", projectPath, iid, resp.StatusCode)
+	}
+	var body struct {
+		IID          int    `json:"iid"`
+		State        string `json:"state"`
+		SHA          string `json:"sha"`
+		WebURL       string `json:"web_url"`
+		HeadPipeline *struct {
+			ID     int64  `json:"id"`
+			Status string `json:"status"`
+			SHA    string `json:"sha"`
+		} `json:"head_pipeline"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return MergeRequestEvidence{}, fmt.Errorf("decode gitlab mr response %s!%d: %w", projectPath, iid, err)
+	}
+	if body.IID != iid {
+		return MergeRequestEvidence{}, fmt.Errorf("gitlab mr response %s!%d: iid mismatch (%d)", projectPath, iid, body.IID)
+	}
+	ev := MergeRequestEvidence{State: body.State, SHA: strings.TrimSpace(body.SHA), WebURL: body.WebURL}
+	if hp := body.HeadPipeline; hp != nil && hp.ID != 0 && hp.Status != "" {
+		ev.HeadPipeline = &HeadPipeline{ID: hp.ID, Status: hp.Status, SHA: strings.TrimSpace(hp.SHA)}
+	}
+	return ev, nil
 }

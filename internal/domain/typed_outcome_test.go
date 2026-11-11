@@ -46,7 +46,7 @@ func TestTaskWaitValidate(t *testing.T) {
 		timed(MaxTimeWait, "comment:"+uuid.NewString()),
 		timed(time.Hour, "artifact:"+uuid.NewString()),
 		{TaskID: task, Kind: TaskWaitDecision, DecisionRequestID: &dr},
-		{TaskID: task, Kind: TaskWaitHuman, HumanGateRef: str("gate-1")},
+		{TaskID: task, Kind: TaskWaitHuman, HumanGateRef: str("gate-1"), Addressee: str("alex"), Question: str("ship it?")},
 	}
 	for _, w := range ok {
 		assert.NoError(t, w.Validate(now), "kind %s", w.Kind)
@@ -79,6 +79,9 @@ func TestTaskWaitValidate(t *testing.T) {
 		{"time relative until only", TaskWait{TaskID: task, Kind: TaskWaitTime, Until: str("6h")}, CodeNaiveTime},
 		{"decision no request", TaskWait{TaskID: task, Kind: TaskWaitDecision}, CodeInvalidTarget},
 		{"human no ref", TaskWait{TaskID: task, Kind: TaskWaitHuman, HumanGateRef: str("")}, CodeInvalidTarget},
+		{"human no question", TaskWait{TaskID: task, Kind: TaskWaitHuman, HumanGateRef: str("comment:x"), Addressee: str("alex")}, CodeInvalidTarget},
+		{"merge no sha", TaskWait{TaskID: task, Kind: TaskWaitMerge, ProjectPath: str("g/p"), MRIID: &iid}, CodeInvalidTarget},
+		{"registered unknown", TaskWait{TaskID: task, Kind: TaskWaitRegistered, Registration: str("poll"), RegistrationRef: str("x")}, CodeInvalidTarget},
 		{"unknown kind", TaskWait{TaskID: task, Kind: "someday"}, CodeInvalidTarget},
 		{"long note", TaskWait{TaskID: task, Kind: TaskWaitCard, TargetTaskID: &other, Note: string(make([]byte, MaxWaitNoteLen+1))}, CodeInvalidTarget},
 	}

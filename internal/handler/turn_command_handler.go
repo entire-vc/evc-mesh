@@ -16,7 +16,7 @@ import (
 )
 
 // TurnCommandHandler serves the turn-ending commands wait_for, continue_next,
-// hand_off and add_note (docs/api/typed-outcomes.md §Commands 1, 2, 6, 7).
+// hand_off, add_note and ask_human (docs/api/typed-outcomes.md §Commands 1, 2, 6, 7, 8).
 type TurnCommandHandler struct {
 	svc   *service.TurnCommandService
 	tasks taskIDResolver
@@ -52,6 +52,11 @@ type waitForBody struct {
 	EventRef        *string     `json:"event_ref"`
 	Source          *string     `json:"source"`
 	Why             *string     `json:"why"`
+	AfterSHA        *string     `json:"after_sha"`
+	AfterPipelineID *int64      `json:"after_pipeline_id"`
+	AfterStatus     *string     `json:"after_status"`
+	Registration    *string     `json:"registration"`
+	RegistrationRef *string     `json:"registration_ref"`
 	Note            string      `json:"note"`
 }
 
@@ -132,6 +137,37 @@ func (h *TurnCommandHandler) WaitFor(c echo.Context) error {
 		VCSLinkID: b.VCSLinkID, Provider: b.Provider, ProjectPath: b.ProjectPath, MRIID: b.MRIID,
 		PipelineID: b.PipelineID, RequiredJobs: b.RequiredJobs, Until: b.Until, UntilAt: b.UntilAt.Time,
 		EventRef: b.EventRef, Source: b.Source, Why: b.Why, Note: b.Note,
+		AfterSHA: b.AfterSHA, AfterPipelineID: b.AfterPipelineID, AfterStatus: b.AfterStatus,
+		Registration: b.Registration, RegistrationRef: b.RegistrationRef,
+	})
+	if err != nil {
+		return turnError(c, err)
+	}
+	return c.JSON(http.StatusCreated, res)
+}
+
+// AskHuman handles POST /tasks/:task_id/ask-human.
+func (h *TurnCommandHandler) AskHuman(c echo.Context) error {
+	id, err := h.taskID(c)
+	if err != nil {
+		return handleError(c, err)
+	}
+	var b struct {
+		turnCommonBody
+		To                 string     `json:"to"`
+		Question           string     `json:"question"`
+		RecommendedDefault string     `json:"recommended_default"`
+		Deadline           *time.Time `json:"deadline"`
+		Soft               bool       `json:"soft"`
+		CanonicalKey       string     `json:"canonical_key"`
+		Supersedes         string     `json:"supersedes"`
+	}
+	if err = c.Bind(&b); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+	res, err := h.svc.AskHuman(c.Request().Context(), id, service.AskHumanInput{
+		TurnCommon: b.common(), To: b.To, Question: b.Question, RecommendedDefault: b.RecommendedDefault,
+		Deadline: b.Deadline, Soft: b.Soft, CanonicalKey: b.CanonicalKey, Supersedes: b.Supersedes,
 	})
 	if err != nil {
 		return turnError(c, err)

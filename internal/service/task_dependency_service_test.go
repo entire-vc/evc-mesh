@@ -787,3 +787,40 @@ type listDependentsFailDepRepo struct {
 func (r *listDependentsFailDepRepo) ListDependents(context.Context, uuid.UUID) ([]domain.TaskDependency, error) {
 	return nil, r.err
 }
+
+func TestTaskDependencyService_DeleteIfGeneration(t *testing.T) {
+	ctx := context.Background()
+	taskID, parentID, depID := uuid.New(), uuid.New(), uuid.New()
+	setup := func() (*MockTaskDependencyRepository, *MockTaskRepository, *taskDependencyService) {
+		svc, depRepo, taskRepo := setupTaskDependencyService()
+		addTask(taskRepo, taskID)
+		taskRepo.items[taskID].ParentTaskID = &parentID
+		depRepo.items[depID] = &domain.TaskDependency{ID: depID, TaskID: taskID, DependsOnTaskID: parentID,
+			DependencyType: domain.DependencyTypeIsChildOf, Generation: 2}
+		return depRepo, taskRepo, svc
+	}
+
+	t.Run("stale generation: 409, edge and parent kept", func(t *testing.T) {
+		depRepo, taskRepo, svc := setup()
+		err := svc.DeleteIfGeneration(ctx, taskID, depID, 1)
+		var ae *apierror.Error
+		require.ErrorAs(t, err, &ae)
+		assert.Equal(t, http.StatusConflict, ae.Code)
+		assert.Contains(t, depRepo.items, depID)
+		assert.NotNil(t, taskRepo.items[taskID].ParentTaskID, "hierarchy must not change on a refused delete")
+	})
+	t.Run("foreign source: 404", func(t *testing.T) {
+		depRepo, _, svc := setup()
+		err := svc.DeleteIfGeneration(ctx, uuid.New(), depID, 2)
+		var ae *apierror.Error
+		require.ErrorAs(t, err, &ae)
+		assert.Equal(t, http.StatusNotFound, ae.Code)
+		assert.Contains(t, depRepo.items, depID)
+	})
+	t.Run("current generation: deleted, parent cleared after", func(t *testing.T) {
+		depRepo, taskRepo, svc := setup()
+		require.NoError(t, svc.DeleteIfGeneration(ctx, taskID, depID, 2))
+		assert.NotContains(t, depRepo.items, depID)
+		assert.Nil(t, taskRepo.items[taskID].ParentTaskID)
+	})
+}

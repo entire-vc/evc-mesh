@@ -9,7 +9,7 @@ import {
   assertTabAfter, assertNoTab, assertSettingsReadback, assertLimitsReadback, assertChatOff, assertEmptyAgentsRejected,
 } from "./lib/detect";
 import { waitTurnFrame, withReplyState } from "./lib/chat";
-import { F1, redControl, row, until } from "./lib/harness";
+import { F1, redControl, minuteCounter, retryOn429, row, until, waitForBudget, withReauth } from "./lib/harness";
 
 /**
  * Red controls of the detectors themselves, with no network and no browser: each
@@ -304,4 +304,72 @@ test("S01 enable: Chat missing, after Updates or before Docs, a tab in a chat-of
   assertLimitsReadback("S01", limits, { ...limits });
   assertChatOff("S01", 404, JSON.stringify({ error_code: "chat_not_enabled" }));
   assertEmptyAgentsRejected(422, saved, saved);
+});
+
+test("429: a 429 is waited out by Retry-After and retried, other statuses are not; a spent minute budget waits for the next bucket", async () => {
+  const calls: number[] = [];
+  const answers = [429, 429, 200];
+  const orig = global.setTimeout;
+  // Zero the waits: the control checks the decision, not the clock.
+  (global as { setTimeout: unknown }).setTimeout = ((fn: () => void) => orig(fn, 0)) as unknown as typeof setTimeout;
+  try {
+    const ok = await retryOn429(async () => { calls.push(1); return { status: answers[calls.length - 1]!, headers: { "retry-after": "3" } }; });
+    expect(ok.status, "two 429 then 200 ends 200").toBe(200);
+    expect(calls.length).toBe(3);
+    const n = [0];
+    const bad = await retryOn429(async () => { n[0]++; return { status: 403, headers: {} }; });
+    expect(bad.status, "403 passes through").toBe(403);
+    expect(n[0], "403 is not retried").toBe(1);
+    const k = [0];
+    const stuck = await retryOn429(async () => { k[0]++; return { status: 429, headers: {} }; });
+    expect(stuck.status, "a 429 that never clears still fails, after 3 tries").toBe(429);
+    expect(k[0]).toBe(3);
+  } finally {
+    (global as { setTimeout: unknown }).setTimeout = orig;
+  }
+  let count = 500;
+  const slept: number[] = [];
+  await waitForBudget(() => count, () => 125_000, async (ms) => { slept.push(ms); count = 0; });
+  expect(slept, "over the budget sleeps to the next minute bucket (125 s -> 55.5 s)").toEqual([55_500]);
+  await waitForBudget(() => 10, () => 0, async () => { throw new Error("must not sleep under budget"); });
+  row("RATE-ctl", "harness", "RED-OK", "429 retried by Retry-After; 403 not retried; budget waits for next bucket");
+});
+
+test("429 delay and request counter: Retry-After sets the wait (+1 s, capped at 65 s, 15 s when absent), the counter buckets by minute and reports the busiest", async () => {
+  const waits: number[] = [];
+  const sleep = async (ms: number) => { waits.push(ms); };
+  const seq = (...hs: Array<Record<string, string>>) => { let i = 0; return async () => (i < hs.length ? { status: 429, headers: hs[i++]! } : { status: 200, headers: {} }); };
+  await retryOn429(seq({ "retry-after": "7" }, { "retry-after": "300" }), 3, sleep);
+  expect(waits, "7 s -> 8 s; 300 s capped to 65 s -> 66 s").toEqual([8_000, 66_000]);
+  waits.length = 0;
+  await retryOn429(seq({}), 3, sleep);
+  expect(waits, "no Retry-After -> 15 s + 1 s").toEqual([16_000]);
+  let t = 10 * 60_000 + 5;
+  const c = minuteCounter(() => t);
+  c.bump(); c.bump(); c.bump();
+  expect(c.used(), "three in this minute").toBe(3);
+  t += 60_000;
+  c.bump();
+  expect(c.used(), "a new minute starts at one").toBe(1);
+  expect(c.peak(), "peak is the busiest minute").toBe(3);
+  expect(minuteCounter().peak(), "an unused counter peaks at zero").toBe(0);
+  row("RATE-ctl2", "harness", "RED-OK", "Retry-After wait, cap and default; minute buckets and peak");
+});
+
+test("expired access token: a 401 without re-login stays red; withReauth logs in again and the repeat passes", async () => {
+  // Fake server: only the token issued by the latest login is valid, the first one has expired.
+  let issued = "t1";
+  const call = async () => ({ status: issued === "t2" ? 200 : 401 });
+  expect((await call()).status, "red control: the stale token alone answers 401").toBe(401);
+  let logins = 0;
+  const ok = await withReauth(call, async () => { logins++; issued = "t2"; });
+  expect(ok.status, "after a re-login the call passes").toBe(200);
+  expect(logins).toBe(1);
+  let again = 0;
+  const bad = await withReauth(async () => ({ status: 401 }), async () => { again++; });
+  expect(bad.status, "a 401 that a new login does not clear still fails").toBe(401);
+  expect(again, "one re-login only, no loop").toBe(1);
+  const fine = await withReauth(async () => ({ status: 403 }), async () => { throw new Error("must not log in on 403"); });
+  expect(fine.status).toBe(403);
+  row("REAUTH-ctl", "harness", "RED-OK", "401 without re-login fails; one re-login then repeat passes; 403 untouched");
 });

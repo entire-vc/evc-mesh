@@ -108,7 +108,7 @@ func releaseCommandCheckout(ctx context.Context, tx *sqlx.Tx, task *domain.Task,
 }
 
 // resolveDirectoryAgent finds the addressee among the agents of the card's
-// workspace by id, slug or name (case-insensitive, an @ prefix ignored). A
+// workspace (home agents and guests with an active grant) by id, slug or name (case-insensitive, an @ prefix ignored). A
 // person, an unknown name, an ambiguous name or the caller is not_an_agent.
 func resolveDirectoryAgent(ctx context.Context, tx *sqlx.Tx, projectID, caller uuid.UUID, to string) (*domain.AgentRef, error) {
 	key := strings.TrimPrefix(strings.TrimSpace(to), "@")
@@ -118,8 +118,10 @@ func resolveDirectoryAgent(ctx context.Context, tx *sqlx.Tx, projectID, caller u
 	var found []domain.AgentRef
 	if err := tx.SelectContext(ctx, &found, `
 		SELECT a.id, a.name, a.slug FROM agents a
-		  JOIN projects p ON p.workspace_id = a.workspace_id AND p.id = $1
+		  JOIN projects p ON p.id = $1
 		 WHERE a.deleted_at IS NULL
+		   AND (a.workspace_id = p.workspace_id OR EXISTS (SELECT 1 FROM agent_workspace_grants g
+		        WHERE g.agent_id = a.id AND g.workspace_id = p.workspace_id AND g.revoked_at IS NULL))
 		   AND (a.id::text = lower($2) OR lower(a.slug) = lower($2) OR lower(a.name) = lower($2))
 		 LIMIT 2`, projectID, key); err != nil {
 		return nil, err

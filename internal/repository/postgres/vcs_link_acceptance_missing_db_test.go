@@ -89,3 +89,34 @@ func TestVCSLinkRepo_MergeMetadata_KeepsFirstDeployedAt(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 6, other.Deployed().At.UTC().Hour(), "a patch without deployed leaves it alone")
 }
+
+// A commit link (repository without MRs) takes the ship_sha receipt; a
+// branch link is still out of scope and answers nil like a missing link.
+func TestVCSLinkRepo_MergeMetadata_CommitLink(t *testing.T) {
+	db := vcsLinkUpsertTestDB(t)
+	ctx := context.Background()
+	repo := NewVCSLinkRepo(db)
+	taskID := vcsLinkTestTask(t, db)
+	sha := "cccccccccccccccccccccccccccccccccccccccc"
+	commit := &domain.VCSLink{
+		ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitLab,
+		LinkType: domain.VCSLinkTypeCommit, ExternalID: sha,
+		URL: "https://code.example.org/workspace/commit/" + sha, CreatedAt: time.Now(),
+	}
+	require.NoError(t, repo.Create(ctx, commit))
+	got, err := repo.MergeMetadata(ctx, taskID, commit.ID, []byte(`{"ship_sha":"`+sha+`","ship_set":{"by_id":"`+uuid.NewString()+`"}}`))
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, sha, got.ShipSHA())
+	assert.NotNil(t, got.ShipSet())
+
+	branch := &domain.VCSLink{
+		ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitLab,
+		LinkType: domain.VCSLinkTypeBranch, ExternalID: "feature/example",
+		URL: "https://git.example.org/example/product/-/tree/feature/example", CreatedAt: time.Now(),
+	}
+	require.NoError(t, repo.Create(ctx, branch))
+	none, err := repo.MergeMetadata(ctx, taskID, branch.ID, []byte(`{"ship_sha":"`+sha+`"}`))
+	require.NoError(t, err)
+	assert.Nil(t, none)
+}
