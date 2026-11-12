@@ -396,3 +396,34 @@ func TestCountUnread_SQL(t *testing.T) {
 	assert.Contains(t, captured, "JOIN workspaces w ON w.id = n.workspace_id")
 	assert.Contains(t, captured, "w.deleted_at IS NULL")
 }
+
+// --- FilterProjectReaders ---------------------------------------------------
+
+// TestFilterProjectReaders_AsksOwnersAdminsAndProjectMembers pins the three
+// halves of the project access rule the scope=all fan-out relies on: the
+// workspace's owners and admins, its founding owner, and the project's members.
+func TestFilterProjectReaders_AsksOwnersAdminsAndProjectMembers(t *testing.T) {
+	repo, mock := newNotificationRepoMock(t)
+
+	wsID, projID := uuid.New(), uuid.New()
+	reader, outsider := uuid.New(), uuid.New()
+
+	mock.ExpectQuery(`(?s)FROM workspace_members wm.*role IN \('owner', 'admin'\).*FROM workspaces w.*owner_id.*FROM project_members pm.*p\.workspace_id = \$1`).
+		WithArgs(wsID, projID, pq.StringArray{reader.String(), outsider.String()}).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id"}).AddRow(reader))
+
+	got, err := repo.FilterProjectReaders(context.Background(), wsID, projID, []uuid.UUID{reader, outsider})
+	require.NoError(t, err)
+
+	assert.True(t, got[reader])
+	assert.False(t, got[outsider], "a user the query did not return was reported as a reader")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFilterProjectReaders_EmptyInputAsksNothing(t *testing.T) {
+	repo, mock := newNotificationRepoMock(t)
+	got, err := repo.FilterProjectReaders(context.Background(), uuid.New(), uuid.New(), nil)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

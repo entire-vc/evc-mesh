@@ -36,6 +36,17 @@ describe("AgentDetailDialog — profile fields", () => {
     setRole("admin");
   });
 
+  it("computed_status online with an old heartbeat shows no stale mark; without computed_status the mark stays", async () => {
+    const old = { ...baseAgent, status: "online" as const, last_heartbeat: "2026-01-01T00:00:00Z" };
+    vi.mocked(api).mockResolvedValue({});
+    const { unmount } = render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={old} computedStatus="online" />);
+    expect(await screen.findByText("Online")).toBeInTheDocument();
+    expect(screen.queryByText("(stale)")).not.toBeInTheDocument();
+    unmount();
+    render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={old} />);
+    expect(await screen.findByText("(stale)")).toBeInTheDocument();
+  });
+
   it("edits responsibility zone through PUT /agents/:id/profile, then refetches the agent", async () => {
     const updated = { ...baseAgent, responsibility_zone: "Mesh — interface" };
     vi.mocked(api).mockImplementation((path: string, opts?: { method?: string }) => {

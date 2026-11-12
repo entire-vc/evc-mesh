@@ -55,7 +55,14 @@ type ShipEvidenceDiagnosis struct {
 	Pattern string             `json:"pattern"`
 	Links   []ShipEvidenceLink `json:"links"`
 	Reasons []string           `json:"reasons"`
+	// Mentions are the card's relates_to PR/MR links, listed only when there
+	// is no delivery link: one of them is usually the card's own MR that the
+	// webhook recorded as a mention.
+	Mentions []ShipEvidenceLink `json:"mentions,omitempty"`
 }
+
+// ReasonRelatesTo marks a mention link in ShipEvidenceDiagnosis.Mentions.
+const ReasonRelatesTo = "relation=relates_to"
 
 // ShipEvidenceLink is one delivery link (MR, or commit on a card without MR
 // links) and the facts it lacks.
@@ -126,8 +133,29 @@ func diagnoseMergedShipped(links []domain.VCSLink, authorID *uuid.UUID) *ShipEvi
 	}
 	if len(d.Links) == 0 {
 		d.Reasons = append(d.Reasons, ReasonNoDeliveryLink)
+		for _, l := range links {
+			if l.LinkType == domain.VCSLinkTypePR && l.IsRelatesTo() && !l.IsReviewSubject() {
+				d.Mentions = append(d.Mentions, ShipEvidenceLink{LinkID: l.ID, LinkType: l.LinkType, ExternalID: l.ExternalID, URL: l.URL, Reasons: []string{ReasonRelatesTo}})
+			}
+		}
 	}
 	return d
+}
+
+// NextAction is the repair the refusal names. Without a delivery link but with
+// a relates_to MR link it names that link: re-publishing a SHIP receipt cannot
+// help while the gate does not read the link at all.
+func (d *ShipEvidenceDiagnosis) NextAction() string {
+	if len(d.Links) > 0 || len(d.Mentions) == 0 {
+		return ShipNextAction
+	}
+	var refs []string
+	for _, m := range d.Mentions {
+		refs = append(refs, fmt.Sprintf("link_id=%s %s (relation=relates_to)", m.LinkID, m.URL))
+	}
+	return "No delivery link: the card's MR link is stored as a mention, which the gate does not read: " +
+		strings.Join(refs, "; ") + ". If that MR is this card's own work, re-run add_vcs_link with its url " +
+		"(without role=review) to bind it, then retry. Do not re-publish a SHIP receipt or start a new review for this refusal."
 }
 
 // ShipNextAction is the safe repair for a missing-evidence refusal. It never
@@ -154,13 +182,17 @@ func (d *ShipEvidenceDiagnosis) apiError(violation string) *apierror.Error {
 	if len(d.Links) == 0 {
 		parts = append(parts, ReasonNoDeliveryLink)
 	}
+	next := d.NextAction()
 	e := apierror.ForbiddenWithDetails("workflow_transition_blocked",
-		fmt.Sprintf("%s; author_if_merged_shipped evidence missing (%s). %s", violation, strings.Join(parts, "; "), ShipNextAction))
+		fmt.Sprintf("%s; author_if_merged_shipped evidence missing (%s). %s", violation, strings.Join(parts, "; "), next))
 	e.Context = map[string]any{
 		"gate":        "author_if_merged_shipped",
 		"reasons":     d.Reasons,
 		"links":       d.Links,
-		"next_action": ShipNextAction,
+		"next_action": next,
+	}
+	if len(d.Mentions) > 0 {
+		e.Context["mentions"] = d.Mentions
 	}
 	return e
 }

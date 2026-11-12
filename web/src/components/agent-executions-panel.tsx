@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { IntegrationDisabledNote } from "@/components/agent-execution-summary";
 import { useAgentExecutions } from "@/hooks/use-agent-executions";
 import { copyText } from "@/lib/clipboard";
 import { cn } from "@/lib/cn";
@@ -172,7 +173,11 @@ function ConfiguredBlock({ view, projectName }: { view: AgentExecutionView; proj
       <p className="font-medium break-words">{projectName}</p>
       {mode !== "managed" ? (
         <div data-testid="exec-unmanaged" className="mt-1 space-y-0.5 text-muted-foreground">
-          <p>{mode === "disabled" ? t("executions.disabledHint") : t("executions.unmanagedHint")}</p>
+          {view.reason === "integration_disabled" ? (
+            <IntegrationDisabledNote views={[view]} projectName={() => projectName} />
+          ) : (
+            <p>{mode === "disabled" ? t("executions.disabledHint") : t("executions.unmanagedHint")}</p>
+          )}
           <p className="font-mono text-xs break-words">
             {view.profile?.model
               ? t("executions.profileFrom", { value: [view.profile.harness, view.profile.model].filter(Boolean).join(" · "), source: view.profile.source })

@@ -251,6 +251,8 @@ export interface TeamDirectoryAgent {
   name: string;
   slug: string;
   status: string;
+  /** Derived presence (online/idle/offline/paused); prefer over the raw `status`. */
+  computed_status?: string;
   agent_type: string;
   model?: string | null;
   parent_agent_id?: string | null;

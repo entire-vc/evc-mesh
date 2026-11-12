@@ -294,8 +294,10 @@ type updatePreferencesRequest struct {
 	Channel     string   `json:"channel"`
 	Events      []string `json:"events"`
 	IsEnabled   *bool    `json:"is_enabled"`
-	// Config carries channel-specific settings — currently just the email
-	// channel's optional custom delivery address ({"email": "..."}). Passed
+	// Config carries channel-specific settings: the email channel's optional
+	// custom delivery address ({"email": "..."}), the Telegram username, and on
+	// every channel the subscription scope ({"scope": "all"|"mine"|"mentions"},
+	// absent = "mine"; see domain.PreferenceScope). Passed
 	// through to the stored preference row as-is except for the validation
 	// below; empty/absent means "use the account default", decided at
 	// dispatch time, not here.
@@ -354,9 +356,17 @@ func (h *NotificationHandler) UpdatePreferences(c echo.Context) error {
 		}
 	}
 
+	// An unknown scope is refused rather than stored: the dispatcher would read
+	// it as "mine", and the subscriber would believe they had asked for more.
+	scope := req.Config["scope"]
+	if !domain.ValidNotificationScope(scope) {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest(
+			"unknown notification scope: "+scope+" (supported: all, mine, mentions)"))
+	}
+
 	var cfgJSON json.RawMessage
 	if channel == "telegram" {
-		encoded, tgErr := h.buildTelegramPreferenceConfig(c.Request().Context(), userID, wsID, isEnabled, strings.TrimSpace(req.Config["telegram_username"]))
+		encoded, tgErr := h.buildTelegramPreferenceConfig(c.Request().Context(), userID, wsID, isEnabled, strings.TrimSpace(req.Config["telegram_username"]), scope)
 		if tgErr != nil {
 			return c.JSON(tgErr.StatusCode(), tgErr)
 		}
@@ -406,13 +416,13 @@ const telegramBindTokenTTL = 15 * time.Minute
 // — there was no way to stop delivery to a bound account or switch which
 // Telegram account is bound, since a fresh bind token is only ever issued
 // when chat_id is already empty (see below).
-func (h *NotificationHandler) buildTelegramPreferenceConfig(ctx context.Context, userID, wsID uuid.UUID, isEnabled bool, username string) (json.RawMessage, *apierror.Error) {
+func (h *NotificationHandler) buildTelegramPreferenceConfig(ctx context.Context, userID, wsID uuid.UUID, isEnabled bool, username, scope string) (json.RawMessage, *apierror.Error) {
 	username = strings.TrimPrefix(username, "@")
 	if isEnabled && username == "" {
 		return nil, apierror.BadRequest("telegram_username is required to enable Telegram notifications")
 	}
 
-	cfg := service.TelegramPreferenceConfig{Username: username}
+	cfg := service.TelegramPreferenceConfig{Username: username, Scope: scope}
 
 	if isEnabled {
 		if existing, err := h.svc.GetPreferences(ctx, userID); err == nil {

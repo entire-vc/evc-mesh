@@ -46,9 +46,17 @@ export default defineConfig({
       timeout: 90 * 60_000,
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    // S08 sits idle N + 3 min per harness (N = session_idle_minutes of the fixture runners).
+    {
+      name: "s08",
+      testMatch: /s08\.spec\.ts$/,
+      dependencies: ["controls"],
+      timeout: 40 * 60_000,
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
     {
       name: "agent-chat",
-      testIgnore: /(controls|s07)\.spec\.ts$/,
+      testIgnore: /(controls|s07|s08)\.spec\.ts$/,
       dependencies: ["controls"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },

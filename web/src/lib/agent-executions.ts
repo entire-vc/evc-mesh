@@ -59,6 +59,8 @@ export interface AgentExecutionView {
   managed: boolean;
   enabled: boolean;
   management_source: string | null;
+  /** null | unmanaged | integration_disabled (binding exists, agent-runner integration off in the project) | disabled. */
+  reason?: string | null;
   configured: {
     source: string;
     revision: number | null;
@@ -154,6 +156,7 @@ export function normalizeExecutionView(raw: unknown): AgentExecutionView | null 
     managed: v.managed,
     enabled: v.enabled !== false,
     management_source: str(v.management_source),
+    reason: str(v.reason),
     configured: cfg && {
       source: str(cfg.source) ?? "",
       revision: num(cfg.revision),
@@ -223,6 +226,11 @@ const ACTIVE_STATES = new Set<AttemptState>(["starting", "running", "waiting"]);
 /** Running for the operator: live state and not lost. Offline/ended attempts are history. */
 export function isActiveAttempt(a: ExecutionAttempt): boolean {
   return ACTIVE_STATES.has(a.state) && a.freshness !== "offline";
+}
+
+/** Views where a Runner binding exists but the project's agent-runner integration is off. */
+export function integrationDisabledViews(views: AgentExecutionView[]): AgentExecutionView[] {
+  return views.filter((v) => v.reason === "integration_disabled");
 }
 
 export type RouteMode = "managed" | "disabled" | "unmanaged";

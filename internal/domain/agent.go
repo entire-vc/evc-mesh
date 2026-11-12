@@ -127,6 +127,13 @@ type Agent struct {
 	// handing it the full agentPerms set a trusted lead agent gets. Same
 	// transient, request-scoped nature as WorkspaceRole/GrantID above.
 	OAuthConnectorUserID *uuid.UUID `json:"-" db:"-"`
+	// RepositoryAccess is filled only by GET /agents/me and GET /agents/{id}
+	// from agents.repository_access; on those two responses an
+	// absent field means "not configured" (legacy), {revision, repositories: []}
+	// means "no repository". Not part of agentSelectCols and never written by
+	// AgentRepository.Update: PUT /agents/{id}/repository-access is the only
+	// writer, so a generic agent write cannot carry it.
+	RepositoryAccess *AgentRepositoryAccess `json:"repository_access,omitempty" db:"-"`
 }
 
 // IsKeyExpired returns true when the agent's API key has a set expiry that has passed.

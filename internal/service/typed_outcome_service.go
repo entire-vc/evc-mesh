@@ -24,6 +24,9 @@ const (
 type TypedOutcomeService interface {
 	ListTurnOutcomes(ctx context.Context, taskID uuid.UUID, sessionID *string, limit int) ([]domain.TurnOutcome, error)
 	ActiveWait(ctx context.Context, taskID uuid.UUID, agentID *uuid.UUID) (*domain.TaskWait, error)
+	// WaitReceipt reads an active or resolved wait on its source card. Access
+	// is checked on that card by the route, never on the wait's target.
+	WaitReceipt(ctx context.Context, taskID, waitID uuid.UUID) (*domain.TaskWait, error)
 	// ResolveWait ends a wait whose event was observed. resolved is false when
 	// the wait had already ended with the same resolution (an idempotent repeat).
 	ResolveWait(ctx context.Context, taskID, waitID uuid.UUID, by WaitResolver, in ResolveWaitInput) (w *domain.TaskWait, resolved bool, err error)
@@ -82,6 +85,17 @@ func (s *typedOutcomeService) ListTurnOutcomes(ctx context.Context, taskID uuid.
 
 func (s *typedOutcomeService) ActiveWait(ctx context.Context, taskID uuid.UUID, agentID *uuid.UUID) (*domain.TaskWait, error) {
 	return s.waits.GetActive(ctx, taskID, agentID)
+}
+
+func (s *typedOutcomeService) WaitReceipt(ctx context.Context, taskID, waitID uuid.UUID) (*domain.TaskWait, error) {
+	w, _, err := s.waits.GetForTask(ctx, taskID, waitID)
+	if err != nil {
+		return nil, err
+	}
+	if w == nil {
+		return nil, apierror.NotFound("Wait")
+	}
+	return w, nil
 }
 
 // ResolveWait marks a wait ended by the event the runner observed. Only the

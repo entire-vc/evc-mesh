@@ -121,6 +121,17 @@ describe("OrgChartPage — invited agents", () => {
     expect(screen.getByText("Homebot")).toBeTruthy();
   });
 
+  it("the guest dialog shows the same computed status as its card, not the raw Offline", async () => {
+    useRulesStore.setState({
+      orgChart: { workspace: "Acme", agent_tree: [{ ...GUEST, status: "offline", computed_status: "online" }], humans: [] },
+    });
+    renderPage();
+    fireEvent.click(screen.getByText("Kidcash"));
+    // card + dialog both say Online; nothing on the page says Offline
+    await waitFor(() => expect(screen.getAllByText(/^Online/).length).toBeGreaterThanOrEqual(2));
+    expect(screen.queryByText("Offline")).toBeNull();
+  });
+
   it("shows no Invited mark when the payload has no guests (old API)", () => {
     useRulesStore.setState({
       orgChart: { workspace: "Acme", agent_tree: [{ ...HOME, is_home: undefined }], humans: [] },

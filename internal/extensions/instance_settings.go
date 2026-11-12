@@ -22,6 +22,10 @@ type EnvSource struct {
 	// Read returns the settings and enabled flag the env describes, or
 	// ok=false when the env does not configure this extension at all.
 	Read func(cfg *config.Config) (settings map[string]any, enabled bool, ok bool)
+	// DefaultOn marks an extension whose provider treats "no instance setting"
+	// as enabled (telegram.Provider.InstanceEnabled). It changes only what the
+	// start log says about such an extension, never what is stored.
+	DefaultOn bool
 }
 
 // BuiltinEnvSources lists the extensions that have env-based instance config.
@@ -74,6 +78,7 @@ func BuiltinEnvSources() []EnvSource {
 		},
 		{
 			ExtensionID: string(domain.IntegrationProviderTelegram),
+			DefaultOn:   true,
 			Read: func(c *config.Config) (map[string]any, bool, bool) {
 				// The config default is "on"; only an explicit variable counts
 				// as the operator having configured the instance.
@@ -98,7 +103,11 @@ func BootstrapInstanceSettings(ctx context.Context, repo repository.InstanceExte
 			if err != nil {
 				return fmt.Errorf("instance settings %q: %w", src.ExtensionID, err)
 			}
-			if row == nil {
+			switch {
+			case row != nil:
+			case src.DefaultOn:
+				log.Printf("[extensions] %s: no instance setting and no MESH_* env — enabled by default at instance level", src.ExtensionID)
+			default:
 				log.Printf("[extensions] %s: no instance setting and no MESH_* env — disabled at instance level", src.ExtensionID)
 			}
 			continue

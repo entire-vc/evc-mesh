@@ -3,8 +3,10 @@ package domain
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -22,7 +24,6 @@ func TestTaskWaitValidate(t *testing.T) {
 	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 	task := uuid.New()
 	other := uuid.New()
-	str := func(s string) *string { return &s }
 	iid := 42
 	pipe := int64(7001)
 	at := func(d time.Duration) *time.Time { v := now.Add(d); return &v }
@@ -83,7 +84,6 @@ func TestTaskWaitValidate(t *testing.T) {
 		{"merge no sha", TaskWait{TaskID: task, Kind: TaskWaitMerge, ProjectPath: str("g/p"), MRIID: &iid}, CodeInvalidTarget},
 		{"registered unknown", TaskWait{TaskID: task, Kind: TaskWaitRegistered, Registration: str("poll"), RegistrationRef: str("x")}, CodeInvalidTarget},
 		{"unknown kind", TaskWait{TaskID: task, Kind: "someday"}, CodeInvalidTarget},
-		{"long note", TaskWait{TaskID: task, Kind: TaskWaitCard, TargetTaskID: &other, Note: string(make([]byte, MaxWaitNoteLen+1))}, CodeInvalidTarget},
 	}
 	for _, tc := range bad {
 		t.Run(tc.name, func(t *testing.T) {
@@ -114,5 +114,70 @@ func TestCommentWakes(t *testing.T) {
 	}
 	for meta, want := range cases {
 		assert.Equal(t, want, CommentWakes(json.RawMessage(meta)), "metadata %q", meta)
+	}
+}
+
+func TestClipRunes(t *testing.T) {
+	assert.Equal(t, "", ClipRunes("abc", 0))
+	assert.Equal(t, "abc", ClipRunes("abc", 3))
+	assert.Equal(t, "ab", ClipRunes("abc", 2))
+	assert.Equal(t, "яя", ClipRunes("яяя", 2))
+	assert.Equal(t, "a😀", ClipRunes("a😀b", 2))
+}
+
+// A long note never refuses the wait: Validate keeps its first MaxWaitNoteLen
+// characters, counted as the column's char_length counts them.
+func TestTaskWaitValidateClipsLongNote(t *testing.T) {
+	task, other := uuid.New(), uuid.New()
+	for name, tc := range map[string]struct {
+		note string
+		keep int
+	}{
+		"2000 ascii":   {strings.Repeat("a", 2000), MaxWaitNoteLen},
+		"2000 unicode": {strings.Repeat("я", 2000), MaxWaitNoteLen},
+		"251 unicode":  {strings.Repeat("я", 251), 251},
+		"500 ascii":    {strings.Repeat("a", 500), 500},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := TaskWait{TaskID: task, Kind: TaskWaitCard, TargetTaskID: &other, Note: tc.note}
+			require.NoError(t, w.Validate(time.Now()))
+			assert.Equal(t, tc.keep, utf8.RuneCountInString(w.Note))
+			assert.True(t, utf8.ValidString(w.Note))
+			assert.True(t, strings.HasPrefix(tc.note, w.Note))
+		})
+	}
+}
+
+// The refusals the handler table cannot reach without a card target name
+// their field too.
+func TestTaskWaitValidateRefusalsNameTheField(t *testing.T) {
+	task, other := uuid.New(), uuid.New()
+	iid := 1
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	for field, w := range map[string]TaskWait{
+		"target_task_id":   {TaskID: task, Kind: TaskWaitCard, TargetTaskID: &task},
+		"target_condition": {TaskID: task, Kind: TaskWaitCard, TargetTaskID: &other, TargetCondition: str("closed")},
+		"provider":         {TaskID: task, Kind: TaskWaitMerge, Provider: str("github"), ProjectPath: str("o/r"), MRIID: &iid, AfterSHA: &sha},
+	} {
+		t.Run(field, func(t *testing.T) {
+			err := w.Validate(time.Now())
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), field)
+		})
+	}
+	manual := TaskWait{TaskID: task, Kind: TaskWaitManual, TargetTaskID: &other, Note: "lead resumes"}
+	assert.Contains(t, manual.Validate(time.Now()).Error(), "target_task_id")
+
+	// A field the kind does not take is named, not just the fields it does take.
+	for want, w := range map[string]TaskWait{
+		"target_condition is not a field of a manual wait": {TaskID: task, Kind: TaskWaitManual, Note: "lead resumes", TargetCondition: str("shipped")},
+		"until_at is not a field of a manual wait":         {TaskID: task, Kind: TaskWaitManual, Note: "lead resumes", UntilAt: &time.Time{}},
+		"until is not a field of a registered wait":        {TaskID: task, Kind: TaskWaitRegistered, Registration: str(RegistrationReceipt), Until: str("merged")},
+		"required_jobs is not a field of a merge wait": {TaskID: task, Kind: TaskWaitMerge, ProjectPath: str("g/p"), MRIID: &iid, AfterSHA: &sha,
+			RequiredJobs: []string{"test"}},
+	} {
+		err := w.Validate(time.Now())
+		require.Error(t, err, want)
+		assert.Contains(t, err.Error(), want)
 	}
 }

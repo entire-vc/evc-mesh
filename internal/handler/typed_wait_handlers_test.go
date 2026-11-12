@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -348,4 +349,86 @@ func TestTypedOutcomeHandler_ResolveWait(t *testing.T) {
 		assert.Equal(t, "expired", out["wait"].(map[string]any)["resolution"])
 		assert.Equal(t, controller.String(), out["wait"].(map[string]any)["resolved_by"])
 	})
+}
+
+// A note longer than the wait row holds is no refusal: the comment keeps the
+// whole text, the wait row its first 500 characters. (A card target needs the
+// route's access check; the DB test covers on=card.)
+func TestTurnCommandHandler_WaitForLongNote(t *testing.T) {
+	for name, note := range map[string]string{
+		"2000 ascii":   strings.Repeat("a", 1999) + "Z",
+		"2000 unicode": strings.Repeat("я", 1999) + "ж",
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newTurnHandlerEnv()
+			raw, err := json.Marshal(map[string]any{"on": "registered", "registration": "receipt", "note": note})
+			require.NoError(t, err)
+			status, body := callTurnHandler(t, e.h.WaitFor, e.agent, e.task.String(), string(raw))
+			require.Equal(t, http.StatusCreated, status, body)
+			require.Len(t, e.store.committed, 1)
+			cmd := e.store.committed[0]
+			assert.True(t, strings.HasSuffix(cmd.CommentBody, "\n\n"+note), "the comment keeps the whole note")
+			assert.Equal(t, domain.MaxWaitNoteLen, utf8.RuneCountInString(cmd.Wait.Note))
+			assert.True(t, utf8.ValidString(cmd.Wait.Note))
+			assert.True(t, strings.HasPrefix(note, cmd.Wait.Note))
+			assert.LessOrEqual(t, utf8.RuneCountInString(cmd.Note), domain.MaxOutcomeNote)
+		})
+	}
+}
+
+// Every refusal of wait_for names the field and what is wrong with it, so the
+// lane can fix the call instead of falling back to a marker line.
+func TestTurnCommandHandler_WaitForRefusalsNameTheField(t *testing.T) {
+	e := newTurnHandlerEnv()
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	future := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+	for _, tc := range []struct {
+		name, body, code, field string
+		status                  int
+	}{
+		{"card no target", `{"on":"card"}`, domain.CodeInvalidTarget, "target_task_id", 422},
+		{"mr no iid", `{"on":"mr","provider":"gitlab","project_path":"g/p","until":"merged"}`, domain.CodeInvalidTarget, "mr_iid", 422},
+		{"mr bad until", `{"on":"mr","provider":"gitlab","project_path":"g/p","mr_iid":1,"until":"finished"}`, domain.CodeInvalidTarget, "until", 422},
+		{"mr bad baseline", `{"on":"mr","provider":"gitlab","project_path":"g/p","mr_iid":1,"until":"merged","after_sha":"abc"}`, domain.CodeInvalidTarget, "after_sha", 422},
+		{"pipeline no id", `{"on":"pipeline","project_path":"g/p","until":"finished"}`, domain.CodeInvalidTarget, "pipeline_id", 422},
+		{"pipeline bad provider", `{"on":"pipeline","provider":"bitbucket","project_path":"g/p","pipeline_id":1,"until":"finished"}`, domain.CodeInvalidTarget, "provider", 422},
+		{"merge no sha", `{"on":"merge","project_path":"g/p","mr_iid":1}`, domain.CodeInvalidTarget, "after_sha", 422},
+		{"merge with until", `{"on":"merge","project_path":"g/p","mr_iid":1,"after_sha":"` + sha + `","until":"merged"}`, domain.CodeInvalidTarget, "project_path, mr_iid and after_sha only", 422},
+		{"registered unknown", `{"on":"registered","registration":"poll","registration_ref":"x"}`, domain.CodeInvalidTarget, "registration", 422},
+		{"stray after_sha", `{"on":"registered","registration":"receipt","after_sha":"` + sha + `"}`, domain.CodeInvalidTarget, "after_sha", 422},
+		{"manual no note", `{"on":"manual"}`, domain.CodeInvalidTarget, "note", 422},
+		{"time no until_at", `{"on":"time"}`, domain.CodeInvalidTarget, "until_at", 422},
+		{"time relative until", `{"on":"time","until":"6h"}`, domain.CodeNaiveTime, "until_at", 422},
+		{"time no evidence", `{"on":"time","until_at":"` + future + `"}`, domain.CodeMissingEvidence, "event_ref, source and why", 422},
+		{"time long why", `{"on":"time","until_at":"` + future + `","event_ref":"nightly-export","source":"https://status.example.com","why":"` + strings.Repeat("я", 501) + `"}`, domain.CodeMissingEvidence, "why", 422},
+		{"time bad source", `{"on":"time","until_at":"` + future + `","event_ref":"nightly-export","source":"card:00000000","why":"the export publishes the file"}`, domain.CodeMissingEvidence, "source", 422},
+		{"unknown kind", `{"on":"someday"}`, domain.CodeInvalidTarget, "on must be", 422},
+		{"session_id too long", `{"on":"registered","registration":"receipt","session_id":"` + strings.Repeat("s", 201) + `"}`, "", "session_id must be at most 200 characters", 400},
+		{"turn_id too long", `{"on":"registered","registration":"receipt","turn_id":"` + strings.Repeat("t", 201) + `"}`, "", "turn_id must be at most 200 characters", 400},
+		{"body cut short", `{"on":"registered",`, "", "body is not valid JSON: it ends before", 400},
+		{"body not JSON", `{"on" "registered"}`, "", "body is not valid JSON at byte", 400},
+		{"body not an object", `["registered"]`, "", "body must be a JSON object, got array", 400},
+		{"mr_iid of the wrong type", `{"on":"mr","provider":"gitlab","project_path":"g/p","mr_iid":"7","until":"merged"}`, "", "mr_iid", 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, body := callTurnHandler(t, e.h.WaitFor, e.agent, e.task.String(), tc.body)
+			require.Equal(t, tc.status, status, body)
+			if tc.code != "" {
+				assert.Equal(t, tc.code, body["error_code"])
+			}
+			msg, _ := body["message"].(string)
+			assert.Contains(t, msg, tc.field, "the refusal names the field and the reason")
+		})
+	}
+	assert.Empty(t, e.store.committed, "a refused wait reached the store")
+}
+
+// 251 Cyrillic characters fit the 500-character why of a time wait; the
+// bound counts characters, not bytes.
+func TestTurnCommandHandler_WaitForUnicodeEvidenceCountsCharacters(t *testing.T) {
+	e := newTurnHandlerEnv()
+	future := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+	status, body := callTurnHandler(t, e.h.WaitFor, e.agent, e.task.String(),
+		`{"on":"time","until_at":"`+future+`","event_ref":"nightly-export","source":"https://status.example.com","why":"`+strings.Repeat("я", 400)+`"}`)
+	require.Equal(t, http.StatusCreated, status, body)
 }

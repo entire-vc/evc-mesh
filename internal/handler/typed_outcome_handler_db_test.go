@@ -88,6 +88,22 @@ func TestTypedOutcomeReads_DB(t *testing.T) {
 	var w domain.TaskWait
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &w))
 	assert.Equal(t, domain.TaskWaitHuman, w.Kind)
+	// Exact receipts remain readable after resolution, but only on their
+	// source card. This is the runner's cross-workspace wake surface.
+	resolved, err := waits.Resolve(ctx, w.ID, domain.WaitResolutionMet)
+	require.NoError(t, err)
+	require.True(t, resolved)
+	rec = get(base + "/wait?wait_id=" + w.ID.String())
+	require.Equal(t, http.StatusOK, rec.Code)
+	var receipt domain.TaskWait
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &receipt))
+	assert.Equal(t, w.ID, receipt.ID)
+	require.NotNil(t, receipt.Resolution)
+	assert.Equal(t, domain.WaitResolutionMet, *receipt.Resolution)
+	assert.Equal(t, http.StatusNotFound, get(base+"/wait").Code)
+	assert.Equal(t, http.StatusNotFound, get(base+"/wait?wait_id="+uuid.NewString()).Code)
+	assert.Equal(t, http.StatusNotFound, get("/api/v1/tasks/"+uuid.NewString()+"/wait?wait_id="+w.ID.String()).Code)
+	assert.Equal(t, http.StatusBadRequest, get(base+"/wait?wait_id=nope").Code)
 
 	assert.Equal(t, http.StatusBadRequest, get(base+"/wait?agent_id=nope").Code)
 	assert.Equal(t, http.StatusBadRequest, get(base+"/turn-outcomes?limit=0").Code)

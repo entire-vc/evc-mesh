@@ -80,6 +80,19 @@ func TestTaskWaitValidate_TypedKinds(t *testing.T) {
 		"GitHub Actions run":       pipeline(WaitUntilGreen, func(w *TaskWait) { w.Provider, w.ProjectPath = str("github"), str("org/repo") }),
 		"GitHub run with baseline": pipeline(WaitUntilChanged, func(w *TaskWait) { w.Provider, w.ProjectPath = str("github"), str("org/repo"); ci(pipe, "success")(w) }),
 	}
+	other := uuid.MustParse("0a1b2c3d-0000-4000-8000-000000000002")
+	manual := func(edit func(w *TaskWait)) TaskWait {
+		w := TaskWait{TaskID: task, Kind: TaskWaitManual, Note: "lead parks it until the vendor answers"}
+		if edit != nil {
+			edit(&w)
+		}
+		return w
+	}
+	ok["manual"] = manual(nil)
+	ok["manual naming its own card"] = manual(func(w *TaskWait) { w.TargetTaskID = &task })
+	ok["GitHub PR merged after opened"] = mr(WaitUntilMerged, func(w *TaskWait) {
+		w.Provider, w.ProjectPath, w.AfterSHA, w.AfterStatus = str("github"), str("org/repo"), str(headSHA40), str(MRBaselineOpened)
+	})
 	for name, w := range ok {
 		t.Run("ok/"+name, func(t *testing.T) {
 			assert.NoError(t, w.Validate(now))
@@ -94,7 +107,7 @@ func TestTaskWaitValidate_TypedKinds(t *testing.T) {
 		"merge without group":       {merge(func(w *TaskWait) { w.ProjectPath = str("p") }), "needs project_path"},
 		"merge without iid":         {merge(func(w *TaskWait) { w.MRIID = nil }), "needs project_path"},
 		"merge with iid 0":          {merge(func(w *TaskWait) { w.MRIID = &zero }), "needs project_path"},
-		"merge on github":           {merge(func(w *TaskWait) { w.Provider = str("github") }), "GitLab only"},
+		"merge on github":           {merge(func(w *TaskWait) { w.Provider = str("github") }), "on=mr provider=github until=merged"},
 		"merge without sha":         {merge(func(w *TaskWait) { w.AfterSHA = nil }), "needs after_sha"},
 		"merge with short sha":      {merge(func(w *TaskWait) { w.AfterSHA = str("abc") }), "needs after_sha"},
 		"merge with uppercase sha":  {merge(func(w *TaskWait) { w.AfterSHA = str(strings.ToUpper(headSHA40)) }), "needs after_sha"},
@@ -136,6 +149,26 @@ func TestTaskWaitValidate_TypedKinds(t *testing.T) {
 		"human question too long": {TaskWait{TaskID: task, Kind: TaskWaitHuman, HumanGateRef: str("comment:x"), Addressee: str("alex"),
 			Question: str(strings.Repeat("я", MaxHumanQuestionLen+1))}, "longer than 2000"},
 	}
+	bad["manual on another card"] = struct {
+		w   TaskWait
+		msg string
+	}{manual(func(w *TaskWait) { w.TargetTaskID = &other }), "on the waiting card itself"}
+	bad["manual without why"] = struct {
+		w   TaskWait
+		msg string
+	}{manual(func(w *TaskWait) { w.Note = "  " }), "needs note"}
+	bad["manual with a timer"] = struct {
+		w   TaskWait
+		msg string
+	}{manual(func(w *TaskWait) { at := now.Add(time.Hour); w.UntilAt = &at }), "no observer and no timer"}
+	bad["manual with until"] = struct {
+		w   TaskWait
+		msg string
+	}{manual(func(w *TaskWait) { w.Until = str(WaitUntilMerged) }), "note only"}
+	bad["manual with an MR"] = struct {
+		w   TaskWait
+		msg string
+	}{manual(func(w *TaskWait) { w.ProjectPath, w.MRIID = str("g/p"), &iid }), "note only"}
 	for name, tc := range bad {
 		t.Run("refused/"+name, func(t *testing.T) {
 			err := tc.w.Validate(now)

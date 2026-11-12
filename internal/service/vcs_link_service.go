@@ -186,10 +186,23 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 	//
 	// explicitStatus (before defaulting) also decides Create vs Upsert below
 	// — track it here, not by re-checking input.Status later.
+	// An explicit add of a PR/MR the webhook stored as a relates_to mention
+	// binds it: the caller states this PR/MR is the card's own work.
+	// The repository merges metadata, so the mark is cleared by
+	// writing it empty; relation_bound records who bound it and when. Without
+	// a status the binding touches only metadata, so no live check runs.
+	var mention *domain.VCSLink
+	if linkType == domain.VCSLinkTypePR {
+		mention = s.relatesToLinkFor(ctx, input.TaskID, input.URL)
+	}
+	if mention != nil {
+		metadata = bindMentionMetadata(ctx, metadata, time.Now())
+	}
+
 	explicitStatus := input.Status != ""
 	status := input.Status
 	liveVerified := false
-	if !explicitStatus && linkType == domain.VCSLinkTypePR {
+	if !explicitStatus && linkType == domain.VCSLinkTypePR && mention == nil {
 		status = domain.VCSLinkStatusOpen
 		// No webhook can report an MR that merged before this link existed, so
 		// ask GitLab once instead of storing "open" for ever. Best effort.
@@ -267,10 +280,58 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 		return s.syncCreatedGitLabLink(ctx, link), created, nil
 	}
 
+	if mention != nil {
+		// Without a status the plain path would refuse the existing row as a
+		// duplicate; binding touches only the relation, never the stored
+		// status a webhook measured.
+		bound, err := s.repo.MergeMetadata(ctx, input.TaskID, mention.ID, bindMentionMetadata(ctx, nil, time.Now()))
+		if err != nil {
+			return nil, false, wrapVCSLinkRepoErr(err)
+		}
+		if bound == nil {
+			return nil, false, apierror.NotFound("vcs link")
+		}
+		return bound, false, nil
+	}
+
 	if err := s.repo.Create(ctx, link); err != nil {
 		return nil, false, wrapVCSLinkRepoErr(err)
 	}
 	return link, true, nil
+}
+
+// relatesToLinkFor returns the task's relates_to PR/MR link to rawURL, or nil.
+// A lookup failure is nil: the caller then takes its ordinary path.
+func (s *vcsLinkService) relatesToLinkFor(ctx context.Context, taskID uuid.UUID, rawURL string) *domain.VCSLink {
+	if rawURL == "" {
+		return nil
+	}
+	links, err := s.repo.ListByTask(ctx, taskID)
+	if err != nil {
+		return nil
+	}
+	for _, l := range filterLinksByURL(links, rawURL) {
+		if l.LinkType == domain.VCSLinkTypePR && l.IsRelatesTo() {
+			return &l
+		}
+	}
+	return nil
+}
+
+// bindMentionMetadata merges into base the clearing of the relates_to mark
+// and a relation_bound stamp (who bound the mention and when).
+func bindMentionMetadata(ctx context.Context, base []byte, at time.Time) []byte {
+	m := map[string]any{}
+	if len(base) > 0 {
+		_ = json.Unmarshal(base, &m)
+	}
+	m["relation"] = ""
+	m[domain.VCSLinkMetaRelationBound] = actorStamp(ctx, at)
+	out, err := json.Marshal(m)
+	if err != nil {
+		return base
+	}
+	return out
 }
 
 // wrapVCSLinkRepoErr wraps a repository error for logging context, EXCEPT

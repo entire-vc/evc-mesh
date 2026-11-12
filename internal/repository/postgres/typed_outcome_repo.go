@@ -25,7 +25,7 @@ const taskWaitCols = `id, task_id, agent_id, session_id, kind, target_task_id, t
 	vcs_link_id, provider, project_path, mr_iid, pipeline_id, required_jobs, until_state,
 	until_at, decision_request_id, human_gate_ref, note, event_ref, evidence_source, evidence_why,
 	until_at_offset, evidence_status, after_sha, after_pipeline_id, after_status, registration,
-	registration_ref, addressee, question, created_at, resolved_at, resolution, resolved_by, resolve_cause`
+	registration_ref, addressee, question, created_at, resolved_at, resolution, resolved_by, resolve_cause, server_observed`
 
 // TaskWaitRepo implements repository.TaskWaitRepository.
 type TaskWaitRepo struct {
@@ -157,7 +157,9 @@ func (r *TurnOutcomeRepo) Append(ctx context.Context, o *domain.TurnOutcome) err
 
 func (r *TurnOutcomeRepo) ListByTask(ctx context.Context, taskID uuid.UUID, sessionID *string, limit int) ([]domain.TurnOutcome, error) {
 	out := []domain.TurnOutcome{}
-	err := r.db.SelectContext(ctx, &out, `SELECT `+turnOutcomeCols+` FROM turn_outcomes
+	err := r.db.SelectContext(ctx, &out, `SELECT `+turnOutcomeCols+`,
+		COALESCE((SELECT w.server_observed FROM task_waits w WHERE w.id = turn_outcomes.wait_id), false) AS wait_server_observed
+		FROM turn_outcomes
 		 WHERE task_id = $1 AND ($2::text IS NULL OR session_id = $2)
 		 ORDER BY created_at DESC, id DESC LIMIT $3`, taskID, sessionID, limit)
 	return out, err
@@ -224,6 +226,31 @@ func (r *DecisionRequestRepo) Answer(ctx context.Context, id uuid.UUID, answerCo
 func (r *DecisionRequestRepo) Withdraw(ctx context.Context, id uuid.UUID) (bool, error) {
 	return r.closeOpen(ctx, `UPDATE decision_requests SET state = 'withdrawn'
 		 WHERE id = $1 AND state = 'open'`, id)
+}
+
+// ListOpenForAgent is the addressee's inbox: open requests to agentID on cards
+// of workspaceID that are not deleted, oldest first. The caller must be an
+// agent of that workspace — its home or an active grant (workspaceAgentSQL,
+// alias a, $2); a revoked grant empties the list. The partial index
+// idx_decision_requests_to_open serves the to_agent_id/state filter.
+func (r *DecisionRequestRepo) ListOpenForAgent(ctx context.Context, agentID, workspaceID uuid.UUID, limit int) ([]domain.InboxDecisionRequest, error) {
+	out := []domain.InboxDecisionRequest{}
+	err := r.db.SelectContext(ctx, &out, `
+		SELECT d.id, d.task_id, d.question, d.state, d.created_at,
+		       fa.id AS "from_agent.id", fa.name AS "from_agent.name", fa.slug AS "from_agent.slug",
+		       t.id AS "task.id", t.title AS "task.title", t.project_id AS "task.project_id",
+		       p.workspace_id AS "task.workspace_id", s.category::text AS "task.status_category"
+		  FROM decision_requests d
+		  JOIN agents a ON a.id = d.to_agent_id AND a.deleted_at IS NULL
+		  JOIN agents fa ON fa.id = d.from_agent_id
+		  JOIN tasks t ON t.id = d.task_id AND t.deleted_at IS NULL
+		  JOIN projects p ON p.id = t.project_id AND p.deleted_at IS NULL
+		  JOIN task_statuses s ON s.id = t.status_id
+		 WHERE d.to_agent_id = $1 AND d.state = 'open' AND p.workspace_id = $2
+		   AND `+workspaceAgentSQL+`
+		 ORDER BY d.created_at, d.id
+		 LIMIT $3`, agentID, workspaceID, limit)
+	return out, err
 }
 
 func (r *DecisionRequestRepo) closeOpen(ctx context.Context, q string, args ...any) (bool, error) {

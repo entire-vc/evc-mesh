@@ -32,13 +32,14 @@ export function agentTypeDisplay(agentType: string): { label: string; color: str
 }
 
 export const agentStatusConfig: Record<
-  AgentStatus,
+  DisplayStatus,
   { label: string; dotColor: string }
 > = {
   online: { label: "Online", dotColor: "bg-tone-success-500" },
   offline: { label: "Offline", dotColor: "bg-tone-neutral-400" },
   busy: { label: "Busy", dotColor: "bg-tone-attention-500" },
   error: { label: "Error", dotColor: "bg-tone-danger-500" },
+  paused: { label: "Paused", dotColor: "bg-tone-neutral-400" },
 };
 
 const STALE_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes
@@ -50,8 +51,30 @@ export function isAgentStale(agent: { last_heartbeat?: string | null }): boolean
 }
 
 /** Returns the DB status as-is. Staleness is shown as a visual warning, not a status override. */
-export function getEffectiveStatus(agent: Agent): AgentStatus {
-  return agent.status;
+export function getEffectiveStatus(agent: Agent, computedStatus?: string | null): DisplayStatus {
+  return displayStatus(agent.status, computedStatus);
+}
+
+export type DisplayStatus = AgentStatus | "paused";
+
+/**
+ * One consistent status for every surface. The raw `status` column is what the
+ * agent last reported and goes stale; `computed_status` (live connection +
+ * heartbeat freshness + fleet pause) wins. busy/error are only reported by the
+ * agent itself, so they survive while the agent is live.
+ */
+export function displayStatus(rawStatus: string, computedStatus?: string | null): DisplayStatus {
+  switch (computedStatus) {
+    case "paused":
+      return "paused";
+    case "offline":
+      return "offline";
+    case "online":
+    case "idle":
+      return rawStatus === "busy" || rawStatus === "error" ? rawStatus : "online";
+    default:
+      return (rawStatus as DisplayStatus) ?? "offline";
+  }
 }
 
 /**

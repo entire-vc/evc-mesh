@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { KeyRound, Trash2 } from "lucide-react";
 import { agentLabel } from "@/lib/agent-label";
 import { apiErrorMessage } from "@/lib/api-error";
-import { agentStatusConfig } from "@/lib/agent-utils";
+import { agentStatusConfig, displayStatus } from "@/lib/agent-utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -82,8 +82,10 @@ export function InvitedAgentDialog({
 
   if (!agent) return null;
 
-  const statusCfg = agentStatusConfig[agent.status as keyof typeof agentStatusConfig] ?? {
-    label: agent.status,
+  // Same status as the chart card: computed_status wins over the raw column.
+  const status = displayStatus(agent.status, agent.computed_status);
+  const statusCfg = agentStatusConfig[status] ?? {
+    label: status,
     dotColor: "bg-tone-neutral-400",
   };
 
@@ -233,7 +235,7 @@ export function InvitedAgentDialog({
                   <dt className="text-muted-foreground">{t("invitedAgent.status")}</dt>
                   <dd className="flex items-center gap-1.5">
                     <span className={`h-2 w-2 rounded-full ${statusCfg.dotColor}`} />
-                    {t(`invitedAgent.statuses.${agent.status}`, { defaultValue: statusCfg.label })}
+                    {t(`invitedAgent.statuses.${status}`, { defaultValue: statusCfg.label })}
                   </dd>
                 </dl>
               }

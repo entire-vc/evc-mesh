@@ -46,7 +46,7 @@ carry no write rights.
 
 `AgentExecutionView` is the contract payload plus two additive fields:
 
-- `reason`: `null`, `"unmanaged"` (project has no enabled Runner) or `"disabled"`
+- `reason`: `null`, `"unmanaged"` (no Runner binding for the agent), `"integration_disabled"` (a binding exists but the `agent-runner` integration is off in the project) or `"disabled"`
   (managed, but binding/connection switched off). With a reason the item still
   carries `profile` (`source: "agent_profile"`); `configured` is `null` when unmanaged.
 - per attempt: `freshness` may also be `history`, see below.

@@ -250,6 +250,10 @@ const (
 	// that changes ship_sha; no agent writes it. A commit link proves delivery
 	// only through it: the SHIP must come from someone other than the author.
 	VCSLinkMetaShipSet = "ship_set"
+
+	// relation_bound records who turned a relates_to mention into the card's
+	// own delivery link by adding it explicitly, and when.
+	VCSLinkMetaRelationBound = "relation_bound"
 )
 
 // VCSActorStamp is who wrote a metadata value and when (role_set, ship_set).

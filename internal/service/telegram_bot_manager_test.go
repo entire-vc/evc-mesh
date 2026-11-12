@@ -335,3 +335,22 @@ func TestHandleStart_NeutralReplyFollowsWorkspaceDefaultLocale(t *testing.T) {
 		assert.Contains(t, client.messages()[0].text, want, "workspace locale %q", locale)
 	}
 }
+
+// The /start binding rewrites the row's config from TelegramPreferenceConfig;
+// a scope the subscriber chose before clicking the link must survive it.
+func TestHandleStart_BindingKeepsTheSubscriptionScope(t *testing.T) {
+	wsID, userID := uuid.New(), uuid.New()
+	pref := telegramPrefWithBind(wsID, userID, "", "good-token", 15*time.Minute)
+	var cfg map[string]any
+	require.NoError(t, json.Unmarshal(pref.Config, &cfg))
+	cfg["scope"] = "all"
+	pref.Config, _ = json.Marshal(cfg)
+	repo := &fakeNotificationRepo{prefs: []domain.NotificationPreference{pref}}
+	mgr := newTestManager(repo, &fakeTelegramClient{}, &fakeTelegramUserLookup{}, &fakeTelegramProjectLookup{}, &fakeWorkspaceNameLookup{})
+
+	mgr.handleStart(context.Background(), wsID, "bot-token", 999, "whoever", "good-token")
+
+	upserted := repo.upsertedPrefs()
+	require.Len(t, upserted, 1)
+	assert.Equal(t, domain.NotificationScopeAll, domain.PreferenceScope(upserted[0].Config))
+}

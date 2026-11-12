@@ -36,6 +36,9 @@ type fakeNotificationRepo struct {
 	members      map[uuid.UUID]bool
 	membersErr   error
 	membersAsked [][]uuid.UUID
+	// projectReaders answers FilterProjectReaders; nil means every candidate
+	// may read the project.
+	projectReaders map[uuid.UUID]bool
 
 	created  []domain.Notification
 	upserted []domain.NotificationPreference
@@ -58,6 +61,16 @@ func (f *fakeNotificationRepo) FilterWorkspaceMembers(_ context.Context, _ uuid.
 		return nil, f.membersErr
 	}
 	return f.members, nil
+}
+
+func (f *fakeNotificationRepo) FilterProjectReaders(_ context.Context, _, _ uuid.UUID, userIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
+	out := make(map[uuid.UUID]bool, len(userIDs))
+	for _, id := range userIDs {
+		if f.projectReaders == nil || f.projectReaders[id] {
+			out[id] = true
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeNotificationRepo) CreateNotification(_ context.Context, n *domain.Notification) error {

@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -389,4 +391,27 @@ func TestTurnCommands_NextHandoffNote_DB(t *testing.T) {
 	var active int
 	require.NoError(t, f.db.Get(&active, `SELECT count(*) FROM task_waits WHERE task_id = $1 AND resolved_at IS NULL`, f.task))
 	assert.Equal(t, 0, active, "hand_off cancels the caller's wait")
+}
+
+// A 2000-character note lands: the wait row keeps its first 500 characters
+// under the column's char_length check, the card comment keeps all of it.
+func TestTurnCommands_WaitLongNote_DB(t *testing.T) {
+	f := newTurnFixture(t)
+	for i, note := range []string{strings.Repeat("a", 1999) + "Z", strings.Repeat("я", 1999) + "ж"} {
+		if i > 0 {
+			f.checkout(t, f.task, f.agent)
+		}
+		rec := f.post(f.agent, "/wait", map[string]any{"on": "card", "target_task_id": f.other, "note": note})
+		require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+		var res domain.TurnCommandResult
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &res))
+		require.NotNil(t, res.Wait)
+		var stored string
+		require.NoError(t, f.db.Get(&stored, `SELECT note FROM task_waits WHERE id = $1`, res.Wait.ID))
+		assert.Equal(t, domain.MaxWaitNoteLen, utf8.RuneCountInString(stored))
+		assert.True(t, strings.HasPrefix(note, stored))
+		var body string
+		require.NoError(t, f.db.Get(&body, `SELECT body FROM comments WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1`, f.task))
+		assert.True(t, strings.HasSuffix(body, "\n\n"+note), "the comment keeps the whole note")
+	}
 }

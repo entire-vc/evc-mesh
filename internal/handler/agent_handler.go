@@ -46,6 +46,26 @@ type AgentHandler struct {
 	shutdown        <-chan struct{}                      // optional, closed on server shutdown to end SSE streams and long-polls
 	workspaceSvc    service.WorkspaceService             // optional, resolves the workspace slug for Agent.URL
 	controllers     repository.AgentControllerRepository // optional, heartbeat renews the controller lease
+	repoAccess      RepositoryAccessReader               // optional, adds repository_access to Me and GetByID
+}
+
+// SetRepositoryAccessReader makes GET /agents/me and GET /agents/{id} carry
+// repository_access. Without it the field is absent.
+func (h *AgentHandler) SetRepositoryAccessReader(r RepositoryAccessReader) { h.repoAccess = r }
+
+// loadRepositoryAccess fills agent.RepositoryAccess. A failed read fails the
+// request: an absent field means "not configured" and would hand the runner
+// its legacy list, so a read error must never look like that.
+func (h *AgentHandler) loadRepositoryAccess(ctx context.Context, agent *domain.Agent) error {
+	if h.repoAccess == nil || agent == nil {
+		return nil
+	}
+	access, err := h.repoAccess.Get(ctx, agent.ID)
+	if err != nil {
+		return err
+	}
+	agent.RepositoryAccess = access
+	return nil
 }
 
 // SetControllerRepo lets Heartbeat renew the agent's controller lease. Without
@@ -227,6 +247,9 @@ func (h *AgentHandler) GetByID(c echo.Context) error {
 
 	agent, err := h.agentService.GetByID(c.Request().Context(), agentID)
 	if err != nil {
+		return handleError(c, err)
+	}
+	if err = h.loadRepositoryAccess(c.Request().Context(), agent); err != nil {
 		return handleError(c, err)
 	}
 	h.decorateAgentURLs(c.Request().Context(), c.Request(), agent.WorkspaceID, agent)
@@ -619,6 +642,13 @@ func (h *AgentHandler) CreateAgentActivity(c echo.Context) error {
 			"event_type": "event_type is required",
 		}))
 	}
+	if req.EventType == domain.AgentRepositoryAccessChangedEvent {
+		// Written only by PUT /agents/{id}/repository-access, in the same
+		// transaction as the change: a hand-made entry would forge the audit.
+		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
+			"event_type": "event_type " + domain.AgentRepositoryAccessChangedEvent + " is reserved",
+		}))
+	}
 
 	entry := &domain.AgentActivityLog{
 		AgentID:     agentID,
@@ -774,6 +804,9 @@ func (h *AgentHandler) Me(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, apierror.InternalError("agent auth workspace not resolved"))
 	}
 
+	if err = h.loadRepositoryAccess(c.Request().Context(), agent); err != nil {
+		return handleError(c, err)
+	}
 	h.decorateAgentURLs(c.Request().Context(), c.Request(), authWsID, agent)
 
 	return c.JSON(http.StatusOK, meResponse(agent, authWsID))

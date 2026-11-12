@@ -82,3 +82,13 @@ func taskParticipants(task *domain.Task, exclude uuid.UUID, extra ...*uuid.UUID)
 
 	return out
 }
+
+// humanActor is the ActorUserID of a notification event: the acting id when a
+// person acted, nil for an agent, the system or an unknown actor. Agent ids
+// live in another namespace and must never be compared against user ids.
+func humanActor(id uuid.UUID, actorType domain.ActorType) *uuid.UUID {
+	if id == uuid.Nil || actorType != domain.ActorTypeUser {
+		return nil
+	}
+	return &id
+}

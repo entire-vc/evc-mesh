@@ -60,7 +60,26 @@ func (r *TurnCommandRepo) CommitTurn(ctx context.Context, cmd *domain.TurnComman
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	var waitScopes map[uuid.UUID]bool
 	if cmd.Kind == domain.TurnOutcomeWait && cmd.Wait != nil && cmd.Wait.Kind == domain.TaskWaitCard {
+		if cmd.Wait.TargetTaskID == nil {
+			return nil, domain.NewOutcomeError(domain.CodeInvalidTarget, "a card wait needs target_task_id")
+		}
+		// Revocation takes these gates exclusively before graph/source locks.
+		// Do not lock grant rows: the revoke statement already owns that row.
+		var scopes []uuid.UUID
+		if scopeErr := tx.SelectContext(ctx, &scopes, `SELECT DISTINCT p.workspace_id
+			FROM tasks t JOIN projects p ON p.id=t.project_id
+			WHERE t.id IN ($1,$2) ORDER BY p.workspace_id`, cmd.TaskID, *cmd.Wait.TargetTaskID); scopeErr != nil {
+			return nil, scopeErr
+		}
+		waitScopes = make(map[uuid.UUID]bool, len(scopes))
+		for _, ws := range scopes {
+			if _, err = tx.ExecContext(ctx, `SELECT card_wait_membership_lock($1,$2,false)`, cmd.AgentID, ws); err != nil {
+				return nil, err
+			}
+			waitScopes[ws] = true
+		}
 		// Dependency writers take the workspace graph lock before any row lock.
 		if _, err = tx.ExecContext(ctx, `SELECT completion_graph_lock(p.workspace_id)
 			FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, cmd.TaskID); err != nil {
@@ -97,7 +116,7 @@ func (r *TurnCommandRepo) CommitTurn(ctx context.Context, cmd *domain.TurnComman
 		}
 		w.TaskID, w.AgentID, w.SessionID = cmd.TaskID, cmd.AgentID, cmd.SessionID
 		if w.Kind == domain.TaskWaitCard {
-			err = linkWaitTarget(ctx, tx, task.WorkspaceID, w)
+			err = linkWaitTarget(ctx, tx, task.WorkspaceID, waitScopes, cmd.DenySameWorkspaceTarget, w)
 			if err != nil {
 				return nil, err
 			}
@@ -116,11 +135,22 @@ func (r *TurnCommandRepo) CommitTurn(ctx context.Context, cmd *domain.TurnComman
 		if err != nil {
 			return nil, err
 		}
+		if w.ServerObserved {
+			// Evidence may already release an existing edge. Do not create a
+			// permanently open wait when no future target mutation is needed.
+			if _, err = tx.ExecContext(ctx, `SELECT resolve_server_card_waits($1)`, *w.TargetTaskID); err != nil {
+				return nil, err
+			}
+			if receiptErr := tx.GetContext(ctx, w, `SELECT `+taskWaitCols+` FROM task_waits WHERE id=$1`, w.ID); receiptErr != nil {
+				return nil, receiptErr
+			}
+		}
 		err = r.step("wait")
 		if err != nil {
 			return nil, err
 		}
 		outcome.WaitID = &w.ID
+		outcome.WaitServerObserved = w.ServerObserved
 		res.Wait = w
 		var raw string
 		raw, err = waitRuntimeState(ctx, tx, w, cmd)
@@ -255,9 +285,9 @@ func (r *TurnCommandRepo) AddNote(ctx context.Context, taskID, authorID uuid.UUI
 	return id, tx.Commit()
 }
 
-// linkWaitTarget checks a card target (exists, same workspace, not already
-// released for the condition) and creates or reuses the blocks edge.
-func linkWaitTarget(ctx context.Context, tx *sqlx.Tx, workspaceID uuid.UUID, w *domain.TaskWait) error {
+// linkWaitTarget creates a blocks edge within a workspace, or across the
+// boundary only for a typed caller with current membership on both sides.
+func linkWaitTarget(ctx context.Context, tx *sqlx.Tx, workspaceID uuid.UUID, scopes map[uuid.UUID]bool, denySameWorkspace bool, w *domain.TaskWait) error {
 	cond := string(domain.DependencyConditionTaskDone)
 	if w.TargetCondition != nil {
 		cond = *w.TargetCondition
@@ -275,23 +305,51 @@ func linkWaitTarget(ctx context.Context, tx *sqlx.Tx, workspaceID uuid.UUID, w *
 		     tasks bt
 		JOIN projects bp ON bp.id = bt.project_id
 		JOIN task_statuses bts ON bts.id = bt.status_id
-		WHERE bt.id = $1 AND bt.deleted_at IS NULL`, *w.TargetTaskID, cond)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && target.WorkspaceID != workspaceID) {
-		return domain.NewOutcomeError(domain.CodeInvalidTarget, "target card not found")
+		WHERE bt.id = $1 AND bt.deleted_at IS NULL FOR SHARE OF bt,bts`, *w.TargetTaskID, cond)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.NewOutcomeError(domain.CodeInvalidTarget, "target_task_id: target card not found")
 	}
 	if err != nil {
 		return err
 	}
-	if target.Released {
-		return domain.NewOutcomeError(domain.CodeAlreadyMet, "the target card already meets "+cond)
+	if !scopes[workspaceID] || !scopes[target.WorkspaceID] {
+		// A project move raced the prelock read. Retry from the new scope,
+		// never acquire membership gates after holding the graph lock.
+		return domain.NewOutcomeError(domain.CodeInvalidTarget, "target_task_id: target card not found")
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO task_dependencies (id, task_id, depends_on_task_id, dependency_type, created_at, condition)
-		VALUES ($1, $2, $3, 'blocks', now(), $4)
-		ON CONFLICT (task_id, depends_on_task_id) DO UPDATE SET dependency_type = 'blocks', condition = EXCLUDED.condition`,
-		uuid.New(), w.TaskID, *w.TargetTaskID, cond)
+	w.ServerObserved = target.WorkspaceID != workspaceID
+	if !w.ServerObserved && denySameWorkspace {
+		return domain.NewOutcomeError(domain.CodeInvalidTarget, "target_task_id: target card not found")
+	}
+	var edgeAgent *uuid.UUID
+	if w.ServerObserved {
+		for _, ws := range []uuid.UUID{workspaceID, target.WorkspaceID} {
+			var member bool
+			if memberErr := tx.GetContext(ctx, &member, `SELECT EXISTS (SELECT 1 FROM agents a
+				WHERE a.id=$1 AND a.deleted_at IS NULL AND `+workspaceAgentSQL+`)`, w.AgentID, ws); memberErr != nil {
+				return memberErr
+			}
+			if !member {
+				return domain.NewOutcomeError(domain.CodeInvalidTarget, "target_task_id: target card not found")
+			}
+		}
+		edgeAgent = &w.AgentID
+	}
+	if target.Released {
+		return domain.NewOutcomeError(domain.CodeAlreadyMet, "target_task_id: the target card already meets "+cond)
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO task_dependencies (id, task_id, depends_on_task_id, dependency_type, created_at, condition, wait_agent_id)
+		VALUES ($1, $2, $3, 'blocks', now(), $4, $5)
+		ON CONFLICT (task_id, depends_on_task_id) DO UPDATE SET dependency_type = 'blocks',
+		condition = EXCLUDED.condition, wait_agent_id = EXCLUDED.wait_agent_id,
+		evidence_status = CASE WHEN task_dependencies.condition IS DISTINCT FROM EXCLUDED.condition
+		    OR task_dependencies.dependency_type <> 'blocks' THEN 'revoked' ELSE task_dependencies.evidence_status END,
+		generation = task_dependencies.generation + CASE WHEN task_dependencies.condition IS DISTINCT FROM EXCLUDED.condition
+		    OR task_dependencies.dependency_type <> 'blocks' THEN 1 ELSE 0 END`,
+		uuid.New(), w.TaskID, *w.TargetTaskID, cond, edgeAgent)
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && pqErr.Constraint == "completion_cycle" {
-		return domain.NewOutcomeError(domain.CodeInvalidTarget, "waiting on this card would close a dependency cycle")
+		return domain.NewOutcomeError(domain.CodeInvalidTarget, "target_task_id: waiting on this card would close a dependency cycle")
 	}
 	return err
 }
@@ -313,16 +371,16 @@ func declareWaitTx(ctx context.Context, tx *sqlx.Tx, w *domain.TaskWait) error {
 			 until_state, until_at, decision_request_id, human_gate_ref, note,
 			 event_ref, evidence_source, evidence_why, until_at_offset, evidence_status,
 			 after_sha, after_pipeline_id, after_status, registration, registration_ref,
-			 addressee, question)
+			 addressee, question, server_observed)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-			$18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
+			$18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
 		RETURNING id, created_at`,
 		w.TaskID, w.AgentID, w.SessionID, w.Kind, w.TargetTaskID, w.TargetCondition,
 		w.VCSLinkID, w.Provider, w.ProjectPath, w.MRIID, w.PipelineID, w.RequiredJobs,
 		w.Until, w.UntilAt, w.DecisionRequestID, w.HumanGateRef, w.Note,
 		w.EventRef, w.Source, w.Why, w.UntilAtOffset, w.EvidenceStatus,
 		w.AfterSHA, w.AfterPipelineID, w.AfterStatus, w.Registration, w.RegistrationRef,
-		w.Addressee, w.Question,
+		w.Addressee, w.Question, w.ServerObserved,
 	).Scan(&w.ID, &w.CreatedAt)
 }
 

@@ -6,6 +6,10 @@ This document describes the JSON contract for instance, workspace, and project
 extension routes. Keep clients compatible with the documented response schemas
 and stable error codes when these routes evolve.
 
+Building your own extension? Start with the
+[Extension Developer Guide](developer-guide.md): manifest, permissions, events,
+UI slots, release and publishing through Spark.
+
 Conventions:
 
 - Base path `/api/v1`, JSON, bearer or agent-key auth like every other route.

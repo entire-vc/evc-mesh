@@ -309,6 +309,65 @@ func (r *NotificationRepo) FilterWorkspaceMembers(ctx context.Context, workspace
 	return members, nil
 }
 
+// FilterProjectReaders returns the subset of userIDs who may read the tasks of
+// projectID in workspaceID: owners and admins of the workspace (including the
+// founding owner, who has no workspace_members row) and everyone with a
+// project_members row on that project.
+//
+// It is the human half of middleware.UserMayAccessProject asked about many users
+// at once. FilterWorkspaceMembers answers "may they hear about this workspace";
+// this answers the narrower "may they hear about this project", which the
+// dispatcher asks before telling a scope=all subscriber about a task they are
+// not a participant of. Callers must apply FilterWorkspaceMembers as well: a
+// stale project_members row of somebody removed from the workspace is not
+// access.
+//
+// The role literals are workspace_role enum labels, so the IN list coerces
+// cleanly (unlike an empty string, see FilterWorkspaceMembers).
+func (r *NotificationRepo) FilterProjectReaders(ctx context.Context, workspaceID, projectID uuid.UUID, userIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
+	readers := make(map[uuid.UUID]bool, len(userIDs))
+	if len(userIDs) == 0 {
+		return readers, nil
+	}
+
+	candidates := make(pq.StringArray, 0, len(userIDs))
+	for _, id := range userIDs {
+		candidates = append(candidates, id.String())
+	}
+
+	const q = `
+		SELECT wm.user_id
+		FROM workspace_members wm
+		WHERE wm.workspace_id = $1 AND wm.user_id = ANY($3::uuid[]) AND wm.role IN ('owner', 'admin')
+		UNION
+		SELECT w.owner_id
+		FROM workspaces w
+		WHERE w.id = $1 AND w.owner_id = ANY($3::uuid[])
+		UNION
+		SELECT pm.user_id
+		FROM project_members pm
+		JOIN projects p ON p.id = pm.project_id
+		WHERE pm.project_id = $2 AND p.workspace_id = $1 AND pm.user_id = ANY($3::uuid[])
+	`
+	rows, err := r.db.QueryContext(ctx, q, workspaceID, projectID, candidates)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var id uuid.UUID
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			return nil, scanErr
+		}
+		readers[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return readers, nil
+}
+
 // nullableJSON stores an absent parameter set as SQL NULL rather than an empty
 // string, which JSONB would reject.
 func nullableJSON(raw json.RawMessage) any {

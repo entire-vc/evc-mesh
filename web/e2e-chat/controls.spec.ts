@@ -9,6 +9,8 @@ import {
   assertTabAfter, assertNoTab, assertSettingsReadback, assertLimitsReadback, assertChatOff, assertEmptyAgentsRejected,
 } from "./lib/detect";
 import { waitTurnFrame, withReplyState } from "./lib/chat";
+import { type IdleHistory, assertIdleHistory, assertIdleResources, assertIdleResumed, assertNotReleasedEarly, resourcesFromRuntime } from "./lib/idle";
+import { issueSweeping, staleHarnessKeys } from "./lib/runner";
 import { F1, redControl, minuteCounter, retryOn429, row, until, waitForBudget, withReauth } from "./lib/harness";
 
 /**
@@ -18,6 +20,54 @@ import { F1, redControl, minuteCounter, retryOn429, row, until, waitForBudget, w
  * decoration. Results go into results.tsv as RED-OK next to the live rows.
  */
 const F: Forbidden = { ids: ["11111111-1111-1111-1111-111111111111"], texts: ["Secret title"], canary: "CANARY-A-xyz" };
+
+test("S08 idle: a surviving process, occupied slot, history replay and unfinished next turn fail; released resources and one completed next turn pass", async () => {
+  const before: IdleHistory = {
+    items: [
+      { id: "u1", role: "user", body: "first", status: "done", turn_id: "old" },
+      { id: "a1", role: "assistant", body: "answer", status: "done", turn_id: "old" },
+    ],
+    active_turn: null,
+  };
+  const after: IdleHistory = {
+    items: [...before.items,
+      { id: "u2", role: "user", body: "next", status: "done", turn_id: "next-turn" },
+      { id: "a2", role: "assistant", body: "resumed", status: "done", turn_id: "next-turn" },
+    ],
+    active_turn: null,
+  };
+  await redControl("S08-red-process-alive", "detector", () => assertIdleResources({ chatProcesses: 1, occupiedSlots: 0 }), /chat process.*still alive after deadline/);
+  await redControl("S08-red-slot-held", "detector", () => assertIdleResources({ chatProcesses: 0, occupiedSlots: 1 }), /slot.*still occupied after deadline/);
+  await redControl("S08-red-observation-missing", "detector", () => assertIdleResources(undefined), /observation is missing/);
+  await redControl("S08-red-count-invalid", "detector", () => assertIdleResources({ chatProcesses: NaN, occupiedSlots: 0 }), /invalid chatProcesses/);
+  await redControl("S08-red-idle-duplicate", "detector", () => assertIdleHistory(before, { ...before, items: [...before.items, before.items[0]!] }), /duplicate or loss/);
+  await redControl("S08-red-idle-mutated", "detector", () => assertIdleHistory(before, { ...before, items: before.items.map((m) => ({ ...m, body: "changed" })) }), /changed or moved/);
+  await redControl("S08-red-resume-duplicate", "detector", () => assertIdleResumed(before, { ...after, items: [...after.items, before.items[0]!] }, "next-turn", "next", "done"), /duplicate message id/);
+  await redControl("S08-red-replay-new-id", "detector", () => assertIdleResumed(before, { ...after, items: [...after.items, { ...before.items[0]!, id: "replay" }] }, "next-turn", "next", "done"), /duplicate or loss/);
+  await redControl("S08-red-turn-not-done", "detector", () => assertIdleResumed(before, after, "next-turn", "next", "failed"), /need done/);
+  await redControl("S08-red-active-turn", "detector", () => assertIdleResumed(before, { ...after, active_turn: { id: "next-turn", state: "streaming" } }, "next-turn", "next", "done"), /no active turn/);
+  await redControl("S08-red-reply-not-done", "detector", () => assertIdleResumed(before, { ...after, items: after.items.map((m) => m.id === "a2" ? { ...m, status: "failed" } : m) }, "next-turn", "next", "done"), /non-empty done reply/);
+  const T0 = Date.parse("2026-01-01T00:00:00Z");
+  const rt = (o: object) => ({ runner_id: "r", process_alive: false, slot_held: false, fresh: true, reported_at: new Date(T0 + 1000).toISOString(), ...o });
+  await redControl("S08-red-runtime-missing", "detector", () => resourcesFromRuntime(undefined, T0, T0 + 2000), /missing or malformed/);
+  await redControl("S08-red-runtime-stale", "detector", () => resourcesFromRuntime(rt({}), T0, T0 + 10 * 60_000), /stale/);
+  await redControl("S08-red-runtime-not-fresh", "detector", () => resourcesFromRuntime(rt({ fresh: false }), T0, T0 + 2000), /not confirmed fresh/);
+  await redControl("S08-red-runtime-fresh-omitted", "detector", () => resourcesFromRuntime(rt({ fresh: undefined }), T0, T0 + 2000), /not confirmed fresh/);
+  await redControl("S08-red-runtime-predates-idle", "detector", () => resourcesFromRuntime(rt({}), T0 + 5000, T0 + 6000), /predates/);
+  await redControl("S08-red-runtime-alive", "detector", () => assertIdleResources(resourcesFromRuntime(rt({ process_alive: true }), T0, T0 + 2000)), /still alive/);
+  await redControl("S08-red-runtime-slot", "detector", () => assertIdleResources(resourcesFromRuntime(rt({ slot_held: true }), T0, T0 + 2000)), /still occupied/);
+  // Lower bound, N = 10: a snapshot reported 2 min after the turn that says "gone" is a premature reap.
+  const at = (ms: number) => ({ reported_at: new Date(T0 + ms).toISOString() });
+  await redControl("S08-red-early-release", "detector", () => assertNotReleasedEarly(rt(at(2 * 60_000)) as never, T0, 10), /released early/);
+  await redControl("S08-red-early-release-slot-only", "detector", () => assertNotReleasedEarly(rt({ ...at(2 * 60_000), process_alive: true }) as never, T0, 10), /released early/);
+  await redControl("S08-red-early-release-just-under", "detector", () => assertNotReleasedEarly(rt(at(9 * 60_000 - 1)) as never, T0, 10), /released early/);
+  assertNotReleasedEarly(rt(at(9 * 60_000)) as never, T0, 10); // at N - 60 s: inside the tolerance, passes
+  assertNotReleasedEarly(rt({ ...at(2 * 60_000), process_alive: true, slot_held: true }) as never, T0, 10); // alive and held early is the expected state
+  assertIdleResources(resourcesFromRuntime(rt({}), T0, T0 + 2000));
+  assertIdleResources({ chatProcesses: 0, occupiedSlots: 0 });
+  assertIdleHistory(before, structuredClone(before));
+  assertIdleResumed(before, after, "next-turn", "next", "done");
+});
 const frame = (o: Partial<Frame>): Frame => ({ event: "chat.message.delta", raw: "{}", ...o });
 
 // A delta of message m in turn a carrying `text`, arrived at `at` ms; the completed frame of m.
@@ -372,4 +422,54 @@ test("expired access token: a 401 without re-login stays red; withReauth logs in
   const fine = await withReauth(async () => ({ status: 403 }), async () => { throw new Error("must not log in on 403"); });
   expect(fine.status).toBe(403);
   row("REAUTH-ctl", "harness", "RED-OK", "401 without re-login fails; one re-login then repeat passes; 403 untouched");
+});
+
+test("leaked temporary keys: only old, active, non-primary keys with the exact harness label are swept", async () => {
+  const now = Date.parse("2026-11-11T12:00:00Z");
+  const old = "2026-11-11T08:00:00Z";
+  const lbl = "e2e-chat-chat-29430-617161-s07";
+  const keys = [
+    { id: "p", primary: true, label: lbl, created_at: old },
+    { id: "a", label: lbl, created_at: old },
+    { id: "b", label: lbl, created_at: old, revoked_at: "2026-11-11T09:00:00Z" },
+    { id: "c", label: "ops-runner", created_at: old },
+    { id: "d", created_at: old },
+    { id: "e", label: "e2e-chat-by-hand-s07", created_at: old },
+    { id: "f", label: lbl, created_at: "2026-11-11T11:55:00Z" },
+    { id: "g", label: lbl },
+    { id: "h", label: lbl, created_at: old, expires_at: "2026-11-11T10:00:00Z" },
+    { id: "j", label: lbl, created_at: "2026-11-11T11:50:00Z" },
+    { id: "k", label: lbl, created_at: "2026-11-11T11:49:59Z" },
+    { id: "m", label: lbl, created_at: old, expires_at: "not-a-date" },
+    { id: "n", label: lbl, created_at: old, expires_at: "" },
+    { id: "i", label: "e2e-chat-chat-29431-617162-s07", created_at: old, expires_at: "2026-11-11T14:00:00Z" },
+  ];
+  expect(staleHarnessKeys(keys, now).map((k) => k.id), "red control: primary, revoked, foreign, hand-made label, young, exactly 10 min old, undated, expired, bad-expiry and empty-expiry keys stay").toEqual(["a", "k", "i"]);
+  expect(staleHarnessKeys([], now).length).toBe(0);
+  row("KEYS-ctl", "harness", "RED-OK", "only the old active non-primary key with the exact harness label is swept");
+});
+
+test("409 on key issue: stale harness keys are revoked and the issue repeats once; without stale keys or on another status nothing is revoked", async () => {
+  const fake = (keys: unknown[], first: number) => {
+    const calls: string[] = [];
+    let posts = 0;
+    const api = async (m: string, path: string) => {
+      calls.push(`${m} ${path.replace(/^.*keys/, "keys")}`);
+      if (m === "POST") return { status: ++posts === 1 ? first : 201, json: () => ({}) };
+      if (m === "GET") return { status: 200, json: () => ({ keys }) };
+      return { status: 204, json: () => ({}) };
+    };
+    return { api, calls };
+  };
+  const keys = [{ id: "p", primary: true }, { id: "a", label: "e2e-chat-chat-1-2-s07", created_at: "2020-01-01T00:00:00Z" }, { id: "f", label: "ops" }];
+  const a = fake(keys, 409);
+  expect((await issueSweeping(a.api, "ag", "l", 60)).status, "409 then 201 after the sweep").toBe(201);
+  expect(a.calls, "only the stale key is deleted, then one more POST").toEqual(["POST keys", "GET keys", "DELETE keys/a", "POST keys"]);
+  const b = fake([{ id: "p", primary: true }, { id: "f", label: "ops" }], 409);
+  expect((await issueSweeping(b.api, "ag", "l", 60)).status, "red control: two foreign keys, 409 stays").toBe(409);
+  expect(b.calls, "nothing deleted, no second POST").toEqual(["POST keys", "GET keys"]);
+  const c = fake(keys, 403);
+  expect((await issueSweeping(c.api, "ag", "l", 60)).status).toBe(403);
+  expect(c.calls, "403 is not a sweep trigger").toEqual(["POST keys"]);
+  row("KEYS-ctl2", "harness", "RED-OK", "409 sweeps own stale keys and repeats once; foreign keys and other statuses untouched");
 });

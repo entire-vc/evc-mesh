@@ -2,7 +2,7 @@
 
 Status: implementation contract. The schema (migrations
 `20261028001_typed_outcomes.sql`, `20261110100_task_waits_typed_kinds.sql`,
-`20261110200_task_waits_resolve.sql`), the two reads, the eight commands and the
+`20261110200_task_waits_resolve.sql`), the three reads, the eight commands and the
 resolve route are implemented. Routes, bodies, responses and error codes are
 fixed here so the server handlers, the MCP tools and the runner can be built in
 parallel against the same contract.
@@ -15,6 +15,8 @@ Every end-of-turn form of the runner's marker grammar has a typed equivalent:
 | `⏳ WAIT mr:[<provider>:]<project>!<iid> [until=… after=…] [jobs=[…]]` | `wait_for` `on: mr` (+ baseline) |
 | `⏳ WAIT pipeline:[<provider>:]<project>#<id> [until=… after=…] [jobs=[…]]` | `wait_for` `on: pipeline` (+ baseline, `provider: github`) |
 | `⏳ WAIT merge:<project>!<iid> after=<sha>` | `wait_for` `on: merge` |
+| `⏳ WAIT mr:github:<owner>/<repo>!<n> until=merged after=<sha>:opened` | `wait_for` `on: mr` `provider: github` `until: merged` |
+| `⏳ WAIT manual:#<8hex> — <why>` | `wait_for` `on: manual` (`note`: why; card labelled `wake:manual`) |
 | `⏳ WAIT ops-review:… / gmail:… / receipt:… / lifecycle:… / stall:… / recovery:… / queue:… / native:…` | `wait_for` `on: registered` |
 | `⏳ WAIT <ISO>: external=<ref> source=<src> <why>` | `wait_for` `on: time` (`event_ref`, `source`, `why`) |
 | `⏳ WAIT decision:@<agent>` | `ask_agent` |
@@ -47,7 +49,7 @@ returns the reason in the same turn.
 | `id` | uuid | |
 | `task_id`, `agent_id` | uuid | the waiting card and agent |
 | `session_id` | string ≤ 200, nullable | runner session that declared it |
-| `kind` | `card` \| `mr` \| `pipeline` \| `time` \| `decision` \| `human` \| `merge` \| `registered` | |
+| `kind` | `card` \| `mr` \| `pipeline` \| `time` \| `decision` \| `human` \| `merge` \| `registered` \| `manual` | |
 | `target_task_id`, `target_condition` | uuid, dependency condition | `card`; condition defaults to `task_done` |
 | `vcs_link_id`, `provider`, `project_path`, `mr_iid` | | `mr`; coordinates are stored even when a link is given. `merge`: `provider` is always `gitlab`, no link |
 | `provider`, `project_path`, `pipeline_id`, `required_jobs[]` | | `pipeline`; `provider` is `gitlab` (or absent, read as gitlab) \| `github` (an Actions run: `owner/repo`, run id). `required_jobs` also on `mr` with `until` `green` \| `changed` |
@@ -62,7 +64,7 @@ returns the reason in the same turn.
 | `evidence_status` | `unverified`, `legacy` | `time`: `unverified` — the server checks shape and Mesh receipts, not the deadline itself; `legacy` — declared before evidence was required, no evidence fields, can only be resolved |
 | `decision_request_id` | uuid | `decision` |
 | `human_gate_ref` | string ≤ 200 | `human`: `comment:<uuid>`, the `❓ Blocking` comment the gate was armed from |
-| `note` | string ≤ 500 | |
+| `note` | string ≤ 500 characters | the first 500 characters of the declared note; a longer note is not refused, the wait comment carries it whole |
 | `created_at`, `resolved_at` | timestamp | |
 | `resolution` | `met` \| `superseded` \| `cancelled` \| `expired` \| `invalid` | set together with `resolved_at` |
 | `resolved_by`, `resolve_cause` | uuid, string ≤ 200 | who ended the wait through the resolve route and why; `resolve_cause` is also `continue_next` or `card closed` when the server ended it |
@@ -116,8 +118,9 @@ subscriber notifications are unchanged.
 
 ## Reads
 
-Both require workspace membership, like every `/tasks/:task_id/...` read.
-`:task_id` is a full UUID or a 6–12 hex short id.
+The two card reads require workspace membership, like every `/tasks/:task_id/...` read.
+`:task_id` is a full UUID or a 6–12 hex short id. The addressee's inbox is
+read with the agent's own key.
 
 ### `GET /api/v1/tasks/:task_id/turn-outcomes`
 
@@ -132,6 +135,54 @@ wait on the card).
 
 `200` — the active `task_waits` row. `404` with `error_code: no_active_wait`
 when there is none (a missing card is `404 not_found`).
+
+Query `wait_id=<uuid>` instead returns the exact wait on this source card,
+including a resolved receipt. A missing wait or a wait from another source card
+is `404 not_found`; an invalid UUID is `400`. The route uses the source card's
+existing access guard. It does not read or expose the target card's contents.
+
+### `GET /api/v1/agents/me/decision-requests`
+
+The addressee's inbox: the open questions other agents asked the caller with
+`ask_agent`. The runner polls it and answers each one with `answer_decision`
+on the asking card, so a question needs no separate card to wake the
+addressee. Agent key only, like every `/agents/me/...` route; without one
+`401 unauthorized`.
+
+Query: `state` (optional, only `open`; any other value is `400
+validation_failed`), `limit` (1–200, default 100; a larger value is read as 200).
+
+Scope: requests whose `to_agent_id` is the caller, `state = open`, on cards that
+are not deleted (nor their project), in **the workspace the presented key
+authenticated into** and only while the caller is an agent of that workspace
+(its home workspace or an active `agent_workspace_grants` row). An agent that
+serves several workspaces lists each workspace's questions with that
+workspace's key; a key never lists another workspace's questions, and a
+revoked grant empties the list.
+
+`200` — oldest first, no cursor; `{"items": []}` when there is nothing to answer.
+
+```json
+{
+  "items": [
+    {
+      "id": "uuid of the decision request",
+      "task_id": "uuid of the asking card",
+      "question": "Which schema version wins?",
+      "state": "open",
+      "created_at": "2026-11-11T09:30:00Z",
+      "from_agent": { "id": "uuid", "name": "Garfield", "slug": "garfield" },
+      "task": {
+        "id": "uuid", "title": "Schema migration", "project_id": "uuid",
+        "workspace_id": "uuid", "status_category": "in_progress"
+      }
+    }
+  ]
+}
+```
+
+`task.status_category` is one of `backlog`, `triage`, `todo`, `in_progress`,
+`review`, `done`, `cancelled`.
 
 ## Commands
 
@@ -180,7 +231,7 @@ Common to all commands:
 
 ```json
 {
-  "on": "card | mr | pipeline | time | merge | registered",
+  "on": "card | mr | pipeline | time | merge | registered | manual",
   "target_task_id": "uuid",            "target_condition": "task_done | shipped | deployed | accepted | ...",
   "vcs_link_id": "uuid",               "provider": "gitlab | github", "project_path": "group/project", "mr_iid": 12,
   "pipeline_id": 7001,                 "required_jobs": ["test"],
@@ -191,7 +242,7 @@ Common to all commands:
   "until_at": "2026-10-29T06:00:00Z",
   "event_ref": "nightly-export",       "source": "https://… | comment:<uuid> | artifact:<uuid>",
   "why": "what happens at until_at",
-  "note": "≤ 500 chars"
+  "note": "any length: the comment keeps it whole, the wait row its first 500 characters"
 }
 ```
 
@@ -211,10 +262,26 @@ Errors: `invalid_target`, `self_wait`, `already_met`, `time_out_of_bounds`,
 
 How the target is confirmed:
 
-- `card` — the card exists in the same workspace and the edge's condition is
-  not already released (a closed card for `task_done`); a cycle in the
-  dependency graph is `invalid_target`. The `blocks` edge is written in the
-  same transaction.
+- `card` — the card is accessible in the source workspace, or the calling
+  agent has home membership/an active workspace grant in both workspaces.
+  Only this typed command may create a cross-workspace `blocks` edge;
+  ordinary `POST /tasks/:id/dependencies` retains its tenancy boundary.
+  No membership and a missing target both return exactly
+  `invalid_target: target card not found`. A released condition returns
+  `already_met`; a cycle anywhere in the completion graph is `invalid_target`.
+  The edge and wait are written in the same transaction. Cross-workspace
+  waits carry `server_observed: true`; their outcome exposes
+  `wait_server_observed: true`, including after resolution. The server resolves
+  the source wait as `met` in the target event's transaction (status, shipped,
+  production deployment, or trusted edge evidence). The runner reads only
+  `GET /tasks/:source/wait?wait_id=:wait`, never the foreign target or edge.
+  Revoking either required grant resolves an open wait as `invalid` with
+  `resolve_cause: grant_revoked` and removes the blocking edge. The runner wakes
+  the source owner with this cause without claiming the target condition met.
+  Target deletion records `invalid/target_deleted`, including before the target
+  foreign key is nulled by a hard delete. A human without target access sees
+  the dependency UUID without its title or status. The `server_observed` mode
+  is server-owned and cannot be selected in the request body.
 - `mr` — live from the workspace's GitLab when it is configured, otherwise from
   a pr link of this card. Not found on either is `invalid_target`; merged or
   closed is `already_met`. A matching link of the card is recorded on the wait.
@@ -228,7 +295,18 @@ How the target is confirmed:
   other baseline fields are refused. The MR is confirmed exactly as for `mr`
   (merged or closed is `already_met`). The head SHA itself is not compared
   with GitLab: the merge gate does that when it runs. Only a runner with the
-  merge gate enabled can act on it.
+  merge gate enabled can act on it. `provider: github` is refused: the merge
+  of a GitHub PR is waited on with `on: mr`, `provider: github`,
+  `until: merged`, `project_path` `owner/repo`, `mr_iid` the PR number and the
+  baseline `after_sha` + `after_status: "opened"`. The PR is confirmed live
+  from the workspace's GitHub (or a pr link of this card); merged or closed is
+  `already_met`.
+- `manual` — a passive wait a lead allowed by labelling the card
+  `wake:manual`: there is no event to observe and no timer. Declared on the
+  waiting card itself (`target_task_id`, when given, must be this card; it is
+  not stored), with `note` saying why; every other field is refused. Without the
+  `wake:manual` label on the card the wait is `invalid_target`. Only a new
+  comment by someone else or a lead's action on the card ends it.
 - `registered` — a runner-owned registration the server cannot observe.
   `registration` is one of the allow-list below; `registration_ref` must have
   its shape. Nothing else is read; `until`, `required_jobs` and baseline fields

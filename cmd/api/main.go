@@ -1101,6 +1101,9 @@ func main() {
 	httpShutdownCh := make(chan struct{})
 	agentHandler.SetShutdownSignal(httpShutdownCh)
 	agentHandler.SetWorkspaceService(workspaceService)
+	agentRepositoryAccessRepo := postgres.NewAgentRepositoryAccessRepo(db)
+	agentHandler.SetRepositoryAccessReader(agentRepositoryAccessRepo)
+	agentRepositoryAccessHandler := handler.NewAgentRepositoryAccessHandler(agentRepositoryAccessRepo)
 	eventHandler := handler.NewEventHandler(eventBusService)
 	activityHandler := handler.NewActivityHandler(activityLogService)
 	secretHandler := handler.NewSecretHandler(secretService, activityLogService)
@@ -2261,6 +2264,11 @@ func main() {
 	// an internal ticket — this route was missing entirely; a guest agent's own key
 	// got a 403 asking where it's connected).
 	api.GET("/agents/me/workspaces", agentWorkspaceGrantHandler.ListMyWorkspaces)
+	// GET /agents/me/decision-requests — the open questions other agents asked
+	// the caller (ask_agent), in the workspace its key authenticated into; the
+	// runner answers each with answer_decision on the asking card.
+	api.GET("/agents/me/decision-requests",
+		handler.NewDecisionRequestInboxHandler(postgres.NewDecisionRequestRepo(db)).ListMine)
 	// Operator-level runtime ("My Runner"): the agent reads its settings by key; an
 	// agent holding the runtime_manager assignment edits its operator's document.
 	api.GET("/agents/me/runtime", userRuntimeHandler.AgentRuntime)
@@ -2273,6 +2281,12 @@ func main() {
 	api.POST("/agents/heartbeat", agentHandler.Heartbeat)
 	api.GET("/agents/:agent_id", agentHandler.GetByID)
 	api.PATCH("/agents/:agent_id", agentHandler.Update, rbac(mw.PermDeleteAgent))
+	// The only writer of repository_access. No route-level
+	// rbac: the repository authorizes in the write transaction (operator,
+	// workspace owner/admin, or another agent's live runtime_manager).
+	api.PUT("/agents/:agent_id/repository-access", agentRepositoryAccessHandler.Put)
+	// Audit of those writes for the agent editor, newest first; same readers as GET /agents/:agent_id.
+	api.GET("/agents/:agent_id/repository-access/history", agentRepositoryAccessHandler.History)
 	api.DELETE("/agents/:agent_id", agentHandler.Delete, rbac(mw.PermDeleteAgent))
 	api.POST("/agents/:agent_id/regenerate-key", agentHandler.RegenerateKey, rbac(mw.PermDeleteAgent))
 	api.GET("/agents/:agent_id/keys", agentKeyHandler.List, rbac(mw.PermDeleteAgent))

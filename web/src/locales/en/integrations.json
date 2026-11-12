@@ -52,7 +52,8 @@
       "online": "Online",
       "offline": "Offline",
       "busy": "Busy",
-      "error": "Error"
+      "error": "Error",
+      "paused": "Paused"
     },
     "fields": {
       "status": "Status",
@@ -282,9 +283,11 @@
       "online": "Online",
       "offline": "Offline",
       "busy": "Busy",
-      "error": "Error"
+      "error": "Error",
+      "paused": "Paused"
     },
     "empty": "No team members yet.",
+    "pausedSection": "Paused ({{count}})",
     "noProject": "No project",
     "registerAgent": "Register Agent",
     "inviteMember": "Invite Member"
@@ -429,7 +432,8 @@
       "online": "Online",
       "offline": "Offline",
       "busy": "Busy",
-      "error": "Error"
+      "error": "Error",
+      "paused": "Paused"
     },
     "roles": {
       "owner": "owner",
@@ -488,6 +492,9 @@
     "retry": "Retry",
     "partial": "Partial data: some runs could not be loaded or were rejected.",
     "unmanagedHint": "Not managed by a Runner in this project. The profile below is a setting, not a record of what ran.",
+    "integrationDisabled": "Runner integration is off in project {{project}}. Runs are not managed.",
+    "integrationEnable": "Enable it",
+    "unmanagedIntegrationOff": "integration off",
     "disabledHint": "Runner is connected but disabled for this project. The profile below is a setting, not a record of what ran.",
     "profileEditNote": "Editing the profile does not change a managed route. Managed execution is changed in the Runner settings.",
     "panel": {

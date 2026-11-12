@@ -33,6 +33,8 @@ interface AgentDetailDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   agent: Agent | null;
+  /** Derived presence from the org-chart payload (GET /agents does not carry it). */
+  computedStatus?: string | null;
 }
 
 type DialogMode = "detail" | "regenerate-confirm" | "regenerate-key" | "delete-confirm";
@@ -41,6 +43,7 @@ export function AgentDetailDialog({
   open,
   onOpenChange,
   agent,
+  computedStatus,
 }: AgentDetailDialogProps) {
   const { t } = useTranslation("integrations");
   const { agents, updateAgent, updateAgentProfile, deleteAgent, regenerateKey } = useAgentStore();
@@ -380,9 +383,11 @@ export function AgentDetailDialog({
 
   if (!agent) return null;
 
-  const effectiveStatus = getEffectiveStatus(agent);
+  const effectiveStatus = getEffectiveStatus(agent, computedStatus);
   const statusConfig = agentStatusConfig[effectiveStatus];
   const stale = isAgentStale(agent);
+  // A computed status already folds heartbeat freshness in; "stale" next to it would contradict it.
+  const showStaleMark = stale && !computedStatus && effectiveStatus === "online";
 
   const tasksCompleted = agent.total_tasks_completed ?? null;
   const totalErrors = agent.total_errors ?? null;
@@ -563,7 +568,7 @@ export function AgentDetailDialog({
                 className={cn("h-2.5 w-2.5 rounded-full", statusConfig.dotColor)}
               />
               <span className="text-sm">{t(`agentDetail.status.${effectiveStatus}`, { defaultValue: statusConfig.label })}</span>
-              {stale && agent.status === "online" && (
+              {showStaleMark && (
                 <span className="text-xs text-tone-attention-600">{t("agentDetail.stale")}</span>
               )}
             </div>
