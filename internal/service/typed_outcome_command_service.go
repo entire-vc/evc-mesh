@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -58,6 +59,8 @@ type TurnCommon struct {
 
 // WaitForInput is the body of POST /tasks/:task_id/wait.
 type WaitForInput struct {
+	// Set by the HTTP body guard; cross-workspace membership is checked in the transaction.
+	DenySameWorkspaceTarget bool
 	TurnCommon
 	On              string
 	TargetTaskID    *uuid.UUID
@@ -86,7 +89,7 @@ type WaitForInput struct {
 }
 
 // waitKindsHint is the refusal text for an unknown wait_for kind.
-const waitKindsHint = "on must be card, mr, pipeline, time, merge or registered; " +
+const waitKindsHint = "on must be card, mr, pipeline, time, merge, registered or manual; " +
 	"a question to an agent is ask_agent, to a person ask_human"
 
 // strayField names a field added with the merge and registered kinds that the
@@ -146,10 +149,21 @@ func trimmed(v *string) *string {
 
 func refuse(code, msg string) error { return domain.NewOutcomeError(code, msg) }
 
+// invalidField is a 400 validation refusal whose message names the field and
+// the reason, so a caller that reads only the message can fix the call.
+func invalidField(name, reason string) *apierror.Error {
+	e := apierror.ValidationError(map[string]string{name: reason})
+	e.Message = "Validation failed: " + name + " " + reason
+	return e
+}
+
 func checkCommon(c TurnCommon) error {
-	for name, v := range map[string]*string{"session_id": c.SessionID, "turn_id": c.TurnID} {
-		if v != nil && len(*v) > domain.MaxSessionIDLen {
-			return apierror.ValidationError(map[string]string{name: "must be at most 200 characters"})
+	for _, f := range []struct {
+		name string
+		v    *string
+	}{{"session_id", c.SessionID}, {"turn_id", c.TurnID}} {
+		if f.v != nil && len(*f.v) > domain.MaxSessionIDLen {
+			return invalidField(f.name, "must be at most 200 characters")
 		}
 	}
 	return nil
@@ -165,7 +179,10 @@ func (s *TurnCommandService) WaitFor(ctx context.Context, taskID uuid.UUID, in W
 	if err != nil {
 		return nil, err
 	}
-	w := &domain.TaskWait{TaskID: taskID, AgentID: agentID, Kind: domain.TaskWaitKind(in.On), Note: strings.TrimSpace(in.Note)}
+	// The whole note goes into the comment; Validate clips the copy the wait
+	// row stores to domain.MaxWaitNoteLen characters.
+	note := strings.TrimSpace(in.Note)
+	w := &domain.TaskWait{TaskID: taskID, AgentID: agentID, Kind: domain.TaskWaitKind(in.On), Note: note}
 	if f := in.strayField(); f != "" {
 		return nil, refuse(domain.CodeInvalidTarget, f+" is not a field of an on="+in.On+" wait")
 	}
@@ -199,6 +216,12 @@ func (s *TurnCommandService) WaitFor(ctx context.Context, taskID uuid.UUID, in W
 		// Until and jobs are copied only so that Validate refuses them.
 		w.Registration, w.RegistrationRef = trimmed(in.Registration), trimmed(in.RegistrationRef)
 		w.Until, w.RequiredJobs = in.Until, in.RequiredJobs
+	case domain.TaskWaitManual:
+		// Everything but the card itself is copied only so that Validate refuses it.
+		w.TargetTaskID, w.TargetCondition, w.VCSLinkID = in.TargetTaskID, in.TargetCondition, in.VCSLinkID
+		w.Provider, w.ProjectPath, w.MRIID, w.PipelineID = in.Provider, in.ProjectPath, in.MRIID, in.PipelineID
+		w.RequiredJobs, w.Until, w.UntilAt = in.RequiredJobs, in.Until, in.UntilAt
+		w.EventRef, w.Source, w.Why = in.EventRef, in.Source, in.Why
 	case domain.TaskWaitTime:
 		// Until is copied only so a relative "6h" is refused, not dropped.
 		w.UntilAt, w.Until = in.UntilAt, in.Until
@@ -225,6 +248,14 @@ func (s *TurnCommandService) WaitFor(ctx context.Context, taskID uuid.UUID, in W
 	if err != nil {
 		return nil, err
 	}
+	if w.Kind == domain.TaskWaitManual {
+		// The card itself is the target: it is not stored as a card target.
+		w.TargetTaskID = nil
+		err = s.checkManual(ctx, taskID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	unverified := false
 	switch w.Kind {
 	case domain.TaskWaitMR, domain.TaskWaitMerge:
@@ -244,12 +275,13 @@ func (s *TurnCommandService) WaitFor(ctx context.Context, taskID uuid.UUID, in W
 	if unverified {
 		body += " Not confirmed here: this workspace's GitLab access cannot read the project; the runner watches it with the lane's own access."
 	}
-	if w.Note != "" {
-		body += "\n\n" + w.Note
+	if note != "" {
+		body += "\n\n" + note
 	}
 	res, err := s.store.CommitTurn(ctx, &domain.TurnCommand{TaskID: taskID, AgentID: agentID,
 		SessionID: in.SessionID, TurnID: in.TurnID, Kind: domain.TurnOutcomeWait, Wait: w,
-		Note: w.Note, CommentBody: body, RuntimeReason: what})
+		Note: w.Note, CommentBody: body, RuntimeReason: clipRuntimeReason(what),
+		DenySameWorkspaceTarget: in.DenySameWorkspaceTarget})
 	if err != nil {
 		return nil, err
 	}
@@ -269,8 +301,8 @@ func (s *TurnCommandService) ContinueNext(ctx context.Context, taskID uuid.UUID,
 		return nil, err
 	}
 	note = strings.TrimSpace(note)
-	if len(note) > domain.MaxOutcomeNote {
-		return nil, apierror.ValidationError(map[string]string{"note": "must be at most 4096 characters"})
+	if utf8.RuneCountInString(note) > domain.MaxOutcomeNote {
+		return nil, invalidField("note", "must be at most 4096 characters")
 	}
 	body := "Continuing with the next step."
 	if note != "" {
@@ -298,7 +330,7 @@ func (s *TurnCommandService) HandOff(ctx context.Context, taskID uuid.UUID, comm
 	}
 	why = strings.TrimSpace(why)
 	if why == "" || len(why) > domain.MaxQuestionLen {
-		return nil, apierror.ValidationError(map[string]string{"why": "is required, at most 4000 characters"})
+		return nil, invalidField("why", "is required, at most 4000 characters")
 	}
 	projectID, workspaceID, err := s.store.TaskScope(ctx, taskID)
 	if err != nil {
@@ -335,9 +367,27 @@ func (s *TurnCommandService) AddNote(ctx context.Context, taskID uuid.UUID, text
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return uuid.Nil, apierror.ValidationError(map[string]string{"text": "is required"})
+		return uuid.Nil, invalidField("text", "is required")
 	}
 	return s.store.AddNote(ctx, taskID, actorID, actorType, text)
+}
+
+// checkManual allows a manual wait only while a lead's LabelWakeManual is on
+// the card: without it the card has an event to wait on, and the agent must name it.
+func (s *TurnCommandService) checkManual(ctx context.Context, taskID uuid.UUID) error {
+	if s.tasks == nil {
+		return refuse(domain.CodeInvalidTarget, "on=manual cannot be confirmed here: the card's labels are unavailable")
+	}
+	task, err := s.tasks.GetByID(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if task == nil || !slices.Contains([]string(task.Labels), domain.LabelWakeManual) {
+		return refuse(domain.CodeInvalidTarget, "on=manual needs the label "+domain.LabelWakeManual+
+			" on this card, which a lead sets when no event can be observed; wait on the card, MR, pipeline or time that will change, "+
+			"or ask the lead with ask_agent")
+	}
+	return nil
 }
 
 func (s *TurnCommandService) after(ctx context.Context, taskID uuid.UUID, kind domain.TurnOutcomeKind) {
@@ -358,7 +408,7 @@ func callerAgent(ctx context.Context) (uuid.UUID, error) {
 // a pr link of this card.
 func (s *TurnCommandService) fillFromLink(ctx context.Context, w *domain.TaskWait) error {
 	if s.links == nil {
-		return refuse(domain.CodeInvalidTarget, "VCS links are unavailable")
+		return refuse(domain.CodeInvalidTarget, "vcs_link_id cannot be checked: VCS links are unavailable")
 	}
 	link, err := s.links.GetByID(ctx, *w.VCSLinkID)
 	if err != nil {
@@ -369,7 +419,7 @@ func (s *TurnCommandService) fillFromLink(ctx context.Context, w *domain.TaskWai
 	}
 	path, iid, ok := mrCoordinates(link)
 	if !ok {
-		return refuse(domain.CodeInvalidTarget, "the link's URL does not name a merge request")
+		return refuse(domain.CodeInvalidTarget, "vcs_link_id: the link's URL does not name a merge request")
 	}
 	provider := string(link.Provider)
 	w.Provider, w.ProjectPath, w.MRIID = &provider, &path, &iid
@@ -437,7 +487,7 @@ func (s *TurnCommandService) checkMR(ctx context.Context, workspaceID uuid.UUID,
 	if *w.Provider == string(domain.VCSProviderGitHub) {
 		return false, s.checkPullRequest(ctx, workspaceID, w, link)
 	}
-	target := fmt.Sprintf("MR %s!%d", *w.ProjectPath, *w.MRIID)
+	target := fmt.Sprintf("MR %s!%d (project_path, mr_iid)", *w.ProjectPath, *w.MRIID)
 	hidden := false
 	if *w.Provider == string(domain.VCSProviderGitLab) && s.gitlab != nil {
 		if checker, ok := s.gitlab(ctx, workspaceID); ok {
@@ -469,7 +519,7 @@ func (s *TurnCommandService) checkMR(ctx context.Context, workspaceID uuid.UUID,
 // GitHub when the workspace has a client, else from a link of this card. A
 // GitHub PR is never asked of GitLab.
 func (s *TurnCommandService) checkPullRequest(ctx context.Context, workspaceID uuid.UUID, w *domain.TaskWait, link *domain.VCSLink) error {
-	target := fmt.Sprintf("PR %s#%d", *w.ProjectPath, *w.MRIID)
+	target := fmt.Sprintf("PR %s#%d (project_path, mr_iid)", *w.ProjectPath, *w.MRIID)
 	if s.github != nil {
 		if checker, ok := s.github(ctx, workspaceID); ok {
 			if owner, repo, found := strings.Cut(*w.ProjectPath, "/"); found {
@@ -499,7 +549,7 @@ var terminalPipelineStatuses = []string{"success", "failed", "canceled", "skippe
 // a project this workspace's GitLab access cannot read is recorded unverified
 // (true), as in checkMR.
 func (s *TurnCommandService) checkPipeline(ctx context.Context, workspaceID uuid.UUID, w *domain.TaskWait) (bool, error) {
-	target := fmt.Sprintf("pipeline %s#%d", *w.ProjectPath, *w.PipelineID)
+	target := fmt.Sprintf("pipeline %s#%d (project_path, pipeline_id)", *w.ProjectPath, *w.PipelineID)
 	var checker gitlabapi.MergeRequestChecker
 	ok := false
 	if s.gitlab != nil {
@@ -558,6 +608,8 @@ func describeWait(w *domain.TaskWait) string {
 		return "@" + *w.Addressee + "'s answer"
 	case domain.TaskWaitTime:
 		return "time until " + w.UntilAt.UTC().Format(time.RFC3339)
+	case domain.TaskWaitManual:
+		return "a comment or a lead's action (" + domain.LabelWakeManual + ")"
 	}
 	return string(w.Kind)
 }
@@ -576,9 +628,28 @@ func describeBaseline(w *domain.TaskWait) string {
 	return s
 }
 
-func truncateNote(s string) string {
-	if len(s) <= domain.MaxOutcomeNote {
+// maxRuntimeReason is the longest reason RuntimeState.Normalize accepts, in
+// bytes. A wait that names many CI jobs describes itself in more than that.
+const maxRuntimeReason = 500
+
+// clipRuntimeReason shortens the wait's description for the card's
+// runtime_state. The comment keeps the whole text; without the cut a pipeline
+// or MR wait with a long jobs list failed in Normalize and the command
+// answered 500, which sent the lane back to a marker line.
+func clipRuntimeReason(s string) string {
+	if len(s) <= maxRuntimeReason {
 		return s
 	}
-	return s[:domain.MaxOutcomeNote]
+	cut := maxRuntimeReason - len("…")
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
+}
+
+// truncateNote keeps the first MaxOutcomeNote characters of an outcome note;
+// a byte cut could split a character and the insert would fail on invalid
+// UTF-8.
+func truncateNote(s string) string {
+	return domain.ClipRunes(s, domain.MaxOutcomeNote)
 }

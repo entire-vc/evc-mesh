@@ -9,6 +9,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { useAgentStore } from "@/stores/agent";
 import { useRulesStore } from "@/stores/rules";
 import { useProjectStore } from "@/stores/project";
+import { useMemberStore } from "@/stores/member";
 import type { OrgChartAgentNode, Project, Workspace } from "@/types";
 import { AGENT_1, attempt, envelope, FIXTURES, PROJ_A, PROJ_B, view, WS } from "@/lib/__tests__/fixtures/agent-executions";
 
@@ -201,5 +202,69 @@ describe("OrgChartPage — configured route vs observed attempts", () => {
     renderChart();
     expect(await screen.findByText(/Partial data/)).toBeInTheDocument();
     expect(attempt().attempt_id).toBeTruthy();
+  });
+
+  it("binding exists but the project integration is off: names the reason and links to the switch for an admin", async () => {
+    useMemberStore.setState({ myRole: "owner", fetchMyRole: vi.fn() } as never);
+    useProjectStore.setState({ projects: [{ id: PROJ_A, name: "Mesh", slug: "mesh" }] as Project[] });
+    serve([view({ managed: false, enabled: false, reason: "integration_disabled", configured: null, attempts: [] })]);
+    renderChart();
+    const note = await screen.findByTestId("exec-integration-disabled");
+    expect(note).toHaveTextContent("Runner integration is off in project Mesh");
+    expect(within(note).getByRole("link", { name: "Enable it" })).toHaveAttribute("href", "/w/acme/p/mesh/settings?tab=integrations");
+  });
+
+  it("integration-off reason has no enable link for a non-admin, and plain unmanaged keeps the generic text", async () => {
+    useMemberStore.setState({ myRole: "member", fetchMyRole: vi.fn() } as never);
+    serve([view({ managed: false, enabled: false, reason: "integration_disabled", configured: null, attempts: [] })]);
+    renderChart();
+    const note = await screen.findByTestId("exec-integration-disabled");
+    expect(within(note).queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("mixed: managed in one project, integration off in another — the other project keeps its enable link", async () => {
+    useMemberStore.setState({ myRole: "admin", fetchMyRole: vi.fn() } as never);
+    useProjectStore.setState({ projects: [{ id: PROJ_A, name: "Mesh", slug: "mesh" }, { id: PROJ_B, name: "Spark", slug: "spark" }] as Project[] });
+    serve([view(), view({ project_id: PROJ_B, managed: false, enabled: false, reason: "integration_disabled", configured: null, attempts: [] })]);
+    renderChart();
+    const note = await screen.findByTestId("exec-integration-disabled");
+    expect(note).toHaveTextContent("Runner integration is off in project Spark");
+    expect(within(note).getByRole("link", { name: "Enable it" })).toHaveAttribute("href", "/w/acme/p/spark/settings?tab=integrations");
+  });
+
+  it("computed_status online is not shown as Offline even when the raw status says offline", async () => {
+    useRulesStore.setState({
+      orgChart: { workspace: "Acme", agent_tree: [{ ...agent, status: "offline", computed_status: "online" } as OrgChartAgentNode], humans: [] },
+    });
+    serve([]);
+    renderChart();
+    expect(await screen.findByText(/^Online/)).toBeInTheDocument();
+    expect(screen.queryByText("Offline")).not.toBeInTheDocument();
+  });
+
+  it("computed_status online with an old heartbeat carries no (stale) mark on the card", async () => {
+    useRulesStore.setState({
+      orgChart: { workspace: "Acme", agent_tree: [{ ...agent, status: "online", computed_status: "online", is_stale: true, last_heartbeat: "2026-01-01T00:00:00Z" } as OrgChartAgentNode], humans: [] },
+    });
+    serve([]);
+    renderChart();
+    expect(await screen.findByText(/^Online/)).toBeInTheDocument();
+    expect(screen.queryByText(/\(stale\)/)).not.toBeInTheDocument();
+  });
+
+  it("paused agents leave the tree for a collapsed Paused section and are still clickable (store lazily loads them)", async () => {
+    const paused = { ...agent, id: "p-1", name: "robin-w2", computed_status: "paused", status: "offline" } as OrgChartAgentNode;
+    useRulesStore.setState({ orgChart: { workspace: "Acme", agent_tree: [agent, paused], humans: [] } });
+    const fetchAgent = vi.fn().mockResolvedValue(undefined);
+    useAgentStore.setState({ agents: [], fetchAgent } as never);
+    serve([]);
+    renderChart();
+    const section = await screen.findByTestId("org-chart-paused");
+    expect(section).toHaveTextContent("Paused (1)");
+    expect(within(section).getByText("robin-w2")).toBeInTheDocument();
+    // the active tree does not carry it
+    expect(screen.getAllByText("robin-w2")).toHaveLength(1);
+    fireEvent.click(within(section).getByText("robin-w2"));
+    await waitFor(() => expect(fetchAgent).toHaveBeenCalledWith("p-1"));
   });
 });

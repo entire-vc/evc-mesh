@@ -2378,6 +2378,7 @@ func (s *taskService) dispatchUserNotification(ctx context.Context, task *domain
 		EventType:       eventType,
 		Title:           title,
 		RelevantUserIDs: relevant,
+		ActorUserID:     humanActor(actorctx.FromContext(ctx)),
 		// eventType is task.status_changed here, the only caller.
 		MessageCode:   "notif." + eventType,
 		MessageParams: map[string]any{"task": task.Title},

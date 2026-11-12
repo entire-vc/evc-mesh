@@ -1167,6 +1167,10 @@ func runtimeKindCondition(prefix string, argIdx int) string {
 // SetRuntimeState stores the runtime state JSON, or NULL when state is nil. It
 // deliberately leaves updated_at/version alone: this is a status beacon refreshed
 // every few minutes, not an edit, and must not make a concurrent PATCH 409.
+// The version half is enforced by advance_task_version (migration
+// 20261111900), which keeps the version when runtime_state is the only change;
+// a refresh with an unchanged value is skipped here so it does not reach that
+// trigger as a no-op UPDATE, which would advance the version.
 func (r *TaskRepo) SetRuntimeState(ctx context.Context, taskID uuid.UUID, state *domain.RuntimeState) error {
 	var payload any
 	if state != nil {
@@ -1177,13 +1181,25 @@ func (r *TaskRepo) SetRuntimeState(ctx context.Context, taskID uuid.UUID, state 
 		payload = string(raw)
 	}
 	dbStart := time.Now()
-	res, err := r.db.ExecContext(ctx,
-		`UPDATE tasks SET runtime_state = $2::jsonb WHERE id = $1 AND deleted_at IS NULL`, taskID, payload)
+	res, err := r.db.ExecContext(ctx, `UPDATE tasks SET runtime_state = $2::jsonb
+		WHERE id = $1 AND deleted_at IS NULL AND runtime_state IS DISTINCT FROM $2::jsonb`, taskID, payload)
 	pkgmetrics.RecordDBQuery("task.set_runtime_state", time.Since(dbStart))
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	// No row changed: either the value is already stored or the task is gone.
+	// A separate statement takes a fresh snapshot, so a soft delete that
+	// committed while the UPDATE waited on the row lock is seen as NotFound.
+	var exists bool
+	err = r.db.GetContext(ctx, &exists,
+		`SELECT EXISTS (SELECT 1 FROM tasks WHERE id = $1 AND deleted_at IS NULL)`, taskID)
+	if err != nil {
+		return err
+	}
+	if !exists {
 		return apierror.NotFound("Task")
 	}
 	return nil

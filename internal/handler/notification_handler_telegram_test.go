@@ -332,3 +332,34 @@ func TestGetTelegramBotInfo_InvalidWorkspaceID(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
+
+func TestUpdatePreferences_TelegramUnknownScopeIsRejected(t *testing.T) {
+	db, mock := newSQLMock(t)
+	wsID, member := uuid.New(), uuid.New()
+	mock.ExpectQuery(`SELECT wm\.role FROM workspace_members wm\s+JOIN workspaces w ON w\.id = wm\.workspace_id\s+WHERE wm\.workspace_id = \$1 AND wm\.user_id = \$2 AND w\.deleted_at IS NULL`).
+		WithArgs(wsID, member).
+		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("member"))
+
+	svc, rec := putTelegramPreferences(t, db, member, nil,
+		`{"workspace_id":"`+wsID.String()+`","channel":"telegram","is_enabled":true,"config":{"telegram_username":"@alice","scope":"bogus"}}`)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.False(t, svc.upsertCalled)
+}
+
+// The Telegram config is rebuilt from TelegramPreferenceConfig on every save;
+// the scope has to be carried into it, or the channel silently stays "mine".
+func TestUpdatePreferences_TelegramScopeIsStored(t *testing.T) {
+	db, mock := newSQLMock(t)
+	wsID, member := uuid.New(), uuid.New()
+	mock.ExpectQuery(`SELECT wm\.role FROM workspace_members wm\s+JOIN workspaces w ON w\.id = wm\.workspace_id\s+WHERE wm\.workspace_id = \$1 AND wm\.user_id = \$2 AND w\.deleted_at IS NULL`).
+		WithArgs(wsID, member).
+		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("member"))
+
+	svc, rec := putTelegramPreferences(t, db, member, nil,
+		`{"workspace_id":"`+wsID.String()+`","channel":"telegram","is_enabled":true,"config":{"telegram_username":"@alice","scope":"all"}}`)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, svc.upsertedPref)
+	assert.Equal(t, domain.NotificationScopeAll, domain.PreferenceScope(svc.upsertedPref.Config))
+}

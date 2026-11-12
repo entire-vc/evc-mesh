@@ -85,8 +85,10 @@ function mockApiByRoute(
     if (url === "/api/v1/workspaces/ws1/members/me") {
       return Promise.resolve({ role });
     }
-    if (url in overrides) {
-      return Promise.resolve(overrides[url]);
+    // The agents list is requested with page params; the fixtures are keyed by path.
+    const path = url.split("?")[0] ?? url;
+    if (path in overrides) {
+      return Promise.resolve(overrides[path]);
     }
     return Promise.resolve({});
   });

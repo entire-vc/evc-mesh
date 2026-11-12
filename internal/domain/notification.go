@@ -22,6 +22,52 @@ type NotificationPreference struct {
 	UpdatedAt   time.Time       `db:"updated_at"   json:"updated_at"`
 }
 
+// Notification scopes: how wide a subscriber's preference row reaches, stored as
+// config.scope on each row (so per channel). An absent value is
+// NotificationScopeMine.
+const (
+	// NotificationScopeAll adds every task event of the workspace the subscriber
+	// can see, beyond the events that name them, minus their own actions.
+	NotificationScopeAll = "all"
+	// NotificationScopeMine is the default: events addressed to the subscriber
+	// and events about tasks they take part in (RelevantUserIDs).
+	NotificationScopeMine = "mine"
+	// NotificationScopeMentions keeps only events addressed to the subscriber
+	// alone (TargetUserID): mentions, assignments, reviewer requests.
+	NotificationScopeMentions = "mentions"
+)
+
+// ValidNotificationScope reports whether s is a scope a preference may store.
+// The empty string is valid and means NotificationScopeMine.
+func ValidNotificationScope(s string) bool {
+	switch s {
+	case "", NotificationScopeAll, NotificationScopeMine, NotificationScopeMentions:
+		return true
+	}
+	return false
+}
+
+// PreferenceScope reads config.scope from a preference row's config. A row
+// without one, with an unreadable config or with an unknown value is
+// NotificationScopeMine: the narrowest reading that keeps the behaviour the
+// row had before scopes existed.
+func PreferenceScope(config json.RawMessage) string {
+	if len(config) == 0 {
+		return NotificationScopeMine
+	}
+	var c struct {
+		Scope string `json:"scope"`
+	}
+	if json.Unmarshal(config, &c) != nil {
+		return NotificationScopeMine
+	}
+	switch c.Scope {
+	case NotificationScopeAll, NotificationScopeMentions:
+		return c.Scope
+	}
+	return NotificationScopeMine
+}
+
 // Notification is a persisted in-app notification for a user.
 type Notification struct {
 	ID          uuid.UUID       `db:"id"           json:"id"`
@@ -73,18 +119,28 @@ type NotificationEvent struct {
 	// the others — is the kind of difference nobody discovers until it leaks.
 	//
 	// An event that names nobody (no TargetUserID, no RelevantUserIDs) is
-	// delivered to nobody unless it sets Broadcast. Silence is the safe failure:
+	// delivered to nobody unless it sets Broadcast or a subscriber chose scope
+	// "all". Silence is the safe failure:
 	// a producer that forgot to name its recipients costs a missing message, not
 	// a task's content in every subscribed colleague's Telegram.
 	//
 	// Advisory, and never widening: it can only remove recipients that the
-	// membership, subscription and TargetUserID checks already allowed.
+	// membership, subscription and TargetUserID checks already allowed. The one
+	// exception is chosen by the subscriber, not the producer: a preference row
+	// with scope "all" also receives task events it is not named in (see
+	// PreferenceScope), and one with scope "mentions" ignores this set.
 	RelevantUserIDs []uuid.UUID `json:"relevant_user_ids,omitempty"`
 	// Broadcast marks an event that is deliberately for every subscribed member
-	// of the workspace. It is the only way to reach more than the people the
-	// event names, it defaults to false, and it is ignored when TargetUserID or
-	// RelevantUserIDs is set. No event type in this codebase sets it today.
+	// of the workspace. It is the only way for a producer to reach more than the
+	// people the event names (a subscriber can opt in with scope "all"), it
+	// defaults to false, and it is ignored when TargetUserID or RelevantUserIDs
+	// is set. No event type in this codebase sets it today.
 	Broadcast bool `json:"broadcast,omitempty"`
+	// ActorUserID is the person whose action raised the event, when a person
+	// did. RelevantUserIDs already leaves the actor out; this field lets a
+	// subscriber with scope "all" — who is reached beyond RelevantUserIDs —
+	// be spared their own actions too. Nil for agent and system actors.
+	ActorUserID *uuid.UUID `json:"actor_user_id,omitempty"`
 	// Labels carries the task's labels/tags at the moment the event was
 	// raised, for channels (Telegram) whose message format includes them.
 	// Not persisted; purely a dispatch-time hint from the caller, which

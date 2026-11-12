@@ -1325,6 +1325,7 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 				MessageCode:     "notif.comment.created",
 				MessageParams:   map[string]any{"task": task.Title},
 				RelevantUserIDs: s.commentParticipants(ctx, comment, task),
+				ActorUserID:     humanActor(comment.AuthorID, comment.AuthorType),
 				Labels:          []string(task.Labels),
 				Metadata: map[string]any{
 					"task_id":    task.ID,

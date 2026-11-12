@@ -5,7 +5,7 @@ import { useLocation } from "react-router";
 import { useTranslation } from "react-i18next";
 import { Bot, Plus, UserPlus } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { agentStatusConfig, asCapabilityList, isAgentStale } from "@/lib/agent-utils";
+import { agentStatusConfig, asCapabilityList, displayStatus, isAgentStale } from "@/lib/agent-utils";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useAgentStore } from "@/stores/agent";
 import { useMemberStore } from "@/stores/member";
@@ -147,6 +147,7 @@ function buildUnifiedTree(
 // ---------------------------------------------------------------------------
 
 const statusBorderColors: Record<string, string> = {
+  paused: "border-l-tone-neutral-400",
   online: "border-l-tone-success-500",
   busy: "border-l-tone-attention-500",
   offline: "border-l-tone-neutral-400",
@@ -154,6 +155,7 @@ const statusBorderColors: Record<string, string> = {
 };
 
 const STATUS_KEYS: Record<string, string> = {
+  paused: "orgChart.status.paused",
   online: "orgChart.status.online",
   offline: "orgChart.status.offline",
   busy: "orgChart.status.busy",
@@ -186,12 +188,15 @@ function AgentCard({
   onClick?: () => void;
 }) {
   const { t } = useTranslation("integrations");
-  const stale = agent.is_stale ?? isAgentStale(agent);
-  const statusCfg = agentStatusConfig[agent.status as keyof typeof agentStatusConfig] ?? {
-    label: agent.status,
+  // computed_status already folds heartbeat freshness in; a stale mark beside it would contradict it.
+  const stale = !agent.computed_status && (agent.is_stale ?? isAgentStale(agent));
+  // computed_status (live connection + heartbeat) wins over the raw column.
+  const status = displayStatus(agent.status, agent.computed_status);
+  const statusCfg = agentStatusConfig[status] ?? {
+    label: status,
     dotColor: "bg-tone-neutral-400",
   };
-  const borderColor = statusBorderColors[agent.status] ?? "border-l-tone-neutral-400";
+  const borderColor = statusBorderColors[status] ?? "border-l-tone-neutral-400";
   const runnerModel = [agent.agent_type, agent.model].filter(Boolean).join(" · ");
   const { load, summaries } = useContext(ExecutionsContext);
   // With a projection the profile model is shown only as "profile" (unmanaged) or not at all.
@@ -202,7 +207,7 @@ function AgentCard({
       className={cn(
         "w-52 shrink-0 border-l-4 select-none hover:shadow-md transition-shadow",
         borderColor,
-        stale && agent.status === "online" && "border-l-tone-attention-500",
+        stale && status === "online" && "border-l-tone-attention-500",
         onClick ? "cursor-pointer" : "cursor-default",
       )}
       onClick={onClick}
@@ -250,8 +255,8 @@ function AgentCard({
         <div className="flex items-center gap-1.5">
           <span className={cn("h-2 w-2 rounded-full shrink-0", statusCfg.dotColor)} />
           <span className="text-xs text-muted-foreground">
-            {STATUS_KEYS[agent.status] ? t(STATUS_KEYS[agent.status]!) : statusCfg.label}
-            {stale && agent.status === "online" && ` ${t("orgChart.stale")}`}
+            {STATUS_KEYS[status] ? t(STATUS_KEYS[status]!) : statusCfg.label}
+            {stale && status === "online" && ` ${t("orgChart.stale")}`}
           </span>
           {agent.max_concurrent_tasks > 0 && (
             <span className="ml-auto text-xs text-muted-foreground tabular-nums">
@@ -599,6 +604,39 @@ function overlayAgentEdits(tree: OrgChartAgentNode[], agents: Agent[]): OrgChart
   return walk(tree);
 }
 
+/** Paused agents leave the main tree; their live children are hoisted so none is lost. */
+function splitPaused(tree: OrgChartAgentNode[]): { active: OrgChartAgentNode[]; paused: OrgChartAgentNode[] } {
+  const paused: OrgChartAgentNode[] = [];
+  const walk = (nodes: OrgChartAgentNode[]): OrgChartAgentNode[] =>
+    nodes.flatMap((n) => {
+      const kids = walk(n.children ?? []);
+      if (n.computed_status === "paused") {
+        paused.push({ ...n, children: [] });
+        return kids;
+      }
+      return [{ ...n, children: kids }];
+    });
+  const active = walk(tree);
+  return { active, paused };
+}
+
+function PausedSection({ agents, onAgentClick }: { agents: OrgChartAgentNode[]; onAgentClick: (agentId: string) => void }) {
+  const { t } = useTranslation("integrations");
+  if (agents.length === 0) return null;
+  return (
+    <details data-testid="org-chart-paused" className="mt-6 rounded-md border border-border p-3">
+      <summary className="cursor-pointer text-sm font-medium">
+        {t("orgChart.pausedSection", { count: agents.length })}
+      </summary>
+      <div className="mt-3 flex flex-wrap gap-4">
+        {agents.map((a) => (
+          <AgentCard key={a.id} agent={a} onClick={() => onAgentClick(a.id)} />
+        ))}
+      </div>
+    </details>
+  );
+}
+
 export function OrgChartPage() {
   const { t } = useTranslation("integrations");
   const { currentWorkspace } = useWorkspaceStore();
@@ -646,6 +684,7 @@ export function OrgChartPage() {
     () => overlayAgentEdits(orgChart?.agent_tree ?? [], agents),
     [orgChart, agents],
   );
+  const { active: activeTree, paused: pausedAgents } = useMemo(() => splitPaused(agentTree), [agentTree]);
   const humans = orgChart?.humans ?? [];
   const workspaceName = orgChart?.workspace ?? currentWorkspace?.name ?? "";
 
@@ -668,6 +707,27 @@ export function OrgChartPage() {
     selectedAgentId && !selectedGuest
       ? agents.find((a) => a.id === selectedAgentId) ?? null
       : null;
+
+  // The agents list is paginated and can lag the org chart: an agent that is on
+  // the chart but not in the store is loaded on click instead of a dead card.
+  const { fetchAgent } = useAgentStore();
+  useEffect(() => {
+    if (selectedAgentId && !selectedGuest && !agents.some((a) => a.id === selectedAgentId)) {
+      void fetchAgent(selectedAgentId).catch(() => setSelectedAgentId(null));
+    }
+  }, [selectedAgentId, selectedGuest, agents, fetchAgent]);
+
+  const selectedComputedStatus = useMemo(() => {
+    const walk = (nodes: OrgChartAgentNode[]): string | null => {
+      for (const n of nodes) {
+        if (n.id === selectedAgentId) return n.computed_status ?? null;
+        const hit = walk(n.children ?? []);
+        if (hit) return hit;
+      }
+      return null;
+    };
+    return walk(agentTree);
+  }, [agentTree, selectedAgentId]);
 
   const handleAgentClick = (agentId: string) => {
     setSelectedAgentId(agentId);
@@ -733,10 +793,11 @@ export function OrgChartPage() {
         {isOrgChartLoading ? (
           <OrgChartSkeleton />
         ) : viewMode === "tree" ? (
-          <TreeView agentTree={agentTree} humans={humans} onAgentClick={handleAgentClick} />
+          <TreeView agentTree={activeTree} humans={humans} onAgentClick={handleAgentClick} />
         ) : (
-          <GridView agentTree={agentTree} humans={humans} onAgentClick={handleAgentClick} />
+          <GridView agentTree={activeTree} humans={humans} onAgentClick={handleAgentClick} />
         )}
+        {!isOrgChartLoading && <PausedSection agents={pausedAgents} onAgentClick={handleAgentClick} />}
         </ExecutionsContext.Provider>
       </div>
 
@@ -744,9 +805,14 @@ export function OrgChartPage() {
       <AgentDetailDialog
         open={selectedAgentId !== null && !selectedGuest}
         onOpenChange={(open) => {
-          if (!open) setSelectedAgentId(null);
+          if (!open) {
+            setSelectedAgentId(null);
+            // An edit, pause or delete in the dialog must show on the chart.
+            if (currentWorkspace) void fetchOrgChart(currentWorkspace.id);
+          }
         }}
         agent={selectedAgent}
+        computedStatus={selectedComputedStatus}
       />
 
       {/* Register agent dialog */}

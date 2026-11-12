@@ -136,3 +136,32 @@ func TestGetEmailAvailability_ReflectsService(t *testing.T) {
 		assert.JSONEq(t, wantBody, rec.Body.String())
 	}
 }
+
+// --- config.scope -------------------------------------------------------------
+
+func TestUpdatePreferences_UnknownScopeIsRejected(t *testing.T) {
+	for _, channel := range []string{"web_push", "email", "browser_push"} {
+		svc := &recordingNotificationService{}
+		body := `{"workspace_id":"` + uuid.New().String() + `","channel":"` + channel + `","events":["comment.created"],"config":{"scope":"bogus"}}`
+
+		rec := putPreferencesNoTenancyGuard(t, svc, body)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code, channel)
+		assert.Contains(t, rec.Body.String(), "scope", channel)
+		assert.Nil(t, svc.upserted, "%s: an unknown scope must not be stored", channel)
+	}
+}
+
+func TestUpdatePreferences_KnownScopeIsStored(t *testing.T) {
+	for _, scope := range []string{"all", "mine", "mentions"} {
+		svc := &recordingNotificationService{}
+		body := `{"workspace_id":"` + uuid.New().String() + `","channel":"email","events":["comment.created"],"config":{"scope":"` + scope + `"}}`
+
+		rec := putPreferencesNoTenancyGuard(t, svc, body)
+
+		require.Equal(t, http.StatusOK, rec.Code, scope)
+		require.NotNil(t, svc.upserted)
+		assert.JSONEq(t, `{"scope":"`+scope+`"}`, string(svc.upserted.Config))
+		assert.Contains(t, rec.Body.String(), `"scope":"`+scope+`"`, "the saved row is returned with its scope")
+	}
+}

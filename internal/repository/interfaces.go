@@ -2385,6 +2385,11 @@ type DecisionRequestRepository interface {
 
 	// Withdraw marks an open request withdrawn. Returns false when it is not open.
 	Withdraw(ctx context.Context, id uuid.UUID) (bool, error)
+
+	// ListOpenForAgent returns the open requests addressed to agentID on live
+	// cards of workspaceID, oldest first, at most limit — and none when the
+	// agent is not of that workspace (home or an active grant).
+	ListOpenForAgent(ctx context.Context, agentID, workspaceID uuid.UUID, limit int) ([]domain.InboxDecisionRequest, error)
 }
 
 // ErrKeepMetadataNotFound is the single answer of the Keep metadata probe's

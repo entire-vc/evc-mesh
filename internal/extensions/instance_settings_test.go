@@ -104,6 +104,25 @@ func TestBootstrap_NoEnvNoRow_LogsDisabled(t *testing.T) {
 	}
 }
 
+// Telegram is on by default (telegram.Provider.InstanceEnabled: no row = ON),
+// so the start log must not call it disabled: that line sent people hunting for
+// an instance switch that was never off.
+func TestBootstrap_NoEnvNoRow_TelegramLogsEnabledByDefault(t *testing.T) {
+	buf := captureLog(t)
+	repo := newFakeSettingRepo()
+	require.NoError(t, BootstrapInstanceSettings(context.Background(), repo, &config.Config{}, BuiltinEnvSources()))
+
+	var line string
+	for _, l := range strings.Split(buf.String(), "\n") {
+		if strings.Contains(l, "[extensions] telegram:") {
+			line = l
+		}
+	}
+	require.NotEmpty(t, line, "no start line for telegram")
+	require.NotContains(t, line, "disabled")
+	require.Contains(t, line, "enabled by default")
+}
+
 func TestBootstrap_SparkURLWithoutEnabledWritesDisabledRow(t *testing.T) {
 	repo := newFakeSettingRepo()
 	cfg := &config.Config{}

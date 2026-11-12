@@ -162,6 +162,11 @@ for (const lng of ["en-US", "ru-RU"]) for (const vp of [{ width: 1440, height: 9
     test.use({ viewport: vp, locale: lng, timezoneId: "UTC" });
 
     test("board card and detail render the same constraints; refs safe; no overflow, no errors", async ({ page }) => {
+      // One test walks every story: two waits to boot the board, then a detail
+      // and a board wait per story, each allowed BOOT_MS. The default 30s test
+      // budget is shorter than a single one of those waits, so a slow runner
+      // failed it mid-walk; the budget is the sum of the waits it may take.
+      test.setTimeout(BOOT_MS * (2 + 2 * Object.keys(STORIES).length));
       await arm(page);
       const tasks = page.waitForResponse((r) => r.url().startsWith(API) && /\/tasks(\?|$)/.test(r.url()), { timeout: BOOT_MS });
       await page.goto("/w/board-fixture/p/contenthub");

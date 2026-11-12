@@ -362,7 +362,7 @@ func TestAgentExecutionUnmanagedAndDisabled(t *testing.T) {
 	require.Equal(t, http.StatusOK, code)
 	item := out["items"].([]any)[0].(map[string]any)
 	require.Equal(t, false, item["managed"])
-	require.Equal(t, "unmanaged", item["reason"])
+	require.Equal(t, "integration_disabled", item["reason"], "binding exists, project integration off")
 	require.Equal(t, "agent_profile", item["profile"].(map[string]any)["source"])
 	require.Nil(t, item["configured"])
 	require.Equal(t, "history", attemptsOf(t, out, 0)[0]["freshness"], "kept attempts are history, not running")

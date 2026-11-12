@@ -1,17 +1,62 @@
 import { useState } from "react";
+import { Link } from "react-router";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
+import { useWorkspaceStore } from "@/stores/workspace";
+import { useProjectStore } from "@/stores/project";
+import { useMemberStore } from "@/stores/member";
 import {
   modelEffort,
   observedModel,
   routeMode,
+  integrationDisabledViews,
+  type AgentExecutionView,
   type AgentExecutionSummary,
   type ExecutionAttempt,
 } from "@/lib/agent-executions";
 
 const configuredLabel = (c: AgentExecutionSummary["configured"][number]) =>
   [c.model ?? c.harness, c.effort].filter(Boolean).join(" · ");
+
+/**
+ * Why a bound agent is "Unmanaged": the Runner binding exists, the project's
+ * agent-runner integration is off. Names the project; owner/admin get the link
+ * to switch it on.
+ */
+export function IntegrationDisabledNote({ views, projectName }: { views: AgentExecutionView[]; projectName: (id: string) => string }) {
+  const { t } = useTranslation("integrations");
+  const wsSlug = useWorkspaceStore((s) => s.currentWorkspace?.slug);
+  const projects = useProjectStore((s) => s.projects);
+  const myRole = useMemberStore((s) => s.myRole);
+  const canManage = myRole === "owner" || myRole === "admin";
+  const off = integrationDisabledViews(views);
+  if (off.length === 0) return null;
+  return (
+    <ul data-testid="exec-integration-disabled" className="space-y-0.5">
+      {off.map((v) => {
+        const slug = projects.find((p) => p.id === v.project_id)?.slug;
+        return (
+          <li key={v.project_id} className="break-words text-tone-attention-600">
+            {t("executions.integrationDisabled", { project: projectName(v.project_id) })}
+            {canManage && wsSlug && slug && (
+              <>
+                {" "}
+                <Link
+                  to={`/w/${wsSlug}/p/${slug}/settings?tab=integrations`}
+                  className="underline"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {t("executions.integrationEnable")}
+                </Link>
+              </>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
 
 /**
  * Org chart card block: configured policy on one line, what actually runs on
@@ -32,6 +77,7 @@ export function ExecutionCardSummary({
     return (
       <div data-testid="exec-unmanaged" className="space-y-0.5 text-[11px] text-muted-foreground">
         <p className="font-medium">{summary.mode === "disabled" ? t("executions.disabled") : t("executions.unmanaged")}</p>
+        <IntegrationDisabledNote views={summary.views} projectName={projectName} />
         <p className="font-mono break-words" title={p ? `${p.harness ?? ""} ${p.model ?? ""}` : undefined}>
           {p?.model
             ? t("executions.profileFrom", { value: [p.harness, p.model].filter(Boolean).join(" · "), source: p.source })
@@ -97,11 +143,17 @@ export function ExecutionCardSummary({
         )}
         {otherModes.length > 0 && (
           <ul data-testid="exec-other-modes" className="space-y-0.5">
-            {otherModes.map((v) => (
-              <li key={v.project_id} className="break-words">
-                {projectName(v.project_id)}: {routeMode(v) === "disabled" ? t("executions.disabled") : t("executions.unmanaged")}
-              </li>
-            ))}
+            {otherModes.map((v) =>
+              v.reason === "integration_disabled" ? (
+                <li key={v.project_id} className="list-none">
+                  <IntegrationDisabledNote views={[v]} projectName={projectName} />
+                </li>
+              ) : (
+                <li key={v.project_id} className="break-words">
+                  {projectName(v.project_id)}: {routeMode(v) === "disabled" ? t("executions.disabled") : t("executions.unmanaged")}
+                </li>
+              ),
+            )}
           </ul>
         )}
       </div>

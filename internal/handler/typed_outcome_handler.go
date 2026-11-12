@@ -54,10 +54,22 @@ func (h *TypedOutcomeHandler) ListTurnOutcomes(c echo.Context) error {
 // GetActiveWait handles GET /tasks/:task_id/wait?agent_id= — the active wait of
 // that agent, or the newest active wait on the task without agent_id. None is
 // 404 with error_code no_active_wait, so a reader tells "no wait" from "no task".
+// With wait_id, returns that source card's exact receipt, including resolution.
 func (h *TypedOutcomeHandler) GetActiveWait(c echo.Context) error {
 	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.tasks)
 	if err != nil {
 		return handleError(c, err)
+	}
+	if raw := c.QueryParam("wait_id"); raw != "" {
+		waitID, perr := uuid.Parse(raw)
+		if perr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid wait_id"))
+		}
+		w, rerr := h.outcomes.WaitReceipt(c.Request().Context(), taskID, waitID)
+		if rerr != nil {
+			return handleError(c, rerr)
+		}
+		return c.JSON(http.StatusOK, w)
 	}
 	var agentID *uuid.UUID
 	if a := c.QueryParam("agent_id"); a != "" {

@@ -292,6 +292,7 @@ proxy.
 | [API Authentication](docs/api-authentication.md) | JWT, agent keys, and RBAC |
 | [Agent Onboarding](docs/agent-onboarding.md) | Issue agent keys, connect over stdio or SSE, run MCP behind a proxy |
 | [MCP Reference](docs/mcp-reference.md) | Tool catalogue with parameters and examples — all 69 tools |
+| [Extension Developer Guide](docs/extensions/developer-guide.md) | Build, validate and publish a Mesh extension through Spark |
 | [Custom Fields](docs/custom-fields.md) | Guide for 12 custom field types |
 | [Webhooks](docs/webhooks.md) | Webhook setup with HMAC-SHA256 validation |
 | [Agent Push Notifications](docs/agent-push-notifications.md) | Callback URL, SSE, and long-polling |

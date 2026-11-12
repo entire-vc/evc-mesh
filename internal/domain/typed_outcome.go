@@ -53,7 +53,14 @@ const (
 	// TaskWaitRegistered is an event of a runner-owned registration the server
 	// cannot observe: Registration names its sub-kind, RegistrationRef the entry.
 	TaskWaitRegistered TaskWaitKind = "registered"
+	// TaskWaitManual is a passive wait a lead allowed by labelling the card
+	// LabelWakeManual: there is no event to observe and no timer. Only a new
+	// comment by someone else or a lead's action on the card ends it.
+	TaskWaitManual TaskWaitKind = "manual"
 )
+
+// LabelWakeManual is the label by which a lead allows a manual wait on a card.
+const LabelWakeManual = "wake:manual"
 
 // Registrations a registered wait may name, with the shape of their ref.
 // Card-scoped ones are armed for the waiting card itself: their ref is the
@@ -110,6 +117,23 @@ const (
 	WaitUntilFinished = "finished"
 )
 
+// ClipRunes returns s cut to its first n characters (runes), never splitting
+// a multi-byte character. Postgres bounds text columns by char_length, so a
+// byte count refuses Cyrillic text at half the advertised length.
+func ClipRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	i := 0
+	for pos := range s {
+		if i == n {
+			return s[:pos]
+		}
+		i++
+	}
+	return s
+}
+
 // WaitResolution is how an active wait stopped being active.
 type WaitResolution string
 
@@ -159,21 +183,24 @@ func outcomeErr(code, msg string) *OutcomeError { return &OutcomeError{Code: cod
 
 // TaskWait is the one active wait of an agent on a card (spec §4.1).
 type TaskWait struct {
-	ID              uuid.UUID      `json:"id" db:"id"`
-	TaskID          uuid.UUID      `json:"task_id" db:"task_id"`
-	AgentID         uuid.UUID      `json:"agent_id" db:"agent_id"`
-	SessionID       *string        `json:"session_id,omitempty" db:"session_id"`
-	Kind            TaskWaitKind   `json:"kind" db:"kind"`
-	TargetTaskID    *uuid.UUID     `json:"target_task_id,omitempty" db:"target_task_id"`
-	TargetCondition *string        `json:"target_condition,omitempty" db:"target_condition"`
-	VCSLinkID       *uuid.UUID     `json:"vcs_link_id,omitempty" db:"vcs_link_id"`
-	Provider        *string        `json:"provider,omitempty" db:"provider"`
-	ProjectPath     *string        `json:"project_path,omitempty" db:"project_path"`
-	MRIID           *int           `json:"mr_iid,omitempty" db:"mr_iid"`
-	PipelineID      *int64         `json:"pipeline_id,omitempty" db:"pipeline_id"`
-	RequiredJobs    pq.StringArray `json:"required_jobs" db:"required_jobs"`
-	Until           *string        `json:"until,omitempty" db:"until_state"`
-	UntilAt         *time.Time     `json:"until_at,omitempty" db:"until_at"`
+	ID              uuid.UUID    `json:"id" db:"id"`
+	TaskID          uuid.UUID    `json:"task_id" db:"task_id"`
+	AgentID         uuid.UUID    `json:"agent_id" db:"agent_id"`
+	SessionID       *string      `json:"session_id,omitempty" db:"session_id"`
+	Kind            TaskWaitKind `json:"kind" db:"kind"`
+	TargetTaskID    *uuid.UUID   `json:"target_task_id,omitempty" db:"target_task_id"`
+	TargetCondition *string      `json:"target_condition,omitempty" db:"target_condition"`
+	// ServerObserved waits are resolved by Mesh; the runner reads only the
+	// receipt on this source card, including after target deletion or revoke.
+	ServerObserved bool           `json:"server_observed,omitempty" db:"server_observed"`
+	VCSLinkID      *uuid.UUID     `json:"vcs_link_id,omitempty" db:"vcs_link_id"`
+	Provider       *string        `json:"provider,omitempty" db:"provider"`
+	ProjectPath    *string        `json:"project_path,omitempty" db:"project_path"`
+	MRIID          *int           `json:"mr_iid,omitempty" db:"mr_iid"`
+	PipelineID     *int64         `json:"pipeline_id,omitempty" db:"pipeline_id"`
+	RequiredJobs   pq.StringArray `json:"required_jobs" db:"required_jobs"`
+	Until          *string        `json:"until,omitempty" db:"until_state"`
+	UntilAt        *time.Time     `json:"until_at,omitempty" db:"until_at"`
 	// A time wait's evidence: the external event, where its deadline is
 	// published, why the card must wait for it, and the offset until_at was
 	// given in. EvidenceStatus is always "unverified" (see TimeEvidenceUnverified).
@@ -222,16 +249,17 @@ func (r WaitResolution) ResolvableByRoute() bool {
 // does not look the target up — existence and terminal state are the
 // service's part, which needs the store.
 func (w *TaskWait) Validate(now time.Time) error {
-	if len(w.Note) > MaxWaitNoteLen {
-		return outcomeErr(CodeInvalidTarget, "note is longer than 500 characters")
-	}
+	// A long note is not a reason to refuse the wait: the command keeps the
+	// whole text in the card comment and the wait row stores its first
+	// MaxWaitNoteLen characters (the column's char_length bound).
+	w.Note = ClipRunes(w.Note, MaxWaitNoteLen)
 	switch w.Kind {
 	case TaskWaitCard:
 		if w.TargetTaskID == nil {
 			return outcomeErr(CodeInvalidTarget, "a card wait needs target_task_id")
 		}
 		if *w.TargetTaskID == w.TaskID {
-			return outcomeErr(CodeSelfWait, "a card cannot wait on itself")
+			return outcomeErr(CodeSelfWait, "target_task_id is this card: a card cannot wait on itself")
 		}
 		if w.TargetCondition != nil && !DependencyCondition(*w.TargetCondition).Valid() {
 			return outcomeErr(CodeInvalidTarget, "unknown target_condition")
@@ -263,16 +291,21 @@ func (w *TaskWait) Validate(now time.Time) error {
 			return outcomeErr(CodeInvalidTarget, "a merge wait needs project_path (group/project) and mr_iid")
 		}
 		if w.Provider != nil && *w.Provider != "gitlab" {
-			return outcomeErr(CodeInvalidTarget, "a merge wait is GitLab only: the runner's merge gate reads the configured GitLab")
+			return outcomeErr(CodeInvalidTarget, "provider: a merge wait is GitLab only: the runner's merge gate reads the configured GitLab; "+
+				"wait for a GitHub PR to merge with on=mr provider=github until=merged (project_path owner/repo, mr_iid the PR number, "+
+				"after_sha the head, after_status opened)")
 		}
 		if w.AfterSHA == nil || !headSHA.MatchString(*w.AfterSHA) {
 			return outcomeErr(CodeInvalidTarget, "a merge wait needs after_sha: the full 40 or 64 hex-digit SHA of the reviewed head")
 		}
-		if w.Until != nil || w.AfterPipelineID != nil || w.AfterStatus != nil || len(w.RequiredJobs) > 0 {
-			return outcomeErr(CodeInvalidTarget, "a merge wait takes project_path, mr_iid and after_sha only")
+		if f := firstSet(field{"until", w.Until != nil}, field{"after_pipeline_id", w.AfterPipelineID != nil},
+			field{"after_status", w.AfterStatus != nil}, field{"required_jobs", len(w.RequiredJobs) > 0}); f != "" {
+			return outcomeErr(CodeInvalidTarget, f+" is not a field of a merge wait: it takes project_path, mr_iid and after_sha only")
 		}
 	case TaskWaitRegistered:
 		return validateRegistration(w)
+	case TaskWaitManual:
+		return validateManual(w)
 	case TaskWaitTime:
 		if w.Until != nil {
 			return outcomeErr(CodeNaiveTime, "a time wait takes an absolute until_at, not a relative until")
@@ -293,15 +326,32 @@ func (w *TaskWait) Validate(now time.Time) error {
 			return outcomeErr(CodeInvalidTarget, "a human wait needs human_gate_ref")
 		}
 		if emptyStr(w.Addressee) || emptyStr(w.Question) {
-			return outcomeErr(CodeInvalidTarget, "a human wait needs the person asked and the question")
+			return outcomeErr(CodeInvalidTarget, "a human wait needs addressee (the person asked) and question")
 		}
 		if utf8.RuneCountInString(*w.Question) > MaxHumanQuestionLen {
 			return outcomeErr(CodeInvalidTarget, "question is longer than 2000 characters")
 		}
 	default:
-		return outcomeErr(CodeInvalidTarget, "unknown wait kind")
+		return outcomeErr(CodeInvalidTarget, "on="+string(w.Kind)+" is not a wait kind")
 	}
 	return nil
+}
+
+// field is one optional input of a wait and whether the caller set it.
+type field struct {
+	name string
+	set  bool
+}
+
+// firstSet names the first field that is set, so a refusal of a field the
+// kind does not take says which one to drop.
+func firstSet(fields ...field) string {
+	for _, f := range fields {
+		if f.set {
+			return f.name
+		}
+	}
+	return ""
 }
 
 // validateBaseline checks the explicit baseline of an mr or pipeline wait
@@ -356,8 +406,30 @@ func validateRegistration(w *TaskWait) error {
 		}
 		return outcomeErr(CodeInvalidTarget, "a "+reg+" wait needs registration_ref: "+shape)
 	}
-	if w.Until != nil || w.AfterSHA != nil || w.AfterPipelineID != nil || w.AfterStatus != nil || len(w.RequiredJobs) > 0 {
-		return outcomeErr(CodeInvalidTarget, "a registered wait takes registration and registration_ref only")
+	if f := firstSet(field{"until", w.Until != nil}, field{"after_sha", w.AfterSHA != nil}, field{"after_pipeline_id", w.AfterPipelineID != nil},
+		field{"after_status", w.AfterStatus != nil}, field{"required_jobs", len(w.RequiredJobs) > 0}); f != "" {
+		return outcomeErr(CodeInvalidTarget, f+" is not a field of a registered wait: it takes registration and registration_ref only")
+	}
+	return nil
+}
+
+// validateManual checks a manual wait: it is declared on the waiting card
+// itself and says why in its note; it names no target, timer or baseline.
+// Whether the card carries LabelWakeManual is the service's part.
+func validateManual(w *TaskWait) error {
+	if w.TargetTaskID != nil && *w.TargetTaskID != w.TaskID {
+		return outcomeErr(CodeInvalidTarget, "target_task_id: a manual wait is declared on the waiting card itself, not on another card; "+
+			"waiting on another card is on=card")
+	}
+	if strings.TrimSpace(w.Note) == "" {
+		return outcomeErr(CodeInvalidTarget, "a manual wait needs note: why the card waits and who resumes it")
+	}
+	if f := firstSet(field{"target_condition", w.TargetCondition != nil}, field{"vcs_link_id", w.VCSLinkID != nil},
+		field{"provider", w.Provider != nil}, field{"project_path", w.ProjectPath != nil}, field{"mr_iid", w.MRIID != nil},
+		field{"pipeline_id", w.PipelineID != nil}, field{"required_jobs", len(w.RequiredJobs) > 0}, field{"until", w.Until != nil},
+		field{"until_at", w.UntilAt != nil}, field{"event_ref", w.EventRef != nil}, field{"source", w.Source != nil},
+		field{"why", w.Why != nil}); f != "" {
+		return outcomeErr(CodeInvalidTarget, f+" is not a field of a manual wait: it takes note only, it has no observer and no timer")
 	}
 	return nil
 }
@@ -378,16 +450,18 @@ const (
 // the latest entry of its session; none after a turn is the explicit
 // no_outcome state.
 type TurnOutcome struct {
-	ID         uuid.UUID       `json:"id" db:"id"`
-	TaskID     uuid.UUID       `json:"task_id" db:"task_id"`
-	AgentID    uuid.UUID       `json:"agent_id" db:"agent_id"`
-	SessionID  *string         `json:"session_id,omitempty" db:"session_id"`
-	TurnID     *string         `json:"turn_id,omitempty" db:"turn_id"`
-	Kind       TurnOutcomeKind `json:"kind" db:"kind"`
-	WaitID     *uuid.UUID      `json:"wait_id,omitempty" db:"wait_id"`
-	ResultKind *ResultKind     `json:"result_kind,omitempty" db:"result_kind"`
-	Note       string          `json:"note" db:"note"`
-	CreatedAt  time.Time       `json:"created_at" db:"created_at"`
+	ID        uuid.UUID       `json:"id" db:"id"`
+	TaskID    uuid.UUID       `json:"task_id" db:"task_id"`
+	AgentID   uuid.UUID       `json:"agent_id" db:"agent_id"`
+	SessionID *string         `json:"session_id,omitempty" db:"session_id"`
+	TurnID    *string         `json:"turn_id,omitempty" db:"turn_id"`
+	Kind      TurnOutcomeKind `json:"kind" db:"kind"`
+	WaitID    *uuid.UUID      `json:"wait_id,omitempty" db:"wait_id"`
+	// Derived from the linked wait, even after it has resolved.
+	WaitServerObserved bool        `json:"wait_server_observed,omitempty" db:"wait_server_observed"`
+	ResultKind         *ResultKind `json:"result_kind,omitempty" db:"result_kind"`
+	Note               string      `json:"note" db:"note"`
+	CreatedAt          time.Time   `json:"created_at" db:"created_at"`
 }
 
 // DecisionState is the life of a question to an agent (spec §4.3).
@@ -411,6 +485,28 @@ type DecisionRequest struct {
 	AnswerCommentID *uuid.UUID    `json:"answer_comment_id,omitempty" db:"answer_comment_id"`
 	AnsweredAt      *time.Time    `json:"answered_at,omitempty" db:"answered_at"`
 	CreatedAt       time.Time     `json:"created_at" db:"created_at"`
+}
+
+// DecisionRequestTask is the asking card of a decision request as its
+// addressee sees it: enough to find the card and answer on it.
+type DecisionRequestTask struct {
+	ID             uuid.UUID      `json:"id" db:"id"`
+	Title          string         `json:"title" db:"title"`
+	ProjectID      uuid.UUID      `json:"project_id" db:"project_id"`
+	WorkspaceID    uuid.UUID      `json:"workspace_id" db:"workspace_id"`
+	StatusCategory StatusCategory `json:"status_category" db:"status_category"`
+}
+
+// InboxDecisionRequest is a decision request addressed to the reading agent,
+// with the asker and the asking card (GET /agents/me/decision-requests).
+type InboxDecisionRequest struct {
+	ID        uuid.UUID           `json:"id" db:"id"`
+	TaskID    uuid.UUID           `json:"task_id" db:"task_id"`
+	Question  string              `json:"question" db:"question"`
+	State     DecisionState       `json:"state" db:"state"`
+	CreatedAt time.Time           `json:"created_at" db:"created_at"`
+	FromAgent AgentRef            `json:"from_agent" db:"from_agent"`
+	Task      DecisionRequestTask `json:"task" db:"task"`
 }
 
 // CommentWakes reports whether a comment wakes anyone: metadata.wakes=false
@@ -452,14 +548,16 @@ const WaitRuntimeRefPrefix = "wait:"
 // everything the store writes in one transaction. Kind is next, wait or
 // handoff; Wait is set for wait, HandoffTo for handoff.
 type TurnCommand struct {
-	TaskID    uuid.UUID
-	AgentID   uuid.UUID
-	SessionID *string
-	TurnID    *string
-	Kind      TurnOutcomeKind
-	Wait      *TaskWait
-	HandoffTo *uuid.UUID
-	Note      string
+	// Retain the HTTP project guard within the source workspace. Never supplied by JSON.
+	DenySameWorkspaceTarget bool
+	TaskID                  uuid.UUID
+	AgentID                 uuid.UUID
+	SessionID               *string
+	TurnID                  *string
+	Kind                    TurnOutcomeKind
+	Wait                    *TaskWait
+	HandoffTo               *uuid.UUID
+	Note                    string
 	// CommentBody is the server-written, human-readable comment of the turn.
 	CommentBody string
 	// CommentID, when set, is the turn's comment already written through the
@@ -524,7 +622,7 @@ func validateTimeEvidence(w *TaskWait) error {
 		if emptyStr(v) {
 			return outcomeErr(CodeMissingEvidence, "a time wait needs event_ref, source and why: the external event and where its deadline is published")
 		}
-		if len(*v) > MaxTimeEvidenceLen {
+		if utf8.RuneCountInString(*v) > MaxTimeEvidenceLen {
 			return outcomeErr(CodeMissingEvidence, name+" is longer than 500 characters")
 		}
 	}

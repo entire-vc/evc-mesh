@@ -34,6 +34,13 @@ type TurnTaskReader interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Task, error)
 }
 
+// WithTasks lets wait_for read the card itself (the wake:manual label of a
+// manual wait); WithHumanGate sets the same reader.
+func (s *TurnCommandService) WithTasks(tasks TurnTaskReader) *TurnCommandService {
+	s.tasks = tasks
+	return s
+}
+
 // WithHumanGate enables ask_human; without it the command is unavailable.
 func (s *TurnCommandService) WithHumanGate(gate TurnHumanGate, tasks TurnTaskReader) *TurnCommandService {
 	s.humanGate, s.tasks = gate, tasks
@@ -158,7 +165,7 @@ func (s *TurnCommandService) AskHuman(ctx context.Context, taskID uuid.UUID, in 
 	}
 	res, err := s.store.CommitTurn(ctx, &domain.TurnCommand{TaskID: taskID, AgentID: agentID,
 		SessionID: in.SessionID, TurnID: in.TurnID, Kind: domain.TurnOutcomeWait, Wait: w,
-		Note: w.Note, CommentID: &comment.ID, RuntimeReason: describeWait(w)})
+		Note: w.Note, CommentID: &comment.ID, RuntimeReason: clipRuntimeReason(describeWait(w))})
 	if err != nil {
 		return nil, err
 	}

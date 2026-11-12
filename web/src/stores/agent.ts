@@ -47,10 +47,18 @@ export const useAgentStore = create<AgentState>((set) => ({
   fetchAgents: async (workspaceId: string) => {
     set({ isLoading: true });
     try {
-      const response = await api<PaginatedResponse<Agent>>(
-        `/api/v1/workspaces/${workspaceId}/agents`,
-      );
-      set({ agents: response.items ?? [], isLoading: false });
+      // The endpoint is paginated (default 50); a workspace can hold more
+      // agents than one page, and the ones past it could not be opened.
+      const all: Agent[] = [];
+      for (let page = 1; ; page++) {
+        const response = await api<PaginatedResponse<Agent>>(
+          `/api/v1/workspaces/${workspaceId}/agents?page=${page}&page_size=200`,
+        );
+        const items = response.items ?? [];
+        all.push(...items);
+        if (!response.has_more || items.length === 0) break;
+      }
+      set({ agents: all, isLoading: false });
     } catch {
       set({ isLoading: false });
     }
@@ -72,8 +80,11 @@ export const useAgentStore = create<AgentState>((set) => ({
 
   fetchAgent: async (agentId: string): Promise<Agent> => {
     const agent = await api<Agent>(`/api/v1/agents/${agentId}`);
+    // Upsert: an agent outside the loaded list must still become editable.
     set((state) => ({
-      agents: state.agents.map((a) => (a.id === agentId ? agent : a)),
+      agents: state.agents.some((a) => a.id === agentId)
+        ? state.agents.map((a) => (a.id === agentId ? agent : a))
+        : [...state.agents, agent],
     }));
     return agent;
   },

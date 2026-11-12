@@ -52,6 +52,23 @@ func TestTurnCommandRepo_TypedWaitKindsRoundTrip_DB(t *testing.T) {
 			assert.Equal(t, "failed", *got.AfterStatus)
 			assert.Equal(t, []string{"lint"}, []string(got.RequiredJobs))
 		}},
+		{"manual", func(*typedOutcomeFixture) *domain.TaskWait {
+			return &domain.TaskWait{Kind: domain.TaskWaitManual, Note: "vendor answers by mail"}
+		}, func(t *testing.T, got *domain.TaskWait) {
+			assert.Equal(t, domain.TaskWaitManual, got.Kind)
+			assert.Equal(t, "vendor answers by mail", got.Note)
+			assert.Nil(t, got.TargetTaskID)
+			assert.Nil(t, got.UntilAt)
+		}},
+		{"GitHub PR until merged after opened", func(*typedOutcomeFixture) *domain.TaskWait {
+			return &domain.TaskWait{Kind: domain.TaskWaitMR, Provider: str("github"), ProjectPath: str("org/repo"),
+				MRIID: &iid, Until: str("merged"), AfterSHA: str(typedSHA), AfterStatus: str("opened")}
+		}, func(t *testing.T, got *domain.TaskWait) {
+			assert.Equal(t, domain.TaskWaitMR, got.Kind)
+			assert.Equal(t, "github", *got.Provider)
+			assert.Equal(t, "merged", *got.Until)
+			assert.Equal(t, "opened", *got.AfterStatus)
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

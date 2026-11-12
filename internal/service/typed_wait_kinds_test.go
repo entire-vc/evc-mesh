@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	githubapi "github.com/entire-vc/evc-mesh/internal/integration/github"
 	gitlabapi "github.com/entire-vc/evc-mesh/internal/integration/gitlab"
 )
 
@@ -50,13 +51,13 @@ func TestTurnCommandService_WaitForTypedKinds(t *testing.T) {
 		msg  string
 	}{
 		{"human through wait_for", func(uuid.UUID) WaitForInput { return WaitForInput{On: "human"} }, domain.CodeInvalidTarget, "ask_human"},
-		{"unknown kind", func(uuid.UUID) WaitForInput { return WaitForInput{On: "gmail"} }, domain.CodeInvalidTarget, "merge or registered"},
+		{"unknown kind", func(uuid.UUID) WaitForInput { return WaitForInput{On: "gmail"} }, domain.CodeInvalidTarget, "registered or manual"},
 		{"merge without sha", func(uuid.UUID) WaitForInput {
 			return WaitForInput{On: "merge", ProjectPath: ptr("g/p"), MRIID: ptr(10)}
 		}, domain.CodeInvalidTarget, "after_sha"},
 		{"merge with short sha", func(uuid.UUID) WaitForInput { return merge(10, "abc123") }, domain.CodeInvalidTarget, "after_sha"},
 		{"merge with uppercase sha", func(uuid.UUID) WaitForInput { return merge(10, strings.ToUpper(sha40)) }, domain.CodeInvalidTarget, "after_sha"},
-		{"merge on GitHub", func(uuid.UUID) WaitForInput { in := merge(10, sha40); in.Provider = ptr("github"); return in }, domain.CodeInvalidTarget, "GitLab only"},
+		{"merge on GitHub", func(uuid.UUID) WaitForInput { in := merge(10, sha40); in.Provider = ptr("github"); return in }, domain.CodeInvalidTarget, "on=mr provider=github until=merged"},
 		{"merge with until", func(uuid.UUID) WaitForInput { in := merge(10, sha40); in.Until = ptr("merged"); return in }, domain.CodeInvalidTarget, "only"},
 		{"merge without group", func(uuid.UUID) WaitForInput {
 			return WaitForInput{On: "merge", ProjectPath: ptr("p"), MRIID: ptr(10), AfterSHA: ptr(sha40)}
@@ -194,4 +195,128 @@ func TestTurnCommandService_WaitForTypedKinds(t *testing.T) {
 			}
 		})
 	}
+}
+
+// labelledTasks is the card reader of a manual wait: the card and its labels.
+type labelledTasks map[uuid.UUID][]string
+
+func (l labelledTasks) GetByID(_ context.Context, id uuid.UUID) (*domain.Task, error) {
+	labels, ok := l[id]
+	if !ok {
+		return nil, nil
+	}
+	return &domain.Task{ID: id, Labels: labels}, nil
+}
+
+// A manual wait (`WAIT manual:#<8hex>`) is recorded only on the card itself
+// and only while a lead's wake:manual label is on it.
+func TestTurnCommandService_WaitForManual(t *testing.T) {
+	why := "vendor answers by mail; the lead resumes the card"
+	env := func(labels ...string) *turnEnv {
+		e := newTurnEnv(nil)
+		e.svc.WithTasks(labelledTasks{e.task: labels})
+		return e
+	}
+
+	t.Run("accepted with the label", func(t *testing.T) {
+		e := env("kind:ops", domain.LabelWakeManual)
+		res, err := e.svc.WaitFor(e.ctx, e.task, WaitForInput{On: "manual", Note: why})
+		require.NoError(t, err)
+		assert.True(t, res.Released)
+		require.Len(t, e.store.committed, 1)
+		cmd := e.store.committed[0]
+		assert.Equal(t, domain.TurnOutcomeWait, cmd.Kind)
+		assert.Equal(t, domain.TaskWaitManual, cmd.Wait.Kind)
+		assert.Nil(t, cmd.Wait.TargetTaskID)
+		assert.Nil(t, cmd.Wait.UntilAt)
+		assert.Equal(t, why, cmd.Wait.Note)
+		assert.Equal(t, "Waiting on a comment or a lead's action (wake:manual).\n\n"+why, cmd.CommentBody)
+		assert.Equal(t, "a comment or a lead's action (wake:manual)", cmd.RuntimeReason)
+	})
+
+	t.Run("accepted naming its own card", func(t *testing.T) {
+		e := env(domain.LabelWakeManual)
+		_, err := e.svc.WaitFor(e.ctx, e.task, WaitForInput{On: "manual", TargetTaskID: &e.task, Note: why})
+		require.NoError(t, err)
+		require.Len(t, e.store.committed, 1)
+		assert.Nil(t, e.store.committed[0].Wait.TargetTaskID, "the card itself is not stored as a card target")
+	})
+
+	refused := []struct {
+		name string
+		e    func() *turnEnv
+		in   func(e *turnEnv) WaitForInput
+		msg  string
+	}{
+		{"without the label", func() *turnEnv { return env("kind:ops", "wake:date") },
+			func(*turnEnv) WaitForInput { return WaitForInput{On: "manual", Note: why} }, "needs the label wake:manual"},
+		{"on another card", func() *turnEnv { return env(domain.LabelWakeManual) },
+			func(*turnEnv) WaitForInput {
+				other := uuid.New()
+				return WaitForInput{On: "manual", TargetTaskID: &other, Note: why}
+			},
+			"on the waiting card itself"},
+		{"without why", func() *turnEnv { return env(domain.LabelWakeManual) },
+			func(*turnEnv) WaitForInput { return WaitForInput{On: "manual"} }, "needs note"},
+		{"with a timer", func() *turnEnv { return env(domain.LabelWakeManual) },
+			func(*turnEnv) WaitForInput { return WaitForInput{On: "manual", Until: ptr("6h"), Note: why} }, "no observer and no timer"},
+		{"with a baseline", func() *turnEnv { return env(domain.LabelWakeManual) },
+			func(*turnEnv) WaitForInput { return WaitForInput{On: "manual", AfterSHA: ptr(sha40), Note: why} }, "after_sha is not a field of an on=manual wait"},
+		{"labels unreadable", func() *turnEnv { return newTurnEnv(nil) },
+			func(*turnEnv) WaitForInput { return WaitForInput{On: "manual", Note: why} }, "labels are unavailable"},
+	}
+	for _, tc := range refused {
+		t.Run("refused/"+tc.name, func(t *testing.T) {
+			e := tc.e()
+			_, err := e.svc.WaitFor(e.ctx, e.task, tc.in(e))
+			assert.Equal(t, domain.CodeInvalidTarget, outcomeCode(t, err))
+			assert.Contains(t, err.Error(), tc.msg)
+			assert.Empty(t, e.store.committed, "a refused wait reached the store")
+		})
+	}
+}
+
+// A GitHub PR merge is waited on as on=mr provider=github until=merged with
+// the opened-head baseline; on=merge refuses GitHub and names that route.
+func TestTurnCommandService_WaitForGitHubMerged(t *testing.T) {
+	gh := func(context.Context, uuid.UUID) (githubapi.PullRequestChecker, bool) {
+		return gitHubStub{"org/repo#7": {State: "open"}, "org/repo#8": {State: "closed", Merged: true}}, true
+	}
+	in := func(n int) WaitForInput {
+		return WaitForInput{On: "mr", Provider: ptr("github"), ProjectPath: ptr("org/repo"), MRIID: ptr(n),
+			Until: ptr("merged"), AfterSHA: ptr(sha40), AfterStatus: ptr("opened")}
+	}
+
+	t.Run("accepted", func(t *testing.T) {
+		e := newTurnEnv(nil)
+		e.svc.WithGitHub(gh)
+		_, err := e.svc.WaitFor(e.ctx, e.task, in(7))
+		require.NoError(t, err)
+		require.Len(t, e.store.committed, 1)
+		w := e.store.committed[0].Wait
+		assert.Equal(t, domain.TaskWaitMR, w.Kind)
+		assert.Equal(t, "github", *w.Provider)
+		assert.Equal(t, "merged", *w.Until)
+		assert.Equal(t, sha40, *w.AfterSHA)
+		assert.Equal(t, "opened", *w.AfterStatus)
+		assert.Equal(t, "Waiting on MR org/repo!7 until merged after 0123456789ab (opened).", e.store.committed[0].CommentBody)
+	})
+
+	t.Run("refused when already merged", func(t *testing.T) {
+		e := newTurnEnv(nil)
+		e.svc.WithGitHub(gh)
+		_, err := e.svc.WaitFor(e.ctx, e.task, in(8))
+		assert.Equal(t, domain.CodeAlreadyMet, outcomeCode(t, err))
+		assert.Empty(t, e.store.committed)
+	})
+
+	t.Run("merge on GitHub names the mr route", func(t *testing.T) {
+		e := newTurnEnv(nil)
+		e.svc.WithGitHub(gh)
+		_, err := e.svc.WaitFor(e.ctx, e.task, WaitForInput{On: "merge", Provider: ptr("github"), ProjectPath: ptr("org/repo"),
+			MRIID: ptr(7), AfterSHA: ptr(sha40)})
+		assert.Equal(t, domain.CodeInvalidTarget, outcomeCode(t, err))
+		assert.Contains(t, err.Error(), "on=mr provider=github until=merged")
+		assert.Empty(t, e.store.committed)
+	})
 }

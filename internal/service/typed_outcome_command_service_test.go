@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -205,6 +206,13 @@ func TestTurnCommandService_WaitForTargets(t *testing.T) {
 			assert.Equal(t, tc.code, outcomeCode(t, err))
 			assert.Empty(t, e.store.committed, "a refused wait reached the store")
 			assert.Empty(t, e.hooks.after)
+			// Every lookup refusal names the fields that identify the target.
+			switch tc.in.On {
+			case "mr":
+				assert.Contains(t, err.Error(), "(project_path, mr_iid)")
+			case "pipeline":
+				assert.Contains(t, err.Error(), "(project_path, pipeline_id)")
+			}
 		})
 	}
 
@@ -455,6 +463,38 @@ func TestTurnCommandService_ContinueNext(t *testing.T) {
 	assert.Equal(t, []domain.TurnOutcomeKind{domain.TurnOutcomeNext, domain.TurnOutcomeNext}, e.hooks.after)
 }
 
+// The continue_next bound counts characters: 4096 Cyrillic characters (8192
+// bytes) pass, one more is refused.
+func TestTurnCommandService_ContinueNextCountsCharacters(t *testing.T) {
+	e := newTurnEnv(nil)
+	note := strings.Repeat("я", domain.MaxOutcomeNote)
+	_, err := e.svc.ContinueNext(e.ctx, e.task, TurnCommon{}, note)
+	require.NoError(t, err)
+	require.Len(t, e.store.committed, 1)
+	assert.Equal(t, note, e.store.committed[0].Note)
+	assert.Equal(t, "Continuing: "+note, e.store.committed[0].CommentBody)
+
+	_, err = e.svc.ContinueNext(e.ctx, e.task, TurnCommon{}, note+"я")
+	assert.True(t, isAPI(apierror.ValidationError(nil).Code, err))
+	assert.Len(t, e.store.committed, 1)
+}
+
+// truncateNote cuts on a character boundary: a byte cut through a two-byte
+// Cyrillic character would store invalid UTF-8.
+func TestTruncateNote(t *testing.T) {
+	short := strings.Repeat("я", domain.MaxOutcomeNote)
+	assert.Equal(t, short, truncateNote(short), "a note at the bound is kept whole")
+	long := strings.Repeat("ab", domain.MaxOutcomeNote/2) + "яяя"
+	got := truncateNote(long)
+	assert.Equal(t, domain.MaxOutcomeNote, utf8.RuneCountInString(got))
+	assert.True(t, utf8.ValidString(got))
+	mixed := "a" + strings.Repeat("я", domain.MaxOutcomeNote)
+	got = truncateNote(mixed)
+	assert.True(t, utf8.ValidString(got), "the cut never splits a character")
+	assert.Equal(t, mixed[:len(got)], got)
+	assert.Equal(t, domain.MaxOutcomeNote, utf8.RuneCountInString(got))
+}
+
 func TestTurnCommandService_HandOff(t *testing.T) {
 	e := newTurnEnv(nil)
 	b := uuid.New()
@@ -533,6 +573,41 @@ func TestTurnHooksFor(t *testing.T) {
 // A project of another GitLab group: the workspace's access cannot read it, the
 // lane that asks can. The wait is recorded unverified instead of refused, so
 // the lane is not pushed back to a marker line.
+// A wait that names many jobs describes itself in more than the 500 bytes the
+// card's runtime_state takes for a reason. The command used to fail there with
+// an internal error (a pipeline with
+// sixteen jobs) and the lane fell back to a marker line.
+func TestTurnCommandService_WaitForManyJobsFitsTheRuntimeReason(t *testing.T) {
+	jobs := make([]string, 0, 40)
+	for i := 0; i < 40; i++ {
+		jobs = append(jobs, fmt.Sprintf("enquiry:form-notification-%02d", i))
+	}
+	for name, in := range map[string]WaitForInput{
+		"pipeline":      {On: "pipeline", ProjectPath: ptr("g/p"), PipelineID: ptr(int64(500)), Until: ptr("green"), RequiredJobs: jobs},
+		"merge request": {On: "mr", Provider: ptr("gitlab"), ProjectPath: ptr("g/p"), MRIID: ptr(10), Until: ptr("green"), RequiredJobs: jobs},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newTurnEnv(liveGitLab())
+			_, err := e.svc.WaitFor(e.ctx, e.task, in)
+			require.NoError(t, err)
+			require.Len(t, e.store.committed, 1)
+			cmd := e.store.committed[0]
+			assert.Contains(t, cmd.CommentBody, jobs[39], "the comment keeps the whole list")
+			assert.LessOrEqual(t, len(cmd.RuntimeReason), 500)
+			assert.True(t, utf8.ValidString(cmd.RuntimeReason))
+			reason := cmd.RuntimeReason
+			state := &domain.RuntimeState{Kind: domain.RuntimeKindWaiting, Since: time.Now(), Reason: &reason}
+			require.NoError(t, state.Normalize(time.Now()), "the store normalizes the state with this reason")
+		})
+	}
+	assert.Equal(t, "short", clipRuntimeReason("short"))
+	long := strings.Repeat("я", 400) // 800 bytes
+	clipped := clipRuntimeReason(long)
+	assert.LessOrEqual(t, len(clipped), 500)
+	assert.True(t, utf8.ValidString(clipped))
+	assert.True(t, strings.HasSuffix(clipped, "…"))
+}
+
 func TestTurnCommandService_WaitForProjectTheWorkspaceCannotRead(t *testing.T) {
 	hiddenGitLab := func(blind bool) GitLabCheckerSource {
 		g := gitLabStub{mrs: map[string]string{}, pipelines: map[string]string{},

@@ -43,6 +43,10 @@ type TelegramPreferenceConfig struct {
 	ChatID        int64      `json:"telegram_chat_id,omitempty"`
 	BindToken     string     `json:"telegram_bind_token,omitempty"`
 	BindExpiresAt *time.Time `json:"telegram_bind_expires_at,omitempty"`
+	// Scope is the row's subscription scope (domain.PreferenceScope). It is
+	// part of this struct so that the /start binding, which rewrites the
+	// config from it, keeps the subscriber's choice.
+	Scope string `json:"scope,omitempty"`
 }
 
 // GenerateTelegramBindToken returns a fresh one-time token for the

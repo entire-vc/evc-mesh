@@ -3,6 +3,8 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/service"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -98,7 +101,36 @@ func bindWaitFor(c echo.Context, b *waitForBody) *apierror.Error {
 	if errors.As(err, &uaErr) {
 		return &apierror.Error{Code: http.StatusUnprocessableEntity, ErrorCode: domain.CodeNaiveTime, Message: uaErr.Error()}
 	}
-	return apierror.BadRequest("invalid request body")
+	return bodyError(err)
+}
+
+// bodyError renders a body that does not bind, naming what is wrong: the field
+// and the type it expected, or the body itself when it is not a JSON object,
+// so the caller can fix the call instead of guessing from a bare "invalid
+// request body".
+func bodyError(err error) *apierror.Error {
+	const msg = "invalid request body: "
+	var syn *json.SyntaxError
+	if errors.As(err, &syn) {
+		return apierror.BadRequest(fmt.Sprintf("%sbody is not valid JSON at byte %d: %s", msg, syn.Offset, syn.Error()))
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return apierror.BadRequest(msg + "body is not valid JSON: it ends before the JSON value is complete")
+	}
+	var te *json.UnmarshalTypeError
+	if errors.As(err, &te) {
+		if te.Field == "" {
+			return apierror.BadRequest(msg + "body must be a JSON object, got " + te.Value)
+		}
+		return apierror.BadRequest(fmt.Sprintf("%s%s must be %s, got %s", msg, te.Field, te.Type, te.Value))
+	}
+	var he *echo.HTTPError
+	if errors.As(err, &he) {
+		if m, ok := he.Message.(string); ok && m != "" {
+			return apierror.BadRequest(msg + "body: " + m)
+		}
+	}
+	return apierror.BadRequest(msg + "body: " + err.Error())
 }
 
 // turnError renders a command refusal: an OutcomeError is 422 with its code,
@@ -127,13 +159,17 @@ func (h *TurnCommandHandler) WaitFor(c echo.Context) error {
 	if apiErr := bindWaitFor(c, &b); apiErr != nil {
 		return c.JSON(apiErr.Code, apiErr)
 	}
-	// Waiting on a card reads its state; the card is named in the body, out of
-	// the route guard's sight.
-	if b.TargetTaskID != nil && !mw.MayAccessTask(c, *b.TargetTaskID) {
-		return c.JSON(http.StatusNotFound, apierror.NotFound("Task"))
+	// The body guard is scoped to the source workspace. Card waits may cross
+	// it only through the transactional membership check; retain the existing
+	// project restriction for targets in the source workspace.
+	targetDenied := b.TargetTaskID != nil && !mw.MayAccessTask(c, *b.TargetTaskID)
+	actorID, actorType := actorctx.FromContext(c.Request().Context())
+	if targetDenied && (b.On != string(domain.TaskWaitCard) || actorID == uuid.Nil || actorType != domain.ActorTypeAgent) {
+		return c.JSON(http.StatusNotFound, apierror.NotFoundWithDetails("Task", "target_task_id names no card you can read"))
 	}
 	res, err := h.svc.WaitFor(c.Request().Context(), id, service.WaitForInput{
-		TurnCommon: b.common(), On: b.On, TargetTaskID: b.TargetTaskID, TargetCondition: b.TargetCondition,
+		DenySameWorkspaceTarget: targetDenied,
+		TurnCommon:              b.common(), On: b.On, TargetTaskID: b.TargetTaskID, TargetCondition: b.TargetCondition,
 		VCSLinkID: b.VCSLinkID, Provider: b.Provider, ProjectPath: b.ProjectPath, MRIID: b.MRIID,
 		PipelineID: b.PipelineID, RequiredJobs: b.RequiredJobs, Until: b.Until, UntilAt: b.UntilAt.Time,
 		EventRef: b.EventRef, Source: b.Source, Why: b.Why, Note: b.Note,
@@ -163,7 +199,7 @@ func (h *TurnCommandHandler) AskHuman(c echo.Context) error {
 		Supersedes         string     `json:"supersedes"`
 	}
 	if err = c.Bind(&b); err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+		return c.JSON(http.StatusBadRequest, bodyError(err))
 	}
 	res, err := h.svc.AskHuman(c.Request().Context(), id, service.AskHumanInput{
 		TurnCommon: b.common(), To: b.To, Question: b.Question, RecommendedDefault: b.RecommendedDefault,
@@ -187,7 +223,7 @@ func (h *TurnCommandHandler) ContinueNext(c echo.Context) error {
 	}
 	err = c.Bind(&b)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+		return c.JSON(http.StatusBadRequest, bodyError(err))
 	}
 	res, err := h.svc.ContinueNext(c.Request().Context(), id, b.common(), b.Note)
 	if err != nil {
@@ -209,7 +245,7 @@ func (h *TurnCommandHandler) HandOff(c echo.Context) error {
 	}
 	err = c.Bind(&b)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+		return c.JSON(http.StatusBadRequest, bodyError(err))
 	}
 	res, err := h.svc.HandOff(c.Request().Context(), id, b.common(), b.To, b.Why)
 	if err != nil {
@@ -229,7 +265,7 @@ func (h *TurnCommandHandler) AddNote(c echo.Context) error {
 	}
 	err = c.Bind(&b)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+		return c.JSON(http.StatusBadRequest, bodyError(err))
 	}
 	commentID, err := h.svc.AddNote(c.Request().Context(), id, b.Text)
 	if err != nil {

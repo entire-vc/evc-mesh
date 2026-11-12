@@ -81,6 +81,7 @@ type NotificationService interface {
 type notificationRepository interface {
 	GetPreferencesByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.NotificationPreference, error)
 	FilterWorkspaceMembers(ctx context.Context, workspaceID uuid.UUID, userIDs []uuid.UUID) (map[uuid.UUID]bool, error)
+	FilterProjectReaders(ctx context.Context, workspaceID, projectID uuid.UUID, userIDs []uuid.UUID) (map[uuid.UUID]bool, error)
 	CreateNotification(ctx context.Context, n *domain.Notification) error
 	GetPreferencesByUser(ctx context.Context, userID uuid.UUID) ([]domain.NotificationPreference, error)
 	UpsertPreference(ctx context.Context, pref *domain.NotificationPreference) error
@@ -208,16 +209,20 @@ func (s *notificationService) Notify(ctx context.Context, event domain.Notificat
 func (s *notificationService) dispatch(event domain.NotificationEvent) {
 	bgCtx := context.Background()
 
-	if !hasAudience(event) {
-		log.Printf("[notification] %s for workspace %s dropped: the event names no recipients and is not marked Broadcast (task %v)",
-			event.EventType, event.WorkspaceID, event.TaskID)
-		return
-	}
-
 	// Load all enabled preferences for the workspace.
 	prefs, err := s.repo.GetPreferencesByWorkspace(bgCtx, event.WorkspaceID)
 	if err != nil {
 		log.Printf("[notification] failed to load preferences for workspace %s: %v", event.WorkspaceID, err)
+		return
+	}
+
+	// An event that names nobody still has an audience when somebody asked for
+	// every task event of the workspace (scope "all"); otherwise it is dropped
+	// here, before anyone's membership is looked up.
+	wide := scopeAllCandidates(prefs, event)
+	if !hasAudience(event) && len(wide) == 0 {
+		log.Printf("[notification] %s for workspace %s dropped: the event names no recipients, is not marked Broadcast and nobody subscribed with scope all (task %v)",
+			event.EventType, event.WorkspaceID, event.TaskID)
 		return
 	}
 
@@ -236,6 +241,8 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 		return
 	}
 
+	aud := audience{event: event, members: members, readers: s.projectReaders(bgCtx, event, wide, members)}
+
 	logUndeliverableTarget(event, prefs, members)
 
 	meta, _ := json.Marshal(event.Metadata)
@@ -251,31 +258,9 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 			continue
 		}
 
-		if p.UserID != nil && !members[*p.UserID] {
-			continue
-		}
-
-		// Check if this event type is subscribed.
-		if !containsInStringArray(p.Events, event.EventType) {
-			continue
-		}
-
-		// Only user preferences are stored in notifications table.
-		if p.UserID == nil {
-			continue
-		}
-
-		// A targeted event (e.g. "you were made reviewer") is about one specific
-		// person, not the workspace at large — everyone else's matching preference
-		// row is not a delivery instruction for this event.
-		if event.TargetUserID != nil && *p.UserID != *event.TargetUserID {
-			continue
-		}
-
-		// And the same for an event that is about several specific people
-		// rather than one — a comment concerns the task's own people, not
-		// every colleague subscribed to comment.created.
-		if !relevantToUser(event, *p.UserID) {
+		// Membership, subscription, addressing and the row's scope: decided in
+		// one place for every channel (audience.reaches).
+		if !aud.reaches(p) {
 			continue
 		}
 
@@ -313,16 +298,7 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 			if p.UserID == nil || sentTo[*p.UserID] {
 				continue
 			}
-			if !members[*p.UserID] {
-				continue
-			}
-			if !containsInStringArray(p.Events, event.EventType) {
-				continue
-			}
-			if event.TargetUserID != nil && *p.UserID != *event.TargetUserID {
-				continue
-			}
-			if !relevantToUser(event, *p.UserID) {
+			if !aud.reaches(p) {
 				continue
 			}
 			taskURL := ""
@@ -370,7 +346,7 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 		// that knew the two would never meet said nothing. Counting the
 		// would-be recipients keeps this to one line per dispatch instead of
 		// one per subscriber.
-		if n := subscriberCountForChannel(prefs, "email", event, members); n > 0 {
+		if n := subscriberCountForChannel(prefs, "email", aud); n > 0 {
 			log.Printf("[notification][email] channel unavailable on this instance (no SMTP configured) — %d subscriber(s) to %s in workspace %s were not emailed",
 				n, event.EventType, event.WorkspaceID)
 		}
@@ -381,20 +357,7 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 			if p.Channel != "email" || p.UserID == nil || sentTo[*p.UserID] {
 				continue
 			}
-			if !members[*p.UserID] {
-				continue
-			}
-			if !containsInStringArray(p.Events, event.EventType) {
-				continue
-			}
-			// Same personal-event restriction as web_push/browser_push above:
-			// task.assigned / task.reviewer_assigned are about one specific
-			// person, and everyone else's matching row is not a delivery
-			// instruction for them.
-			if event.TargetUserID != nil && *p.UserID != *event.TargetUserID {
-				continue
-			}
-			if !relevantToUser(event, *p.UserID) {
+			if !aud.reaches(p) {
 				continue
 			}
 			sentTo[*p.UserID] = true
@@ -443,16 +406,16 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 	// once per dispatch, and only when somebody was actually waiting on it.
 	switch {
 	case s.telegramClient == nil || s.telegramIntegrations == nil:
-		s.logTelegramUndeliverable(prefs, event, members, "the Telegram channel is not wired up on this instance")
+		s.logTelegramUndeliverable(prefs, aud, "the Telegram channel is not wired up on this instance")
 	case s.telegramGate != nil && !s.telegramGate(bgCtx):
-		s.logTelegramUndeliverable(prefs, event, members, "the Telegram extension is switched off for this instance")
+		s.logTelegramUndeliverable(prefs, aud, "the Telegram extension is switched off for this instance")
 	default:
 		integration, err := s.telegramIntegrations.GetByProvider(bgCtx, event.WorkspaceID, domain.IntegrationProviderTelegram)
 		if err != nil {
 			log.Printf("[telegram] failed to load bot integration for workspace %s: %v", event.WorkspaceID, err)
-			s.logTelegramUndeliverable(prefs, event, members, "the workspace's bot integration could not be read")
+			s.logTelegramUndeliverable(prefs, aud, "the workspace's bot integration could not be read")
 		} else if token, _, ok := decodeTelegramIntegration(integration); !ok {
-			s.logTelegramUndeliverable(prefs, event, members, "this workspace has no active Telegram bot configured")
+			s.logTelegramUndeliverable(prefs, aud, "this workspace has no active Telegram bot configured")
 		} else {
 			wsName := ""
 			if s.telegramWorkspaces != nil {
@@ -473,16 +436,7 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 				if p.Channel != "telegram" || p.UserID == nil || sentTo[*p.UserID] {
 					continue
 				}
-				if !members[*p.UserID] {
-					continue
-				}
-				if !containsInStringArray(p.Events, event.EventType) {
-					continue
-				}
-				if event.TargetUserID != nil && *p.UserID != *event.TargetUserID {
-					continue
-				}
-				if !relevantToUser(event, *p.UserID) {
+				if !aud.reaches(p) {
 					continue
 				}
 				var cfg TelegramPreferenceConfig
@@ -594,8 +548,8 @@ func hasAudience(event domain.NotificationEvent) bool {
 // is the same rule at the point each channel asks, so a channel added later
 // cannot reintroduce the wider audience.
 //
-// Every fan-out loop calls this, in the same position as the TargetUserID check
-// it generalises. Which events narrow is decided once, by the producer that
+// Every fan-out loop reaches this through audience.reaches, right after the
+// TargetUserID check it generalises. Which events narrow is decided once, by the producer that
 // knows who the event is about, rather than four times over by each channel
 // guessing — so a comment reaches the same people whether they read it in the
 // bell, their inbox or Telegram, and adding a fifth channel cannot accidentally
@@ -613,6 +567,106 @@ func relevantToUser(event domain.NotificationEvent, userID uuid.UUID) bool {
 	return false
 }
 
+// audience is the one answer to "does this preference row receive this event",
+// asked by every channel's fan-out loop and by the undeliverable-channel
+// counters, so the bell, the inbox, the browser and Telegram can never disagree
+// about who is told.
+type audience struct {
+	event domain.NotificationEvent
+	// members are the subscribers entitled to the workspace's content.
+	members map[uuid.UUID]bool
+	// readers are the scope=all candidates who may read the event's project;
+	// only they are reached beyond the people the event names.
+	readers map[uuid.UUID]bool
+}
+
+// reaches applies, in order: workspace membership, the row's event-type
+// subscription, personal addressing (TargetUserID: that person on every scope,
+// nobody else) and then the row's scope:
+//   - mentions: nothing more; the participant fan-out does not apply.
+//   - mine: the people the producer named (relevantToUser).
+//   - all: the same, plus any task event of the workspace whose project the
+//     subscriber may read, except their own actions (ActorUserID).
+func (a audience) reaches(p *domain.NotificationPreference) bool {
+	if p.UserID == nil || !a.members[*p.UserID] {
+		return false
+	}
+	if !containsInStringArray(p.Events, a.event.EventType) {
+		return false
+	}
+	user := *p.UserID
+	if a.event.TargetUserID != nil {
+		return user == *a.event.TargetUserID
+	}
+	switch domain.PreferenceScope(p.Config) {
+	case domain.NotificationScopeMentions:
+		return false
+	case domain.NotificationScopeAll:
+		if relevantToUser(a.event, user) {
+			return true
+		}
+		return widensTo(a.event, user) && a.readers[user]
+	default:
+		return relevantToUser(a.event, user)
+	}
+}
+
+// widensTo reports whether scope "all" can carry this event to user beyond the
+// people it names: it has to be about a task (and say which project, so access
+// can be checked), must not be addressed to one person, and user must not be
+// the one who did it.
+func widensTo(event domain.NotificationEvent, user uuid.UUID) bool {
+	if event.TaskID == nil || event.ProjectID == nil || event.TargetUserID != nil {
+		return false
+	}
+	return event.ActorUserID == nil || *event.ActorUserID != user
+}
+
+// scopeAllCandidates lists the users that scope "all" could reach with this
+// event: an enabled row subscribed to the event type with scope all, for a
+// user widensTo allows. Membership and project access are checked afterwards.
+func scopeAllCandidates(prefs []domain.NotificationPreference, event domain.NotificationEvent) []uuid.UUID {
+	seen := make(map[uuid.UUID]bool)
+	var out []uuid.UUID
+	for i := range prefs {
+		p := &prefs[i]
+		if p.UserID == nil || seen[*p.UserID] || !p.IsEnabled {
+			continue
+		}
+		if !containsInStringArray(p.Events, event.EventType) || domain.PreferenceScope(p.Config) != domain.NotificationScopeAll {
+			continue
+		}
+		if !widensTo(event, *p.UserID) {
+			continue
+		}
+		seen[*p.UserID] = true
+		out = append(out, *p.UserID)
+	}
+	return out
+}
+
+// projectReaders narrows the scope=all candidates who are workspace members to
+// those who may read the event's project. A failed lookup reaches nobody beyond
+// the named people: an unanswerable access question is not permission.
+func (s *notificationService) projectReaders(ctx context.Context, event domain.NotificationEvent, candidates []uuid.UUID, members map[uuid.UUID]bool) map[uuid.UUID]bool {
+	var ids []uuid.UUID
+	for _, id := range candidates {
+		if members[id] {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 || event.ProjectID == nil {
+		return nil
+	}
+	readers, err := s.repo.FilterProjectReaders(ctx, event.WorkspaceID, *event.ProjectID, ids)
+	if err != nil {
+		log.Printf("[notification] failed to resolve project access for %s in workspace %s, scope-all subscribers get nothing beyond their own tasks: %v",
+			event.EventType, event.WorkspaceID, err)
+		return nil
+	}
+	return readers
+}
+
 // logTelegramUndeliverable reports, once per dispatch, that the Telegram
 // channel could not deliver anything at all — and to how many people. Mirrors
 // the email branch's unavailable-channel line, and for the same reason: the
@@ -621,16 +675,15 @@ func relevantToUser(event domain.NotificationEvent, userID uuid.UUID) bool {
 // still visible is the moment dispatch declines to try.
 func (s *notificationService) logTelegramUndeliverable(
 	prefs []domain.NotificationPreference,
-	event domain.NotificationEvent,
-	members map[uuid.UUID]bool,
+	aud audience,
 	reason string,
 ) {
-	n := subscriberCountForChannel(prefs, "telegram", event, members)
+	n := subscriberCountForChannel(prefs, "telegram", aud)
 	if n == 0 {
 		return
 	}
 	log.Printf("[notification][telegram] NOT DELIVERED: %s — %d subscriber(s) to %s in workspace %s got nothing",
-		reason, n, event.EventType, event.WorkspaceID)
+		reason, n, aud.event.EventType, aud.event.WorkspaceID)
 }
 
 // disableTelegramForUser turns off the telegram preference row for one user
@@ -695,8 +748,7 @@ func (s *notificationService) resolveEmailAddress(ctx context.Context, userID uu
 func subscriberCountForChannel(
 	prefs []domain.NotificationPreference,
 	channel string,
-	event domain.NotificationEvent,
-	members map[uuid.UUID]bool,
+	aud audience,
 ) int {
 	counted := make(map[uuid.UUID]bool)
 	for i := range prefs {
@@ -704,16 +756,7 @@ func subscriberCountForChannel(
 		if p.Channel != channel || p.UserID == nil || counted[*p.UserID] {
 			continue
 		}
-		if !members[*p.UserID] {
-			continue
-		}
-		if !containsInStringArray(p.Events, event.EventType) {
-			continue
-		}
-		if event.TargetUserID != nil && *p.UserID != *event.TargetUserID {
-			continue
-		}
-		if !relevantToUser(event, *p.UserID) {
+		if !aud.reaches(p) {
 			continue
 		}
 		counted[*p.UserID] = true

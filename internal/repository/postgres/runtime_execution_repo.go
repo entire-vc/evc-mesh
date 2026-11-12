@@ -674,12 +674,7 @@ func (r *RuntimeRepo) AgentExecutions(ctx context.Context, ws uuid.UUID, actor R
 		}
 		view.Managed = chosen != nil && enabledProjects[p.Project]
 		view.Enabled = view.Managed && view.Enabled
-		switch {
-		case !view.Managed:
-			view.Reason = execStrp("unmanaged")
-		case !view.Enabled:
-			view.Reason = execStrp("disabled")
-		}
+		view.Reason = executionReason(chosen != nil, view.Managed, view.Enabled)
 		if view.Managed {
 			for i := range routes {
 				routes[i].Order = i
@@ -716,6 +711,21 @@ func nullUUIDText(id uuid.UUID) string {
 }
 
 func execStrp(s string) *string { return &s }
+
+// executionReason says why a project view is not a managed, enabled route.
+// integration_disabled: a Runner binding exists but the project's agent-runner
+// integration is off, so the UI can name the cause and point at the switch.
+func executionReason(hasBinding, managed, enabled bool) *string {
+	switch {
+	case hasBinding && !managed:
+		return execStrp("integration_disabled")
+	case !managed:
+		return execStrp("unmanaged")
+	case !enabled:
+		return execStrp("disabled")
+	}
+	return nil
+}
 
 func sortedBindingRefs(c *domain.RuntimeCatalog) []string {
 	refs := make([]string, 0, len(c.Bindings))
