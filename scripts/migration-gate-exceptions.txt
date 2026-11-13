@@ -5,3 +5,5 @@ allow-remove 20261013002_i18n_locale.sql
 allow-remove 20261017004_agent_operator_runtime.sql
 allow-remove 20261025001_task_dependency_condition.sql
 allow-remove 20261028300_task_waits_time_evidence.sql
+allow-remove 20261113300_task_dependency_owner_wait.sql
+allow-remove 20261113300_task_input_revision.sql

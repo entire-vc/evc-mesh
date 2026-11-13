@@ -54,6 +54,7 @@
     "submit": "Comment"
   },
   "cost": {
+    "incomplete": "Some usage is unknown",
     "spawns_few": "{{count}} spawns",
     "spawns_many": "{{count}} spawns",
     "spawns_one": "{{count}} spawn",

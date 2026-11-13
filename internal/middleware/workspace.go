@@ -542,6 +542,10 @@ var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/extensions/:ext_id/allowed":                                                          true,
 	"/api/v1/extensions/:ext_id/update":                                                           true,
 	"/api/v1/extensions/:ext_id/rollback":                                                         true,
+	"/api/v1/extensions/:ext_id/move-to-catalog":                                                  true, // :ext_id is a manifest id in the instance-level installed_extensions, which no workspace owns; ExtensionRepoInstallHandler answers 403 unless the caller is an instance admin before anything is read or written
+	"/api/v1/extensions/:ext_id/move-to-catalog/plan":                                             true, // same instance-level shape and instance-admin check as move-to-catalog
+	"/api/v1/extensions/:ext_id/repin":                                                            true, // same instance-level shape and instance-admin check as move-to-catalog
+	"/api/v1/extensions/:ext_id/repin/plan":                                                       true, // same instance-level shape and instance-admin check as move-to-catalog
 	"/api/v1/instance/themes/:id":                                                                 true, // :id is an installed theme's manifest id in the instance-level catalog (installed_extensions), which no workspace owns; ThemeHandler.Delete answers 403 unless the caller is an instance admin before anything is touched
 	"/api/v1/memories/:id":                                                                        true,
 	"/api/v1/projects/:proj_id/chat/threads/:thread_id":                                           true, // ChatThreadDeleteRepo selects the thread by id AND project_id AND the caller's user_id; anything else is a 404 thread_not_found
@@ -559,6 +563,7 @@ var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/oauth/grants/:oauth_grant_id":                                                        true,
 	"/api/v1/workspaces/:ws_id/extensions/:ext_id":                                                true,
 	"/api/v1/workspaces/:ws_id/extensions/:ext_id/connect":                                        true,
+	"/api/v1/workspaces/:ws_id/extensions/:ext_id/consent":                                        true,
 	"/api/v1/workspaces/:ws_id/extensions/:ext_id/settings":                                       true,
 	"/api/v1/workspaces/:ws_id/extensions/:ext_id/enable":                                         true,
 	"/api/v1/workspaces/:ws_id/extensions/:ext_id/disable":                                        true,

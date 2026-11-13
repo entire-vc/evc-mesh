@@ -384,10 +384,15 @@ export async function getMentionables(
   );
 }
 
+// total_cost / tokens_in / tokens_out are the sum of the KNOWN figures: null when no session
+// has a known figure (never 0). *_incomplete is true when some session's figure is unknown.
 export interface TaskCostSummary {
-  total_cost: number;
-  tokens_in: number;
-  tokens_out: number;
+  total_cost: number | null;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  cost_incomplete?: boolean;
+  tokens_in_incomplete?: boolean;
+  tokens_out_incomplete?: boolean;
   session_count: number;
   rework_count: number;
   quality_flag: "golden" | "rework" | "multi-turn" | "unknown";

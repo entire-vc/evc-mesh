@@ -13,6 +13,8 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/require"
 
+	"github.com/entire-vc/evc-mesh/internal/config"
+	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
 	"github.com/entire-vc/evc-mesh/internal/extensions/telegram"
@@ -186,4 +188,67 @@ func TestBotToken_UnopenableOrEmptyIsNoBot(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "123:abc", tok)
 	require.Equal(t, "mesh_bot", name)
+}
+
+// settingRows is instance_extension_settings in memory: Get returns the row
+// written for an extension, nil when none.
+type settingRows map[string]*domain.InstanceExtensionSetting
+
+func (r settingRows) Get(_ context.Context, id string) (*domain.InstanceExtensionSetting, error) {
+	return r[id], nil
+}
+
+func (r settingRows) InsertIfAbsent(_ context.Context, s *domain.InstanceExtensionSetting, _ []string) (bool, error) {
+	if _, ok := r[s.ExtensionID]; ok {
+		return false, nil
+	}
+	c := *s
+	r[s.ExtensionID] = &c
+	return true, nil
+}
+
+func (r settingRows) Upsert(_ context.Context, s *domain.InstanceExtensionSetting, _ []string) error {
+	c := *s
+	r[s.ExtensionID] = &c
+	return nil
+}
+
+// The instance switch being off is reported, not only obeyed: the settings
+// page reads Resolved.InstanceDisabled to say "disabled at instance level"
+// instead of "not connected, ask an admin to connect a bot".
+func TestResolve_InstanceOffIsReported(t *testing.T) {
+	ctx := context.Background()
+	ws := uuid.New()
+
+	envOff := func(t *testing.T) extensions.InstanceStore {
+		t.Setenv("MESH_TELEGRAM_ENABLED", "false")
+		cfg := &config.Config{}
+		cfg.Telegram.Enabled = false
+		return &extensions.DBInstanceStore{Repo: settingRows{}, Cfg: cfg, Sources: extensions.BuiltinEnvSources()}
+	}
+	rowOff := func(*testing.T) extensions.InstanceStore {
+		return &extensions.DBInstanceStore{Repo: settingRows{telegram.ID: {
+			ExtensionID: telegram.ID, Enabled: false, Source: domain.InstanceSettingSourceEnv,
+		}}}
+	}
+
+	for name, store := range map[string]func(*testing.T) extensions.InstanceStore{"row enabled=f": rowOff, "env false": envOff} {
+		for rowName, row := range map[string]*extensions.Connection{"no bot": nil, "active bot": bot(true), "inactive bot": bot(false)} {
+			t.Run(name+"/"+rowName, func(t *testing.T) {
+				r, err := newProvider(conns{row: row}, store(t)).Resolve(ctx, ws)
+				require.NoError(t, err)
+				require.True(t, r.InstanceDisabled, "instance switch off must be reported")
+				require.False(t, r.Enabled)
+				require.Empty(t, r.Settings, "an instance-off channel exposes no bot settings")
+			})
+		}
+	}
+
+	// switched on or unset: nothing to report
+	for name, i := range map[string]inst{"unset": {}, "on": {s: &extensions.InstanceSetting{Enabled: true}}, "unreadable": {err: errors.New("db")}} {
+		r, err := newProvider(conns{row: bot(true)}, i).Resolve(ctx, ws)
+		require.NoError(t, err, name)
+		require.False(t, r.InstanceDisabled, name)
+		require.True(t, r.Enabled, name)
+	}
 }

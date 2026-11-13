@@ -24,7 +24,7 @@ What is selected, for a diff `base..head`:
      package: a test-only edit cannot change how a dependent behaves;
   5. every package that declares, in go_test_file_deps.txt, that its tests read a
      file the diff touched. Several tests here parse other packages' sources,
-     `cmd/api/main.go`, `migrations/` or `web/src/locales/`: no import edge shows it.
+     the `cmd/api` sources, `migrations/` or `web/src/locales/`: no import edge shows it.
 
 It answers `ALL` instead of guessing when anything cannot be resolved: go.mod or
 go.sum, a migration, a CI file, a shared test helper, a changed file that no

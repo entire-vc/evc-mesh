@@ -47,21 +47,25 @@ type ExtensionRepoState struct {
 
 // InstalledExtension is a row of installed_extensions (instance level).
 type InstalledExtension struct {
-	ExtensionID     string              `db:"extension_id"`
-	Version         string              `db:"version"`
-	Manifest        json.RawMessage     `db:"manifest"`
-	Source          ExtensionSource     `db:"source"`
-	RepoURL         string              `db:"repo_url"`
-	RepoRef         string              `db:"repo_ref"`
-	CommitSHA       string              `db:"commit_sha"`
-	ArtifactSHA256  string              `db:"artifact_sha256"`
-	TrustLevel      ExtensionTrustLevel `db:"trust_level"`
-	InstalledBy     *uuid.UUID          `db:"installed_by"`
-	PreviousVersion string              `db:"previous_version"`
-	Blocked         bool                `db:"blocked"`
-	BlockedReason   string              `db:"blocked_reason"`
-	CreatedAt       time.Time           `db:"created_at"`
-	UpdatedAt       time.Time           `db:"updated_at"`
+	ExtensionID    string              `db:"extension_id"`
+	Version        string              `db:"version"`
+	Manifest       json.RawMessage     `db:"manifest"`
+	Source         ExtensionSource     `db:"source"`
+	RepoURL        string              `db:"repo_url"`
+	RepoRef        string              `db:"repo_ref"`
+	CommitSHA      string              `db:"commit_sha"`
+	ArtifactSHA256 string              `db:"artifact_sha256"`
+	TrustLevel     ExtensionTrustLevel `db:"trust_level"`
+	// CatalogScope is "scoped" for a catalog install taken from an exact
+	// receipt: it is pinned to that version (autoupdate and the default
+	// catalogue's latest never move it). "default" otherwise.
+	CatalogScope    string     `db:"catalog_scope"`
+	InstalledBy     *uuid.UUID `db:"installed_by"`
+	PreviousVersion string     `db:"previous_version"`
+	Blocked         bool       `db:"blocked"`
+	BlockedReason   string     `db:"blocked_reason"`
+	CreatedAt       time.Time  `db:"created_at"`
+	UpdatedAt       time.Time  `db:"updated_at"`
 }
 
 // CatalogSnapshot is everything an update of a source=catalog row replaced,
@@ -69,16 +73,19 @@ type InstalledExtension struct {
 // Superseded* fields name the release the snapshot was taken against: a row
 // that has moved on since is stale and must not be rolled back from it.
 type CatalogSnapshot struct {
-	Version           string          `json:"version"`
-	Manifest          json.RawMessage `json:"manifest"`
-	CommitSHA         string          `json:"commit_sha"`
-	ArtifactSHA256    string          `json:"artifact_sha256"`
-	TrustLevel        string          `json:"trust_level"`
-	Source            string          `json:"source"`
-	SupersededVersion string          `json:"superseded_version"`
-	SupersededCommit  string          `json:"superseded_commit"`
-	CapturedAt        time.Time       `json:"captured_at"`
-	Digest            string          `json:"digest"`
+	Version        string          `json:"version"`
+	Manifest       json.RawMessage `json:"manifest"`
+	CommitSHA      string          `json:"commit_sha"`
+	ArtifactSHA256 string          `json:"artifact_sha256"`
+	TrustLevel     string          `json:"trust_level"`
+	Source         string          `json:"source"`
+	// CatalogScope is the scope the snapshot's release was installed with;
+	// "" (legacy snapshot) means default.
+	CatalogScope      string    `json:"catalog_scope,omitempty"`
+	SupersededVersion string    `json:"superseded_version"`
+	SupersededCommit  string    `json:"superseded_commit"`
+	CapturedAt        time.Time `json:"captured_at"`
+	Digest            string    `json:"digest"`
 }
 
 // canonicalJSON re-encodes raw with sorted keys and no insignificant spacing,
@@ -102,6 +109,12 @@ func (s CatalogSnapshot) ComputeDigest() string {
 	h := sha256.New()
 	for _, f := range []string{s.Version, string(canonicalJSON(s.Manifest)), s.CommitSHA, s.ArtifactSHA256, s.TrustLevel, s.Source, s.SupersededVersion, s.SupersededCommit} {
 		h.Write([]byte(f))
+		h.Write([]byte{0})
+	}
+	// Only a non-default scope enters the digest, so the snapshots sealed
+	// before the scope existed stay intact.
+	if s.CatalogScope != "" && s.CatalogScope != "default" {
+		h.Write([]byte("catalog_scope=" + s.CatalogScope))
 		h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil))
@@ -131,3 +144,21 @@ type CatalogUpdateGuard struct {
 	// row lock and the update refused when it equals the target.
 	Auto bool
 }
+
+// ExtensionStateGuard is what a move or a re-pin requires the installed row to
+// still be when it writes: the source, version and commit the admin's plan
+// was made against. Anything else is a concurrent change and nothing is written.
+type ExtensionStateGuard struct {
+	Source    ExtensionSource
+	Version   string
+	CommitSHA string
+}
+
+// RepoTokenChange says what a re-pin does with the stored repository token.
+type RepoTokenChange string
+
+const (
+	RepoTokenKeep    RepoTokenChange = "keep"
+	RepoTokenReplace RepoTokenChange = "replace"
+	RepoTokenRemove  RepoTokenChange = "remove"
+)

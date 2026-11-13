@@ -10,11 +10,12 @@ import (
 	"image/png"
 	"mime/multipart"
 	"net/http"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/entire-vc/evc-mesh/internal/apisource"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -93,6 +94,7 @@ var wsScopedRoutes = []wsRoute{
 	{http.MethodPost, "/extensions/" + dummyUUID + "/enable", map[string]string{}},
 	{http.MethodPost, "/extensions/" + dummyUUID + "/disable", map[string]string{}},
 	{http.MethodPost, "/extensions/" + dummyUUID + "/test", map[string]string{}},
+	{http.MethodPost, "/extensions/" + dummyUUID + "/consent", map[string]string{"version": "1.0.0"}},
 	{http.MethodPut, "/extensions/" + dummyUUID + "/project-scope", map[string]string{"project_scope": "bound"}},
 	{http.MethodDelete, "/extensions/" + dummyUUID, nil},
 	{http.MethodGet, "/chat/settings", nil},
@@ -344,7 +346,7 @@ func TestCrossTenant_WorkspaceStillWorksForItsOwner(t *testing.T) {
 // workspace route would slip out of the membership guard unnoticed, so such a move has
 // to land it in the exception list or fail here.
 func TestCrossTenant_RouteTableIsComplete(t *testing.T) {
-	src, err := os.ReadFile("../../cmd/api/main.go")
+	src, err := apisource.Read("../../cmd/api")
 	require.NoError(t, err, "cannot read route registrations")
 
 	re := regexp.MustCompile(`\b(?:api|v1)\.(GET|HEAD|POST|PUT|PATCH|DELETE)\("(/workspaces/:ws_id[^"]*)"`)

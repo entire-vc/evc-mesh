@@ -2,9 +2,10 @@ package main
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"testing"
+
+	"github.com/entire-vc/evc-mesh/internal/apisource"
 )
 
 // TestRulesServiceWiresAgentWorkspaceGrantRepo holds shut a gap of the same
@@ -17,10 +18,10 @@ import (
 //
 // GetTeamDirectory (internal/service/rules_service.go) reads s.agentGrantRepo
 // to list GUEST agents — home workspace elsewhere, reached into this one via
-// an active agent_workspace_grants connection (task U3/#71627c5a). Unwired,
+// an active agent_workspace_grants connection (task U3/an internal ticket). Unwired,
 // GET /workspaces/:ws_id/team reverts to home-only: a correctly invited,
 // actively-granted agent is simply missing from the directory, with no error
-// to notice — the exact "не видно" repro #71627c5a was filed against, not an
+// to notice — the exact "не видно" repro an internal ticket was filed against, not an
 // outage this time but a silent narrowing.
 //
 // AST walk of the NewRulesServiceWithOptions call, not a grep, for the same
@@ -34,7 +35,7 @@ func TestRulesServiceWiresAgentWorkspaceGrantRepo(t *testing.T) {
 	)
 
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	file, err := apisource.Parse(fset, ".", 0)
 	if err != nil {
 		t.Fatalf("parse main.go: %v", err)
 	}

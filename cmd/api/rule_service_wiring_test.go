@@ -2,9 +2,10 @@ package main
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"testing"
+
+	"github.com/entire-vc/evc-mesh/internal/apisource"
 )
 
 // TestRuleServiceWiresTaskStatusRepoForAllowCancelled holds shut a gap that is
@@ -17,11 +18,11 @@ import (
 // That check only runs when deps.taskStatusRepo is non-nil — and taskStatusRepo is
 // an OPTIONAL dependency of ruleService, wired only via WithRuleTaskStatusRepo.
 //
-// Until this fix (#204c0311), main.go constructed ruleService WITHOUT that option,
+// Until this fix, main.go constructed ruleService WITHOUT that option,
 // so in production deps.taskStatusRepo was always nil, allow_cancelled was silently
 // a no-op, and any parent task with even one cancelled subtask could never reach
 // done/review — no matter how the rule was configured. Live incident: task
-// #815f703b, workspace rule "Require subtasks done before close" had
+// an internal ticket, workspace rule "Require subtasks done before close" had
 // allow_cancelled:true the whole time and it was never honored.
 //
 // internal/service tests cannot catch this: they construct evaluatorDeps directly
@@ -37,7 +38,7 @@ func TestRuleServiceWiresTaskStatusRepoForAllowCancelled(t *testing.T) {
 	)
 
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	file, err := apisource.Parse(fset, ".", 0)
 	if err != nil {
 		t.Fatalf("parse main.go: %v", err)
 	}

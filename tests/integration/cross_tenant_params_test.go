@@ -10,12 +10,13 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/entire-vc/evc-mesh/internal/apisource"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -357,7 +358,7 @@ func (f *victimFixture) concreteURL(pattern string) string {
 // covers was a hand-maintained list of guarded routes falling behind the router.
 func discoverScopedRoutes(t *testing.T) []struct{ Method, Path string } {
 	t.Helper()
-	src, err := os.ReadFile("../../cmd/api/main.go")
+	src, err := apisource.Read("../../cmd/api")
 	require.NoError(t, err, "cannot read route registrations")
 
 	re := regexp.MustCompile(`api\.(GET|POST|PUT|PATCH|DELETE)\("(/[^"]*)"`)

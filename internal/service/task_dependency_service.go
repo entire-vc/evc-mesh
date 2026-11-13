@@ -432,6 +432,18 @@ func (s *taskDependencyService) DeleteIfGeneration(ctx context.Context, taskID, 
 	})
 }
 
+// DeleteIfOwned deletes the edge only at the expected generation and only
+// while the typed wait ownerWaitID owns it.
+func (s *taskDependencyService) DeleteIfOwned(ctx context.Context, taskID, id uuid.UUID, gen int64, ownerWaitID uuid.UUID) error {
+	return s.deleteEdge(ctx, id, func() error {
+		err := s.depRepo.DeleteIfOwned(ctx, taskID, id, gen, ownerWaitID)
+		if errors.Is(err, domain.ErrStaleDependencyGeneration) {
+			return apierror.Conflict("dependency changed since it was read or is not owned by this wait (generation or owner mismatch); re-read and retry")
+		}
+		return err
+	})
+}
+
 func (s *taskDependencyService) deleteEdge(ctx context.Context, id uuid.UUID, del func() error) error {
 	// Read the edge before deleting it — afterwards its type and endpoints are gone.
 	// A read failure must not block the delete: the edge removal is what the caller

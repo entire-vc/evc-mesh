@@ -38,6 +38,17 @@ type extensionEventSubscriptionService struct {
 	subs         repository.ExtensionEventSubscriptionRepository
 	integrations repository.IntegrationRepository
 	installed    repository.InstalledExtensionRepository
+	consents     repository.ExtensionConsentRepository
+}
+
+// WithSubscriptionConsents makes Subscribe also require the workspace's consent
+// to the event: a declared event the workspace has not agreed to yet (a newer
+// manifest added it) is refused until POST .../consent.
+func WithSubscriptionConsents(s ExtensionEventSubscriptionService, c repository.ExtensionConsentRepository) ExtensionEventSubscriptionService {
+	if impl, ok := s.(*extensionEventSubscriptionService); ok {
+		impl.consents = c
+	}
+	return s
 }
 
 // NewExtensionEventSubscriptionService creates the service.
@@ -77,6 +88,15 @@ func (s *extensionEventSubscriptionService) Subscribe(ctx context.Context, in Cr
 	}
 	if !slices.Contains(manifest.Capabilities.Events, in.Event) {
 		return nil, apierror.ForbiddenWithDetails("the extension manifest does not declare this event in capabilities.events", in.Event)
+	}
+	if s.consents != nil {
+		c, cerr := s.consents.GetConsent(ctx, conn.WorkspaceID, string(conn.Provider))
+		if cerr != nil {
+			return nil, cerr
+		}
+		if c == nil || !slices.Contains(c.Capabilities, "events:"+in.Event) {
+			return nil, apierror.ForbiddenWithDetails("the workspace has not consented to this event; consent to the installed version first", in.Event)
+		}
 	}
 
 	return s.subs.Create(ctx, &domain.ExtensionEventSubscription{

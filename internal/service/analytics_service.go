@@ -375,6 +375,12 @@ type costTotalsRow struct {
 	TokensOut            int64   `db:"tokens_out"`
 	SessionCount         int     `db:"session_count"`
 	ReportedSessionCount int     `db:"reported_session_count"`
+	// A reporter said the figure is unknown for at least one session in the period
+	// (the totals above are then the known sum). Sessions that never reported are
+	// counted by ReportedSessionCount, not here.
+	CostIncomplete      bool `db:"cost_incomplete"`
+	TokensInIncomplete  bool `db:"tokens_in_incomplete"`
+	TokensOutIncomplete bool `db:"tokens_out_incomplete"`
 }
 
 // agentCostQueryRow holds one row from the per-agent cost aggregation.
@@ -434,7 +440,10 @@ func (s *analyticsService) queryCostMetrics(ctx context.Context, filter Analytic
 		       COALESCE(SUM(ags.tokens_in), 0) AS tokens_in,
 		       COALESCE(SUM(ags.tokens_out), 0) AS tokens_out,
 		       COUNT(*) AS session_count,
-		       COUNT(*) FILTER (WHERE ags.model_used <> '' AND ags.model_used IS NOT NULL) AS reported_session_count
+		       COUNT(*) FILTER (WHERE ags.model_used <> '' AND ags.model_used IS NOT NULL) AS reported_session_count,
+		       COALESCE(bool_or(ags.cost_unknown), false) AS cost_incomplete,
+		       COALESCE(bool_or(ags.tokens_in_unknown), false) AS tokens_in_incomplete,
+		       COALESCE(bool_or(ags.tokens_out_unknown), false) AS tokens_out_incomplete
 		FROM agent_sessions ags
 		LEFT JOIN tasks t ON t.id = ags.task_id
 		WHERE ags.workspace_id = $1
@@ -562,6 +571,9 @@ func (s *analyticsService) queryCostMetrics(ctx context.Context, filter Analytic
 		TotalTokensOut:       totals.TokensOut,
 		SessionCount:         totals.SessionCount,
 		ReportedSessionCount: totals.ReportedSessionCount,
+		CostIncomplete:       totals.CostIncomplete,
+		TokensInIncomplete:   totals.TokensInIncomplete,
+		TokensOutIncomplete:  totals.TokensOutIncomplete,
 		ByAgent:              byAgent,
 		ByProject:            byProject,
 		ByDay:                byDay,

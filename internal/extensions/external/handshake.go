@@ -50,6 +50,11 @@ type Subscriptions interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
+// ConsentReader reads the consent recorded on a workspace connection.
+type ConsentReader interface {
+	GetConsent(ctx context.Context, workspaceID uuid.UUID, extensionID string) (*domain.ExtensionConsent, error)
+}
+
 // installRequest is the body of POST {base}{install_path}. The service keeps
 // signing_secret and verifies every later event with it. install_code is the
 // one-time code the service issued for binding; it is sent only when the
@@ -80,6 +85,10 @@ type Handshaker struct {
 	// Tokens delivers the extension actor token to a service whose manifest
 	// sets external.token_path. nil disables delivery.
 	Tokens TokenStore
+	// Consents is the workspace consent: the connection is subscribed only to
+	// the declared events it consented to, and one without a consent record to
+	// none. nil (tests of the wire format only) subscribes every declared event.
+	Consents ConsentReader
 
 	delivery tokenDelivery
 
@@ -117,8 +126,8 @@ func (h *Handshaker) key(ws uuid.UUID, ext string) string { return ws.String() +
 // fingerprint covers what the service was told, including the full SHA-256
 // digests of the signing secret and the install code, so a rotated secret or a
 // new code forces a new handshake.
-func fingerprint(m extensions.Manifest, base, secret, code string) string {
-	ev := slices.Clone(m.Capabilities.Events)
+func fingerprint(m extensions.Manifest, events []string, base, secret, code string) string {
+	ev := slices.Clone(events)
 	slices.Sort(ev)
 	sum := sha256.Sum256([]byte(secret))
 	fp := m.Version + "|" + base + "|" + strings.Join(ev, ",") + "|" + hex.EncodeToString(sum[:])
@@ -154,7 +163,11 @@ func (h *Handshaker) Ensure(ctx context.Context, p *Provider, ws uuid.UUID, sett
 	if err != nil {
 		return h.Run(ctx, p, ws, settings)
 	}
-	fp := fingerprint(p.Man, base, secret, code)
+	events, err := h.events(ctx, p.Man, ws)
+	if err != nil {
+		return h.Run(ctx, p, ws, settings)
+	}
+	fp := fingerprint(p.Man, events, base, secret, code)
 	h.mu.Lock()
 	same := h.done[h.key(ws, p.Man.ID)] == fp
 	h.mu.Unlock()
@@ -168,6 +181,18 @@ func (h *Handshaker) Ensure(ctx context.Context, p *Provider, ws uuid.UUID, sett
 // (install_path), then align subscriptions. Errors carry no secret and no
 // response body.
 func (h *Handshaker) Run(ctx context.Context, p *Provider, ws uuid.UUID, settings map[string]any) error {
+	return h.run(ctx, p, ws, settings, true)
+}
+
+// Refresh is Run without token delivery, for a re-consent: the service learns
+// the consented events and the subscriptions follow, while the actor token is
+// neither issued nor rotated. A first delivery still owed (token_path, never
+// delivered) stays with the next Run or Ensure, exactly as before the consent.
+func (h *Handshaker) Refresh(ctx context.Context, p *Provider, ws uuid.UUID, settings map[string]any) error {
+	return h.run(ctx, p, ws, settings, false)
+}
+
+func (h *Handshaker) run(ctx context.Context, p *Provider, ws uuid.UUID, settings map[string]any, deliverToken bool) error {
 	m := p.Man
 	h.Forget(ws, m.ID)
 	base, err := p.baseURL(settings)
@@ -190,7 +215,10 @@ func (h *Handshaker) Run(ctx context.Context, p *Provider, ws uuid.UUID, setting
 	if err != nil {
 		return err
 	}
-	events := publicDeclared(m)
+	events, err := h.events(ctx, m, ws)
+	if err != nil {
+		return err
+	}
 	if p.ext.InstallPath != "" {
 		if err := h.install(ctx, p, base, installRequest{
 			ExtensionID: m.ID, Version: m.Version, WorkspaceID: ws, SigningSecret: secret,
@@ -203,14 +231,19 @@ func (h *Handshaker) Run(ctx context.Context, p *Provider, ws uuid.UUID, setting
 	if err := h.alignSubscriptions(ctx, conn.ID, base, p.ext.EventsPath, name, events); err != nil {
 		return err
 	}
-	if err := h.deliverOnInstall(ctx, p, ws, conn.ID, base, secret); err != nil {
+	if !deliverToken {
+		if p.HasTokenPath() && h.Tokens != nil {
+			// Delivery was skipped, so no memo: Ensure must still run it.
+			return nil
+		}
+	} else if err := h.deliverOnInstall(ctx, p, ws, conn.ID, base, secret); err != nil {
 		return err
 	}
 	h.mu.Lock()
 	if h.done == nil {
 		h.done = map[string]string{}
 	}
-	h.done[h.key(ws, m.ID)] = fingerprint(m, base, secret, code)
+	h.done[h.key(ws, m.ID)] = fingerprint(m, events, base, secret, code)
 	h.mu.Unlock()
 	return nil
 }
@@ -228,6 +261,37 @@ func publicDeclared(m extensions.Manifest) []string {
 	var out []string
 	for _, e := range m.Capabilities.Events {
 		if extensions.IsPublicEvent(e) && !slices.Contains(out, e) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// events is what the connection is subscribed to and what install announces:
+// the public events the manifest declares that the workspace consented to. An
+// event a newer manifest added waits for the consent (POST .../consent); a
+// connection with no consent record gets none.
+func (h *Handshaker) events(ctx context.Context, m extensions.Manifest, ws uuid.UUID) ([]string, error) {
+	declared := publicDeclared(m)
+	if h.Consents == nil {
+		return declared, nil
+	}
+	c, err := h.Consents.GetConsent(ctx, ws, m.ID)
+	if err != nil {
+		return nil, errors.New("consent lookup failed")
+	}
+	return ConsentedEvents(declared, c), nil
+}
+
+// ConsentedEvents keeps the events of declared the consent covers
+// ("events:<name>"); none for a nil consent. Never nil.
+func ConsentedEvents(declared []string, c *domain.ExtensionConsent) []string {
+	out := []string{}
+	if c == nil {
+		return out
+	}
+	for _, e := range declared {
+		if slices.Contains(c.Capabilities, "events:"+e) {
 			out = append(out, e)
 		}
 	}

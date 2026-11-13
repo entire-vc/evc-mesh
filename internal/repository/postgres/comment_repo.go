@@ -50,13 +50,28 @@ func (r *CommentRepo) Create(ctx context.Context, comment *domain.Comment) error
 	if metadata == nil {
 		metadata = json.RawMessage(`{}`)
 	}
-	_, err := r.db.ExecContext(ctx, q,
-		comment.ID, comment.TaskID, comment.ParentCommentID,
+	args := []any{comment.ID, comment.TaskID, comment.ParentCommentID,
 		comment.AuthorID, comment.AuthorType, comment.Body,
 		metadata, comment.SystemCode, comment.SystemParams, comment.IsInternal,
-		comment.CreatedAt, comment.UpdatedAt,
-	)
-	return err
+		comment.CreatedAt, comment.UpdatedAt}
+	if comment.Fence == nil {
+		_, err := r.db.ExecContext(ctx, q, args...)
+		return err
+	}
+	// A fenced comment commits only while the caller holds the named lock,
+	// checked under the task row lock in the insert's own transaction.
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := checkResultFenceTx(ctx, tx, comment.Fence); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, q, args...); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *CommentRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Comment, error) {

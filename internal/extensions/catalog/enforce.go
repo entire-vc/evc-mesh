@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
@@ -36,6 +37,51 @@ type Enforcer struct {
 	Notify func(ctx context.Context, extensionID, reason string, blocked bool)
 	// OnChange runs once after a pass that changed anything (runtime resync).
 	OnChange func(ctx context.Context)
+	// Exact reads the exact receipt of id@version (Client.FetchExact). A
+	// scoped install is judged by it: Spark leaves scoped blocks out of the
+	// default blocklist and answers a blocked, yanked or suspended exact
+	// selection with 404. Nil judges scoped installs by the default blocklist only.
+	Exact func(ctx context.Context, id, version string) (*ExactReceipt, error)
+}
+
+// ReasonScopedWithdrawn is the block reason of a scoped install whose exact
+// receipt Spark no longer serves (404).
+const ReasonScopedWithdrawn = "Spark no longer offers this exact release (blocked, yanked or withdrawn)"
+
+// verdict is whether row must be blocked and why. A scoped row's exact
+// receipt is re-read on every pass, also when the default blocklist already
+// names it: either source blocks, the default block's reason wins. ok=false:
+// the state cannot be judged now (Spark unreachable, receipt does not verify)
+// and the row is left as it is, unless the default blocklist alone blocks it.
+func (e *Enforcer) verdict(ctx context.Context, cat *Catalog, row *domain.InstalledExtension) (b Block, hit, ok bool) {
+	def, defHit := cat.Blocks(row.ExtensionID, row.Version)
+	if !IsScoped(row) || e.Exact == nil {
+		return def, defHit, true
+	}
+	b, hit, ok = e.exactVerdict(ctx, row)
+	if defHit {
+		return def, true, true
+	}
+	return b, hit, ok
+}
+
+// exactVerdict judges a scoped row by its exact receipt alone.
+func (e *Enforcer) exactVerdict(ctx context.Context, row *domain.InstalledExtension) (b Block, hit, ok bool) {
+	rc, err := e.Exact(ctx, row.ExtensionID, row.Version)
+	switch {
+	case errors.Is(err, ErrSelectionUnavailable):
+		return Block{ID: row.ExtensionID, Version: row.Version, Reason: ReasonScopedWithdrawn}, true, true
+	case err != nil:
+		log.Printf("[extensions] blocklist: exact receipt %s@%s: %v; state kept", row.ExtensionID, row.Version, err)
+		return Block{}, false, false
+	}
+	if rel := rc.Entry.Latest; rel.CommitSHA != row.CommitSHA || rel.ArtifactSHA256 == nil || *rel.ArtifactSHA256 != row.ArtifactSHA256 {
+		// The same id@version now names other bytes: what runs here is not
+		// what Spark offers any more.
+		return Block{ID: row.ExtensionID, Version: row.Version, Reason: ReasonScopedWithdrawn}, true, true
+	}
+	b, hit = rc.Catalog.Blocks(row.ExtensionID, row.Version)
+	return b, hit, true
 }
 
 // Apply runs one pass over the installed extensions against cat.
@@ -51,7 +97,10 @@ func (e *Enforcer) Apply(ctx context.Context, cat *Catalog) {
 		if row.Source == domain.ExtensionSourceBuiltin {
 			continue
 		}
-		b, hit := cat.Blocks(row.ExtensionID, row.Version)
+		b, hit, judged := e.verdict(ctx, cat, row)
+		if !judged {
+			continue
+		}
 		if hit == row.Blocked && (!hit || row.BlockedReason == b.Reason) {
 			continue
 		}

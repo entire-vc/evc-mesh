@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/entire-vc/evc-mesh/internal/apisource"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -180,7 +181,7 @@ func TestInstanceSettingsRoutes_Contract(t *testing.T) {
 // handler built with a nil instance store reports enabled=false/configured=false
 // for every extension, even with saved instance settings.
 func TestExtensionCatalogHandler_WiredWithInstanceStore(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	file, err := apisource.Parse(token.NewFileSet(), ".", 0)
 	require.NoError(t, err)
 	found := 0
 	ast.Inspect(file, func(n ast.Node) bool {

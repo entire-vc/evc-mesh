@@ -59,6 +59,9 @@ func (p *SystemParams) UnmarshalJSON(b []byte) error {
 // Comment is a threaded message on a task, authored by a user, agent, or system.
 // Internal comments (is_internal=true) are visible only to agents for inter-agent communication.
 type Comment struct {
+	// Fence, when set, makes the insert conditional on the caller's checkout
+	// never bound from JSON, never stored.
+	Fence           *ResultFence    `json:"-" db:"-"`
 	ID              uuid.UUID       `json:"id" db:"id"`
 	TaskID          uuid.UUID       `json:"task_id" db:"task_id"`
 	ParentCommentID *uuid.UUID      `json:"parent_comment_id" db:"parent_comment_id"`

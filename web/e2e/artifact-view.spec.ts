@@ -5,7 +5,7 @@ import {
   type BrowserContext,
   type Page,
 } from "@playwright/test";
-import { loginWithRetry } from "./auth-helper";
+import { loginWithRetry, pinUiLocale } from "./auth-helper";
 
 /**
  * E2E scenario: artifact-view (route /a/:artifactId, an internal ticket)
@@ -111,6 +111,8 @@ test.beforeAll(async ({ browser }) => {
   test.setTimeout(180_000);
 
   context = await browser.newContext();
+  // UI language from this context's own /auth/me, never the shared account's stored locale (see pinUiLocale).
+  await pinUiLocale(context, "en");
 
   const { accessToken: token } = await loginWithRetry(
     context.request,

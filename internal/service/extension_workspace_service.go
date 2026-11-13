@@ -59,6 +59,14 @@ type ExtensionSaveHook interface {
 	Removed(ctx context.Context, integrationID uuid.UUID)
 }
 
+// ExtensionReconsentHook is implemented by a save hook that reacts to a
+// re-consent differently from a save (external: the handshake runs without
+// token delivery, since a consent never changes the token). A hook without it
+// gets Saved.
+type ExtensionReconsentHook interface {
+	Reconsented(ctx context.Context, integrationID uuid.UUID)
+}
+
 // ExtensionHealthView is the health part of ExtensionStatusView.
 type ExtensionHealthView struct {
 	OK      bool   `json:"ok"`
@@ -93,8 +101,28 @@ type ExtensionConnectionView struct {
 	ConsentedCapabilities []string       `json:"consented_capabilities"`
 	ConsentedAt           *time.Time     `json:"consented_at,omitempty"`
 	ConsentedBy           *uuid.UUID     `json:"consented_by,omitempty"`
-	CreatedAt             time.Time      `json:"created_at"`
-	UpdatedAt             time.Time      `json:"updated_at"`
+	// ConsentedVersion and ConsentedCommit name the manifest release consented
+	// to; empty for a consent recorded before they were stored.
+	ConsentedVersion string `json:"consented_version"`
+	ConsentedCommit  string `json:"consented_commit"`
+	// NeedsConsent: the installed manifest declares rights the workspace has
+	// not agreed to (PendingConsent lists them), or nothing was ever recorded.
+	NeedsConsent   bool                `json:"needs_consent"`
+	PendingConsent *PendingConsentView `json:"pending_consent"`
+	CreatedAt      time.Time           `json:"created_at"`
+	UpdatedAt      time.Time           `json:"updated_at"`
+}
+
+// PendingConsentView is what POST .../consent would grant: the installed
+// release and the capabilities it declares beyond the recorded consent. It is
+// computed on read, nothing is stored for it.
+type PendingConsentView struct {
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+	// AddedCapabilities are flat "kind:value", as consented_capabilities.
+	AddedCapabilities []string `json:"added_capabilities"`
+	// AddedEvents are the event names among them, without the "events:" prefix.
+	AddedEvents []string `json:"added_events"`
 }
 
 // WorkspaceExtensionView is one item of GET /workspaces/{ws}/extensions.
@@ -166,6 +194,22 @@ type ExtensionWorkspaceService struct {
 	// run time, so no id-specific hook can be wired at startup).
 	external ExtensionSaveHook
 	activity VCSActivitySource
+	// installed reads the installed release (version, commit, manifest) of an
+	// extension; nil: the registered manifest, with no commit.
+	installed InstalledReleaseReader
+}
+
+// InstalledReleaseReader reads one installed_extensions row (nil when none).
+type InstalledReleaseReader interface {
+	Get(ctx context.Context, extensionID string) (*domain.InstalledExtension, error)
+}
+
+// WithInstalledReleases lets the view and POST .../consent name the installed
+// commit and read the manifest of an extension installed from a repository or
+// the catalog from its row, the same row the consent transaction locks.
+func (s *ExtensionWorkspaceService) WithInstalledReleases(r InstalledReleaseReader) *ExtensionWorkspaceService {
+	s.installed = r
+	return s
 }
 
 // ExternalRuntime marks a provider backed by an external service.
@@ -417,7 +461,11 @@ func (s *ExtensionWorkspaceService) Connect(ctx context.Context, ws uuid.UUID, i
 	if err != nil || stored == nil {
 		return nil, fmt.Errorf("connect extension: reload: %w", errOrMissing(err))
 	}
-	if err = s.consents.SetConsent(ctx, stored.ID, domain.ExtensionConsent{Capabilities: consent, At: now, By: by}); err != nil {
+	rel, err := s.currentRelease(ctx, p)
+	if err != nil {
+		rel = release{Version: m.Version}
+	}
+	if err = s.consents.SetConsent(ctx, stored.ID, domain.ExtensionConsent{Capabilities: consent, At: now, By: by, Version: rel.Version, Commit: rel.Commit}); err != nil {
 		// Do not leave a connection without recorded consent: the retry would hit already_connected.
 		if delErr := s.integ.Delete(ctx, stored.ID); delErr != nil {
 			return nil, fmt.Errorf("connect extension: record consent: %w (rollback of the new connection also failed: %v)", err, delErr)
@@ -426,6 +474,121 @@ func (s *ExtensionWorkspaceService) Connect(ctx context.Context, ws uuid.UUID, i
 	}
 	s.saved(ctx, id, stored.ID)
 	return s.viewPtr(ctx, ws, p)
+}
+
+// release is one installed manifest version of an extension: what a consent is
+// given for.
+type release struct {
+	Version  string
+	Commit   string
+	Declared []string
+}
+
+// releaseOf is the installed release of p: the installed_extensions row for an
+// extension installed from a repository or the catalog (its manifest is what
+// the external runtime registers), else the registered manifest with the row's
+// commit (empty for a builtin).
+func releaseOf(p extensions.Provider, inst *domain.InstalledExtension) (release, error) {
+	m := p.Manifest()
+	if inst != nil && (inst.Source == domain.ExtensionSourceRepo || inst.Source == domain.ExtensionSourceCatalog) {
+		im, err := extensions.ParseManifest(inst.Manifest)
+		if err != nil {
+			return release{}, fmt.Errorf("installed manifest of %s: %w", inst.ExtensionID, err)
+		}
+		return release{Version: inst.Version, Commit: inst.CommitSHA, Declared: extensions.DeclaredCapabilities(im.Capabilities)}, nil
+	}
+	r := release{Version: m.Version, Declared: extensions.DeclaredCapabilities(m.Capabilities)}
+	if inst != nil {
+		r.Commit = inst.CommitSHA
+	}
+	return r, nil
+}
+
+func (s *ExtensionWorkspaceService) currentRelease(ctx context.Context, p extensions.Provider) (release, error) {
+	var inst *domain.InstalledExtension
+	if s.installed != nil {
+		var err error
+		if inst, err = s.installed.Get(ctx, p.Manifest().ID); err != nil {
+			return release{}, err
+		}
+	}
+	return releaseOf(p, inst)
+}
+
+// errVersionChanged is the 409 of POST .../consent for a release that is not
+// the installed one; context names the installed one.
+func errVersionChanged(cur release) *apierror.Error {
+	return &apierror.Error{Code: http.StatusConflict, ErrorCode: "version_changed",
+		Message: "The installed extension version changed; review the rights of the installed version and consent again.",
+		Context: map[string]any{"version": cur.Version, "commit": cur.Commit}}
+}
+
+// Reconsent records the workspace's consent to the installed manifest release
+// version/commit of an existing connection: the consent becomes exactly what
+// that release declares, and the extension actor's capability snapshot is
+// replaced in the same transaction, so the token in use gains the added rights
+// (and loses the dropped ones) on its next request. Tokens, settings, project
+// scope and bindings, the enabled flag and the actor id are not touched. A
+// release other than the installed one is refused with 409 version_changed.
+// After the commit the install handshake is re-sent (subscriptions follow the
+// new consent); its failure leaves the consent recorded and is retried by the
+// health check, as after a connect.
+func (s *ExtensionWorkspaceService) Reconsent(ctx context.Context, ws uuid.UUID, id string, by *uuid.UUID, version, commit string) (*WorkspaceExtensionView, error) {
+	p, row, err := s.connection(ctx, ws, id)
+	if err != nil {
+		return nil, err
+	}
+	if merr := refuseManagedElsewhere(p); merr != nil {
+		return nil, merr
+	}
+	if strings.TrimSpace(version) == "" {
+		return nil, apierror.ValidationError(map[string]string{"version": "the manifest version consented to is required"})
+	}
+	m := p.Manifest()
+	if aerr := extensions.RequireAllowed(ctx, s.allow, m.ID); aerr != nil {
+		return nil, aerr
+	}
+	now := time.Now()
+	_, err = s.consents.Reconsent(ctx, row.ID, m.ID, func(t domain.ExtensionReconsentTarget) (domain.ExtensionConsent, []byte, error) {
+		cur, rerr := releaseOf(p, t.Installed)
+		if rerr != nil {
+			return domain.ExtensionConsent{}, nil, rerr
+		}
+		if cur.Version != version || cur.Commit != commit {
+			return domain.ExtensionConsent{}, nil, errVersionChanged(cur)
+		}
+		// The registry may lag the row on another replica: a provider whose
+		// manifest is not this release yet is refused too, or the rights
+		// enforced would not be the ones agreed to.
+		if t.Installed == nil || t.Installed.Source == domain.ExtensionSourceBuiltin {
+			if m.Version != version {
+				return domain.ExtensionConsent{}, nil, errVersionChanged(cur)
+			}
+		}
+		caps, merr := json.Marshal(CapabilitiesByKind(cur.Declared))
+		if merr != nil {
+			return domain.ExtensionConsent{}, nil, merr
+		}
+		return domain.ExtensionConsent{Capabilities: cur.Declared, At: now, By: by, Version: cur.Version, Commit: cur.Commit}, caps, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.reconsented(ctx, m.ID, row.ID)
+	return s.viewPtr(ctx, ws, p)
+}
+
+// reconsented runs the hook's re-consent reaction, else its Saved.
+func (s *ExtensionWorkspaceService) reconsented(ctx context.Context, id string, integrationID uuid.UUID) {
+	h := s.hookFor(id)
+	if h == nil {
+		return
+	}
+	if rh, ok := h.(ExtensionReconsentHook); ok {
+		rh.Reconsented(ctx, integrationID)
+		return
+	}
+	h.Saved(ctx, integrationID)
 }
 
 // PatchSettings merges settings over the current ones. A secret sent back as
@@ -717,10 +880,41 @@ func (s *ExtensionWorkspaceService) viewOf(ctx context.Context, ws uuid.UUID, p 
 			return WorkspaceExtensionView{}, err
 		}
 		if h, ok := p.(SettingsHider); ok && h.HideConnectionSettings() {
+			// Managed elsewhere (Runner): no generic consent flow either.
 			v.Connection.Settings = map[string]any{}
+		} else if err := s.fillPending(ctx, p, v.Connection, c); err != nil {
+			return WorkspaceExtensionView{}, err
 		}
 	}
 	return v, nil
+}
+
+// fillPending sets needs_consent and pending_consent: the installed release's
+// declared capabilities minus the recorded consent; all of them when nothing was
+// recorded. Rights the recorded consent has but the release no longer declares
+// are not pending: they stopped acting already.
+func (s *ExtensionWorkspaceService) fillPending(ctx context.Context, p extensions.Provider, v *ExtensionConnectionView, c *domain.ExtensionConsent) error {
+	rel, err := s.currentRelease(ctx, p)
+	if err != nil {
+		return err
+	}
+	var consented []string
+	if c != nil {
+		consented = c.Capabilities
+	}
+	added := missingCapabilities(rel.Declared, consented)
+	if c != nil && len(added) == 0 {
+		return nil
+	}
+	pv := &PendingConsentView{Version: rel.Version, Commit: rel.Commit, AddedCapabilities: []string{}, AddedEvents: []string{}}
+	for _, a := range added {
+		pv.AddedCapabilities = append(pv.AddedCapabilities, a)
+		if ev, ok := strings.CutPrefix(a, "events:"); ok {
+			pv.AddedEvents = append(pv.AddedEvents, ev)
+		}
+	}
+	v.NeedsConsent, v.PendingConsent = true, pv
+	return nil
 }
 
 func statusView(st extensions.Status) ExtensionStatusView {
@@ -758,6 +952,7 @@ func connectionView(row *domain.IntegrationConfig, c *domain.ExtensionConsent, s
 		v.ConsentedCapabilities = append([]string{}, c.Capabilities...)
 		at := c.At
 		v.ConsentedAt, v.ConsentedBy = &at, c.By
+		v.ConsentedVersion, v.ConsentedCommit = c.Version, c.Commit
 	}
 	return v, nil
 }

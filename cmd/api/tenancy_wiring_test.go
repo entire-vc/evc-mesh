@@ -2,9 +2,10 @@ package main
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"testing"
+
+	"github.com/entire-vc/evc-mesh/internal/apisource"
 )
 
 // assertNewTaskServiceOption is the shared AST walk behind both wiring guards
@@ -18,7 +19,7 @@ func assertNewTaskServiceOption(t *testing.T, option, explain string) {
 	const constructor = "NewTaskService"
 
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	file, err := apisource.Parse(fset, ".", 0)
 	if err != nil {
 		t.Fatalf("parse main.go: %v", err)
 	}
@@ -103,7 +104,7 @@ func TestTaskServiceWiresTheAssigneeTenancyGuard(t *testing.T) {
 }
 
 // TestTaskServiceWiresTheAgentWorkspaceGrantGuard is the AGENT-half sibling of
-// TestTaskServiceWiresTheAssigneeTenancyGuard (task U3/#71627c5a).
+// TestTaskServiceWiresTheAssigneeTenancyGuard (task U3/an internal ticket).
 //
 // assertAssigneeInProjectWorkspace's agent branch reads s.agentGrantRepo to
 // admit a GUEST agent — home workspace elsewhere, reached into this one via

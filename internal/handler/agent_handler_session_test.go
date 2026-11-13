@@ -74,9 +74,13 @@ func (m *mockSessionRepo) Update(ctx context.Context, s *domain.AgentSession) er
 	return nil
 }
 
-// AddUsage mirrors the real repo's contract (add onto the active session,
-// create on miss) under the mock's mutex.
 func (m *mockSessionRepo) AddUsage(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, tokensIn, tokensOut int64, cost float64, model string) (*domain.AgentSession, error) {
+	return m.ReportUsage(ctx, agentID, workspaceID, taskID, domain.SessionUsage{TokensIn: tokensIn, TokensOut: tokensOut, Cost: cost}, model)
+}
+
+// ReportUsage mirrors the real repo's contract (add onto the active session,
+// create on miss) under the mock's mutex.
+func (m *mockSessionRepo) ReportUsage(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, u domain.SessionUsage, model string) (*domain.AgentSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var target *domain.AgentSession
@@ -92,9 +96,24 @@ func (m *mockSessionRepo) AddUsage(ctx context.Context, agentID, workspaceID uui
 	} else {
 		m.updateN++
 	}
-	target.TokensIn += tokensIn
-	target.TokensOut += tokensOut
-	target.EstimatedCost += cost
+	if u.TokensInUnknown {
+		target.TokensInUnknown = true
+	} else {
+		target.TokensIn += u.TokensIn
+		target.TokensInKnown = true
+	}
+	if u.TokensOutUnknown {
+		target.TokensOutUnknown = true
+	} else {
+		target.TokensOut += u.TokensOut
+		target.TokensOutKnown = true
+	}
+	if u.CostUnknown {
+		target.CostUnknown = true
+	} else {
+		target.EstimatedCost += u.Cost
+		target.CostKnown = true
+	}
 	if model != "" {
 		target.ModelUsed = model
 	}

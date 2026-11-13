@@ -59,7 +59,7 @@ func (d TaskDependency) EffectiveCriterion() string {
 // the claim's URL. Authority of the actor is checked by the caller; actorOK
 // says it passed.
 func VerifyDependencyEvidence(dep TaskDependency, c EvidenceClaim, links []VCSLink, actorOK bool) DependencyEvidence {
-	ev := DependencyEvidence{URL: strings.TrimSpace(c.URL), HeadSHA: c.HeadSHA, Environment: c.Environment}
+	ev := DependencyEvidence{URL: strings.TrimSpace(c.URL), HeadSHA: c.HeadSHA, Environment: NormalizeVCSEnvironment(c.Environment)}
 	set := func(st EvidenceStatus, why string) DependencyEvidence { ev.Status, ev.Reason = st, why; return ev }
 	if ev.URL != "" {
 		if u, err := url.Parse(ev.URL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
@@ -120,10 +120,11 @@ func VerifyDependencyEvidence(dep TaskDependency, c EvidenceClaim, links []VCSLi
 			if d == nil || d.SHA != c.HeadSHA {
 				continue
 			}
-			if strings.TrimSpace(c.Environment) == "" {
+			if ev.Environment == "" {
 				return set(EvidenceInvalid, "environment is required for deployed")
 			}
-			if d.Environment != c.Environment {
+			// "production" in a claim names the same deploy as a stored "prod".
+			if NormalizeVCSEnvironment(d.Environment) != ev.Environment {
 				continue
 			}
 			ev.LinkID = &id

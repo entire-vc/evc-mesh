@@ -39,6 +39,7 @@ func (in *Installer) Rollback(ctx context.Context, actor *uuid.UUID, id string) 
 		"from": row.Version, "to": snap.Version, "from_commit_sha": row.CommitSHA, "commit_sha": snap.CommitSHA,
 		"from_artifact_sha256": row.ArtifactSHA256, "artifact_sha256": snap.ArtifactSHA256,
 		"from_trust": row.TrustLevel, "trust": snap.TrustLevel, "snapshot_digest": snap.Digest, "source": "catalog",
+		"from_catalog_scope": scopeName(row.CatalogScope), "catalog_scope": scopeName(snap.CatalogScope),
 	})
 	journal := &domain.InstanceExtensionJournalEntry{ActorID: actor, ExtensionID: id, Action: domain.InstanceJournalRolledBack, Details: details}
 	if err := in.Store.RollbackCatalog(ctx, id, guard, *snap, journal); err != nil {
@@ -97,7 +98,11 @@ func (in *Installer) rollbackPlan(ctx context.Context, row *domain.InstalledExte
 	if b, hit := cat.Blocks(id, snap.Version); hit {
 		return nil, apiErr(http.StatusConflict, CodeBlocked, "blocked by the catalog: "+b.Reason)
 	}
-	if err := in.releaseUsable(ctx, cat, id, snap); err != nil {
+	if snap.CatalogScope == ScopeScoped {
+		if err := in.exactReleaseUsable(ctx, id, snap); err != nil {
+			return nil, err
+		}
+	} else if err := in.releaseUsable(ctx, cat, id, snap); err != nil {
 		return nil, err
 	}
 

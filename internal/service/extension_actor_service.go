@@ -113,7 +113,41 @@ type extensionActorService struct {
 	integrations repository.IntegrationRepository
 	workspaces   repository.WorkspaceRepository
 	consents     repository.ExtensionConsentRepository
-	now          func() time.Time
+	// declared returns the capabilities the installed manifest of an extension
+	// declares, flat ("api:tasks:read"); ok=false when it is not registered.
+	declared func(extensionID string) (caps []string, ok bool)
+	now      func() time.Time
+}
+
+// WithDeclaredCapabilities narrows every authenticated principal to what the
+// installed manifest still declares: a right the workspace consented to but a
+// newer (or rolled-back) manifest no longer declares stops acting at once, while
+// the recorded consent and the actor snapshot keep it until the next consent
+// replaces them. An extension that is not registered gets no capabilities.
+// Without it the snapshot is used as is.
+func WithDeclaredCapabilities(s ExtensionActorService, declared func(extensionID string) ([]string, bool)) ExtensionActorService {
+	if impl, ok := s.(*extensionActorService); ok {
+		impl.declared = declared
+	}
+	return s
+}
+
+// NarrowCapabilities keeps the entries of caps (by kind) that declared (flat
+// "kind:value") contains. Never nil.
+func NarrowCapabilities(caps map[string][]string, declared []string) map[string][]string {
+	allowed := make(map[string]bool, len(declared))
+	for _, d := range declared {
+		allowed[d] = true
+	}
+	out := map[string][]string{}
+	for kind, vals := range caps {
+		for _, v := range vals {
+			if allowed[kind+":"+v] {
+				out[kind] = append(out[kind], v)
+			}
+		}
+	}
+	return out
 }
 
 // WithConsents lets Rotate issue the first token of a connection that has no
@@ -389,6 +423,10 @@ func (s *extensionActorService) Authenticate(ctx context.Context, rawToken strin
 			// Unreadable capabilities mean no capabilities, never "all".
 			return nil, fmt.Errorf("extension actor %s: bad capabilities: %w", row.ConnectionID, err)
 		}
+	}
+	if s.declared != nil {
+		d, _ := s.declared(row.ExtensionID)
+		caps = NarrowCapabilities(caps, d)
 	}
 	return &ExtensionPrincipal{
 		ConnectionID: row.ConnectionID, WorkspaceID: row.WorkspaceID, ActorID: row.ActorID,

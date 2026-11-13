@@ -171,6 +171,7 @@ const execScenarios = {
 let execScenario = "main", execOn = false;
 const HOST = "127.0.0.1";
 const sockets = new Set();
+const connLog = []; // the last [fixture-conn] lines, served at GET /__fixture/conn-log for fixture-connections.spec.ts
 const server = http.createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", `http://${HOST}:3019`);
   res.setHeader("Access-Control-Allow-Credentials", "true");
@@ -179,6 +180,10 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") { res.writeHead(204); return res.end(); }
   const url = new URL(req.url, `http://${HOST}`);
   let status = 200, body = {};
+  if (url.pathname === "/__fixture/conn-log") {
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    return res.end(JSON.stringify({ lines: connLog }));
+  }
   if (url.pathname === "/__fixture") {
     if (req.method === "POST") {
       let raw = ""; for await (const part of req) raw += part;
@@ -364,5 +369,36 @@ server.on("upgrade", (req, socket) => {
   const accept = createHash("sha1").update(req.headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
   socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
   sockets.add(socket); socket.on("close", () => sockets.delete(socket)); socket.on("error", () => sockets.delete(socket));
+  const st = conn.get(socket); if (st) st.upgraded = true; // a WebSocket's end is not an HTTP connection fault
 });
-server.listen(8019, "127.0.0.1", () => console.log("Board fixture listening on 127.0.0.1:8019"));
+// Idle keep-alive sockets stay open for the whole run. Playwright's route.fetch agent ignores the Keep-Alive hint and
+// reuses a pooled socket up to the moment the server closes it (default 5 s + 1 s buffer); a request written on a
+// socket the server is closing fails as `read ECONNRESET` or `socket hang up` (CI jobs 655978, 656874, 658472).
+// No idle close inside a run removes the race; a run is ~15 min and this process ends with it.
+server.keepAliveTimeout = 60 * 60 * 1000;
+// Connection diagnostics: a route.fetch in CI twice failed with `read ECONNRESET` while this server stayed up. Every
+// abnormal end of an HTTP connection goes to stderr (Playwright prints it as [WebServer]) with the server's view of
+// it: requests served on the socket, idle time since the last response, and whether the keep-alive timer had fired.
+const t0 = Date.now();
+const conn = new WeakMap();
+const logConn = (text) => {
+  const l = `[fixture-conn] +${((Date.now() - t0) / 1000).toFixed(3)}s ${text}`;
+  console.error(l); connLog.push(l); if (connLog.length > 200) connLog.shift();
+};
+server.on("connection", (socket) => {
+  const st = { peer: socket.remotePort, served: 0, lastEnd: Date.now(), keepAliveFired: false, upgraded: false };
+  conn.set(socket, st);
+  const line = (what) => logConn(`:${st.peer} ${what} served=${st.served} idle=${Date.now() - st.lastEnd}ms keepAliveFired=${st.keepAliveFired}`);
+  socket.on("timeout", () => { st.keepAliveFired = true; });
+  socket.on("error", (e) => { if (!st.upgraded) line(`socket error ${e.code ?? e.message}`); });
+  socket.on("close", (hadError) => { if (hadError && !st.upgraded) line("closed with error"); });
+});
+server.on("request", (req, res) => res.on("finish", () => {
+  const st = conn.get(req.socket); if (st) { st.served++; st.lastEnd = Date.now(); st.keepAliveFired = false; }
+}));
+server.on("clientError", (err, socket) => {
+  const st = conn.get(socket);
+  logConn(`:${st?.peer} clientError ${err.code ?? ""} ${err.message} served=${st?.served}`);
+  if (socket.writable) socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"); else socket.destroy();
+});
+server.listen(8019, "127.0.0.1", () => console.log(`Board fixture listening on 127.0.0.1:8019 (node ${process.version}, keepAliveTimeout=${server.keepAliveTimeout}ms, buffer=${server.keepAliveTimeoutBuffer ?? "n/a"}ms)`));

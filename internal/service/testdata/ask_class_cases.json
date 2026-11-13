@@ -1,5 +1,5 @@
 {
- "_about": "Shared fixture of the hard/soft class a '❓ Blocking @person' ask arms its human gate with, and the default the ask itself states (server markerDefault, Runner asks.marker_default): on the marker line or after it, never above. Byte-identical copies live in evc-mesh internal/service/testdata/ask_class_cases.json and evc-mesh-runner tests/fixtures/ask_class_cases.json. The Go test (markerGateClass) and the Python test (asks.gate_class) both assert every case, and that their hard_patterns, hard_labels and fallback_default equal the ones here. To change either side: change this file, copy it to the other repo, make both tests pass.",
+ "_about": "Shared fixture of the hard/soft class a '❓ Blocking @person' ask arms its human gate with, and the default the ask itself states (server markerDefault, Runner asks.marker_default): on the marker line or after it, never above. Byte-identical copies live in the Mesh server's internal/service/testdata/ask_class_cases.json and in this repository's tests/fixtures/ask_class_cases.json. The Go test (markerGateClass) and the Python test (asks.gate_class) both assert every case, and that their hard_patterns, hard_labels and fallback_default equal the ones here. To change either side: change this file, copy it to the other repo, make both tests pass.",
  "hard_patterns": [
   "pay\\b",
   "pays\\b",
@@ -37,6 +37,22 @@
   "бюджет",
   "купит",
   "покупк",
+  "top[- ]?up",
+  "credits?\\b",
+  "deposit",
+  "balance",
+  "пополн",
+  "баланс",
+  "перев(?:од|ест|ед|ож)[а-яё]*\\s+(?:денег|деньги|средств[а-яё]*)",
+  "[$€₽£][\\s ]?\\d",
+  "\\d[\\d.,]*[\\s ]?(?:usd|eur|руб|₽|\\$)",
+  "доллар",
+  "евро\\b",
+  "dollar",
+  "euros?\\b",
+  "бакс",
+  "\\d[\\d.,]*[\\s ]?(?:k|к|тыс)\\b",
+  "(?:за|с)кин[уь][а-яё]*(?:[\\s ]+[^\\s ]+){0,3}?[\\s ]+\\d",
   "secret",
   "key\\b",
   "keys\\b",
@@ -177,8 +193,8 @@
  "cases": [
   {
    "name": "plan approval with a stated default",
-   "body": "❓ Blocking @alex: утверждаешь план витрины на ноябрь?\nDefault: утвердить план как есть",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: утверждаешь план витрины на ноябрь?\nDefault: утвердить план как есть",
+   "slug": "morgan",
    "labels": [],
    "default": "утвердить план как есть",
    "class": "soft",
@@ -186,8 +202,8 @@
   },
   {
    "name": "soft tag without a default",
-   "body": "❓ Blocking @alex [soft]: какой цвет кнопки оставить?",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan [soft]: какой цвет кнопки оставить?",
+   "slug": "morgan",
    "labels": [],
    "default": "",
    "class": "soft",
@@ -195,8 +211,8 @@
   },
   {
    "name": "no default stated",
-   "body": "❓ Blocking @alex: какой цвет кнопки оставить?",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: какой цвет кнопки оставить?",
+   "slug": "morgan",
    "labels": [],
    "default": "",
    "class": "hard",
@@ -204,8 +220,8 @@
   },
   {
    "name": "only the system fallback default",
-   "body": "❓ Blocking @alex: какой цвет кнопки оставить?\nDefault: применить рекомендацию исполнителя / закрыть как есть",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: какой цвет кнопки оставить?\nDefault: применить рекомендацию исполнителя / закрыть как есть",
+   "slug": "morgan",
    "labels": [],
    "default": "применить рекомендацию исполнителя / закрыть как есть",
    "class": "hard",
@@ -213,8 +229,8 @@
   },
   {
    "name": "hard tag on a plain question",
-   "body": "❓ Blocking @alex [hard]: какой цвет кнопки оставить?\nDefault: утвердить план как есть",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan [hard]: какой цвет кнопки оставить?\nDefault: утвердить план как есть",
+   "slug": "morgan",
    "labels": [],
    "default": "утвердить план как есть",
    "class": "hard",
@@ -222,8 +238,8 @@
   },
   {
    "name": "payment",
-   "body": "❓ Blocking @alex: подтверждаешь оплату хостинга за год?\nDefault: оплатить",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: подтверждаешь оплату хостинга за год?\nDefault: оплатить",
+   "slug": "morgan",
    "labels": [],
    "default": "оплатить",
    "class": "hard",
@@ -231,8 +247,8 @@
   },
   {
    "name": "token under a soft tag",
-   "body": "❓ Blocking @alex [soft]: выпустить новый токен для CI?\nDefault: выпустить",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan [soft]: выпустить новый токен для CI?\nDefault: выпустить",
+   "slug": "morgan",
    "labels": [],
    "default": "выпустить",
    "class": "hard",
@@ -240,8 +256,8 @@
   },
   {
    "name": "publication",
-   "body": "❓ Blocking @alex: опубликовать анонс релиза в канале?\nDefault: утвердить план как есть",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: опубликовать анонс релиза в канале?\nDefault: утвердить план как есть",
+   "slug": "morgan",
    "labels": [],
    "default": "утвердить план как есть",
    "class": "hard",
@@ -249,8 +265,8 @@
   },
   {
    "name": "letter in his name",
-   "body": "❓ Blocking @alex: отправить лиду письмо от вашего имени?\nDefault: отправить",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: отправить лиду письмо от вашего имени?\nDefault: отправить",
+   "slug": "morgan",
    "labels": [],
    "default": "отправить",
    "class": "hard",
@@ -258,8 +274,8 @@
   },
   {
    "name": "commercial offer",
-   "body": "❓ Blocking @alex: согласовать КП для лида?\nDefault: согласовать",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: согласовать КП для лида?\nDefault: согласовать",
+   "slug": "morgan",
    "labels": [],
    "default": "согласовать",
    "class": "hard",
@@ -267,8 +283,8 @@
   },
   {
    "name": "call",
-   "body": "❓ Blocking @alex: позвонить клиенту завтра утром?\nDefault: позвонить",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: позвонить клиенту завтра утром?\nDefault: позвонить",
+   "slug": "morgan",
    "labels": [],
    "default": "позвонить",
    "class": "hard",
@@ -276,8 +292,8 @@
   },
   {
    "name": "whatsapp",
-   "body": "❓ Blocking @alex: вести переписку с лидом в WhatsApp?\nDefault: вести",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: вести переписку с лидом в WhatsApp?\nDefault: вести",
+   "slug": "morgan",
    "labels": [],
    "default": "вести",
    "class": "hard",
@@ -285,8 +301,8 @@
   },
   {
    "name": "english call",
-   "body": "❓ Blocking @alex: should I call the customer tomorrow?\nDefault: call at 10",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: should I call the customer tomorrow?\nDefault: call at 10",
+   "slug": "morgan",
    "labels": [],
    "default": "call at 10",
    "class": "hard",
@@ -294,8 +310,8 @@
   },
   {
    "name": "english offer letter",
-   "body": "❓ Blocking @alex: send the lead our offer by letter?\nDefault: send it",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: send the lead our offer by letter?\nDefault: send it",
+   "slug": "morgan",
    "labels": [],
    "default": "send it",
    "class": "hard",
@@ -303,8 +319,8 @@
   },
   {
    "name": "english outreach",
-   "body": "❓ Blocking @alex: shall I reach out to the three leads today?\nDefault: yes",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: shall I reach out to the three leads today?\nDefault: yes",
+   "slug": "morgan",
    "labels": [],
    "default": "yes",
    "class": "hard",
@@ -312,8 +328,8 @@
   },
   {
    "name": "english write to",
-   "body": "❓ Blocking @alex: should I write to the customer about the delay?\nDefault: write today",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: should I write to the customer about the delay?\nDefault: write today",
+   "slug": "morgan",
    "labels": [],
    "default": "write today",
    "class": "hard",
@@ -321,8 +337,8 @@
   },
   {
    "name": "english contact",
-   "body": "❓ Blocking @alex: contact the supplier about the refund window?\nDefault: contact them",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: contact the supplier about the refund window?\nDefault: contact them",
+   "slug": "morgan",
    "labels": [],
    "default": "contact them",
    "class": "hard",
@@ -330,8 +346,8 @@
   },
   {
    "name": "russian write to a client",
-   "body": "❓ Blocking @alex: написать клиенту про задержку?\nDefault: написать сегодня",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: написать клиенту про задержку?\nDefault: написать сегодня",
+   "slug": "morgan",
    "labels": [],
    "default": "написать сегодня",
    "class": "hard",
@@ -339,8 +355,8 @@
   },
   {
    "name": "russian get in touch",
-   "body": "❓ Blocking @alex: связаться с партнёром по интеграции?\nDefault: связаться",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: связаться с партнёром по интеграции?\nDefault: связаться",
+   "slug": "morgan",
    "labels": [],
    "default": "связаться",
    "class": "hard",
@@ -348,8 +364,8 @@
   },
   {
    "name": "writing code is not contact",
-   "body": "❓ Blocking @alex: написать тест на ретраи или оставить так?\nDefault: написать тест",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: написать тест на ретраи или оставить так?\nDefault: написать тест",
+   "slug": "morgan",
    "labels": [],
    "default": "написать тест",
    "class": "soft",
@@ -357,8 +373,8 @@
   },
   {
    "name": "english stem inside a word is not a call",
-   "body": "❓ Blocking @alex: keep the retry callback as is?\nDefault: keep it",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: keep the retry callback as is?\nDefault: keep it",
+   "slug": "morgan",
    "labels": [],
    "default": "keep it",
    "class": "soft",
@@ -366,8 +382,8 @@
   },
   {
    "name": "english behalf",
-   "body": "❓ Blocking @alex: answer the lead on your behalf?\nDefault: answer",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: answer the lead on your behalf?\nDefault: answer",
+   "slug": "morgan",
    "labels": [],
    "default": "answer",
    "class": "hard",
@@ -375,8 +391,8 @@
   },
   {
    "name": "hard label on a soft question",
-   "body": "❓ Blocking @alex: утверждаешь план витрины на ноябрь?\nDefault: утвердить план как есть",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: утверждаешь план витрины на ноябрь?\nDefault: утвердить план как есть",
+   "slug": "morgan",
    "labels": [
     "money"
    ],
@@ -386,8 +402,8 @@
   },
   {
    "name": "cyrillic whole word",
-   "body": "❓ Blocking @alex: какой счет выставить по проекту?\nDefault: утвердить план как есть",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: какой счет выставить по проекту?\nDefault: утвердить план как есть",
+   "slug": "morgan",
    "labels": [],
    "default": "утвердить план как есть",
    "class": "hard",
@@ -395,8 +411,8 @@
   },
   {
    "name": "cyrillic word prefix is not the word",
-   "body": "❓ Blocking @alex: обнулить счетчик ретраев?\nDefault: утвердить план как есть",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: обнулить счетчик ретраев?\nDefault: утвердить план как есть",
+   "slug": "morgan",
    "labels": [],
    "default": "утвердить план как есть",
    "class": "soft",
@@ -404,8 +420,8 @@
   },
   {
    "name": "stem inside a word does not match",
-   "body": "❓ Blocking @alex: перезапустить линтер или переоплатить позже?\nDefault: утвердить план как есть",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: перезапустить линтер или переоплатить позже?\nDefault: утвердить план как есть",
+   "slug": "morgan",
    "labels": [],
    "default": "утвердить план как есть",
    "class": "soft",
@@ -413,8 +429,8 @@
   },
   {
    "name": "hard word only in inline code",
-   "body": "❓ Blocking @alex: оставить шаг `delete cache` в README как есть?\nDefault: утвердить план как есть",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: оставить шаг `delete cache` в README как есть?\nDefault: утвердить план как есть",
+   "slug": "morgan",
    "labels": [],
    "default": "утвердить план как есть",
    "class": "soft",
@@ -422,8 +438,8 @@
   },
   {
    "name": "hard word only in a quote",
-   "body": "❓ Blocking @alex: принять формулировку раздела?\n> старый текст: оплата картой\nDefault: утвердить план как есть",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: принять формулировку раздела?\n> старый текст: оплата картой\nDefault: утвердить план как есть",
+   "slug": "morgan",
    "labels": [],
    "default": "утвердить план как есть",
    "class": "soft",
@@ -431,8 +447,8 @@
   },
   {
    "name": "the ask's own inline default beats a context default above it",
-   "body": "План витрин.\n- **Default:** текущий H1 «Sync your docs»\n- **B:** «Sync selected folders»\n\n---\n\n❓ **Blocking @alex**: Утверждаешь план пяти витрин (Stage 1)? Default: да, с текущим H1",
-   "slug": "alex",
+   "body": "План витрин.\n- **Default:** текущий H1 «Sync your docs»\n- **B:** «Sync selected folders»\n\n---\n\n❓ **Blocking @morgan**: Утверждаешь план пяти витрин (Stage 1)? Default: да, с текущим H1",
+   "slug": "morgan",
    "labels": [],
    "default": "да, с текущим H1",
    "class": "soft",
@@ -440,8 +456,8 @@
   },
   {
    "name": "a default line after the marker beats a context default above it",
-   "body": "- По умолчанию: вариант B\n❓ Blocking @alex: какой вариант заголовка берём?\nDefault: вариант A",
-   "slug": "alex",
+   "body": "- По умолчанию: вариант B\n❓ Blocking @morgan: какой вариант заголовка берём?\nDefault: вариант A",
+   "slug": "morgan",
    "labels": [],
    "default": "вариант A",
    "class": "soft",
@@ -449,8 +465,8 @@
   },
   {
    "name": "a context default above the marker is not the ask's default",
-   "body": "Default: вариант A\n❓ Blocking @alex: какой вариант заголовка берём?",
-   "slug": "alex",
+   "body": "Default: вариант A\n❓ Blocking @morgan: какой вариант заголовка берём?",
+   "slug": "morgan",
    "labels": [],
    "default": "",
    "class": "hard",
@@ -458,8 +474,8 @@
   },
   {
    "name": "a context default above does not make a soft-looking ask soft either",
-   "body": "- **Default:** текущий H1\n\n❓ **Blocking @alex**: утверждаешь план витрин?",
-   "slug": "alex",
+   "body": "- **Default:** текущий H1\n\n❓ **Blocking @morgan**: утверждаешь план витрин?",
+   "slug": "morgan",
    "labels": [],
    "default": "",
    "class": "hard",
@@ -467,12 +483,273 @@
   },
   {
    "name": "hard word on a later line",
-   "body": "❓ Blocking @alex: утверждаешь план витрины?\nВ плане рассылка по базе клиентов.\nDefault: утвердить план как есть",
-   "slug": "alex",
+   "body": "❓ Blocking @morgan: утверждаешь план витрины?\nВ плане рассылка по базе клиентов.\nDefault: утвердить план как есть",
+   "slug": "morgan",
    "labels": [],
    "default": "утвердить план как есть",
    "class": "hard",
    "rule": "keyword:рассылк"
+  },
+  {
+   "name": "top-up of a shared balance, default names no money (verbatim question)",
+   "body": "❓ Blocking @morgan: Пополнить общий баланс на $20 через https://openrouter.ai/settings/credits или оставить этот канал отключённым? Рекомендую пополнение: сейчас остаток $0.000002433, за сутки не восстановился, в логах Lilit подтверждены 402; после пополнения проверю рабочий запрос бота.\n\nDefault: да",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да",
+   "class": "hard",
+   "rule": "keyword:пополн"
+  },
+  {
+   "name": "top-up of a shared balance, live default (verbatim question)",
+   "body": "❓ Blocking @morgan: Пополнить общий баланс на $20 через https://openrouter.ai/settings/credits или оставить этот канал отключённым? Рекомендую пополнение: сейчас остаток $0.000002433, за сутки не восстановился, в логах Lilit подтверждены 402; после пополнения проверю рабочий запрос бота.\n\nDefault: да, пополнить",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да, пополнить",
+   "class": "hard",
+   "rule": "keyword:пополн"
+  },
+  {
+   "name": "top-up of a shared balance, verbatim question and default",
+   "body": "❓ Blocking @morgan: Пополнить общий баланс на $20 через https://openrouter.ai/settings/credits или оставить этот канал отключённым? Рекомендую пополнение: сейчас остаток $0.000002433, за сутки не восстановился, в логах Lilit подтверждены 402; после пополнения проверю рабочий запрос бота.\n\nDefault: Рекомендую пополнить на $20; без явного решения платежи не выполняются.",
+   "slug": "morgan",
+   "labels": [],
+   "default": "Рекомендую пополнить на $20; без явного решения платежи не выполняются.",
+   "class": "hard",
+   "rule": "keyword:пополн"
+  },
+  {
+   "name": "english top up credits",
+   "body": "❓ Blocking @morgan: top up the API credits so the bot answers again?\nDefault: yes, top up",
+   "slug": "morgan",
+   "labels": [],
+   "default": "yes, top up",
+   "class": "hard",
+   "rule": "keyword:top up"
+  },
+  {
+   "name": "amount in roubles after the number",
+   "body": "❓ Blocking @morgan: продлить канал ещё на месяц за 1500 ₽?\nDefault: продлить",
+   "slug": "morgan",
+   "labels": [],
+   "default": "продлить",
+   "class": "hard",
+   "rule": "keyword:1500 ₽"
+  },
+  {
+   "name": "amount with a trailing dollar sign",
+   "body": "❓ Blocking @morgan: оставить лимит канала на 20$ в месяц?\nDefault: оставить",
+   "slug": "morgan",
+   "labels": [],
+   "default": "оставить",
+   "class": "hard",
+   "rule": "keyword:20$"
+  },
+  {
+   "name": "money only in the default",
+   "body": "❓ Blocking @morgan: включаем канал бота обратно?\nDefault: да, оплатить и включить",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да, оплатить и включить",
+   "class": "hard",
+   "rule": "keyword:оплат"
+  },
+  {
+   "name": "a number without a currency stays soft",
+   "body": "❓ Blocking @morgan: поднять лимит ретраев до 20?\nDefault: поднять до 20",
+   "slug": "morgan",
+   "labels": [],
+   "default": "поднять до 20",
+   "class": "soft",
+   "rule": "no hard rule matched"
+  },
+  {
+   "name": "a marker asking nothing, default on its own line",
+   "body": "❓ Blocking @morgan:\n\nDefault: да, включить",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да, включить",
+   "class": "hard",
+   "rule": "unsure: no question text"
+  },
+  {
+   "name": "a marker asking nothing, default inline",
+   "body": "❓ Blocking @morgan: Default: да, включить",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да, включить",
+   "class": "hard",
+   "rule": "unsure: no question text"
+  },
+  {
+   "name": "a marker with only tags, a default and a deadline",
+   "body": "❓ Blocking @morgan: [soft]\n[hard]\nDefault: да\nDeadline: 2026-11-13T12:00:00Z",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да",
+   "class": "hard",
+   "rule": "unsure: no question text"
+  },
+  {
+   "name": "a question on the line after the marker stays soft",
+   "body": "❓ Blocking @morgan:\nКакой макет взять?\nDefault: левый",
+   "slug": "morgan",
+   "labels": [],
+   "default": "левый",
+   "class": "soft",
+   "rule": "no hard rule matched"
+  },
+  {
+   "name": "money transfer, infinitive",
+   "body": "❓ Blocking @morgan: Перевести средства исполнителю?\nDefault: да",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да",
+   "class": "hard",
+   "rule": "keyword:перевести средства"
+  },
+  {
+   "name": "money transfer, first person",
+   "body": "❓ Blocking @morgan: Переведу деньги подрядчику сегодня?\nDefault: да",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да",
+   "class": "hard",
+   "rule": "keyword:переведу деньги"
+  },
+  {
+   "name": "money transfer, noun",
+   "body": "❓ Blocking @morgan: Нужен перевод средств партнёру?\nDefault: да",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да",
+   "class": "hard",
+   "rule": "keyword:перевод средств"
+  },
+  {
+   "name": "a transfer of a task, not money, stays soft",
+   "body": "❓ Blocking @morgan: Перевести задачу в другой проект?\nDefault: да",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да",
+   "class": "soft",
+   "rule": "no hard rule matched"
+  },
+  {
+   "name": "amount in dollars spelled out, default yes",
+   "body": "❓ Blocking @morgan: Закинуть 20 долларов на OpenRouter?\nDefault: да",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да",
+   "class": "hard",
+   "rule": "keyword:закинуть 2"
+  },
+  {
+   "name": "amount in euros spelled out, default yes",
+   "body": "❓ Blocking @morgan: Потратить 50 евро на домен?\nDefault: да",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да",
+   "class": "hard",
+   "rule": "keyword:евро"
+  },
+  {
+   "name": "amount in dollars in English, default yes",
+   "body": "❓ Blocking @morgan: Spend 30 dollars on the domain?\nDefault: yes",
+   "slug": "morgan",
+   "labels": [],
+   "default": "yes",
+   "class": "hard",
+   "rule": "keyword:dollar"
+  },
+  {
+   "name": "amount in euros in English, default yes",
+   "body": "❓ Blocking @morgan: Spend 30 euros on the domain?\nDefault: yes",
+   "slug": "morgan",
+   "labels": [],
+   "default": "yes",
+   "class": "hard",
+   "rule": "keyword:30 eur"
+  },
+  {
+   "name": "amount in bucks, default yes",
+   "body": "❓ Blocking @morgan: Отдать 15 баксов за подписку на сервис?\nDefault: да",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да",
+   "class": "hard",
+   "rule": "keyword:бакс"
+  },
+  {
+   "name": "amount in thousands, default yes",
+   "body": "❓ Blocking @morgan: Выделить 5к на рекламу?\nDefault: да",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да",
+   "class": "hard",
+   "rule": "keyword:5к"
+  },
+  {
+   "name": "amount in thousands spelled tys, default yes",
+   "body": "❓ Blocking @morgan: Выделить 10 тыс на рекламу?\nDefault: да",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да",
+   "class": "hard",
+   "rule": "keyword:10 тыс"
+  },
+  {
+   "name": "amount in k, default yes",
+   "body": "❓ Blocking @morgan: Allocate 2k for the ads?\nDefault: yes",
+   "slug": "morgan",
+   "labels": [],
+   "default": "yes",
+   "class": "hard",
+   "rule": "keyword:2k"
+  },
+  {
+   "name": "transfer verb with a bare amount, default yes",
+   "body": "❓ Blocking @morgan: Скинуть 20 на OpenRouter?\nDefault: да",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да",
+   "class": "hard",
+   "rule": "keyword:скинуть 2"
+  },
+  {
+   "name": "transfer verb with the amount a word later, default yes",
+   "body": "❓ Blocking @morgan: Закинуть на OpenRouter 20, чтобы бот ожил?\nDefault: да",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да",
+   "class": "hard",
+   "rule": "keyword:закинуть на openrouter 2"
+  },
+  {
+   "name": "a time window is not money, default yes",
+   "body": "❓ Blocking @morgan: Оставить окно 24 часа для мягких вопросов?\nDefault: да",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да",
+   "class": "soft",
+   "rule": "no hard rule matched"
+  },
+  {
+   "name": "euro inside another word is not money, default yes",
+   "body": "❓ Blocking @morgan: Перенести сервер в европейский регион?\nDefault: да",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да",
+   "class": "soft",
+   "rule": "no hard rule matched"
+  },
+  {
+   "name": "transfer verb without an amount is not money, default yes",
+   "body": "❓ Blocking @morgan: Скинуть ссылку на макет в канал?\nDefault: да",
+   "slug": "morgan",
+   "labels": [],
+   "default": "да",
+   "class": "soft",
+   "rule": "no hard rule matched"
   }
  ]
 }

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entire-vc/evc-mesh/internal/apisource"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -679,7 +681,7 @@ type registeredRoute struct{ method, path string }
 func handlerRoutes(t *testing.T) map[string][]registeredRoute {
 	t.Helper()
 
-	src, err := os.ReadFile(filepath.Join("..", "..", "cmd", "api", "main.go"))
+	src, err := apisource.Read(filepath.Join("..", "..", "cmd", "api"))
 	require.NoError(t, err, "cannot read route registrations")
 
 	receivers := handlerMethodReceivers(t)

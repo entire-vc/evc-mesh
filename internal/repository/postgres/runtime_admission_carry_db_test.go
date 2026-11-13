@@ -207,3 +207,31 @@ func TestRuntimeSaveDropsOnlyChangedProfileFromAdmission(t *testing.T) {
 	require.Equal(t, saved.Digest, f.admissionDigest(t, "worker-b"))
 	require.Equal(t, []string{"preferred"}, f.admittedProfiles(t, "worker-b"))
 }
+
+// A policy edit of one binding changes the catalog digest for all of them; the
+// other bindings' admissions must move with it. Before the fix SetBindingPolicy
+// carried only its own binding, and on prod one edit disabled 50 other lanes.
+func TestRuntimeSetBindingPolicyCarriesOtherAdmissions(t *testing.T) {
+	f := seedRuntime(t)
+	ctx := context.Background()
+	f.twoReceivers(t)
+	f.save(t, 0)
+	f.admit(t, "worker-b", "preferred")
+	f.admit(t, "worker-c", "reserve")
+	before, err := f.repo.Binding(ctx, f.owner, f.receiver, "worker-c", f.receiverActor)
+	require.NoError(t, err)
+	require.True(t, before.Enabled)
+
+	policy := f.catalog.Bindings["worker-b"].Policy
+	policy.MaxAttempts++
+	view, err := f.repo.SetBindingPolicy(ctx, f.owner, f.receiver, "worker-b", f.ownerActor, RuntimePolicySave{IfRevision: 1, Policy: policy})
+	require.NoError(t, err)
+	require.NotEqual(t, before.Digest, view.Digest, "the edit changed the catalog digest")
+	require.True(t, view.Enabled, "the edited binding stays admitted")
+
+	after, err := f.repo.Binding(ctx, f.owner, f.receiver, "worker-c", f.receiverActor)
+	require.NoError(t, err)
+	require.Equal(t, view.Digest, f.admissionDigest(t, "worker-c"), "worker-c's admission moved to the new digest")
+	require.True(t, after.Enabled, "another binding's policy edit keeps worker-c enabled")
+	require.Equal(t, before.Admission.PermittedProfiles, after.Admission.PermittedProfiles)
+}

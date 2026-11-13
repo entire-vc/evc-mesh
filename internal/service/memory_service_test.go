@@ -2647,6 +2647,9 @@ func (m *mockTaskDepRepo) Delete(_ context.Context, _ uuid.UUID) error          
 func (m *mockTaskDepRepo) DeleteIfGeneration(_ context.Context, _, _ uuid.UUID, _ int64) error {
 	return nil
 }
+func (m *mockTaskDepRepo) DeleteIfOwned(_ context.Context, _, _ uuid.UUID, _ int64, _ uuid.UUID) error {
+	return nil
+}
 func (m *mockTaskDepRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.TaskDependency, error) {
 	return nil, nil
 }

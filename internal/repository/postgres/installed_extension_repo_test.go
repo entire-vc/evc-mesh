@@ -78,10 +78,24 @@ func TestInstalledExtensionRepo_UpdateCatalog_SealsSnapshotInOneTx(t *testing.T)
 	mock.ExpectBegin()
 	mock.ExpectQuery(`FROM installed_extensions WHERE extension_id = \$1 AND source = 'catalog' FOR UPDATE`).WithArgs("hello").WillReturnRows(catalogRow("1", "c1"))
 	mock.ExpectExec(`UPDATE installed_extensions SET\s+previous_version = version, previous_snapshot = \$7, skipped_commit_sha = ''`).
-		WithArgs("hello", "2", []byte(`{"id":"hello"}`), "c2", "dg-2", "verified", sqlmock.AnyArg()).
+		WithArgs("hello", "2", []byte(`{"id":"hello"}`), "c2", "dg-2", "verified", sqlmock.AnyArg(), "default").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	require.NoError(t, repo.UpdateCatalog(context.Background(), newCatalogTarget(), domain.CatalogUpdateGuard{FromVersion: "1", FromCommitSHA: "c1"}))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestInstalledExtensionRepo_UpdateCatalog_WritesScope(t *testing.T) {
+	repo, mock := newInstalledExtensionRepoMock(t)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`FOR UPDATE`).WithArgs("hello").WillReturnRows(catalogRow("1", "c1"))
+	mock.ExpectExec(`UPDATE installed_extensions SET`).
+		WithArgs("hello", "2", []byte(`{"id":"hello"}`), "c2", "dg-2", "verified", sqlmock.AnyArg(), "scoped").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	target := newCatalogTarget()
+	target.CatalogScope = "scoped"
+	require.NoError(t, repo.UpdateCatalog(context.Background(), target, domain.CatalogUpdateGuard{FromVersion: "1", FromCommitSHA: "c1"}))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -191,7 +205,7 @@ func TestInstalledExtensionRepo_RollbackCatalog(t *testing.T) {
 	guard := domain.CatalogRollbackGuard{Version: "2", CommitSHA: "c2", SnapshotDigest: "d"}
 	journal := &domain.InstanceExtensionJournalEntry{ExtensionID: "hello", Action: domain.InstanceJournalRolledBack}
 	upd := `UPDATE installed_extensions SET\s+skipped_commit_sha = commit_sha,`
-	args := []driver.Value{"hello", "2", "c2", "d", "1", []byte(`{"id":"hello"}`), "c1", "dg-1", "verified"}
+	args := []driver.Value{"hello", "2", "c2", "d", "1", []byte(`{"id":"hello"}`), "c1", "dg-1", "verified", "default"}
 
 	repo, mock := newInstalledExtensionRepoMock(t)
 	mock.ExpectBegin()

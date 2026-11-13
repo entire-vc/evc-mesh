@@ -59,11 +59,15 @@ const (
 
 // Task is the central entity -- a unit of work that can be assigned to users or agents.
 type Task struct {
-	Version   int64     `json:"version" db:"version"`
-	ID        uuid.UUID `json:"id" db:"id"`
-	ProjectID uuid.UUID `json:"project_id" db:"project_id"`
-	StatusID  uuid.UUID `json:"status_id" db:"status_id"`
-	Title     string    `json:"title" db:"title"`
+	Version int64 `json:"version" db:"version"`
+	// InputRevision is the version of the assignment content (title, description,
+	// custom_fields) only; checkout, comments, moves and reassignment leave it
+	// (migration 20261113302). A fenced write may expect it.
+	InputRevision int64     `json:"input_revision" db:"input_revision"`
+	ID            uuid.UUID `json:"id" db:"id"`
+	ProjectID     uuid.UUID `json:"project_id" db:"project_id"`
+	StatusID      uuid.UUID `json:"status_id" db:"status_id"`
+	Title         string    `json:"title" db:"title"`
 	// Description is the heaviest field on a task by a wide margin and the board
 	// does not render it: on the Mesh dev project it was 703 911 of the 916 923
 	// bytes (77%) that GET /projects/:id/tasks?page_size=200 put on the wire, to
@@ -453,6 +457,11 @@ type TaskDependency struct {
 	// TaskDependency.Released): the evidence half OR the blocker's own state
 	// for the condition. Always true for a non-blocks edge.
 	ConditionSatisfied bool `json:"condition_satisfied" db:"condition_satisfied"`
+	// OwnerWaitID is the typed card wait that owns this edge (NULL: a person,
+	// a lead or an older edge; nobody's to remove by owner). OwnerAgentID is
+	// that wait's agent. Any change of the edge outside a typed wait clears it.
+	OwnerWaitID  *uuid.UUID `json:"owner_wait_id,omitempty" db:"owner_wait_id"`
+	OwnerAgentID *uuid.UUID `json:"owner_agent_id,omitempty" db:"owner_agent_id"`
 	// Warning is set on the create response only (never stored): the blocker is
 	// a monitor/umbrella/recurring card that normally never reaches done.
 	Warning string `json:"warning,omitempty" db:"-"`
@@ -501,10 +510,15 @@ func DependencySatisfiedSQL(alias string) string {
 
 // BlockerState is what Released reads off the blocker task. Category is the
 // category of the blocker's status ("" when unknown); IsShipped is tasks.is_shipped;
-// HasDeployment is true when any pr link of the blocker records a deploy to the
-// canonical prod environment (metadata.deployed with sha, at and environment
-// "prod"). A deploy to staging, an empty or an unknown environment (including
-// the legacy spelling "production") does not count.
+// HasDeployment is true when the blocker's change is on prod as a whole: at
+// least one of its pr links records a deploy to the canonical prod environment
+// (metadata.deployed with sha, at and environment "prod") and none of its other
+// pr links is still on the way there (open or merged without a prod deploy).
+// A closed (abandoned) link does not hold; neither does a review-subject or a
+// relates_to link, which are not the card's work. A deploy to staging, an empty
+// or an unknown environment does not count. "production" is stored as "prod"
+// (NormalizeVCSEnvironment on write, migration 20261113100 for older rows), so
+// it counts as prod. DeploymentReleasesSQL is the SQL form.
 type BlockerState struct {
 	Category      StatusCategory
 	IsShipped     bool
@@ -523,7 +537,8 @@ func (d TaskDependency) NeedsDeploymentLookup() bool {
 //   - not a blocks edge: always released (it never holds anything);
 //   - evidence (EvidenceSatisfied): released whatever the blocker is;
 //   - shipped:  blocker is_shipped OR in done. Cancelled never.
-//   - deployed: blocker is_shipped OR any of its pr links records a deploy.
+//   - deployed: blocker is_shipped OR HasDeployment (a prod deploy recorded
+//     and no other pr link of the blocker still open or merged-not-deployed).
 //     Merged/done alone is not enough: that is the point of the condition.
 //   - accepted: blocker in done. Cancelled never.
 //   - task_done and the evidence-only conditions (access_ready, contract_ready,
@@ -556,14 +571,34 @@ func (d TaskDependency) Released(b BlockerState) bool {
 // Every SQL reader that asks "is this blocker still holding" uses it instead of
 // writing its own copy.
 func DependencyReleasedSQL(edge, blocker, category string) string {
-	deployed := "EXISTS (SELECT 1 FROM vcs_links dv WHERE dv.task_id = " + blocker + ".id AND dv.link_type = 'pr'" +
-		" AND COALESCE(dv.metadata->'deployed'->>'sha', '') <> '' AND dv.metadata->'deployed'->>'at' IS NOT NULL" +
-		" AND dv.metadata->'deployed'->>'environment' = '" + VCSEnvProd + "')"
+	deployed := DeploymentReleasesSQL(blocker + ".id")
 	return "COALESCE(" + edge + ".dependency_type <> 'blocks' OR " + DependencySatisfiedSQL(edge) + " OR (CASE " + edge + ".condition" +
 		" WHEN 'shipped' THEN (" + blocker + ".is_shipped OR " + category + " = 'done')" +
 		" WHEN 'deployed' THEN (" + blocker + ".is_shipped OR " + deployed + ")" +
 		" WHEN 'accepted' THEN " + category + " = 'done'" +
 		" ELSE " + category + " IN ('done', 'cancelled') END), false)"
+}
+
+// DeploymentReleasesSQL is the SQL form of BlockerState.HasDeployment for the
+// blocker task whose id is the SQL expression taskID: a pr link of it records a
+// prod deploy, and no other pr link of it is still open or merged without one.
+// Only the card's own work counts: review-subject and relates_to links neither
+// release nor hold, and a closed (abandoned) link does not hold. A link with no
+// recorded status reads as open. DependencyReleasedSQL and the batch Go reader
+// TaskDependencyRepo.DeployedTasks both use it.
+func DeploymentReleasesSQL(taskID string) string {
+	own := func(a string) string {
+		return a + ".task_id = " + taskID + " AND " + a + ".link_type = 'pr'" +
+			" AND COALESCE(" + a + ".metadata->>'role', '') <> '" + VCSLinkRoleReview + "'" +
+			" AND COALESCE(" + a + ".metadata->>'relation', '') <> '" + VCSLinkRelationRelatesTo + "'"
+	}
+	onProd := func(a string) string {
+		return "(COALESCE(" + a + ".metadata->'deployed'->>'sha', '') <> '' AND " + a + ".metadata->'deployed'->>'at' IS NOT NULL" +
+			" AND " + a + ".metadata->'deployed'->>'environment' = '" + VCSEnvProd + "')"
+	}
+	return "(EXISTS (SELECT 1 FROM vcs_links dv WHERE " + own("dv") + " AND " + onProd("dv") + ")" +
+		" AND NOT EXISTS (SELECT 1 FROM vcs_links dh WHERE " + own("dh") +
+		" AND COALESCE(dh.status, '') <> '" + string(VCSLinkStatusClosed) + "' AND NOT " + onProd("dh") + "))"
 }
 
 // EnrichedTaskDependency is a TaskDependency joined with the OTHER task in the

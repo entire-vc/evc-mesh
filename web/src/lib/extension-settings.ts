@@ -22,7 +22,7 @@ export function saveWorkspaceExtensionSettings(workspaceId: string, extensionId:
   }).then(afterSave);
 }
 
-/** `PUT /extensions/{id}/instance-settings` (W1.3) — instance administrator only. */
+/** `PUT /extensions/{id}/instance-settings` — instance administrator only. */
 export function saveInstanceExtensionSettings(extensionId: string, body: { enabled: boolean; settings: Values }) {
   return api(`/api/v1/extensions/${extensionId}/instance-settings`, { method: "PUT", body }).then(afterSave);
 }
@@ -41,6 +41,17 @@ export function connectWorkspaceExtension(workspaceId: string, extensionId: stri
     method: "POST",
     body: { settings, consent: { capabilities } },
   });
+}
+
+/**
+ * `POST …/consent` — agree to the whole declared set of the installed version. The server refuses with
+ * 409 `version_changed` (context: version, commit) when the installed manifest is no longer the one named.
+ */
+export function consentWorkspaceExtension(workspaceId: string, extensionId: string, version: string, commit: string) {
+  return api(`${wsBase(workspaceId, extensionId)}/consent`, {
+    method: "POST",
+    body: { version, commit },
+  }).then(afterSave);
 }
 
 /**

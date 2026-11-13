@@ -119,6 +119,16 @@ func (h *Hook) Prepare(context.Context, map[string]any, map[string]any) error { 
 
 // Saved runs the handshake for an active connection.
 func (h *Hook) Saved(ctx context.Context, integrationID uuid.UUID) {
+	h.handshake(ctx, integrationID, true)
+}
+
+// Reconsented re-runs the handshake after a re-consent without delivering the
+// actor token: a consent changes rights, never the token.
+func (h *Hook) Reconsented(ctx context.Context, integrationID uuid.UUID) {
+	h.handshake(ctx, integrationID, false)
+}
+
+func (h *Hook) handshake(ctx context.Context, integrationID uuid.UUID, deliverToken bool) {
 	conn, err := h.Conns.GetByID(ctx, integrationID)
 	if err != nil || conn == nil || !conn.IsActive {
 		return
@@ -135,7 +145,11 @@ func (h *Hook) Saved(ctx context.Context, integrationID uuid.UUID) {
 	if err := json.Unmarshal(conn.Config, &settings); err != nil {
 		return
 	}
-	if err := h.HS.Run(ctx, p, conn.WorkspaceID, settings); err != nil {
+	run := h.HS.Run
+	if !deliverToken {
+		run = h.HS.Refresh
+	}
+	if err := run(ctx, p, conn.WorkspaceID, settings); err != nil {
 		log.Printf("[extensions] %s install handshake (workspace %s): %v", p.Man.ID, conn.WorkspaceID, err)
 	}
 }

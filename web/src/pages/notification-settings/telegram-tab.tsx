@@ -55,6 +55,17 @@ export function TelegramTab({
   instanceDisabled = false,
 }: TelegramTabProps) {
   const { t } = useTranslation("notifications");
+  const saveButton = (
+    <div className="flex justify-end pt-2">
+      <Button onClick={onSave} disabled={telegramSaving} className="gap-2">
+        {telegramSaved ? (
+          <><Check className="h-4 w-4" />{t("settings.actions.saved")}</>
+        ) : (
+          <><Save className="h-4 w-4" />{telegramSaving ? t("settings.actions.saving") : t("settings.actions.save")}</>
+        )}
+      </Button>
+    </div>
+  );
   return (
     <Card>
       <CardHeader>
@@ -77,7 +88,11 @@ export function TelegramTab({
           </div>
         )}
 
-        {!telegramBotInfo ? (
+        {/* With the channel switched off on the instance there is nothing to
+            connect and nothing to save: the "not connected — ask an admin to
+            connect a bot" hint would send the admin to set up a bot that this
+            instance will never use. The banner above is the whole answer. */}
+        {instanceDisabled ? null : !telegramBotInfo ? (
           <Skeleton className="h-16 w-full" />
         ) : !telegramBotInfo.available ? (
           <>
@@ -95,15 +110,7 @@ export function TelegramTab({
               </div>
             </div>
             <ScopeSelect channel="telegram" value={scope} onChange={onScopeChange} />
-            <div className="flex justify-end pt-2">
-              <Button onClick={onSave} disabled={telegramSaving} className="gap-2">
-                {telegramSaved ? (
-                  <><Check className="h-4 w-4" />{t("settings.actions.saved")}</>
-                ) : (
-                  <><Save className="h-4 w-4" />{telegramSaving ? t("settings.actions.saving") : t("settings.actions.save")}</>
-                )}
-              </Button>
-            </div>
+            {saveButton}
           </>
         ) : (
           <>
@@ -243,15 +250,7 @@ export function TelegramTab({
               ))}
             </div>
 
-            <div className="flex justify-end pt-2">
-              <Button onClick={onSave} disabled={telegramSaving} className="gap-2">
-                {telegramSaved ? (
-                  <><Check className="h-4 w-4" />{t("settings.actions.saved")}</>
-                ) : (
-                  <><Save className="h-4 w-4" />{telegramSaving ? t("settings.actions.saving") : t("settings.actions.save")}</>
-                )}
-              </Button>
-            </div>
+            {saveButton}
           </>
         )}
       </CardContent>

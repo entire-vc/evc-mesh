@@ -89,6 +89,47 @@ func TestPatchMetadata_DeployedIsIdempotent(t *testing.T) {
 	assert.True(t, third.Deployed().At.After(*at) || third.Deployed().At.Equal(*at))
 }
 
+// A deploy recorded as "production" is stored as "prod" and makes
+// the link shipped; staging still does not. Re-reporting it in the other
+// spelling is the same deploy and keeps the first deployed_at.
+func TestPatchMetadata_ProductionIsStoredAsProd(t *testing.T) {
+	ctx := context.Background()
+	for _, env := range []string{"production", " Production ", "PRODUCTION"} {
+		svc, _, link := patchMetaSetup(domain.VCSLinkTypePR)
+		got, err := svc.PatchMetadata(ctx, link.TaskID, link.ID, map[string]any{
+			"merged_sha": sha("2"),
+			"deployed":   map[string]any{"sha": sha("2"), "environment": env},
+		})
+		require.NoError(t, err, env)
+		require.NotNil(t, got.Deployed(), env)
+		assert.Equal(t, domain.VCSEnvProd, got.Deployed().Environment, env)
+		assert.True(t, got.IsShipped(), "%q deploy of the merged sha is shipped", env)
+		assert.Equal(t, domain.DeliveryStateYes, got.DeliveryStates().Installed, env)
+
+		var out map[string]any
+		b, err := json.Marshal(got)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(b, &out))
+		assert.Equal(t, "prod", out["deployed_env"], "the response shows the stored value")
+
+		at := got.Deployed().At
+		again, err := svc.PatchMetadata(ctx, link.TaskID, link.ID, map[string]any{
+			"deployed": map[string]any{"sha": sha("2"), "environment": "prod"},
+		})
+		require.NoError(t, err)
+		assert.True(t, at.Equal(*again.Deployed().At), "prod after production is the same deploy")
+	}
+
+	svc, _, link := patchMetaSetup(domain.VCSLinkTypePR)
+	got, err := svc.PatchMetadata(ctx, link.TaskID, link.ID, map[string]any{
+		"merged_sha": sha("2"),
+		"deployed":   map[string]any{"sha": sha("2"), "environment": "staging"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "staging", got.Deployed().Environment)
+	assert.False(t, got.IsShipped(), "staging is not prod")
+}
+
 func TestPatchMetadata_RejectsBadDeliveryValues(t *testing.T) {
 	svc, _, link := patchMetaSetup(domain.VCSLinkTypePR)
 	for name, patch := range map[string]map[string]any{

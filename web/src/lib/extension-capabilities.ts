@@ -1,6 +1,6 @@
 /**
  * The one place that turns manifest `capabilities` into human wording. The
- * extension page (Permissions tab) and the connect wizard (W2.4) both read it,
+ * extension page (Permissions tab) and the connect wizard both read it,
  * so a right is never described two ways. Wording lives in the `integrations`
  * i18n namespace under `capabilities.*`; this file only maps keys.
  */
@@ -99,3 +99,21 @@ const SETTING_REF = /^\{settings\.[\w.]+\}$/;
 export function domainText(t: Translate, d: string): string {
   return SETTING_REF.test(d) ? t("capabilities.domainFromSettings") : d;
 }
+
+/** The added rights of a pending consent (`kind:value` tokens plus bare event names) as manifest capabilities. */
+export function capabilitiesFromTokens(tokens: string[], events: string[] = []): ManifestCapabilities {
+  const out: Record<TokenKind, string[]> = { api: [], events: [...events], webhooks_in: [], ui: [], secrets: [] };
+  for (const tok of tokens) {
+    const i = tok.indexOf(":");
+    const kind = tok.slice(0, i);
+    const val = tok.slice(i + 1);
+    // an explicit list, never `in`: a token from the server must not reach an inherited property
+    if (i > 0 && val && (TOKEN_KINDS as readonly string[]).includes(kind) && !out[kind as TokenKind].includes(val)) {
+      out[kind as TokenKind].push(val);
+    }
+  }
+  return out;
+}
+
+const TOKEN_KINDS = ["api", "events", "webhooks_in", "ui", "secrets"] as const;
+type TokenKind = (typeof TOKEN_KINDS)[number];

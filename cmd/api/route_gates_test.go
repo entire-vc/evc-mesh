@@ -2,9 +2,10 @@ package main
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"testing"
+
+	"github.com/entire-vc/evc-mesh/internal/apisource"
 )
 
 // routeGate describes one registered route and the guard identifiers applied to it.
@@ -26,7 +27,7 @@ func parseRouteGates(t *testing.T) []routeGate {
 	t.Helper()
 
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	file, err := apisource.Parse(fset, ".", 0)
 	if err != nil {
 		t.Fatalf("parse main.go: %v", err)
 	}

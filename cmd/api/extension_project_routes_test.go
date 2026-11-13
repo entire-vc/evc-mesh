@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/entire-vc/evc-mesh/internal/apisource"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -87,7 +88,7 @@ func (l lookup) Get(id string) (extensions.Provider, bool) { p, ok := l[id]; ret
 // main.go, the string literals handed to handler.DeprecatedAlias.
 func deprecatedAliasesInMain(t *testing.T) map[string]string {
 	t.Helper()
-	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	file, err := apisource.Parse(token.NewFileSet(), ".", 0)
 	require.NoError(t, err)
 	out := map[string]string{}
 	ast.Inspect(file, func(n ast.Node) bool {

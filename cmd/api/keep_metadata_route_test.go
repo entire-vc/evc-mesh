@@ -2,10 +2,11 @@ package main
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"strings"
 	"testing"
+
+	"github.com/entire-vc/evc-mesh/internal/apisource"
 )
 
 // Route inventory for the Keep metadata probe (route and boundary controls). The
@@ -15,7 +16,7 @@ import (
 // is renamed or only mentioned in a comment does not count.
 func TestKeepMetadataRouteInventory(t *testing.T) {
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "main.go", nil, 0)
+	f, err := apisource.Parse(fset, ".", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

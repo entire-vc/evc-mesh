@@ -3,13 +3,14 @@ package main
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/entire-vc/evc-mesh/internal/apisource"
 )
 
 // MCP-OAuth sec. RequirePermission clamps an OAuth connector (mot_
@@ -205,7 +206,7 @@ func parseAuditRoutes(t *testing.T) []auditRoute {
 	t.Helper()
 
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	file, err := apisource.Parse(fset, ".", 0)
 	if err != nil {
 		t.Fatalf("parse main.go: %v", err)
 	}
@@ -427,7 +428,7 @@ func TestRBACRouteAudit_ConnectorClampsCarryTheReviewedPermission(t *testing.T) 
 // sub-group with its own auth would never be seen by the tests above.
 func TestRBACRouteAudit_NoUnreviewedWriteOutsideTheAuthenticatedGroup(t *testing.T) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	file, err := apisource.Parse(fset, ".", 0)
 	if err != nil {
 		t.Fatalf("parse main.go: %v", err)
 	}

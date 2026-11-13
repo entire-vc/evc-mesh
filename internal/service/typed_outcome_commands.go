@@ -58,6 +58,9 @@ type FinishTaskInput struct {
 	Evidence      string   `json:"evidence"`
 	EvidenceLinks []string `json:"evidence_links"`
 	To            string   `json:"to"`
+	// Fence is the caller's checkout/input_revision precondition,
+	// set by the handler from request headers.
+	Fence *domain.ResultFence `json:"-"`
 }
 
 type typedOutcomeCommandRepository interface {
@@ -243,7 +246,7 @@ func (s *taskService) FinishTask(ctx context.Context, taskID uuid.UUID, in Finis
 			Kind: outcomeKind, ResultKind: &kind, Note: evidence},
 	}
 	heldByCaller := task.CheckedOutBy != nil && *task.CheckedOutBy == caller
-	if err := s.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &status.ID, Source: "finish_task", Finish: finish}); err != nil {
+	if err := s.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &status.ID, Source: "finish_task", Finish: finish, Fence: in.Fence}); err != nil {
 		return nil, err
 	}
 	out := &domain.CommandResult{Outcome: finish.Outcome, CommentID: finish.Comment.ID}

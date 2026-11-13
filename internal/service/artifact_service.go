@@ -170,6 +170,18 @@ func (s *artifactService) Upload(ctx context.Context, input UploadArtifactInput)
 		UploadedBy:     input.UploadedBy,
 		UploadedByType: input.UploadedByType,
 		CreatedAt:      timeNow(),
+		Fence:          input.Fence,
+	}
+	// A fenced upload whose lock is already gone is refused before the bucket
+	// is touched; the record is checked again under the row lock.
+	if input.Fence != nil {
+		if fc, ok := s.artifactRepo.(interface {
+			CheckResultFence(context.Context, *domain.ResultFence) error
+		}); ok {
+			if err := fc.CheckResultFence(ctx, input.Fence); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	// The reservation holds the room on the task before any byte reaches

@@ -48,6 +48,7 @@ func TestVerifyDependencyEvidence(t *testing.T) {
 		{"custom criterion matches", TaskDependency{DependencyType: DependencyTypeBlocks, Condition: DependencyConditionShipped, Criterion: "S3 shipped"}, EvidenceClaim{URL: u, Criterion: "S3 shipped", HeadSHA: head}, []VCSLink{shipLink}, true, EvidenceTrusted},
 		{"no criterion: link only", edge(DependencyConditionShipped), EvidenceClaim{URL: u, HeadSHA: head}, []VCSLink{shipLink}, true, EvidenceUnverified},
 		{"deployed: same sha+env", edge(DependencyConditionDeployed), EvidenceClaim{URL: u, Criterion: "deployed", HeadSHA: head, Environment: "prod"}, []VCSLink{deployed}, true, EvidenceTrusted},
+		{"deployed: production claim matches a prod deploy", edge(DependencyConditionDeployed), EvidenceClaim{URL: u, Criterion: "deployed", HeadSHA: head, Environment: " Production "}, []VCSLink{deployed}, true, EvidenceTrusted},
 		{"deployed: other env", edge(DependencyConditionDeployed), EvidenceClaim{URL: u, Criterion: "deployed", HeadSHA: head, Environment: "staging"}, []VCSLink{deployed}, true, EvidenceInvalid},
 		{"deployed: other sha", edge(DependencyConditionDeployed), EvidenceClaim{URL: u, Criterion: "deployed", HeadSHA: other, Environment: "prod"}, []VCSLink{deployed}, true, EvidenceInvalid},
 		{"deployed: nothing deployed yet", edge(DependencyConditionDeployed), EvidenceClaim{URL: u, Criterion: "deployed", HeadSHA: head, Environment: "prod"}, []VCSLink{noShip}, true, EvidencePending},
@@ -69,5 +70,28 @@ func TestVerifyDependencyEvidence(t *testing.T) {
 				assert.NotNil(t, got.LinkID, "delivery evidence is bound to a pr link")
 			}
 		})
+	}
+}
+
+// The stored claim environment is the canonical one, so the drift
+// trigger compares it with the link's stored "prod" and does not revoke it.
+func TestVerifyDependencyEvidence_ProductionClaimStoredAsProd(t *testing.T) {
+	const head = "aaaa111"
+	dep := TaskDependency{DependencyType: DependencyTypeBlocks, Condition: DependencyConditionDeployed}
+	link := evPRLink(map[string]any{"head_sha": head, "deployed": map[string]any{"sha": head, "environment": "prod"}})
+	ev := VerifyDependencyEvidence(dep, EvidenceClaim{URL: "https://git.example/mr/1", Criterion: "deployed", HeadSHA: head, Environment: "production"}, []VCSLink{link}, true)
+	assert.Equal(t, EvidenceTrusted, ev.Status, ev.Reason)
+	assert.Equal(t, VCSEnvProd, ev.Environment)
+
+	staging := VerifyDependencyEvidence(dep, EvidenceClaim{URL: "https://git.example/mr/1", Criterion: "deployed", HeadSHA: head, Environment: "staging"}, []VCSLink{link}, true)
+	assert.NotEqual(t, EvidenceTrusted, staging.Status, "staging claim never matches a prod deploy")
+}
+
+func TestNormalizeVCSEnvironment(t *testing.T) {
+	for in, want := range map[string]string{
+		"prod": "prod", "production": "prod", " Production ": "prod", "PRODUCTION": "prod",
+		"staging": "staging", " Staging": "staging", "": "", "prod-eu": "prod-eu", "productions": "productions",
+	} {
+		assert.Equal(t, want, NormalizeVCSEnvironment(in), "input %q", in)
 	}
 }

@@ -2,7 +2,7 @@
 #
 # go_affected_packages.py selects test packages from the import graph. Several
 # tests here do not follow an import edge: they parse another package's sources
-# (route and tenancy ratchets), read cmd/api/main.go, or open JSON that lives in
+# (route and tenancy ratchets), read the cmd/api sources, or open JSON that lives in
 # docs/ or web/. Without a line below, an MR that edits only such a file would
 # skip the test that guards it.
 #
@@ -22,8 +22,8 @@
 # with its own directory. When it fails, add the line; do not mute the test.
 # A line that is too broad costs CI minutes, one that is too narrow costs a red main.
 
-internal/handler <- cmd/api/main.go internal/ws/handler.go docs/api/agent-runtime.example.json
-internal/middleware <- cmd/api/main.go internal/**/*.go
+internal/handler <- cmd/api/*.go internal/ws/handler.go docs/api/agent-runtime.example.json
+internal/middleware <- cmd/api/*.go internal/**/*.go
 internal/service <- internal/**/*.go cmd/**/*.go scripts/audit/task-transition.sql
 internal/repository/postgres <- **/*.go **/*.sql docs/api/agent-runtime.example.json
 internal/domain <- docs/api/agent-runtime.example.json web/src/locales/**/board.json
@@ -35,8 +35,9 @@ internal/extensions/spark <- internal/extensions/schema/**/*
 internal/extensions/team-relay <- internal/extensions/schema/**/*
 internal/extensions/telegram <- internal/extensions/schema/**/*
 pkg/apierror <- web/src/locales/**/apiErrors.json
-tests/integration <- cmd/api/main.go
+tests/integration <- cmd/api/*.go
 internal/extensions/repoinstall <- internal/extensions/schema/**/*
 internal/extensions/migrationlint <- internal/extensions/**/migrations/*.sql
 internal/themes <- packages/mesh-theme-sdk/cli/**/* packages/mesh-theme-sdk/fixtures/**/*
 internal/extensions/external <- examples/external-extension/mesh-extension.json
+internal/extensions/catalog <- internal/extensions/catalog/testdata/**/*

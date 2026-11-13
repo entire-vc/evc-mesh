@@ -555,7 +555,7 @@ func normalizeVCSMetadataValue(key string, v any, existing *domain.VCSLink) (any
 		if !domain.IsFullCommitSHA(d.SHA) {
 			return nil, apierror.BadRequest("deployed.sha must be a 40-character lowercase hex string")
 		}
-		d.Environment = strings.ToLower(strings.TrimSpace(d.Environment))
+		d.Environment = domain.NormalizeVCSEnvironment(d.Environment) // "production" is stored as "prod"
 		if !vcsEnvironmentRe.MatchString(d.Environment) {
 			return nil, apierror.BadRequest("deployed.environment must be 1-32 chars of a-z, 0-9, _ or -")
 		}

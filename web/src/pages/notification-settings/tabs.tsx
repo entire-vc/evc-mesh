@@ -26,7 +26,7 @@ export function NotificationSettingsTabs({
 }: NotificationSettingsTabsProps) {
   const { t } = useTranslation("notifications");
   return (
-    <div className="flex max-w-full items-center gap-0 overflow-x-auto border-b border-border" role="tablist">
+    <div className="flex max-w-full flex-wrap items-center gap-0 border-b border-border" role="tablist">
       {TABS.map(({ id, labelKey, Icon }) => {
         const isActive = activeTab === id;
         const unavailable =

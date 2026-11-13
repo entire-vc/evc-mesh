@@ -46,6 +46,13 @@ type sessionRow struct {
 	EstimatedCost    float64                   `db:"estimated_cost"`
 	ComplianceScore  float32                   `db:"compliance_score"`
 	ComplianceDetail json.RawMessage           `db:"compliance_detail"`
+
+	TokensInKnown    bool `db:"tokens_in_known"`
+	TokensOutKnown   bool `db:"tokens_out_known"`
+	CostKnown        bool `db:"cost_known"`
+	TokensInUnknown  bool `db:"tokens_in_unknown"`
+	TokensOutUnknown bool `db:"tokens_out_unknown"`
+	CostUnknown      bool `db:"cost_unknown"`
 }
 
 func (r *sessionRow) toDomain() domain.AgentSession {
@@ -85,12 +92,19 @@ func (r *sessionRow) toDomain() domain.AgentSession {
 		EstimatedCost:    r.EstimatedCost,
 		ComplianceScore:  r.ComplianceScore,
 		ComplianceDetail: complianceDetail,
+		TokensInKnown:    r.TokensInKnown,
+		TokensOutKnown:   r.TokensOutKnown,
+		CostKnown:        r.CostKnown,
+		TokensInUnknown:  r.TokensInUnknown,
+		TokensOutUnknown: r.TokensOutUnknown,
+		CostUnknown:      r.CostUnknown,
 	}
 }
 
 const sessionColumns = `id, workspace_id, agent_id, task_id, started_at, ended_at, last_activity_at, status,
 	tool_calls, tool_breakdown, tasks_touched, events_published, memories_created,
-	model_used, tokens_in, tokens_out, estimated_cost, compliance_score, compliance_detail`
+	model_used, tokens_in, tokens_out, estimated_cost, compliance_score, compliance_detail,
+	tokens_in_known, tokens_out_known, cost_known, tokens_in_unknown, tokens_out_unknown, cost_unknown`
 
 // Create inserts a new agent session row.
 func (r *SessionRepo) Create(ctx context.Context, s *domain.AgentSession) error {
@@ -332,6 +346,8 @@ func (r *SessionRepo) IncrementToolBreakdown(ctx context.Context, agentID, works
 	})
 }
 
+// Arguments: agent-wide $1..$5 = tokens in, tokens out, cost, model, agent; $6..$8 = the three
+// unknown flags. Task-scoped: $6 = task, $7..$9 = the unknown flags.
 // addUsageAgentWide and addUsageTaskScoped are the two fixed query shapes of
 // AddUsage: one UPDATE that adds the report onto the active session row
 // inside the database (`tokens_in = tokens_in + $1`), so the sum is taken
@@ -339,9 +355,15 @@ func (r *SessionRepo) IncrementToolBreakdown(ctx context.Context, agentID, works
 // read earlier. Every value is a bound argument.
 const addUsageAgentWide = `
 	UPDATE agent_sessions
-	SET tokens_in        = tokens_in + $1,
-	    tokens_out       = tokens_out + $2,
-	    estimated_cost   = estimated_cost + $3,
+	SET tokens_in          = tokens_in + $1,
+	    tokens_out         = tokens_out + $2,
+	    estimated_cost     = estimated_cost + $3,
+	    tokens_in_known    = tokens_in_known OR NOT $6::boolean,
+	    tokens_out_known   = tokens_out_known OR NOT $7::boolean,
+	    cost_known         = cost_known OR NOT $8::boolean,
+	    tokens_in_unknown  = tokens_in_unknown OR $6::boolean,
+	    tokens_out_unknown = tokens_out_unknown OR $7::boolean,
+	    cost_unknown       = cost_unknown OR $8::boolean,
 	    model_used       = COALESCE(NULLIF($4, ''), model_used),
 	    last_activity_at = GREATEST(last_activity_at, now())
 	WHERE status = 'active' AND id = (
@@ -354,9 +376,15 @@ const addUsageAgentWide = `
 
 const addUsageTaskScoped = `
 	UPDATE agent_sessions
-	SET tokens_in        = tokens_in + $1,
-	    tokens_out       = tokens_out + $2,
-	    estimated_cost   = estimated_cost + $3,
+	SET tokens_in          = tokens_in + $1,
+	    tokens_out         = tokens_out + $2,
+	    estimated_cost     = estimated_cost + $3,
+	    tokens_in_known    = tokens_in_known OR NOT $7::boolean,
+	    tokens_out_known   = tokens_out_known OR NOT $8::boolean,
+	    cost_known         = cost_known OR NOT $9::boolean,
+	    tokens_in_unknown  = tokens_in_unknown OR $7::boolean,
+	    tokens_out_unknown = tokens_out_unknown OR $8::boolean,
+	    cost_unknown       = cost_unknown OR $9::boolean,
 	    model_used       = COALESCE(NULLIF($4, ''), model_used),
 	    last_activity_at = GREATEST(last_activity_at, now())
 	WHERE status = 'active' AND id = (
@@ -375,6 +403,22 @@ const addUsageTaskScoped = `
 // on agent + task makes that "update, else insert" step run one at a time, so
 // two first reports for the same agent and task end up on one session, not two.
 func (r *SessionRepo) AddUsage(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, tokensIn, tokensOut int64, cost float64, model string) (*domain.AgentSession, error) {
+	return r.ReportUsage(ctx, agentID, workspaceID, taskID, domain.SessionUsage{TokensIn: tokensIn, TokensOut: tokensOut, Cost: cost}, model)
+}
+
+// ReportUsage is AddUsage for a report that may say a measure is unknown. An unknown measure
+// adds nothing and sets the session's *_unknown flag, which no later report clears; a known
+// measure (a real 0 included) adds its figure and sets *_known.
+func (r *SessionRepo) ReportUsage(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, u domain.SessionUsage, model string) (*domain.AgentSession, error) {
+	if u.TokensInUnknown {
+		u.TokensIn = 0
+	}
+	if u.TokensOutUnknown {
+		u.TokensOut = 0
+	}
+	if u.CostUnknown {
+		u.Cost = 0
+	}
 	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -391,25 +435,32 @@ func (r *SessionRepo) AddUsage(ctx context.Context, agentID, workspaceID uuid.UU
 
 	var row sessionRow
 	if taskID != nil {
-		err = tx.GetContext(ctx, &row, addUsageTaskScoped, tokensIn, tokensOut, cost, model, agentID, *taskID)
+		err = tx.GetContext(ctx, &row, addUsageTaskScoped, u.TokensIn, u.TokensOut, u.Cost, model, agentID, *taskID,
+			u.TokensInUnknown, u.TokensOutUnknown, u.CostUnknown)
 	} else {
-		err = tx.GetContext(ctx, &row, addUsageAgentWide, tokensIn, tokensOut, cost, model, agentID)
+		err = tx.GetContext(ctx, &row, addUsageAgentWide, u.TokensIn, u.TokensOut, u.Cost, model, agentID,
+			u.TokensInUnknown, u.TokensOutUnknown, u.CostUnknown)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		now := time.Now()
 		sess := &domain.AgentSession{
 			ID: uuid.New(), AgentID: agentID, WorkspaceID: workspaceID, TaskID: taskID,
 			StartedAt: now, LastActivityAt: now, Status: domain.AgentSessionStatusActive,
-			ModelUsed: model, TokensIn: tokensIn, TokensOut: tokensOut, EstimatedCost: cost,
+			ModelUsed: model, TokensIn: u.TokensIn, TokensOut: u.TokensOut, EstimatedCost: u.Cost,
+			TokensInKnown: !u.TokensInUnknown, TokensOutKnown: !u.TokensOutUnknown, CostKnown: !u.CostUnknown,
+			TokensInUnknown: u.TokensInUnknown, TokensOutUnknown: u.TokensOutUnknown, CostUnknown: u.CostUnknown,
 			ToolBreakdown: json.RawMessage(`{}`), ComplianceDetail: json.RawMessage(`{}`),
 			TasksTouched: []uuid.UUID{},
 		}
 		const ins = `
 			INSERT INTO agent_sessions (id, workspace_id, agent_id, task_id, started_at, last_activity_at, status,
-				model_used, tokens_in, tokens_out, estimated_cost)
-			VALUES ($1, $2, $3, $4, $5, $5, $6, $7, $8, $9, $10)`
+				model_used, tokens_in, tokens_out, estimated_cost,
+				tokens_in_known, tokens_out_known, cost_known, tokens_in_unknown, tokens_out_unknown, cost_unknown)
+			VALUES ($1, $2, $3, $4, $5, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`
 		if _, err = tx.ExecContext(ctx, ins, sess.ID, workspaceID, agentID, taskID, now,
-			sess.Status, model, tokensIn, tokensOut, cost); err != nil {
+			sess.Status, model, u.TokensIn, u.TokensOut, u.Cost,
+			sess.TokensInKnown, sess.TokensOutKnown, sess.CostKnown,
+			sess.TokensInUnknown, sess.TokensOutUnknown, sess.CostUnknown); err != nil {
 			return nil, err
 		}
 		if cerr := tx.Commit(); cerr != nil {
@@ -497,18 +548,24 @@ func (r *SessionRepo) GetPreviousStartedAt(ctx context.Context, agentID uuid.UUI
 // GetTaskCostSummary aggregates session cost/token metrics for a task and computes
 // rework count from activity_log backward-move transitions.
 func (r *SessionRepo) GetTaskCostSummary(ctx context.Context, taskID uuid.UUID) (*domain.TaskCostSummary, error) {
-	var total float64
-	var tokIn, tokOut int64
+	var total sql.NullFloat64
+	var tokIn, tokOut sql.NullInt64
+	var costInc, inInc, outInc bool
 	var count int
 
+	// Known figures only; NULL when no session has one. Incomplete when any session's figure is
+	// unknown or was never given. No sessions: SUM is NULL and no flag, answered as 0 below.
 	err := r.db.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(estimated_cost), 0),
-		       COALESCE(SUM(tokens_in), 0),
-		       COALESCE(SUM(tokens_out), 0),
+		SELECT SUM(estimated_cost) FILTER (WHERE cost_known),
+		       SUM(tokens_in)      FILTER (WHERE tokens_in_known),
+		       SUM(tokens_out)     FILTER (WHERE tokens_out_known),
+		       COALESCE(bool_or(cost_unknown       OR NOT cost_known), false),
+		       COALESCE(bool_or(tokens_in_unknown  OR NOT tokens_in_known), false),
+		       COALESCE(bool_or(tokens_out_unknown OR NOT tokens_out_known), false),
 		       COUNT(*)
 		FROM agent_sessions
 		WHERE task_id = $1
-	`, taskID).Scan(&total, &tokIn, &tokOut, &count)
+	`, taskID).Scan(&total, &tokIn, &tokOut, &costInc, &inInc, &outInc, &count)
 	if err != nil {
 		return nil, err
 	}
@@ -542,14 +599,30 @@ func (r *SessionRepo) GetTaskCostSummary(ctx context.Context, taskID uuid.UUID) 
 		flag = "multi-turn"
 	}
 
-	return &domain.TaskCostSummary{
-		TotalCost:    total,
-		TokensIn:     tokIn,
-		TokensOut:    tokOut,
-		SessionCount: count,
-		ReworkCount:  rework,
-		QualityFlag:  flag,
-	}, nil
+	sum := &domain.TaskCostSummary{
+		CostIncomplete:      costInc,
+		TokensInIncomplete:  inInc,
+		TokensOutIncomplete: outInc,
+		SessionCount:        count,
+		ReworkCount:         rework,
+		QualityFlag:         flag,
+	}
+	if count == 0 {
+		// No sessions: nothing is unknown, the answer stays a plain 0 as before.
+		zeroCost, zeroIn, zeroOut := 0.0, int64(0), int64(0)
+		sum.TotalCost, sum.TokensIn, sum.TokensOut = &zeroCost, &zeroIn, &zeroOut
+		return sum, nil
+	}
+	if total.Valid {
+		sum.TotalCost = &total.Float64
+	}
+	if tokIn.Valid {
+		sum.TokensIn = &tokIn.Int64
+	}
+	if tokOut.Valid {
+		sum.TokensOut = &tokOut.Int64
+	}
+	return sum, nil
 }
 
 // EndStale marks all active sessions that have had no activity for longer

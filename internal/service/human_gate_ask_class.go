@@ -4,7 +4,6 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
@@ -36,6 +35,15 @@ var hardAskPatterns = []string{
 	`refund`, `charge\b`, `charged\b`, `subscription`, `money`, `purchase`, `budget`,
 	`оплат`, `платн`, `платеж`, `платёж`, `платит`, `счёт`, `счет\b`, `счета\b`, `деньг`, `денежн`, `цена\b`,
 	`цены\b`, `цену\b`, `цен[аыу]\b`, `стоимост`, `тариф`, `возврат`, `бюджет`, `купит`, `покупк`,
+	// a top-up, a balance or an amount of money is money too (a live gate asked to "top up
+	// the shared balance by $20"); the space before a currency may be a no-break one
+	`top[- ]?up`, `credits?\b`, `deposit`, `balance`, `пополн`, `баланс`, `перев(?:од|ест|ед|ож)[а-яё]*\s+(?:денег|деньги|средств[а-яё]*)`,
+	`[$€₽£][\s ]?\d`, `\d[\d.,]*[\s ]?(?:usd|eur|руб|₽|\$)`,
+	// a currency or an amount spelled as a word ("20 долларов", "50 евро", "5к"), and a
+	// "drop/throw" verb with an amount a few words on ("скинуть 20 на OpenRouter"); "евро"
+	// only as a whole word. Go's \s is ASCII-only, hence the explicit no-break space
+	`доллар`, `евро\b`, `dollar`, `euros?\b`, `бакс`, `\d[\d.,]*[\s ]?(?:k|к|тыс)\b`,
+	`(?:за|с)кин[уь][а-яё]*(?:[\s ]+[^\s ]+){0,3}?[\s ]+\d`,
 	// secrets, keys, credentials, access
 	`secret`, `key\b`, `keys\b`, `token`, `password`, `passphrase`, `credential`, `access\b`,
 	`permission`, `api[ _-]?key`, `доступ`, `ключ`, `токен`, `парол`, `секрет`, `учётн`, `учетн`,
@@ -70,8 +78,11 @@ var hardAskPatterns = []string{
 var hardAskLabels = []string{"money", "security", "legal", "prod-data", "publish"}
 
 // wordEnd stands in for a trailing \b: Go's \b is ASCII-only, so `счет\b` would never
-// match Cyrillic text and a hard question would silently read as soft.
-const wordEnd = `(?:$|[^\p{L}\p{N}_])`
+// match Cyrillic text and a hard question would silently read as soft. It is the only
+// capturing group of the alternation (every fragment groups with (?:…)), so matchHardAsk
+// can drop exactly the character it consumed and nothing a fragment matched itself
+// (the "$" of "20$").
+const wordEnd = `($|[^\p{L}\p{N}_])`
 
 // hardAskRegex is the alternation of every fragment, anchored at the position it is
 // tried from. Word-start anchoring (Python's (?<!\w), which RE2 lacks) is done by
@@ -95,17 +106,20 @@ func isAskWordRune(r rune) bool {
 }
 
 // matchHardAsk returns the first hard fragment found at a word start, lowercased
-// (wordEnd's trailing character trimmed), or "".
+// (the character wordEnd consumed trimmed), or "".
 func matchHardAsk(text string) string {
 	prev := rune(-1)
 	for i, r := range text {
 		if prev == -1 || !isAskWordRune(prev) {
-			if m := hardAskRegex.FindString(text[i:]); m != "" {
-				last, size := utf8.DecodeLastRuneInString(m)
-				if !isAskWordRune(last) && size < len(m) {
-					m = m[:len(m)-size]
+			if loc := hardAskRegex.FindStringSubmatchIndex(text[i:]); len(loc) >= 2 && loc[1] > 0 {
+				end := loc[1]
+				for g := 2; g+1 < len(loc); g += 2 {
+					if loc[g] >= 0 && loc[g+1] == loc[1] && loc[g+1] > loc[g] {
+						end = loc[g]
+						break
+					}
 				}
-				return strings.ToLower(m)
+				return strings.ToLower(text[i : i+end])
 			}
 		}
 		prev = r
@@ -177,6 +191,9 @@ func markerGateClass(body, slug string, labels []string) (class domain.HumanGate
 	if blockingMarkerHardTagRegex.MatchString(markerLine) {
 		return domain.HumanGateClassHard, "tag:hard"
 	}
+	if !askWordRegex.MatchString(askedText(askTextForSlug(body, slug))) {
+		return domain.HumanGateClassHard, "unsure: no question text"
+	}
 	v := classifyAsk(blockingMarkerClassRegex.ReplaceAllString(askTextForSlug(body, slug), " "), labels)
 	if v.Hard {
 		return domain.HumanGateClassHard, v.Rule
@@ -195,6 +212,34 @@ func markerGateClass(body, slug string, labels []string) (class domain.HumanGate
 // the separator here: a "default - …" in prose is too easily something else.
 var inlineDefaultRegex = regexp.MustCompile(
 	`(?i)(?:^|[^\p{L}\p{N}_])(?:recommended[ _-]?default|default|по\s+умолчанию|дефолт)\**\s*[:—]\**\s*(.+)$`)
+
+// askWordRegex is a letter or a digit: an ask without one asks nothing (":" alone).
+var askWordRegex = regexp.MustCompile(`[\p{L}\p{N}]`)
+
+// askMetaLineRegex is a deadline or supersedes line of an ask: metadata, not its question.
+var askMetaLineRegex = regexp.MustCompile(`(?i)^[\s>*\-•]*\**\s*(?:deadline|supersedes)\**\s*:`)
+
+// askedText is the question of a marker's text (askTextForSlug) without its default,
+// deadline and supersedes lines and without class tags; "" when the marker asks nothing,
+// so a marker carrying only a default fails closed instead of reading the default as its
+// question (asks._asked_text).
+func askedText(text string) string {
+	lines := strings.Split(text, "\n")
+	first := lines[0]
+	if loc := inlineDefaultRegex.FindStringIndex(first); loc != nil {
+		first = first[:loc[0]]
+	}
+	kept := []string{first}
+	for _, l := range lines[1:] {
+		if recommendedDefaultRegex.MatchString(l) || askMetaLineRegex.MatchString(l) {
+			continue
+		}
+		kept = append(kept, l)
+	}
+	joined := blockingMarkerClassRegex.ReplaceAllString(
+		blockingMarkerHardTagRegex.ReplaceAllString(strings.Join(kept, "\n"), " "), " ")
+	return strings.Join(strings.Fields(joined), " ")
+}
 
 // markerDefault is the default the ask naming slug states: on the marker's own line,
 // else on a "Default:" line after it in the same comment; "" when the ask states none.

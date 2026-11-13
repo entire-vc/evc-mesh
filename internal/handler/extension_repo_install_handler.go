@@ -23,6 +23,7 @@ type ExtensionRepoInstallHandler struct {
 	admins  InstanceAdminChecker
 	catalog CatalogInstaller
 	refresh CatalogRefreshFunc
+	mover   CatalogMover
 }
 
 // CatalogRefreshFunc forces one refresh of the signed catalog cache and returns
@@ -62,6 +63,10 @@ type CatalogInstaller interface {
 	Updates(ctx context.Context) ([]repoinstall.UpdateInfo, error)
 	Update(ctx context.Context, actor *uuid.UUID, id, consentSHA string) (*repoinstall.UpdateResult, error)
 	UpdateTarget(ctx context.Context, actor *uuid.UUID, id, consentSHA, version, expectedCommitSHA string) (*repoinstall.UpdateResult, error)
+	// InstallExact and UpdateExact read the release from Spark's exact
+	// receipt (scope=scoped); the install is pinned to it.
+	InstallExact(ctx context.Context, actor uuid.UUID, id, version string) (*domain.InstalledExtension, error)
+	UpdateExact(ctx context.Context, actor *uuid.UUID, id, consentSHA, version, expectedCommitSHA string) (*repoinstall.UpdateResult, error)
 	UpdateAll(ctx context.Context, actor *uuid.UUID) ([]repoinstall.UpdateResult, error)
 	Rollback(ctx context.Context, actor *uuid.UUID, id string) (*domain.InstalledExtension, error)
 }
@@ -88,6 +93,9 @@ type repoBody struct {
 	RepoURL   string `json:"repo_url"`
 	Ref       string `json:"ref"`
 	AuthToken string `json:"auth_token"`
+	// Version (catalog only) installs exactly that version from Spark's
+	// exact receipt; the install is pinned to it.
+	Version string `json:"version"`
 }
 
 func (b *repoBody) clean() {
@@ -100,7 +108,7 @@ func (h *ExtensionRepoInstallHandler) bindAny(c echo.Context) (repoBody, error) 
 		return b, apierror.BadRequest("invalid request body")
 	}
 	b.clean()
-	b.ID = strings.TrimSpace(b.ID)
+	b.ID, b.Version = strings.TrimSpace(b.ID), strings.TrimSpace(b.Version)
 	return b, nil
 }
 
@@ -201,6 +209,10 @@ type updateBody struct {
 	ConsentCommitSHA        string          `json:"consent_commit_sha"`
 	TargetVersion           json.RawMessage `json:"target_version"`
 	ExpectedTargetCommitSHA json.RawMessage `json:"expected_target_commit_sha"`
+	// TargetScope "scoped" reads target_version from Spark's exact receipt and
+	// keeps (or makes) the install pinned; "" or "default" picks it from the
+	// default catalogue and unpins a scoped install.
+	TargetScope string `json:"target_scope"`
 }
 
 // Update handles POST /extensions/:ext_id/update.
@@ -214,6 +226,9 @@ func (h *ExtensionRepoInstallHandler) Update(c echo.Context) error {
 		return handleError(c, apierror.BadRequest("invalid request body"))
 	}
 	consent := strings.TrimSpace(b.ConsentCommitSHA)
+	if strings.TrimSpace(b.TargetScope) != "" && len(b.TargetVersion) == 0 {
+		return handleError(c, apierror.BadRequest("target_scope needs target_version and expected_target_commit_sha"))
+	}
 	if len(b.TargetVersion) > 0 || len(b.ExpectedTargetCommitSHA) > 0 {
 		var version, sha string
 		if json.Unmarshal(b.TargetVersion, &version) != nil || json.Unmarshal(b.ExpectedTargetCommitSHA, &sha) != nil || version == "" || sha == "" {
@@ -222,7 +237,15 @@ func (h *ExtensionRepoInstallHandler) Update(c echo.Context) error {
 		if h.catalog == nil {
 			return handleError(c, apierror.BadRequest("target selection requires a catalog extension"))
 		}
-		res, err := h.catalog.UpdateTarget(c.Request().Context(), &uid, c.Param("ext_id"), consent, version, sha)
+		update := h.catalog.UpdateTarget
+		switch strings.TrimSpace(b.TargetScope) {
+		case "", "default":
+		case "scoped":
+			update = h.catalog.UpdateExact
+		default:
+			return handleError(c, apierror.BadRequest(`target_scope must be "default" or "scoped"`))
+		}
+		res, err := update(c.Request().Context(), &uid, c.Param("ext_id"), consent, version, sha)
 		if err != nil {
 			return handleError(c, err)
 		}
@@ -282,12 +305,22 @@ func (h *ExtensionRepoInstallHandler) installFromCatalog(c echo.Context, uid uui
 	if b.ID == "" {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("id is required"))
 	}
-	row, err := h.catalog.Install(c.Request().Context(), uid, b.ID)
+	var row *domain.InstalledExtension
+	var err error
+	if b.Version != "" {
+		row, err = h.catalog.InstallExact(c.Request().Context(), uid, b.ID, b.Version)
+	} else {
+		row, err = h.catalog.Install(c.Request().Context(), uid, b.ID)
+	}
 	if err != nil {
 		return handleError(c, err)
 	}
+	scope := "default"
+	if row.CatalogScope == "scoped" {
+		scope = "scoped"
+	}
 	return c.JSON(http.StatusCreated, map[string]any{
 		"extension_id": row.ExtensionID, "version": row.Version, "source": row.Source, "trust_level": row.TrustLevel,
-		"commit_sha": row.CommitSHA, "artifact_sha256": row.ArtifactSHA256,
+		"commit_sha": row.CommitSHA, "artifact_sha256": row.ArtifactSHA256, "catalog_scope": scope,
 	})
 }

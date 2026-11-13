@@ -25,7 +25,8 @@ const taskWaitCols = `id, task_id, agent_id, session_id, kind, target_task_id, t
 	vcs_link_id, provider, project_path, mr_iid, pipeline_id, required_jobs, until_state,
 	until_at, decision_request_id, human_gate_ref, note, event_ref, evidence_source, evidence_why,
 	until_at_offset, evidence_status, after_sha, after_pipeline_id, after_status, registration,
-	registration_ref, addressee, question, created_at, resolved_at, resolution, resolved_by, resolve_cause, server_observed`
+	registration_ref, addressee, question, created_at, resolved_at, resolution, resolved_by, resolve_cause, server_observed,
+	dependency_id, dependency_generation, dependency_owned`
 
 // TaskWaitRepo implements repository.TaskWaitRepository.
 type TaskWaitRepo struct {

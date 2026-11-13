@@ -551,8 +551,8 @@ func TestCleanBaseURL_HTTPSOrLoopback(t *testing.T) {
 // truncated digest in the fingerprint would treat them as the same secret.
 func TestFingerprint_DistinguishesSecretsWithCollidingShortDigest(t *testing.T) {
 	m := extensions.Manifest{Version: "0.1.0"}
-	a := fingerprint(m, "https://svc.example", "secret-36533", "")
-	b := fingerprint(m, "https://svc.example", "secret-103289", "")
+	a := fingerprint(m, nil, "https://svc.example", "secret-36533", "")
+	b := fingerprint(m, nil, "https://svc.example", "secret-103289", "")
 	assert.NotEqual(t, a, b)
 	assert.NotContains(t, a, "secret-36533", "the fingerprint never carries the secret")
 }
