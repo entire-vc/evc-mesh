@@ -12,9 +12,16 @@ answer.
 | `POST /api/v1/tasks/{task_id}/comments` | the comment |
 | `POST /api/v1/tasks/{task_id}/artifacts` | the artifact |
 | `POST /api/v1/tasks/{task_id}/finish` | the published result |
+| `POST /api/v1/tasks/{task_id}/move` | the move and its side effects |
 | `POST /api/v1/agents/me/sessions/report` | the reported tokens and cost, added to the session a second time |
 
 Without the header these routes behave as before.
+
+With a checkout precondition (`X-Mesh-Checkout-Token` and the rest, see
+`docs/extensions/agents-me-contract.md` "Fencing a stale worker") the stored
+answer wins: a repeat of a write that happened is replayed even after the lock
+is gone, and a write that did not happen is not performed under a lost lock
+(its `409 checkout_precondition_failed` is what a retry gets back).
 
 ## The key
 

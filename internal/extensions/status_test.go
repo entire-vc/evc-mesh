@@ -263,9 +263,13 @@ func (r recordedConsents) GetConsent(context.Context, uuid.UUID, string) (*domai
 func (r recordedConsents) SetConsent(context.Context, uuid.UUID, domain.ExtensionConsent) error {
 	return nil
 }
+func (r recordedConsents) Reconsent(context.Context, uuid.UUID, string, domain.ExtensionReconsentResolve) (*domain.ExtensionConsent, error) {
+	return nil, errors.New("not used")
+}
 
-// The production registry reads recorded consent; without a recorded row the
-// manifest's declared capabilities still apply.
+// The production registry reads recorded consent; a connection without a
+// recorded row has consented to nothing (it is shown as needing consent), not
+// to what the manifest declares.
 func TestWithIntegrationConsents_RecordedWinsOverDeclared(t *testing.T) {
 	stub, _ := newStub(t, &extensions.Connection{IsActive: true}, nil)
 	id := stub.Manifest().ID
@@ -280,7 +284,7 @@ func TestWithIntegrationConsents_RecordedWinsOverDeclared(t *testing.T) {
 	require.NoError(t, legacy.Register(stub))
 	s, err = legacy.ResolveStatus(context.Background(), uuid.New(), id)
 	require.NoError(t, err)
-	require.Equal(t, extensions.DeclaredCapabilities(stub.Manifest().Capabilities), s.ConsentedCapabilities)
+	require.Empty(t, s.ConsentedCapabilities, "no record is no consent, not the declared set")
 }
 
 // An extension with no connection and no instance setting has consented to
@@ -296,9 +300,8 @@ func TestWithIntegrationConsents_UnconnectedHasNoConsent(t *testing.T) {
 	require.Empty(t, s.ConsentedCapabilities)
 }
 
-// The production store falls back to the manifest's declared capabilities for a
-// connection without a record. With only the instance level on there is no
-// workspace connection, so that fallback must not be reported as workspace consent.
+// With only the instance level on there is no workspace connection, so nothing
+// is reported as workspace consent.
 func TestWithIntegrationConsents_InstanceOnlyHasNoWorkspaceConsent(t *testing.T) {
 	stub, _ := newStub(t, nil, &extensions.InstanceSetting{Enabled: true})
 	reg := extensions.NewRegistry().WithIntegrationConsents(recordedConsents{})

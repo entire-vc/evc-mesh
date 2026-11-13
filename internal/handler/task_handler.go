@@ -1159,7 +1159,7 @@ func (h *TaskHandler) MoveTask(c echo.Context) error {
 	}
 
 	var req moveTaskRequest
-	if err := c.Bind(&req); err != nil {
+	if bindErr := c.Bind(&req); bindErr != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -1167,7 +1167,12 @@ func (h *TaskHandler) MoveTask(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("status_id or position is required"))
 	}
 
+	fence, err := resultFenceFromRequest(c, taskID)
+	if err != nil {
+		return handleError(c, err)
+	}
 	input := service.MoveTaskInput{
+		Fence:              fence,
 		StatusID:           req.StatusID,
 		Position:           req.Position,
 		AssigneeID:         req.AssigneeID,

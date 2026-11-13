@@ -323,6 +323,22 @@ func (h *DependencyHandler) Delete(c echo.Context) error {
 		}
 		expectedGen = &g
 	}
+	// expected_owner_wait_id adds the owner to the compare-and-delete: only the
+	// typed wait that owns the edge removes it. It needs expected_generation.
+	var expectedOwner *uuid.UUID
+	if vals, ok := c.QueryParams()["expected_owner_wait_id"]; ok {
+		if len(vals) != 1 {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("expected_owner_wait_id must be given once"))
+		}
+		w, perr := uuid.Parse(vals[0])
+		if perr != nil || w == uuid.Nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("expected_owner_wait_id must be a wait id (uuid)"))
+		}
+		if expectedGen == nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("expected_owner_wait_id needs expected_generation"))
+		}
+		expectedOwner = &w
+	}
 
 	ctx := c.Request().Context()
 	deps, err := h.depService.ListByTask(ctx, taskID)
@@ -338,6 +354,14 @@ func (h *DependencyHandler) Delete(c echo.Context) error {
 	}
 	if !belongs {
 		return c.JSON(http.StatusNotFound, apierror.NotFound("TaskDependency"))
+	}
+
+	if expectedOwner != nil {
+		// Generation and owner are both predicates of the storage DELETE.
+		if err := h.depService.DeleteIfOwned(ctx, taskID, depID, *expectedGen, *expectedOwner); err != nil {
+			return handleError(c, err)
+		}
+		return c.NoContent(http.StatusNoContent)
 	}
 
 	if expectedGen != nil {

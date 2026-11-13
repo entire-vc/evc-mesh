@@ -468,7 +468,7 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 // profile survives is the admission left on the old digest, which needs renewed
 // approval as before. Adding a profile to the binding never widens the admitted
 // set. Policy, controller versions and unrelated bindings are outside the
-// projection, as in SetBindingPolicy. The grant and its key fingerprint are
+// projection. Save and SetBindingPolicy both call it. The grant and its key fingerprint are
 // matched in SQL, so a rotated key never inherits an admission. The admission
 // revision is the receiver's token and stays as is.
 func carryRuntimeAdmissions(ctx context.Context, tx *sqlx.Tx, connectionID uuid.UUID, previous []byte, catalog *domain.RuntimeCatalog, fingerprints map[string]string, oldDigest, digest string) error {
@@ -1148,14 +1148,28 @@ func (r *RuntimeRepo) SetBindingPolicy(ctx context.Context, owner, receiver uuid
 	if err != nil {
 		return nil, err
 	}
-	// The receiver's admission is bound to the catalog digest, which this edit
-	// just changed. A policy edit only reorders and re-prefers profiles the
-	// receiver already admitted (catalog validation rejects anything outside the
-	// permitted list; the admitted set is intersected with it on read), so an
-	// admission that matched the previous digest and the current grant is carried
-	// to the new digest instead of silently disabling the agent. Its revision is
-	// the receiver's token and stays as is.
-	if _, err = tx.ExecContext(ctx, `UPDATE runtime_binding_admissions SET catalog_digest=$3 WHERE integration_id=$1 AND binding_ref=$2 AND catalog_digest=$4 AND workspace_id=$5 AND agent_id=$6 AND grant_id=$7 AND grant_fingerprint=$8`, connection.ID, ref, digest, oldDigest, binding.Binding.WorkspaceID, binding.Binding.AgentID, binding.Binding.GrantID, fingerprint); err != nil {
+	// Every admission is bound to the catalog digest, which this edit just
+	// changed, so every binding's admission is carried, exactly as a full Save
+	// carries them: a policy edit of one binding must not disable the others.
+	// The edited binding needs an active grant, as before; another binding whose
+	// grant is gone has no admission to carry and does not fail this edit.
+	fingerprints := map[string]string{ref: fingerprint}
+	for other, b := range catalog.Bindings {
+		if other == ref {
+			continue
+		}
+		f, grantErr := runtimeGrant(ctx, tx, b.Binding)
+		var apiErr *apierror.Error
+		if errors.As(grantErr, &apiErr) && apiErr.Code == http.StatusForbidden {
+			continue
+		}
+		if grantErr != nil {
+			return nil, grantErr
+		}
+		fingerprints[other] = f
+	}
+	err = carryRuntimeAdmissions(ctx, tx, connection.ID, connection.Config, catalog, fingerprints, oldDigest, digest)
+	if err != nil {
 		return nil, err
 	}
 	admission, err := runtimeAdmission(ctx, tx, connection.ID, ref, binding, fingerprint, digest)

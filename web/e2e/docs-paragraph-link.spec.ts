@@ -4,7 +4,7 @@ import {
   type APIRequestContext,
   type Page,
 } from "@playwright/test";
-import { loginWithRetry } from "./auth-helper";
+import { loginWithRetry, pinUiLocale } from "./auth-helper";
 
 /**
  * E2E scenario: docs-paragraph-link
@@ -135,7 +135,7 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
   // after can still read the previous body for a short window — the object
   // store lags its own commit signal. Measured live against prod on this same
   // document class: GET stayed stale for ~0.8-1.4s AFTER the PATCH response
-  // carried the server's own `updated_at` for the write (task #659b9f32).
+  // carried the server's own `updated_at` for the write.
   //
   // page.goto right after a PATCH lands inside that window on essentially
   // every run — Playwright's own goto+networkidle overhead is on the same
@@ -204,6 +204,8 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
     test.setTimeout(120_000);
 
     const context = await browser.newContext();
+    // UI language from this context's own /auth/me, never the shared account's stored locale (see pinUiLocale).
+    await pinUiLocale(context, "en");
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
 
     // Log in through the endpoint the app itself uses, exactly as
@@ -345,7 +347,7 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
       await gotoUntilFresh(linkUrl, INSERTED_ABOVE());
 
       // Four blocks now, not the original three — this is what makes the run
-      // sensitive to "the PATCH never reached the page" (#659b9f32): the old
+      // sensitive to "the PATCH never reached the page": the old
       // three-paragraph document and the moved-anchor text look identical to
       // every assertion below on their own, since neither paragraph 1's text
       // nor its highlight depends on whether the insertion above it landed.
@@ -362,7 +364,7 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
     });
   });
 
-  // Was QUARANTINED (test.fixme) for #659b9f32: after PATCHing the document
+  // Was QUARANTINED (test.fixme) for an internal ticket: after PATCHing the document
   // body, a full page.goto used to still render the PREVIOUS text — the
   // highlighted paragraph held a string no longer anywhere in the document.
   // Root cause, found by timing a PATCH's own `updated_at` against a polled
@@ -404,7 +406,7 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
     });
   });
 
-  // Was QUARANTINED for the same root cause as scenario 3 (#659b9f32, see the
+  // Was QUARANTINED for the same root cause as scenario 3 (see the
   // comment above it): the object-storage read-after-write gap, not this
   // test and not the frontend. `waitForConsistentRead` closes it here too.
   test("4. the anchored paragraph is gone — nothing highlighted, notice shown", async () => {

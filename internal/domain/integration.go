@@ -77,4 +77,21 @@ type ExtensionConsent struct {
 	Capabilities []string   `json:"capabilities"`
 	At           time.Time  `json:"at"`
 	By           *uuid.UUID `json:"by,omitempty"`
+	// Version and Commit name the manifest release the consent was given for;
+	// empty on a consent recorded before they were stored (or backfilled from
+	// an actor snapshot).
+	Version string `json:"version,omitempty"`
+	Commit  string `json:"commit,omitempty"`
 }
+
+// ExtensionReconsentTarget is the release a re-consent is checked against,
+// resolved inside the transaction that records it: the installed_extensions row
+// (locked against a concurrent update), nil for an extension with no row.
+type ExtensionReconsentTarget struct {
+	Installed *InstalledExtension
+}
+
+// ExtensionReconsentResolve turns the locked target into the consent to record
+// and the actor capability snapshot (JSON object by kind) to install with it, or
+// refuses (version changed). It runs inside the transaction.
+type ExtensionReconsentResolve func(target ExtensionReconsentTarget) (consent ExtensionConsent, actorCapabilities []byte, err error)

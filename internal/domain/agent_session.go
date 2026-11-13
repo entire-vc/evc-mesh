@@ -93,15 +93,44 @@ type AgentSession struct {
 	EstimatedCost    float64            `json:"estimated_cost" db:"estimated_cost"`
 	ComplianceScore  float32            `json:"compliance_score" db:"compliance_score"`
 	ComplianceDetail json.RawMessage    `json:"compliance_detail" db:"compliance_detail"`
+
+	// Known/unknown facts per measure (migration 20261113300). *Known: some report gave a
+	// figure. *Unknown: some report said the figure is unknown; never cleared by a later
+	// report. A measure is incomplete when *Unknown or not *Known.
+	TokensInKnown    bool `json:"tokens_in_known" db:"tokens_in_known"`
+	TokensOutKnown   bool `json:"tokens_out_known" db:"tokens_out_known"`
+	CostKnown        bool `json:"cost_known" db:"cost_known"`
+	TokensInUnknown  bool `json:"tokens_in_unknown" db:"tokens_in_unknown"`
+	TokensOutUnknown bool `json:"tokens_out_unknown" db:"tokens_out_unknown"`
+	CostUnknown      bool `json:"cost_unknown" db:"cost_unknown"`
+}
+
+// SessionUsage is one usage report. A measure flagged unknown carries no figure (its number
+// is ignored); a measure not flagged is a known figure, including a real 0.
+type SessionUsage struct {
+	TokensIn         int64
+	TokensOut        int64
+	Cost             float64
+	TokensInUnknown  bool
+	TokensOutUnknown bool
+	CostUnknown      bool
 }
 
 // TaskCostSummary aggregates cost and quality metrics for a single task
 // across all agent sessions that worked on it.
+//
+// TotalCost, TokensIn and TokensOut are the sum of the KNOWN figures: null when no session
+// has a known figure for that measure (never 0), with the matching *Incomplete flag true
+// whenever any session's figure is unknown or missing. A real zero stays 0 without the flag.
+// A task with no sessions keeps 0 and no flags.
 type TaskCostSummary struct {
-	TotalCost    float64 `json:"total_cost"`
-	TokensIn     int64   `json:"tokens_in"`
-	TokensOut    int64   `json:"tokens_out"`
-	SessionCount int     `json:"session_count"`
-	ReworkCount  int     `json:"rework_count"`
-	QualityFlag  string  `json:"quality_flag"` // "golden" | "rework" | "multi-turn" | "unknown"
+	TotalCost           *float64 `json:"total_cost"`
+	TokensIn            *int64   `json:"tokens_in"`
+	TokensOut           *int64   `json:"tokens_out"`
+	CostIncomplete      bool     `json:"cost_incomplete"`
+	TokensInIncomplete  bool     `json:"tokens_in_incomplete"`
+	TokensOutIncomplete bool     `json:"tokens_out_incomplete"`
+	SessionCount        int      `json:"session_count"`
+	ReworkCount         int      `json:"rework_count"`
+	QualityFlag         string   `json:"quality_flag"` // "golden" | "rework" | "multi-turn" | "unknown"
 }

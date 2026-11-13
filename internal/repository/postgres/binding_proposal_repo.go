@@ -236,7 +236,7 @@ func (r *BindingProposalRepo) ApplyConfirm(ctx context.Context, proposalID, edge
 		SET status='applied', confirmed_by=$2, confirmed_at=$3 WHERE id=$1`, proposalID, by, at); err != nil {
 		return nil, err
 	}
-	q := `WITH d AS (UPDATE task_dependencies SET condition = $2, evidence_url = NULL, condition_met_at = NULL, evidence_status = 'none', evidence_reason = NULL, evidence_head_sha = NULL, evidence_environment = NULL, evidence_link_id = NULL, evidence_actor_id = NULL, generation = generation + 1 WHERE id = $1 RETURNING *)
+	q := `WITH d AS (UPDATE task_dependencies SET condition = $2, evidence_url = NULL, condition_met_at = NULL, evidence_status = 'none', evidence_reason = NULL, evidence_head_sha = NULL, evidence_environment = NULL, evidence_link_id = NULL, evidence_actor_id = NULL, owner_wait_id = NULL, generation = generation + 1 WHERE id = $1 RETURNING *)
 		SELECT ` + taskDependencySelectCols + ` FROM d ` + taskDependencyJoins
 	var dep domain.TaskDependency
 	if err := tx.GetContext(ctx, &dep, q, edgeID, newCond); err != nil {

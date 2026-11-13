@@ -4,6 +4,7 @@ import { AgentDetailDialog } from "@/components/agent-detail-dialog";
 import { useAgentWorkspaceGrantStore } from "@/stores/agent-workspace-grant";
 import { useMemberStore } from "@/stores/member";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useAuthStore } from "@/stores/auth";
 import type { Agent, Workspace } from "@/types";
 
 vi.mock("@/lib/api", () => ({
@@ -492,5 +493,118 @@ describe("AgentDetailDialog — home runtime tabs stay (invited dialog regressio
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
       "Profile", "Route & runs", "Workspace access", "Execution & routes", "Observed state",
     ]);
+  });
+});
+
+describe("AgentDetailDialog — repository access scope", () => {
+  const access = { revision: 3, repositories: [{ provider: "gitlab", host: "gitlab.com", project_path: "entire-vc/evc-mesh" }] };
+
+  function mockApi(agent: Agent, operated: { agent_id: string; operator_user_id: string | null }[] = []) {
+    vi.mocked(api).mockImplementation((path: string) => {
+      const p = String(path);
+      if (p.startsWith("/api/v1/me/runtime/agents")) return Promise.resolve({ agents: operated });
+      if (p.includes("/repository-access/history")) return Promise.resolve({ items: [] });
+      if (p === "/api/v1/agents/agent-1") return Promise.resolve({ ...agent, repository_access: access });
+      return Promise.reject(new Error(`unexpected call: ${p}`));
+    });
+  }
+
+  beforeEach(() => {
+    vi.mocked(api).mockReset();
+    setRole("admin");
+  });
+
+  it("an admin of the current workspace edits the repository access of an agent that lives there (positive control)", async () => {
+    mockApi(baseAgent);
+    render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={baseAgent} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Workspace access" }));
+    await waitFor(() => expect(screen.getAllByTestId("repository-access-row").length).toBe(1));
+    expect(screen.getByLabelText("Host")).toBeInTheDocument();
+  });
+
+  it("an admin of the current workspace gets no editor for a guest agent from another workspace: the server checks the home workspace", async () => {
+    const guest: Agent = { ...baseAgent, workspace_id: "ws-home-elsewhere" };
+    mockApi(guest);
+    render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={guest} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Workspace access" }));
+    await waitFor(() => expect(screen.getAllByTestId("repository-access-row").length).toBe(1));
+    expect(screen.queryByLabelText("Host")).not.toBeInTheDocument();
+  });
+});
+
+describe("AgentDetailDialog — repository access operator rights", () => {
+  const access = { revision: 3, repositories: [{ provider: "gitlab", host: "gitlab.com", project_path: "entire-vc/evc-mesh" }] };
+  const me = "user-me";
+
+  function mockApi(agent: Agent, operated: { agent_id: string; operator_user_id: string | null }[]) {
+    vi.mocked(api).mockImplementation((path: string) => {
+      const p = String(path);
+      if (p.startsWith("/api/v1/me/runtime/agents")) return Promise.resolve({ agents: operated });
+      if (p.includes("/repository-access/history")) return Promise.resolve({ items: [] });
+      if (p === "/api/v1/agents/agent-1") return Promise.resolve({ ...agent, repository_access: access });
+      return Promise.reject(new Error(`unexpected call: ${p}`));
+    });
+  }
+
+  async function openAccessTab(agent: Agent) {
+    render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={agent} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Workspace access" }));
+    await waitFor(() => expect(screen.getAllByTestId("repository-access-row").length).toBe(1));
+  }
+
+  beforeEach(() => {
+    vi.mocked(api).mockReset();
+    setRole("viewer");
+    useAuthStore.setState({ user: { id: me } as never });
+  });
+
+  it("a member who is only the supervisor, not the operator, gets no editor: supervisor_user_id grants nothing on the server", async () => {
+    const agent: Agent = { ...baseAgent, supervisor_user_id: me };
+    mockApi(agent, [{ agent_id: "agent-1", operator_user_id: "someone-else" }]);
+    await openAccessTab(agent);
+    await waitFor(() => expect(vi.mocked(api).mock.calls.some(([p]) => String(p).startsWith("/api/v1/me/runtime/agents"))).toBe(true));
+    expect(screen.queryByLabelText("Host")).not.toBeInTheDocument();
+  });
+
+  it("the real operator, without admin role and without being the supervisor, gets the editor (positive control)", async () => {
+    mockApi(baseAgent, [{ agent_id: "agent-1", operator_user_id: me }]);
+    await openAccessTab(baseAgent);
+    expect(await screen.findByLabelText("Host")).toBeInTheDocument();
+  });
+
+  it("a failed operator lookup leaves the editor read-only instead of guessing", async () => {
+    mockApi(baseAgent, []);
+    vi.mocked(api).mockImplementation((path: string) => {
+      const p = String(path);
+      if (p.startsWith("/api/v1/me/runtime/agents")) return Promise.reject(new Error("boom"));
+      if (p.includes("/repository-access/history")) return Promise.resolve({ items: [] });
+      if (p === "/api/v1/agents/agent-1") return Promise.resolve({ ...baseAgent, repository_access: access });
+      return Promise.reject(new Error(`unexpected call: ${p}`));
+    });
+    await openAccessTab(baseAgent);
+    expect(screen.queryByLabelText("Host")).not.toBeInTheDocument();
+  });
+
+  it("the operator of a guest agent asks for the runtime list of the agent's HOME workspace and gets the editor", async () => {
+    const guest: Agent = { ...baseAgent, workspace_id: "ws-home-elsewhere" };
+    vi.mocked(api).mockImplementation((path: string) => {
+      const p = String(path);
+      if (p === "/api/v1/me/runtime/agents?workspace_id=ws-home-elsewhere") return Promise.resolve({ agents: [{ agent_id: "agent-1", operator_user_id: me }] });
+      if (p.startsWith("/api/v1/me/runtime/agents")) return Promise.resolve({ agents: [] });
+      if (p.includes("/repository-access/history")) return Promise.resolve({ items: [] });
+      if (p === "/api/v1/agents/agent-1") return Promise.resolve({ ...guest, repository_access: access });
+      return Promise.reject(new Error(`unexpected call: ${p}`));
+    });
+    await openAccessTab(guest);
+    expect(await screen.findByLabelText("Host")).toBeInTheDocument();
+  });
+
+  it("an admin of the viewing workspace who is not the operator of a guest agent still gets no editor (guest-admin ban kept)", async () => {
+    setRole("admin");
+    const guest: Agent = { ...baseAgent, workspace_id: "ws-home-elsewhere" };
+    mockApi(guest, [{ agent_id: "agent-1", operator_user_id: "someone-else" }]);
+    await openAccessTab(guest);
+    await waitFor(() => expect(vi.mocked(api).mock.calls.some(([p]) => String(p) === "/api/v1/me/runtime/agents?workspace_id=ws-home-elsewhere")).toBe(true));
+    expect(screen.queryByLabelText("Host")).not.toBeInTheDocument();
   });
 });

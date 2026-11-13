@@ -42,13 +42,16 @@ func (r *TaskRepo) UpdateTransition(ctx context.Context, task *domain.Task, inpu
 	if input.Finish != nil && input.AlarmDue != nil {
 		return fmt.Errorf("a finish cannot also arm a park alarm")
 	}
-	if input.DisallowParkedWait || input.Audit != nil || input.Finish != nil {
+	if input.DisallowParkedWait || input.Audit != nil || input.Finish != nil || input.Fence != nil {
 		var err error
 		tx, err = r.db.BeginTxx(ctx, nil)
 		if err != nil {
 			return err
 		}
 		defer func() { _ = tx.Rollback() }()
+		if err := checkResultFenceTx(ctx, tx, input.Fence); err != nil {
+			return err
+		}
 		if input.DisallowParkedWait {
 			// Registration holds this same row lock but does not advance task.version.
 			// Read the registration only AFTER locking: an UPDATE NOT EXISTS alone

@@ -119,6 +119,8 @@ type Catalog struct {
 	GeneratedAt string  `json:"generated_at"`
 	Extensions  []Entry `json:"extensions"`
 	Blocklist   []Block `json:"blocklist"`
+	// Selection is set only on an exact receipt (scope=scoped).
+	Selection *Selection `json:"selection,omitempty"`
 }
 
 // Blocks reports whether id@version is on the blocklist.
@@ -333,6 +335,9 @@ func (c *Client) refresh(ctx context.Context, meshAPI int, notify bool) error {
 	cat, err := Verify(key, body, sig)
 	if err != nil {
 		return err
+	}
+	if cat.Selection != nil {
+		return ErrUnexpectedSelection
 	}
 	// ETag is a content hash; a mismatch means a middlebox changed the body.
 	if et := resp.Header.Get("ETag"); et != "" && !bytes.Equal([]byte(normalizeETag(et)), []byte(ETagOf(body))) {

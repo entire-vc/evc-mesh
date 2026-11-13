@@ -49,7 +49,7 @@ Authenticated with `Authorization: Bearer ext_…`.
 
 | Route | Pinned |
 |---|---|
-| `GET /ext/me` | `actor` (`ext:<id>@<workspace>`), `actor_id`, `extension_id`, `connection_id`, `workspace_id`, `capabilities` (consented, grouped by kind), `violations.{count,last_at,last}`; the token is never echoed; 403 for any other principal |
+| `GET /ext/me` | `actor` (`ext:<id>@<workspace>`), `actor_id`, `extension_id`, `connection_id`, `workspace_id`, `capabilities` (consented and declared by the installed manifest, grouped by kind), `violations.{count,last_at,last}`; the token is never echoed; 403 for any other principal |
 | `POST /ext/me/token/rotate` | `extension_token`, `token_prefix`, `token_length`, `actor`, `actor_id`, `connection_id`, `workspace_id`, `previous_valid_for`, `previous_valid_until`; `Cache-Control: no-store` |
 | `DELETE /ext/me/token/previous` | 204 |
 
@@ -71,6 +71,29 @@ and reordering statuses (`POST /projects/:proj_id/statuses`, `PATCH
 /projects/:proj_id/statuses/:status_id`, `PUT
 /projects/:proj_id/statuses/reorder`) stay closed to extensions: 403. A
 project-bound connection reads only the statuses of its bound projects.
+
+## Rights after a manifest update
+
+The rights of an `ext_` token are the extension actor's capability snapshot
+narrowed to what the installed manifest declares, on every request:
+
+- an instance update that **adds** rights changes nothing for the token, the
+  install handshake (`events`) or event delivery until the workspace consents
+  to that release (`POST /workspaces/{ws}/extensions/{id}/consent`, see
+  [api.md](./api.md#re-consent-to-a-newer-manifest)). The consent replaces the
+  snapshot in the same transaction as the consent record; the token, actor id
+  and connection stay, and the same token has the added rights on its next
+  request;
+- an update that **drops** rights takes them away at once; a later rollback
+  does not bring them back unless the workspace consents to them again;
+- after the consent Mesh repeats the install call with the consented events;
+  if it fails, the consent stands and the next health check retries it.
+
+`GET /ext/me` `capabilities` is this effective set, so a service that wants to
+know whether its new rights are active reads it there (for example after the
+install call arrives with new `events`) instead of assuming them from its own
+manifest. Pinned by `internal/service/extension_reconsent_db_test.go` and
+`internal/extensions/external/reconsent_test.go`.
 
 ## What is a breaking change
 

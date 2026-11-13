@@ -108,3 +108,75 @@ func TestDependencyHandler_DeleteCAS(t *testing.T) {
 		})
 	}
 }
+
+// expected_owner_wait_id: the owner travels with the generation to
+// the owner-checked delete; without it the generation delete is unchanged.
+func TestDependencyHandler_DeleteOwnerCAS(t *testing.T) {
+	taskID, depID, waitID := uuid.New(), uuid.New(), uuid.New()
+	list := func(context.Context, uuid.UUID) ([]domain.TaskDependency, error) {
+		return []domain.TaskDependency{{ID: depID, TaskID: taskID}}, nil
+	}
+	untouched := func(called *bool) *MockTaskDependencyService {
+		return &MockTaskDependencyService{
+			ListByTaskFunc: list,
+			DeleteFunc:     func(context.Context, uuid.UUID) error { *called = true; return nil },
+			DeleteIfGenerationFunc: func(context.Context, uuid.UUID, uuid.UUID, int64) error {
+				*called = true
+				return nil
+			},
+			DeleteIfOwnedFunc: func(context.Context, uuid.UUID, uuid.UUID, int64, uuid.UUID) error {
+				*called = true
+				return nil
+			},
+		}
+	}
+
+	t.Run("owner and generation reach the owner-checked delete only", func(t *testing.T) {
+		var gotGen int64
+		var gotOwner uuid.UUID
+		other := false
+		rec := deleteCASRequest(t, &MockTaskDependencyService{
+			ListByTaskFunc: list,
+			DeleteFunc:     func(context.Context, uuid.UUID) error { other = true; return nil },
+			DeleteIfGenerationFunc: func(context.Context, uuid.UUID, uuid.UUID, int64) error {
+				other = true
+				return nil
+			},
+			DeleteIfOwnedFunc: func(_ context.Context, tid, id uuid.UUID, gen int64, owner uuid.UUID) error {
+				assert.Equal(t, taskID, tid)
+				assert.Equal(t, depID, id)
+				gotGen, gotOwner = gen, owner
+				return nil
+			},
+		}, taskID, depID, "?expected_generation=2&expected_owner_wait_id="+waitID.String())
+		assert.Equal(t, http.StatusNoContent, rec.Code)
+		assert.EqualValues(t, 2, gotGen)
+		assert.Equal(t, waitID, gotOwner)
+		assert.False(t, other, "a weaker delete ran when an owner was given")
+	})
+
+	t.Run("not the owner is 409", func(t *testing.T) {
+		rec := deleteCASRequest(t, &MockTaskDependencyService{
+			ListByTaskFunc: list,
+			DeleteIfOwnedFunc: func(context.Context, uuid.UUID, uuid.UUID, int64, uuid.UUID) error {
+				return apierror.Conflict("not owned")
+			},
+		}, taskID, depID, "?expected_generation=2&expected_owner_wait_id="+waitID.String())
+		assert.Equal(t, http.StatusConflict, rec.Code)
+	})
+
+	for name, q := range map[string]string{
+		"owner without generation": "?expected_owner_wait_id=" + waitID.String(),
+		"owner not a uuid":         "?expected_generation=2&expected_owner_wait_id=abc",
+		"owner nil uuid":           "?expected_generation=2&expected_owner_wait_id=" + uuid.Nil.String(),
+		"owner empty":              "?expected_generation=2&expected_owner_wait_id=",
+		"owner repeated":           "?expected_generation=2&expected_owner_wait_id=" + waitID.String() + "&expected_owner_wait_id=" + waitID.String(),
+	} {
+		t.Run("malformed "+name+" is 400", func(t *testing.T) {
+			called := false
+			rec := deleteCASRequest(t, untouched(&called), taskID, depID, q)
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+			assert.False(t, called, "a malformed owner must not fall back to a weaker delete")
+		})
+	}
+}

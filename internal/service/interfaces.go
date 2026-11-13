@@ -75,6 +75,9 @@ type MoveTaskInput struct {
 	// Finish is set only by finish_task: its writes join the move's
 	// transaction (domain.TaskTransition.Finish).
 	Finish *domain.TaskFinish `json:"-"`
+	// Fence makes the move conditional on the caller's checkout and/or
+	// input_revision; set by the handler from request headers.
+	Fence *domain.ResultFence `json:"-"`
 }
 
 // AssignTaskInput holds parameters for assigning a task.
@@ -338,6 +341,10 @@ type TaskDependencyService interface {
 	// DeleteIfGeneration is Delete as a compare-and-delete on the edge of taskID:
 	// 404 when the edge is not taskID's, 409 when its generation is not gen.
 	DeleteIfGeneration(ctx context.Context, taskID, id uuid.UUID, gen int64) error
+	// DeleteIfOwned is DeleteIfGeneration that also requires the edge to be
+	// owned by the typed wait ownerWaitID: 409 when it is not (no owner, another
+	// owner, or another generation).
+	DeleteIfOwned(ctx context.Context, taskID, id uuid.UUID, gen int64, ownerWaitID uuid.UUID) error
 	// UpdateCondition changes an edge's condition and/or evidence. A
 	// non-task_done edge with evidence is marked met now; clearing the evidence
 	// un-marks it. Returns the stored edge.
@@ -420,6 +427,8 @@ type UploadArtifactInput struct {
 	UploadedByType domain.UploaderType `json:"uploaded_by_type"`
 	Reader         io.Reader           `json:"-"`
 	Size           int64               `json:"size"`
+	// Fence makes the upload conditional on the caller's checkout.
+	Fence *domain.ResultFence `json:"-"`
 }
 
 // ArtifactService provides business logic for artifact management.
@@ -1652,15 +1661,20 @@ type DayMetric struct {
 // CostMetrics holds aggregated agent-session cost/token data for a workspace/period,
 // sourced from agent_sessions (populated by the fiddler session_report MCP tool).
 type CostMetrics struct {
-	TotalCost            float64          `json:"total_cost"`
-	TotalTokensIn        int64            `json:"total_tokens_in"`
-	TotalTokensOut       int64            `json:"total_tokens_out"`
-	SessionCount         int              `json:"session_count"`
-	ReportedSessionCount int              `json:"reported_session_count"`
-	ByAgent              []AgentCostRow   `json:"by_agent"`
-	ByProject            []ProjectCostRow `json:"by_project"`
-	ByDay                []DayCostMetric  `json:"by_day"`
-	TopTasks             []TaskCostRow    `json:"top_tasks"`
+	TotalCost            float64 `json:"total_cost"`
+	TotalTokensIn        int64   `json:"total_tokens_in"`
+	TotalTokensOut       int64   `json:"total_tokens_out"`
+	SessionCount         int     `json:"session_count"`
+	ReportedSessionCount int     `json:"reported_session_count"`
+	// A reporter said the figure is unknown for at least one session in the period: the
+	// totals are the known sum. Per measure.
+	CostIncomplete      bool             `json:"cost_incomplete"`
+	TokensInIncomplete  bool             `json:"tokens_in_incomplete"`
+	TokensOutIncomplete bool             `json:"tokens_out_incomplete"`
+	ByAgent             []AgentCostRow   `json:"by_agent"`
+	ByProject           []ProjectCostRow `json:"by_project"`
+	ByDay               []DayCostMetric  `json:"by_day"`
+	TopTasks            []TaskCostRow    `json:"top_tasks"`
 }
 
 // AgentCostRow holds per-agent spend/token stats for the period.

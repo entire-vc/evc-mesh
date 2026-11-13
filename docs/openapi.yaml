@@ -4522,6 +4522,10 @@ paths:
                 estimated_cost: {type: number}
                 task_id: {type: string, format: uuid, description: Scopes the session to a task}
                 tool_breakdown: {type: object, additionalProperties: {type: integer}}
+                unknown:
+                  type: array
+                  items: {type: string, enum: [tokens_in, tokens_out, estimated_cost]}
+                  description: Measures the caller has no figure for, each separately. A listed measure adds nothing and marks the total incomplete for good; a non-zero number for it is 400. Absent = every measure is a known figure (as before).
       responses:
         "200":
           description: Totals of the session after this report (additive)
@@ -4534,10 +4538,19 @@ paths:
                   totals:
                     type: object
                     properties:
-                      tokens_in: {type: integer}
-                      tokens_out: {type: integer}
-                      estimated_cost: {type: number}
+                      tokens_in: {type: integer, nullable: true, description: Known sum; null when no report gave a known figure}
+                      tokens_out: {type: integer, nullable: true}
+                      estimated_cost: {type: number, nullable: true}
+                      tokens_in_incomplete: {type: boolean}
+                      tokens_out_incomplete: {type: boolean}
+                      estimated_cost_incomplete: {type: boolean}
                       model_used: {type: string}
+        "400":
+          description: Unknown measure name in `unknown`, or a figure sent for a measure listed there
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "401":
           description: Unauthorized
           content:
@@ -5177,8 +5190,11 @@ paths:
                   description: 40-character lowercase hex commit SHA.
                 env:
                   type: string
-                  description: Environment, 1-32 chars of a-z, 0-9, _ or -.
-                  example: production
+                  description: |
+                    Environment, 1-32 chars of a-z, 0-9, _ or -; trimmed and lower-cased.
+                    "production" is stored as "prod", the only environment whose deploy
+                    makes the link shipped. The response shows the stored value.
+                  example: prod
       responses:
         "200":
           description: The updated link

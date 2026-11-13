@@ -5,9 +5,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
+
+	"github.com/entire-vc/evc-mesh/internal/apisource"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/google/uuid"
@@ -198,7 +199,7 @@ func TestTaskRoutes_InertElsewhere(t *testing.T) {
 // relies on. Without this a refactor that drops the line leaves every test above
 // green and the routes open.
 func TestTaskProjectGuardIsRegistered(t *testing.T) {
-	src, err := os.ReadFile("../../cmd/api/main.go")
+	src, err := apisource.Read("../../cmd/api")
 	require.NoError(t, err)
 	body := string(src)
 	ws := strings.Index(body, "api.Use(mw.RequireWorkspaceMemberScoped(db))")

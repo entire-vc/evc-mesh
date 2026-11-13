@@ -34,6 +34,9 @@ const (
 // Artifact is a file, code snippet, log, report, or link attached to a task.
 // Stored in S3/MinIO with metadata for display and retrieval.
 type Artifact struct {
+	// Fence, when set, makes the insert conditional on the caller's checkout
+	// never bound from JSON, never stored.
+	Fence          *ResultFence    `json:"-" db:"-"`
 	ID             uuid.UUID       `json:"id" db:"id"`
 	TaskID         uuid.UUID       `json:"task_id" db:"task_id"`
 	Name           string          `json:"name" db:"name"`

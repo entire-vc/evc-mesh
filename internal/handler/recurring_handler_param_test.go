@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/entire-vc/evc-mesh/internal/apisource"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -139,7 +140,7 @@ func TestRecurringHandler_RejectsMalformedID(t *testing.T) {
 // register the name the handler reads. Reading main.go rather than asserting from
 // memory is the point — this is the failure mode the rename introduced.
 func TestRecurringRoutesUseRecurringIDParam(t *testing.T) {
-	src, err := os.ReadFile("../../cmd/api/main.go")
+	src, err := apisource.Read("../../cmd/api")
 	require.NoError(t, err)
 
 	routes := regexp.MustCompile(`api\.[A-Z]+\("(/recurring/[^"]*)"`).FindAllStringSubmatch(string(src), -1)

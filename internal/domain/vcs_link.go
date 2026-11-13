@@ -266,6 +266,22 @@ type VCSActorStamp struct {
 // VCSEnvProd is the environment whose deploy makes a link shipped.
 const VCSEnvProd = "prod"
 
+// vcsEnvProdAlias is the other spelling of VCSEnvProd that writers send
+// ("production"). It is never stored: NormalizeVCSEnvironment folds it into
+// VCSEnvProd on every write, and migration 20261113100 rewrote the rows written
+// before that, so every reader (Go and SQL) compares with VCSEnvProd only.
+const vcsEnvProdAlias = "production"
+
+// NormalizeVCSEnvironment is the stored form of a deploy environment: trimmed,
+// lower case, with "production" folded into "prod".
+func NormalizeVCSEnvironment(env string) string {
+	e := strings.ToLower(strings.TrimSpace(env))
+	if e == vcsEnvProdAlias {
+		return VCSEnvProd
+	}
+	return e
+}
+
 // VCSCIVerdict is the CI result of one pipeline on one commit.
 type VCSCIVerdict struct {
 	Status     string `json:"status"`

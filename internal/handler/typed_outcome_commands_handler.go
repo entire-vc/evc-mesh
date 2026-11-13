@@ -82,6 +82,9 @@ func (h *TypedOutcomeCommandHandler) FinishTask(c echo.Context) error {
 	if bindErr := c.Bind(&in); bindErr != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
+	if in.Fence, err = resultFenceFromRequest(c, taskID); err != nil {
+		return handleError(c, err)
+	}
 	res, err := h.cmds.FinishTask(c.Request().Context(), taskID, in)
 	if err != nil {
 		return commandError(c, err)

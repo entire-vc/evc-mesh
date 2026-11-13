@@ -23,6 +23,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { AgentRepositoryAccess } from "@/components/agent-repository-access";
+import { api } from "@/lib/api";
+import type { OperatorAgent } from "@/lib/my-runner";
+import { useAuthStore } from "@/stores/auth";
 import { AgentRuntimeTabs } from "@/components/agent-runtime-tabs";
 import { ApiKeyRevealPanel } from "@/components/api-key-reveal";
 import type { Agent, AgentProfileUpdateRequest, AgentType } from "@/types";
@@ -60,6 +64,26 @@ export function AgentDetailDialog({
     : myRoleError
       ? true
       : myRole === "owner" || myRole === "admin";
+  const currentUserId = useAuthStore((st) => st.user?.id);
+  // The server admits the agent's operator (operator_user_id) or an owner/admin of its home workspace.
+  // supervisor_user_id is a different field and grants nothing. The operator link is only visible
+  // through the caller's own runtime list; until it is confirmed the editor stays read-only.
+  const [operatorOf, setOperatorOf] = useState<{ agentId: string; userId: string } | null>(null);
+  useEffect(() => {
+    if (!open || !agent?.id || !agent.workspace_id || !currentUserId) return;
+    let cancelled = false;
+    // The list is filtered by the agent's HOME workspace (the server's authorization scope), which for a
+    // guest agent differs from the workspace being viewed.
+    api<{ agents: OperatorAgent[] | null }>(`/api/v1/me/runtime/agents?workspace_id=${encodeURIComponent(agent.workspace_id)}`)
+      .then((r) => {
+        if (cancelled) return;
+        const mine = (r.agents ?? []).some((a) => a.agent_id === agent.id && a.operator_user_id === currentUserId);
+        setOperatorOf(mine ? { agentId: agent.id, userId: currentUserId } : null);
+      })
+      .catch(() => { if (!cancelled) setOperatorOf(null); });
+    return () => { cancelled = true; };
+  }, [open, agent?.id, agent?.workspace_id, currentUserId]);
+  const isOperator = !!operatorOf && operatorOf.agentId === agent?.id && operatorOf.userId === currentUserId;
   const {
     agentWorkspaces,
     isLoadingAgentWorkspaces,
@@ -1135,6 +1159,17 @@ export function AgentDetailDialog({
                 )}
               </div>
             )}
+          <AgentRepositoryAccess
+            agent={agents.find((a) => a.id === agent.id) ?? agent}
+            canEdit={
+              // The server authorizes against the agent's home workspace, so an admin of the
+              // current workspace edits only agents that live in it, not guests from elsewhere.
+              (roleSettled &&
+                agent.workspace_id === currentWorkspace?.id &&
+                (myRole === "owner" || myRole === "admin")) ||
+              isOperator
+            }
+          />
         </div>
           }
         />

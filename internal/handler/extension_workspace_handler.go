@@ -87,6 +87,31 @@ func (h *ExtensionWorkspaceHandler) Connect(c echo.Context) error {
 	return extensionJSON(c, http.StatusCreated, v)
 }
 
+// Reconsent handles POST /workspaces/:ws_id/extensions/:ext_id/consent: the
+// workspace agrees to the rights of the installed manifest release it names.
+func (h *ExtensionWorkspaceHandler) Reconsent(c echo.Context) error {
+	ws, apiErr := extWorkspaceID(c)
+	if apiErr != nil {
+		return c.JSON(apiErr.StatusCode(), apiErr)
+	}
+	var req struct {
+		Version string `json:"version"`
+		Commit  string `json:"commit"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+	var by *uuid.UUID
+	if uid, ok := currentUserID(c); ok {
+		by = &uid
+	}
+	v, err := h.svc.Reconsent(c.Request().Context(), ws, c.Param("ext_id"), by, req.Version, req.Commit)
+	if err != nil {
+		return h.fail(c, err)
+	}
+	return extensionJSON(c, http.StatusOK, v)
+}
+
 // PatchSettings handles PATCH /workspaces/:ws_id/extensions/:ext_id/settings.
 func (h *ExtensionWorkspaceHandler) PatchSettings(c echo.Context) error {
 	ws, apiErr := extWorkspaceID(c)

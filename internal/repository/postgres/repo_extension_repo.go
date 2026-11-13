@@ -65,7 +65,14 @@ func (r *RepoExtensionRepo) InsertRepo(ctx context.Context, ext *domain.Installe
 }
 
 func (r *RepoExtensionRepo) GetState(ctx context.Context, extensionID string) (*domain.ExtensionRepoState, error) {
-	var s domain.ExtensionRepoState
+	// The manifests are NULL on an install that was never updated, was rolled
+	// back or was moved to the catalog; json.RawMessage cannot take a NULL, a
+	// []byte can.
+	var s struct {
+		domain.ExtensionRepoState
+		PreviousManifest []byte `db:"previous_manifest"`
+		PendingManifest  []byte `db:"pending_manifest"`
+	}
 	err := r.db.GetContext(ctx, &s, `
 		SELECT previous_manifest, previous_commit_sha, previous_ref, pending_version, pending_ref, pending_commit_sha, pending_manifest, skipped_commit_sha
 		FROM installed_extensions WHERE extension_id = $1`, extensionID)
@@ -75,7 +82,9 @@ func (r *RepoExtensionRepo) GetState(ctx context.Context, extensionID string) (*
 	if err != nil {
 		return nil, err
 	}
-	return &s, nil
+	st := s.ExtensionRepoState
+	st.PreviousManifest, st.PendingManifest = s.PreviousManifest, s.PendingManifest
+	return &st, nil
 }
 
 func (r *RepoExtensionRepo) ApplyUpdate(ctx context.Context, extensionID, version, ref, commitSHA string, manifest []byte) error {

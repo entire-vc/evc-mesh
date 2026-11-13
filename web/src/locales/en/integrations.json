@@ -102,6 +102,37 @@
       "title": "Workspaces",
       "loading": "Loading…",
       "home": "Home"
+    },
+    "repositoryAccess": {
+      "title": "Repository access",
+      "legacyBadge": "Legacy",
+      "revision": "Revision {{revision}}",
+      "legacy": "No restriction configured (legacy). Saving a list restricts this agent to it.",
+      "denyAll": "Access to all repositories is denied.",
+      "denyAllShort": "all repositories denied",
+      "conflict": "The access list was changed by someone else. Your input is kept.",
+      "serverNow": "Current on server (revision {{revision}}):",
+      "reread": "Reload from server",
+      "discard": "Discard my input",
+      "provider": "Provider",
+      "host": "Host",
+      "path": "Project path",
+      "remove": "Remove repository",
+      "add": "Add repository",
+      "save": "Save",
+      "willDenyAll": "Saving an empty list denies all repositories.",
+      "duplicate": "Duplicate repository",
+      "readOnly": "Only the human operator or a workspace owner/admin can change this.",
+      "history": "Change history",
+      "historyEmpty": "No changes yet.",
+      "historyError": "Could not load history.",
+      "retry": "Retry",
+      "more": "Show more",
+      "revisionChange": "revision {{from}} → {{to}}",
+      "error": {
+        "save": "Failed to save repository access",
+        "reload": "Failed to reload"
+      }
     }
   },
   "eventFeed": {
@@ -1034,6 +1065,17 @@
     }
   },
   "installed": {
+    "consentNotice": {
+      "title": "{{name}} {{version}} asks for more permissions",
+      "body": "The installed version declares permissions this workspace has not agreed to. They stay off until an admin agrees.",
+      "needsBody": "No consent is recorded for {{name}}. Permissions stay off until an admin agrees.",
+      "added": "Added permissions",
+      "agree": "Agree to version {{version}}",
+      "adminOnly": "Only an owner or admin can agree.",
+      "agreed": "{{name}}: permissions of version {{version}} agreed",
+      "changed": "The version changed meanwhile. The list was refreshed: review it and agree again.",
+      "failed": "Could not record consent. Try again."
+    },
     "saved": "{{name}}: settings saved",
     "connected": "{{name}} connected",
     "settingsTitle": "{{name}} settings",

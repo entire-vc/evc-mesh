@@ -54,6 +54,7 @@
     "submit": "Отправить"
   },
   "cost": {
+    "incomplete": "Часть расхода неизвестна",
     "spawns_few": "{{count}} запуска",
     "spawns_many": "{{count}} запусков",
     "spawns_one": "{{count}} запуск",

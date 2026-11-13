@@ -244,6 +244,9 @@ func (h *ArtifactHandler) uploadMultipart(c echo.Context, taskID uuid.UUID) erro
 		Reader:         form.file,
 		Size:           form.size,
 	}
+	if input.Fence, err = resultFenceFromRequest(c, taskID); err != nil {
+		return handleError(c, err)
+	}
 
 	artifact, err := h.artifactService.Upload(c.Request().Context(), input)
 	if err != nil {
@@ -324,6 +327,11 @@ func (h *ArtifactHandler) uploadJSON(c echo.Context, taskID uuid.UUID) error {
 		Reader:         bytes.NewReader(data),
 		Size:           int64(len(data)),
 	}
+	fence, fenceErr := resultFenceFromRequest(c, taskID)
+	if fenceErr != nil {
+		return handleError(c, fenceErr)
+	}
+	input.Fence = fence
 
 	artifact, err := h.artifactService.Upload(c.Request().Context(), input)
 	if err != nil {

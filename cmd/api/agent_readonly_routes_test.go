@@ -2,13 +2,14 @@ package main
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/entire-vc/evc-mesh/internal/apisource"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -132,7 +133,7 @@ func TestAgentReadOnly_WithoutGuardViewerAgentWrites(t *testing.T) {
 // right after DualAuth and before any route is registered on the group.
 func TestAgentReadOnly_GuardMountedOnAuthenticatedGroup(t *testing.T) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	file, err := apisource.Parse(fset, ".", 0)
 	if err != nil {
 		t.Fatalf("parse main.go: %v", err)
 	}

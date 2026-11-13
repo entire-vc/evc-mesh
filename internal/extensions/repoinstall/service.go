@@ -264,7 +264,10 @@ type UpdateInfo struct {
 	Pending         bool     `json:"pending"`
 	CanRollback     bool     `json:"can_rollback"`
 	PreviousVersion string   `json:"previous_version,omitempty"`
-	Error           string   `json:"error,omitempty"`
+	// CatalogScope is "scoped" for a catalog install pinned to an exact
+	// receipt: no update is offered until an admin chooses a version.
+	CatalogScope string `json:"catalog_scope,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
 type candidate struct {
@@ -274,7 +277,17 @@ type candidate struct {
 
 // latest finds what the row's ref points at now. For a tag it also considers a
 // newer semver tag; for a branch it is the branch head.
+//
+// A commit pin is its own latest: an explicit SHA is never moved, by the
+// manual update or by the automatic pass, and the repository is not asked.
 func (s *Service) latest(ctx context.Context, row *domain.InstalledExtension, token string) (*candidate, error) {
+	if IsCommitPin(row.RepoRef) {
+		m, err := extensions.ParseManifest(row.Manifest)
+		if err != nil {
+			return nil, apiErr(http.StatusConflict, CodeManifestInvalid, "the installed manifest is unreadable")
+		}
+		return &candidate{f: &fetched{manifest: m, raw: row.Manifest, sha: row.CommitSHA}, ref: row.RepoRef}, nil
+	}
 	src, err := s.Client.ParseURL(row.RepoURL)
 	if err != nil {
 		return nil, wrapHost(err)

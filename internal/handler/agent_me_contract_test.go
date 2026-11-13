@@ -388,6 +388,69 @@ func TestContract_AgentsMeSessionsReport_AccumulatesUsage(t *testing.T) {
 	assert.Equal(t, "m-1", totals.ModelUsed)
 }
 
+func TestContract_AgentsMeSessionsReport_UnknownMeasures(t *testing.T) {
+	agentID, wsID, taskID := uuid.New(), uuid.New(), uuid.New()
+	svc := &MockAgentService{
+		GetByIDFunc: func(_ context.Context, id uuid.UUID) (*domain.Agent, error) {
+			return &domain.Agent{ID: id, WorkspaceID: wsID}, nil
+		},
+	}
+	report := func(t *testing.T, h *AgentHandler, body string) (int, map[string]any) {
+		t.Helper()
+		c, rec := contractCtx(http.MethodPost, "/api/v1/agents/me/sessions/report", body, agentID, wsID)
+		require.NoError(t, h.ReportSession(c))
+		var out map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+		return rec.Code, out
+	}
+	task := `"task_id":"` + taskID.String() + `"`
+
+	t.Run("plain numbers are read as today: known, no flag", func(t *testing.T) {
+		h := NewAgentHandlerWithEvents(svc, nil, nil, nil, nil, newMockSessionRepo())
+		code, out := report(t, h, `{"tokens_in":100,"tokens_out":0,"estimated_cost":0.5,`+task+`}`)
+		require.Equal(t, http.StatusOK, code)
+		totals := out["totals"].(map[string]any)
+		assert.EqualValues(t, 100, totals["tokens_in"])
+		assert.EqualValues(t, 0, totals["tokens_out"], "a real zero stays 0")
+		assert.Equal(t, false, totals["tokens_in_incomplete"])
+		assert.Equal(t, false, totals["tokens_out_incomplete"])
+		assert.Equal(t, false, totals["estimated_cost_incomplete"])
+	})
+
+	t.Run("all unknown: totals null, flags true", func(t *testing.T) {
+		h := NewAgentHandlerWithEvents(svc, nil, nil, nil, nil, newMockSessionRepo())
+		code, out := report(t, h, `{"unknown":["tokens_in","tokens_out","estimated_cost"],`+task+`}`)
+		require.Equal(t, http.StatusOK, code)
+		totals := out["totals"].(map[string]any)
+		for _, k := range []string{"tokens_in", "tokens_out", "estimated_cost"} {
+			assert.Nil(t, totals[k], k+" has no known part: null, not 0")
+			assert.Equal(t, true, totals[k+"_incomplete"], k)
+		}
+	})
+
+	t.Run("mixed: known + unknown is an incomplete number, and it survives a later known report", func(t *testing.T) {
+		h := NewAgentHandlerWithEvents(svc, nil, nil, nil, nil, newMockSessionRepo())
+		code, _ := report(t, h, `{"tokens_in":100,"estimated_cost":1,`+task+`}`)
+		require.Equal(t, http.StatusOK, code)
+		code, _ = report(t, h, `{"tokens_out":3,"estimated_cost":1,"unknown":["tokens_in"],`+task+`}`)
+		require.Equal(t, http.StatusOK, code)
+		code, out := report(t, h, `{"tokens_in":50,"tokens_out":3,"estimated_cost":1,`+task+`}`)
+		require.Equal(t, http.StatusOK, code)
+		totals := out["totals"].(map[string]any)
+		assert.EqualValues(t, 150, totals["tokens_in"])
+		assert.Equal(t, true, totals["tokens_in_incomplete"], "a later known report does not clear it")
+		assert.Equal(t, false, totals["estimated_cost_incomplete"], "measures are separate")
+	})
+
+	t.Run("refused: unknown name, or a figure sent for a measure declared unknown", func(t *testing.T) {
+		h := NewAgentHandlerWithEvents(svc, nil, nil, nil, nil, newMockSessionRepo())
+		code, _ := report(t, h, `{"unknown":["cost"]}`)
+		assert.Equal(t, http.StatusBadRequest, code)
+		code, _ = report(t, h, `{"tokens_in":5,"unknown":["tokens_in"]}`)
+		assert.Equal(t, http.StatusBadRequest, code)
+	})
+}
+
 func TestContract_AgentsMeSessionsReport_Errors(t *testing.T) {
 	t.Run("no agent key is 401", func(t *testing.T) {
 		h := NewAgentHandlerWithEvents(&MockAgentService{}, nil, nil, nil, nil, newMockSessionRepo())

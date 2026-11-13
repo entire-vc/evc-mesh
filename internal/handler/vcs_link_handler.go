@@ -362,7 +362,8 @@ func (h *VCSLinkHandler) PatchMetadata(c echo.Context) error {
 }
 
 // RecordDeployment handles POST /tasks/:task_id/vcs-links/:link_id/deployment.
-// Body: {"sha": "<40 hex lowercase>", "env": "production"}. Marks the link
+// Body: {"sha": "<40 hex lowercase>", "env": "prod"}. "production" is accepted
+// and stored as "prod" (the response shows the stored value). Marks the link
 // deployed from now (deployed_at); reporting the same sha and env again keeps
 // the first deployed_at. It writes the same metadata.deployed that PATCH
 // .../metadata does, so there is one record of a deploy, and responds with the

@@ -103,7 +103,11 @@ func TestDependencyReleasedSQLShape(t *testing.T) {
 	for _, want := range []string{
 		"td.dependency_type <> 'blocks'", "td.condition <> 'task_done'", // non-blocks + evidence half
 		"WHEN 'shipped' THEN (bt.is_shipped OR bts.category = 'done')",
-		"WHEN 'deployed' THEN (bt.is_shipped OR EXISTS (SELECT 1 FROM vcs_links dv WHERE dv.task_id = bt.id",
+		"WHEN 'deployed' THEN (bt.is_shipped OR " + DeploymentReleasesSQL("bt.id") + ")",
+		"EXISTS (SELECT 1 FROM vcs_links dv WHERE dv.task_id = bt.id",
+		// a sibling pr link still on the way to prod holds the edge
+		"AND NOT EXISTS (SELECT 1 FROM vcs_links dh WHERE dh.task_id = bt.id",
+		"COALESCE(dh.status, '') <> 'closed'",
 		"WHEN 'accepted' THEN bts.category = 'done'",
 		"ELSE bts.category IN ('done', 'cancelled')",
 	} {

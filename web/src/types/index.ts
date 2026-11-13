@@ -330,6 +330,44 @@ export interface Agent {
   created_at: string;
   updated_at: string;
   short_tag?: string | null;
+  // Absent/null = legacy (no restriction configured); {repositories: []} = deny all.
+  repository_access?: RepositoryAccess | null;
+}
+
+export interface RepositoryRef {
+  provider: string;
+  host: string;
+  project_path: string;
+}
+
+export interface RepositoryAccess {
+  revision: number;
+  repositories: RepositoryRef[];
+}
+
+/** PUT /agents/:id/repository-access — expected_revision 0 starts from legacy (null). */
+export interface RepositoryAccessUpdateRequest {
+  expected_revision: number;
+  repositories: RepositoryRef[];
+}
+
+export interface RepositoryAccessAuditActor {
+  type: string;
+  id: string;
+  name?: string;
+}
+
+export interface RepositoryAccessAuditEntry {
+  id: string;
+  created_at: string;
+  actor: RepositoryAccessAuditActor;
+  old: RepositoryAccess | null;
+  new: RepositoryAccess;
+}
+
+export interface RepositoryAccessAuditPage {
+  items: RepositoryAccessAuditEntry[];
+  next_cursor?: string | null;
 }
 
 // A markdown page inside a project. Named ProjectDocument rather than Document
@@ -1378,6 +1416,9 @@ export interface AnalyticsMetrics {
     total_tokens_out: number;
     session_count: number;
     reported_session_count: number;
+    cost_incomplete?: boolean;
+    tokens_in_incomplete?: boolean;
+    tokens_out_incomplete?: boolean;
     by_agent: Array<{
       agent_id: string;
       agent_name: string;

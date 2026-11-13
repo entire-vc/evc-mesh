@@ -288,6 +288,7 @@ type MockTaskDependencyService struct {
 	CreateFunc                   func(ctx context.Context, dep *domain.TaskDependency) error
 	DeleteFunc                   func(ctx context.Context, id uuid.UUID) error
 	DeleteIfGenerationFunc       func(ctx context.Context, taskID, id uuid.UUID, gen int64) error
+	DeleteIfOwnedFunc            func(ctx context.Context, taskID, id uuid.UUID, gen int64, owner uuid.UUID) error
 	ListByTaskFunc               func(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
 	ListByTaskBothDirectionsFunc func(ctx context.Context, taskID uuid.UUID) (outgoing, incoming []domain.EnrichedTaskDependency, err error)
 	CheckCycleFunc               func(ctx context.Context, taskID, dependsOnTaskID uuid.UUID) (bool, error)
@@ -318,6 +319,13 @@ func (m *MockTaskDependencyService) Delete(ctx context.Context, id uuid.UUID) er
 func (m *MockTaskDependencyService) DeleteIfGeneration(ctx context.Context, taskID, id uuid.UUID, gen int64) error {
 	if m.DeleteIfGenerationFunc != nil {
 		return m.DeleteIfGenerationFunc(ctx, taskID, id, gen)
+	}
+	return nil
+}
+
+func (m *MockTaskDependencyService) DeleteIfOwned(ctx context.Context, taskID, id uuid.UUID, gen int64, owner uuid.UUID) error {
+	if m.DeleteIfOwnedFunc != nil {
+		return m.DeleteIfOwnedFunc(ctx, taskID, id, gen, owner)
 	}
 	return nil
 }
@@ -1261,6 +1269,9 @@ func (m *MockAgentSessionRepository) GetActiveAgentWide(ctx context.Context, age
 }
 func (m *MockAgentSessionRepository) AddUsage(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, tokensIn, tokensOut int64, cost float64, model string) (*domain.AgentSession, error) {
 	return &domain.AgentSession{AgentID: agentID, WorkspaceID: workspaceID, TaskID: taskID, TokensIn: tokensIn, TokensOut: tokensOut, EstimatedCost: cost, ModelUsed: model}, nil
+}
+func (m *MockAgentSessionRepository) ReportUsage(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, u domain.SessionUsage, model string) (*domain.AgentSession, error) {
+	return m.AddUsage(ctx, agentID, workspaceID, taskID, u.TokensIn, u.TokensOut, u.Cost, model)
 }
 func (m *MockAgentSessionRepository) GetActiveForTask(ctx context.Context, agentID, taskID uuid.UUID) (*domain.AgentSession, error) {
 	return nil, nil

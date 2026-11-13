@@ -98,9 +98,15 @@ func (p *Provider) InstanceEnabled(ctx context.Context) bool {
 
 // Resolve: the workspace's own bot row governs (active or switched off); the
 // instance level is a kill switch over all workspaces, not a source of settings.
+// A thrown kill switch is reported as InstanceDisabled, so the settings page
+// says "disabled at instance level" rather than "no bot connected".
 func (p *Provider) Resolve(ctx context.Context, workspaceID uuid.UUID) (extensions.Resolved, error) {
 	off := extensions.Resolved{ExtensionID: p.Man.ID, Source: extensions.SourceNone}
-	if !p.InstanceEnabled(ctx) || p.Conns == nil {
+	if !p.InstanceEnabled(ctx) {
+		off.InstanceDisabled = true
+		return off, nil
+	}
+	if p.Conns == nil {
 		return off, nil
 	}
 	c, err := p.Conns.Connection(ctx, workspaceID, p.Man.ID)

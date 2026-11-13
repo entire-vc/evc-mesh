@@ -93,6 +93,15 @@ off) | `instance` (no workspace connection; instance level governs) | `none`.
   "consented_capabilities": ["api:tasks.read"],
   "consented_at": "2026-10-14T17:00:00Z",
   "consented_by": "7a30…",
+  "consented_version": "0.3.0",
+  "consented_commit": "4be1…",
+  "needs_consent": true,
+  "pending_consent": {
+    "version": "0.4.0",
+    "commit": "9c07…",
+    "added_capabilities": ["api:tasks:write", "events:task.created"],
+    "added_events": ["task.created"]
+  },
   "created_at": "…",
   "updated_at": "…"
 }
@@ -100,6 +109,14 @@ off) | `instance` (no workspace connection; instance level governs) | `none`.
 
 `settings` are validated against the manifest `settings` schema for the
 `workspace` level.
+
+`consented_version` / `consented_commit` name the release the consent was given
+for; both are empty on a consent recorded before they were stored or backfilled
+from the extension actor. `pending_consent` is computed on every read from the
+installed release, nothing is stored: the rights that release declares and the
+consent does not cover. It is absent (and `needs_consent` is `false`) when there
+is nothing new to agree to. A connection without any consent record shows every
+declared right as pending. See "Re-consent to a newer manifest".
 
 ### WorkspaceExtension (workspace list item)
 
@@ -151,19 +168,180 @@ still govern: see `status.source`).
 | `GET /extensions/{id}/instance-settings` | instance admin | – | `200` settings object; secret values are masked |
 | `PUT /extensions/{id}/instance-settings` | instance admin | settings object | `200` settings object; a masked secret value preserves the stored secret |
 | `POST /extensions/install` | instance admin | `{ "source": "repo", "repo_url", "ref", "auth_token"? }` | `201 { extension_id, version, source, trust_level: "custom", repo_url, repo_ref, commit_sha }`. `400` `extension_builtin_runtime` / `extension_incompatible` / `extension_manifest_invalid`, `409` `extension_id_conflict` (the id is installed, listed in the Spark catalog or shipped with Mesh: one extension, one id), `403`/`404`/`502` `extension_repo_unavailable`. The token is stored encrypted and never returned |
+| `POST /extensions/install` (catalog) | instance admin | `{ "source": "catalog", "id", "version"? }` | `201 { extension_id, version, source: "catalog", trust_level, commit_sha, artifact_sha256, catalog_scope }`. Without `version`: the default catalogue's latest (`catalog_scope: "default"`). With `version`: exactly that release from Spark's exact receipt, also for an id the default catalogue does not list (`catalog_scope: "scoped"`, pinned). See [Installing an exact version](#installing-and-updating-an-exact-version-scoped-releases) |
 | `POST /extensions/repo/refs` | instance admin | `{ repo_url, auth_token? }` | `200 { tags: [{name, sha}], branches: [{name, sha}] }` |
 | `POST /extensions/repo/preview` | instance admin | as install | `200` manifest, `capabilities`, `compatible`, `commit_sha`, `trust_level: "custom"`, `warning`; installs nothing |
-| `GET /extensions/updates` | instance admin | – | `200 { updates: [{extension_id, current_*, latest_*, update_available, new_capabilities, needs_consent, pending, can_rollback, error?}] }` |
-| `POST /extensions/{id}/update` | instance admin | `{ consent_commit_sha? }` | `200 { outcome: updated \| up_to_date \| pending_consent, ... }`. An update that adds permissions stays `pending_consent` until `consent_commit_sha` names that commit |
+| `GET /extensions/updates` | instance admin | – | `200 { updates: [{extension_id, current_*, latest_*, update_available, new_capabilities, needs_consent, pending, can_rollback, catalog_scope?, error?}] }`. A row with `catalog_scope: "scoped"` is pinned: it is never offered the default catalogue's latest |
+| `POST /extensions/{id}/update` | instance admin | `{ consent_commit_sha?, target_version?, expected_target_commit_sha?, target_scope? }` | `200 { outcome: updated \| up_to_date \| pending_consent, ... }`. An update that adds permissions stays `pending_consent` until `consent_commit_sha` names that commit. `target_version` + `expected_target_commit_sha` choose a release: from the default catalogue (`target_scope` absent or `"default"`; a pinned install becomes unpinned) or from Spark's exact receipt (`target_scope: "scoped"`; the install stays or becomes pinned) |
 | `POST /extensions/update-all` | instance admin | – | `200 { results: [...] }`, same shape per extension |
 | `POST /extensions/{id}/rollback` | instance admin | – | `200` the version before the last update; `409` when there is none |
+| `POST /extensions/{id}/move-to-catalog/plan` | instance admin | `{ target_version?, target_scope? }` | `200 MovePlan`; changes nothing. See [Moving a repository install to the catalog](#moving-a-repository-install-to-the-catalog) |
+| `POST /extensions/{id}/move-to-catalog` | instance admin | `{ expected_version, expected_commit_sha, target_version, target_commit_sha, target_scope?, consent_commit_sha? }`, header `Idempotency-Key` | `200 { outcome: moved \| already_moved, plan }` |
+| `POST /extensions/{id}/repin/plan` | instance admin | `{ repo_url?, ref, auth_token?, remove_auth_token? }` | `200 RepinPlan`; changes nothing. See [Re-pinning a repository install](#re-pinning-a-repository-install) |
+| `POST /extensions/{id}/repin` | instance admin | as plan, plus `{ expected_version, expected_commit_sha, expected_target_commit_sha, consent_commit_sha? }`, header `Idempotency-Key` | `200 { outcome: repinned \| up_to_date, plan }` |
 
 For a tag `ref` the updates check also offers a newer semver tag; for a branch it
 compares the head with the installed `commit_sha`. With the instance auto-update
 flag on, a background pass every 30 minutes applies updates that add no
 permissions; the others wait for consent.
 
-`GET /extensions/events` returns the extension event catalog.
+### Moving a repository install to the catalog
+
+An extension installed from a repository (`source: "repo"`) can be moved to the
+release Spark publishes under the same id, without uninstalling it. Everything
+keyed by the id stays as it is: workspace connections and their consent,
+project scope and bindings, event subscriptions, the extension actor and its
+token, instance settings and the disable flag, the instance allow-list, and
+`keep:` references in connection config. No project outside the bindings
+becomes reachable.
+
+1. `POST /extensions/{id}/move-to-catalog/plan` with an optional
+   `target_version` (default: the catalog's latest). The answer:
+   `{ extension_id, current, target, added_capabilities, removed_capabilities,
+   needs_consent, one_way: true }`, where `current` and `target` each carry
+   `source, version, commit_sha, artifact_sha256?, trust_level, repo_url?,
+   repo_ref?, manifest`. The target artifact is fetched and verified exactly as
+   a catalog install does (signed catalog, Spark marks the release installable,
+   artifact SHA-256 equals the signed digest, manifest id and version match).
+2. `POST /extensions/{id}/move-to-catalog` with `expected_version` and
+   `expected_commit_sha` (the `current` side of the plan) and `target_version`
+   and `target_commit_sha` (its `target` side). The move is one transaction:
+   the row is locked, checked against the expected state, switched to
+   `source: "catalog"` with the catalog trust, digest, commit and manifest; the
+   repository URL, ref, the previous/pending/skipped repository state and the
+   stored repository token are deleted; a `moved_to_catalog` journal entry is
+   written. When `added_capabilities` is not empty, `consent_commit_sha` must
+   equal `target_commit_sha`; nothing is parked as pending.
+
+With `target_scope: "scoped"` (and `target_version`, required then) the target
+is read from Spark's exact receipt instead of the default catalogue, so the id
+need not be listed there, and the moved install is pinned to that version (see
+[Installing and updating an exact version](#installing-and-updating-an-exact-version-scoped-releases)).
+`current`/`target` then carry `catalog_scope`.
+
+The same version as the repository install is allowed; an older one is not
+(`409 extension_move_downgrade`). Refusals change nothing:
+
+| Status and code | When |
+|---|---|
+| `400` | a required field is missing |
+| `404` | the id is not installed |
+| `404 extension_not_in_catalog` | the catalog does not list the id or that version |
+| `409 extension_not_repo_install` | the install is not from a repository |
+| `409 extension_builtin_runtime` | the catalog record is the code shipped with Mesh |
+| `409 extension_state_changed` | the install or the catalog release is not what the plan showed (another admin, an update or a catalog change in between) |
+| `409 consent_required` | the target adds permissions and `consent_commit_sha` is not the target commit |
+| `409 extension_blocked` / `extension_release_revoked` | the release is blocked or yanked |
+| `409 extension_move_downgrade` | the target is older than the installed version |
+| `422 extension_artifact_digest_mismatch` | the catalog gives no digest for the release, or the artifact does not match it |
+| `422 extension_incompatible` | the release does not support this Mesh API version |
+| `422 extension_manifest_invalid` | Spark does not mark the release installable, or the artifact's manifest is not that id and version |
+| `503 extension_catalog_unavailable` | the signed catalog or Spark cannot be read |
+
+**The move is one way.** The repository state is not kept, so
+`POST /extensions/{id}/rollback` right after the move answers
+`409 extension_rollback_unavailable`: a catalog rollback only restores a catalog
+snapshot. From then on update, auto-update and rollback of the id go through the
+catalog path only and never call the old repository. Going back to a repository
+means uninstalling and installing again.
+
+A retry of an apply that already happened answers `200 already_moved` and
+writes nothing. With an `Idempotency-Key` header the retry returns the stored
+answer byte for byte (`Idempotent-Replayed: true`).
+
+### Installing and updating an exact version (scoped releases)
+
+A publisher can release a version in Spark with the `scoped` publication scope:
+it stays out of the default catalogue (no `latest`, no listing, no Updates
+offer) and is fetched only by exact id and version. **Scoped is unlisted, not
+private**: Spark serves the receipt and the artifact to anyone who names the id
+and the version, without authentication. Do not put secrets in a scoped
+release.
+
+Mesh reads one release with
+`GET {spark}/api/v1/mesh-extensions/catalog.json?scope=scoped&slug={id}&version={x.y.z}&mesh_api=1`.
+The receipt is trusted exactly like the default catalogue (Ed25519 signature
+over the exact bytes with the instance's catalog key, schema 1, ETag equal to
+the body hash) and is refused unless its `selection` is
+`{scope: "scoped", slug: id, version}` and it carries exactly one entry, of that
+id, with exactly one release, of that version. The artifact comes from the
+ordinary route and must hash to the receipt's digest; the manifest inside must
+be that id and version; Mesh API compatibility, the blocklist (the receipt's
+and the cached default catalogue's), the id conflict check and the consent for
+added permissions are those of any catalog install. Spark's 404 for a missing,
+incompatible, yanked, blocked, suspended or non-public selection is
+`404 extension_not_in_catalog`; a receipt that does not verify or is not the
+one asked for is `502 extension_catalog_receipt_invalid`. Nothing is written
+on a refusal.
+
+- Install: `POST /extensions/install { "source": "catalog", "id", "version" }`.
+- Update to another exact version:
+  `POST /extensions/{id}/update { "target_version", "expected_target_commit_sha", "target_scope": "scoped", "consent_commit_sha"? }`.
+  The version must be newer than the installed one; `expected_target_commit_sha`
+  must be the receipt's commit.
+- Move a repository install: `move-to-catalog{,/plan}` with
+  `"target_scope": "scoped"`.
+
+**Such an install is pinned** (`catalog_scope: "scoped"`): the automatic update
+pass never moves it, `GET /extensions/updates` never offers it the default
+catalogue's `latest`, and a plain `update` answers `up_to_date`, also after
+the id appears in the default catalogue. It moves only when an admin chooses a
+version: an exact one keeps it pinned, a default-catalogue one
+(`target_scope: "default"`) unpins it. `rollback` returns to the previous
+release with the scope it had; for a scoped snapshot the exact receipt of that
+version decides whether it is still offered.
+
+**Blocking.** Spark keeps a scoped block out of the default blocklist and
+answers the exact receipt of a blocked, yanked or suspended scoped release with
+404. The hourly blocklist pass therefore re-reads the exact receipt of every
+pinned install: a 404 (or a receipt whose commit or digest no longer matches the
+installed one) switches the extension off for every workspace with the reason
+"Spark no longer offers this exact release (blocked, yanked or withdrawn)",
+writes `catalog_blocked` and notifies instance admins; a block in the receipt's
+own blocklist does the same with its reason; a receipt that is served again
+switches it back on. Spark unreachable or a receipt that does not verify
+changes nothing. An exact update to a version Spark still offers switches the
+extension back on at once.
+
+### Re-pinning a repository install
+
+`POST /extensions/{id}/repin/plan` and `POST /extensions/{id}/repin` change the
+`ref` of a repository install, and optionally its `repo_url` and token, with the
+same plan/apply shape. `ref` is a branch, a tag or a full 40-hex commit SHA.
+The plan answers `{ extension_id, current, target, added_capabilities,
+removed_capabilities, needs_consent, token, auto_update, changed }`; `current`
+and `target` carry `repo_url, ref, pin_kind (commit | tag | branch),
+commit_sha, version, manifest`.
+
+- Apply requires `expected_version` and `expected_commit_sha` (the current
+  install) and `expected_target_commit_sha` (the plan's `target.commit_sha`);
+  a missing one is `400`. A current install that changed since the plan, or a
+  branch or tag that now resolves to another commit, is
+  `409 extension_state_changed`.
+- A commit pin must resolve to itself (`422 extension_manifest_invalid`). The manifest at the target must carry the
+  same id (`409 extension_id_conflict`).
+- Added permissions need `consent_commit_sha` equal to the target commit
+  (`409 consent_required`); nothing is parked as pending.
+- Token: `auth_token` replaces the stored token (stored encrypted),
+  `remove_auth_token: true` deletes it, neither keeps it. When `repo_url`
+  changes and a token is stored, one of the two is required
+  (`400 extension_repo_token_choice_required`): a stored token is never sent to
+  a new address unasked. The plan's `token` says `keep`, `replace`, `remove` or
+  `none`.
+- On the same URL the old pin stays available to `rollback`; on a new URL the
+  previous state is cleared.
+- Auto-update leaves a commit pin where it is (`auto_update` in the plan says
+  so) and makes no repository request for it. A tag pin moves to a newer semver
+  tag and a branch pin follows its head, as before.
+- A retry: `200 up_to_date` when the install is already at the target; with
+  `Idempotency-Key` the stored answer is replayed.
+
+Both operations write the instance journal (`moved_to_catalog`, `repinned`)
+with the from/to version, commit, source and token change; read it with
+`GET /extensions/instance/journal`. A repository token never appears in an
+answer, the journal or the log.
+
+`GET /extensions/events` (event catalog) is unchanged.
 
 ## Workspace routes
 
@@ -186,11 +364,61 @@ and `settings_managed_elsewhere` (generic connect/settings/remove refuse; Runner
 | `POST /workspaces/{ws}/extensions/{id}/disable` | `{ "confirm": true }` | `200 WorkspaceExtension`. When `status.source` is `instance` the extension is on for the whole instance and `confirm` must be `true`; without it `409 confirmation_required` and nothing changes |
 | `POST /workspaces/{ws}/extensions/{id}/test` | – | `200 { "ok": true, "message": "", "status": ExtensionStatus }` — fresh health check |
 | `DELETE /workspaces/{ws}/extensions/{id}?data=keep\|delete` | – | `204`. `keep` (default) removes the connection and keeps the extension's data; `delete` removes the data too |
+| `POST /workspaces/{ws}/extensions/{id}/consent` | `{ "version": "0.4.0", "commit": "9c07…" }` | `200 WorkspaceExtension`. Re-consent of an existing connection to the installed release, see below. `version` and `commit` must name exactly what is installed (`commit` is empty for a builtin extension), else `409 version_changed` with `context: { version, commit }` of the installed release and nothing changes. No `version`: `400`; no connection: `404` |
 | `PUT /workspaces/{ws}/extensions/{id}/project-scope` | `{ "project_scope": "workspace" \| "bound" }` | `200 { "extension_id", "project_scope" }`. See "Project scope" below. `bound` on an extension without `levels.project`: `400 validation_failed`; no connection: `404` |
 
 Errors common to all: `404 not_found` (unknown extension id or no connection
 where one is required), `403 forbidden`, `400 validation_failed` (settings do
 not match the manifest schema; `details` carries the field messages).
+
+### Re-consent to a newer manifest
+
+An instance update can bring a manifest that declares more rights (API scopes,
+events) than the workspace agreed to at connect. Those added rights do not act
+until an owner or admin (`manage_webhooks`) agrees to them:
+
+- the extension token, push subscriptions and deliveries use the rights that are
+  both declared by the installed manifest and consented by the workspace;
+- `POST …/consent` with the `version` and `commit` from `pending_consent`
+  records the consent as exactly the rights that release declares, with
+  `consented_version/commit/at/by`, and in the same transaction replaces the
+  extension actor's capability snapshot. The transaction locks the installed
+  release row: an instance update in flight is waited for and then refused with
+  `409 version_changed`, so a consent never lands on a release the admin did
+  not review;
+- the connection keeps its id, settings, project scope and bindings, its
+  enabled/disabled state, its actor id and its token. The same token gains the
+  added rights on its next request;
+- after the consent Mesh repeats the install handshake so the service learns
+  the new event set. This handshake never issues, rotates or posts the
+  token, even to a `token_path` service whose token is not yet marked delivered;
+  such a first delivery stays with the ordinary handshake, as before the
+  consent. A failed handshake does not undo the consent; it is retried
+  by the next health check, exactly like a failed connect. The service reads its
+  current rights from `GET /ext/me`.
+
+Rights a newer manifest **dropped** stop acting at once, without any consent:
+the effective set is always intersected with what the installed manifest
+declares. They are not pending, and the next consent removes them from the
+record, because a consent is always the whole declared set of one release.
+A rollback of the instance to an older release therefore does not bring back a
+right the workspace no longer consents to: it acts only if the older release
+declares it *and* the current consent covers it.
+
+Connections that had no consent record were backfilled from their extension
+actor's snapshot (what the token already held). A builtin connection without a
+record was backfilled with its builtin manifest's declared set: that is what
+its status always reported, and builtins use neither `ext_` tokens nor push
+events. Any other connection with neither is not given the declared set: it
+receives no events and shows `needs_consent` until someone consents.
+
+Delivery also needs the extension to be registered on the instance: a
+connection left behind by an extension that is no longer installed receives
+nothing, since there is no manifest to declare its events.
+
+`POST /extensions/{id}/update` with `consent_commit_sha` is the instance
+admin's agreement to install a release; it does not consent on behalf of the
+workspaces. Each workspace consents on its own connection.
 
 ### Project scope
 

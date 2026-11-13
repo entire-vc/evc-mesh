@@ -109,10 +109,20 @@ func scanCallbackWrites(fset *token.FileSet, f *ast.File, path string) (rowWrite
 			case *ast.AssignStmt:
 				// repo := s.agentRepo hides the receiver from the call check
 				// above. Aliasing the repository is itself worth a review.
-				for _, rhs := range x.Rhs {
-					if sel, ok := rhs.(*ast.SelectorExpr); ok && strings.EqualFold(sel.Sel.Name, "agentRepo") {
-						rowWrites = append(rowWrites, callbackWriteFinding{"alias of agentRepo", path + ":" + fn})
+				// A copy that keeps an agent-repository name
+				// (agentRepo := deps.agentRepo) hides nothing: every write
+				// through it is still a call the check above reports.
+				for i, rhs := range x.Rhs {
+					sel, ok := rhs.(*ast.SelectorExpr)
+					if !ok || !strings.EqualFold(sel.Sel.Name, "agentRepo") {
+						continue
 					}
+					if len(x.Lhs) == len(x.Rhs) {
+						if id, ok := x.Lhs[i].(*ast.Ident); ok && nameMentionsAgent(id.Name) {
+							continue
+						}
+					}
+					rowWrites = append(rowWrites, callbackWriteFinding{"alias of agentRepo", path + ":" + fn})
 				}
 				for _, lhs := range x.Lhs {
 					if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "CallbackURL" {
@@ -156,6 +166,8 @@ func lit() agent { return agent{CallbackURL: "http://x"} }
 	// receiver.
 	fset2, f2 := parseForScan(t, "y.go", `package service
 func alias(s *svc) { r := s.agentRepo; r.Update(nil) }
+func sameName(s *svc) { agentRepo := s.agentRepo; agentRepo.Update(nil) }
+func readOnly(s *svc) { agentRepo := s.agentRepo; agentRepo.GetByID(nil) }
 func bare(agentRepo repo) { agentRepo.Update(nil) }
 func renamed(s *svc) { s.agentRepository.Create(nil) }
 func plural(s *svc) { s.agents.Update(nil) }
@@ -169,6 +181,8 @@ func notAgent(s *svc) { s.taskRepo.Update(nil) }
 	}
 	assert.ElementsMatch(t, []string{
 		"internal/service/y.go:alias alias of agentRepo",
+		// A same-name copy is not an alias finding, but its write still is.
+		"internal/service/y.go:sameName agentRepo.Update",
 		"internal/service/y.go:bare agentRepo.Update",
 		"internal/service/y.go:renamed agentRepo.Create",
 		"internal/service/y.go:plural agentRepo.Update",

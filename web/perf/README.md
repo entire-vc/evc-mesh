@@ -201,6 +201,23 @@ every chunk, so moving code or the RU locale into a lazy chunk does not lower it
 The ceiling moved by the smallest step above the measurement. `login.initial_js_kb_gz`
 unchanged. Revert: revert the MR and restore 741.3. Lead sign-off recorded.
 
+## `total_js_kb_gz` 744.1 → 746.9 for the agent repository access editor (!1825)
+
+`total_js_kb_gz` 744.1 → 746.9 (**+2.85 KB gz** over main, !1825): the repository
+access editor and its audit history in the agent settings dialog (one lazy component,
+the dialog's three states, the compare-and-set save) and the RU/EN strings. No new
+dependency. Main `96841bd5` measures 744.04 / login 173.64 (ceiling 744.1 after !1868);
+the branch merged with it measures 746.89 / 173.63 (`vite build` +
+`check-bundle-budget.mjs`). The first build of this branch overran both ceilings
+(CI pipeline 31471, job 662558: 746.08 / 173.83 against 743.1 / 173.7); the editor's
+two API helpers moved out of the agent store into the lazy component and the now
+redundant store merge was dropped, so `login.initial_js_kb_gz` is unchanged (ceiling
+stays 173.7). The metric sums every chunk, so lazy loading does not lower it. The
+ceiling is the smallest 0.1 step above the measurement. Revert: restore 744.1
+together with reverting the MR (re-check the budget if main moved). Product lead approval dated
+2026-11-13; conditions: `perf-bundle` on the final HEAD
+measures total <= 746.9 and login <= 173.7; growth above those is not covered.
+
 ## Proving the gate actually gates (do this again after touching the script)
 
 A budget check that can't go red isn't a check (a deliberate failure proves enforcement). Two
@@ -1186,5 +1203,11 @@ constraints variant (Next / Wakes on / Source line, "+N more" toggle) lost its o
 is unchanged. Main sat at the 739.0 ceiling; local `pnpm build` + `check-bundle-budget` measured 739.35 on the branch. The ceiling is the smallest 0.1 step above it.
 Revert: restore 739.0 together with reverting the MR (re-check the budget if main moved). Product lead approval dated 2026-11-04; conditions: `perf-bundle` on the final HEAD measures total <= 739.4 and login <= 173.6; growth above 739.4 is not covered.
 
-`total_js_kb_gz` 739.5 → 740.6 (**+1.09 KB gz**, wait target on the kanban tile and one brief in task detail): `waitBrief` picks one structured target (task, MR, pipeline, decision) from the state or its constraints and ignores free text and hidden/redacted targets; the tile renders a prefix plus a safe link; task detail drops the repeated target and moves Next / Wakes on / Source / raw target / full reason into a collapsed `<details>` (`runtime-constraints.tsx`), with the technical-details and target strings in en and ru. `login.initial_js_kb_gz` 173.53 → 173.54 (+0.01 KB gz, within the existing 173.6 ceiling, which is not raised). Main sat at 739.49 against the 739.5 ceiling (no headroom, `perf-bundle` job 573450); `perf-bundle` job 574164 measured 740.58 on the branch. The ceiling is the smallest 0.1 step above it.
+`total_js_kb_gz` 739.5 → 740.6 (**+1.09 KB gz**, wait target on the kanban tile and one brief in task detail, !1775): `waitBrief` picks one structured target (task, MR, pipeline, decision) from the state or its constraints and ignores free text and hidden/redacted targets; the tile renders a prefix plus a safe link; task detail drops the repeated target and moves Next / Wakes on / Source / raw target / full reason into a collapsed `<details>` (`runtime-constraints.tsx`), with the technical-details and target strings in en and ru. `login.initial_js_kb_gz` 173.53 → 173.54 (+0.01 KB gz, within the existing 173.6 ceiling, which is not raised). Main sat at 739.49 against the 739.5 ceiling (no headroom, `perf-bundle` job 573450); `perf-bundle` job 574164 measured 740.58 on the branch. The ceiling is the smallest 0.1 step above it.
 Revert: restore 739.5 together with reverting the MR (re-check the budget if main moved). Product lead approval dated 2026-11-05; conditions: `perf-bundle` on the final HEAD measures total <= 740.6 and login <= 173.6; growth above those values is not covered.
+
+`total_js_kb_gz` 743.0 → 743.1 (**+0.1 KB gz**, !1864): the task cost block marks an incomplete total (a "+" after the figure, with a tooltip, and its string in en and ru) when a usage report said tokens or cost are unknown. A workspace-dashboard mark and a shared import that reshuffled chunks were removed to keep the addition small. Main sat inside the 743.0 ceiling; local `pnpm build` + `check-bundle-budget` measured 743.09 on the rebased branch. The ceiling is the smallest 0.1 step above it.
+Revert: restore 743.0 together with reverting the MR (re-check the budget if main moved). Product lead approval dated 2026-11-13; condition: `perf-bundle` on the final HEAD measures total <= 743.1; growth above that is not covered.
+
+`total_js_kb_gz` 743.1 → 744.1 (**+0.95 KB gz** over main, !1868): the installed-extension row shows a consent notice (`consent-notice.tsx`) with the version and the added rights, and an Agree action for owner/admin; the consent request, the token-to-capability helper and the notice strings in en and ru. Long strings were shortened and a "busy" label dropped to keep it small; `login.initial_js_kb_gz` is unchanged (173.63 on the branch, 173.64 on main, ceiling 173.7 not raised). Main `5ba17c84` measured 743.09; local `pnpm build` + `check-bundle-budget` measured 744.04 on the branch rebased onto it. The ceiling is the smallest 0.1 step above it.
+Revert: restore 743.1 together with reverting the MR (re-check the budget if main moved). Product lead approval dated 2026-11-13; conditions: `perf-bundle` on the final HEAD measures total <= 744.1 and login <= 173.7; growth above those is not covered.

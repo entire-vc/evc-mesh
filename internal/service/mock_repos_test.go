@@ -1242,6 +1242,23 @@ func (m *MockTaskDependencyRepository) DeleteIfGeneration(_ context.Context, tas
 	return nil
 }
 
+func (m *MockTaskDependencyRepository) DeleteIfOwned(_ context.Context, taskID, id uuid.UUID, gen int64, owner uuid.UUID) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	dep, ok := m.items[id]
+	if !ok || dep.TaskID != taskID {
+		return apierror.NotFound("TaskDependency")
+	}
+	if dep.Generation != gen || dep.OwnerWaitID == nil || *dep.OwnerWaitID != owner {
+		return domain.ErrStaleDependencyGeneration
+	}
+	delete(m.items, id)
+	return nil
+}
+
 func (m *MockTaskDependencyRepository) ListByTask(_ context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error) {
 	if m.errToReturn != nil {
 		return nil, m.errToReturn

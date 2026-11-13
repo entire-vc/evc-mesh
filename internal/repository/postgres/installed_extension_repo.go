@@ -25,7 +25,15 @@ func NewInstalledExtensionRepo(db *sqlx.DB) *InstalledExtensionRepo {
 }
 
 const installedExtensionCols = `extension_id, version, manifest, source, repo_url, repo_ref, commit_sha,
-	artifact_sha256, trust_level, installed_by, previous_version, blocked, blocked_reason, created_at, updated_at`
+	artifact_sha256, trust_level, catalog_scope, installed_by, previous_version, blocked, blocked_reason, created_at, updated_at`
+
+// catalogScope is the stored scope of a catalog row: "scoped" or "default".
+func catalogScope(s string) string {
+	if s == "scoped" {
+		return s
+	}
+	return "default"
+}
 
 func (r *InstalledExtensionRepo) UpsertBuiltin(ctx context.Context, ext *domain.InstalledExtension) error {
 	return upsertBuiltin(ctx, r.db, ext)
@@ -84,9 +92,9 @@ func (r *InstalledExtensionRepo) SetBlocked(ctx context.Context, extensionID str
 // InsertCatalog inserts a source=catalog row; apierror.Conflict when the id is taken.
 func (r *InstalledExtensionRepo) InsertCatalog(ctx context.Context, ext *domain.InstalledExtension) error {
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO installed_extensions (extension_id, version, manifest, source, commit_sha, artifact_sha256, trust_level, installed_by)
-		VALUES ($1, $2, $3, 'catalog', $4, $5, $6, $7)`,
-		ext.ExtensionID, ext.Version, []byte(ext.Manifest), ext.CommitSHA, ext.ArtifactSHA256, string(ext.TrustLevel), ext.InstalledBy)
+		INSERT INTO installed_extensions (extension_id, version, manifest, source, commit_sha, artifact_sha256, trust_level, installed_by, catalog_scope)
+		VALUES ($1, $2, $3, 'catalog', $4, $5, $6, $7, $8)`,
+		ext.ExtensionID, ext.Version, []byte(ext.Manifest), ext.CommitSHA, ext.ArtifactSHA256, string(ext.TrustLevel), ext.InstalledBy, catalogScope(ext.CatalogScope))
 	var pgErr *pq.Error
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return apierror.Conflict("an extension with this id is already installed")
@@ -134,7 +142,7 @@ func (r *InstalledExtensionRepo) UpdateCatalog(ctx context.Context, ext *domain.
 	}
 	snap := domain.CatalogSnapshot{
 		Version: cur.Version, Manifest: cur.Manifest, CommitSHA: cur.CommitSHA, ArtifactSHA256: cur.ArtifactSHA256,
-		TrustLevel: string(cur.TrustLevel), Source: string(cur.Source),
+		TrustLevel: string(cur.TrustLevel), Source: string(cur.Source), CatalogScope: catalogScope(cur.CatalogScope),
 		SupersededVersion: ext.Version, SupersededCommit: ext.CommitSHA, CapturedAt: time.Now().UTC(),
 	}
 	snap.Seal()
@@ -148,9 +156,9 @@ func (r *InstalledExtensionRepo) UpdateCatalog(ctx context.Context, ext *domain.
 		UPDATE installed_extensions SET
 			previous_version = version, previous_snapshot = $7, skipped_commit_sha = '',
 			version = $2, manifest = $3, commit_sha = $4,
-			artifact_sha256 = $5, trust_level = $6, updated_at = now()
+			artifact_sha256 = $5, trust_level = $6, catalog_scope = $8, updated_at = now()
 		WHERE extension_id = $1 AND source = 'catalog'`,
-		ext.ExtensionID, ext.Version, []byte(ext.Manifest), ext.CommitSHA, ext.ArtifactSHA256, string(ext.TrustLevel), raw); err != nil {
+		ext.ExtensionID, ext.Version, []byte(ext.Manifest), ext.CommitSHA, ext.ArtifactSHA256, string(ext.TrustLevel), raw, catalogScope(ext.CatalogScope)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -202,13 +210,13 @@ func (r *InstalledExtensionRepo) RollbackCatalog(ctx context.Context, extensionI
 	res, err := tx.ExecContext(ctx, `
 		UPDATE installed_extensions SET
 			skipped_commit_sha = commit_sha,
-			version = $5, manifest = $6, commit_sha = $7, artifact_sha256 = $8, trust_level = $9,
+			version = $5, manifest = $6, commit_sha = $7, artifact_sha256 = $8, trust_level = $9, catalog_scope = $10,
 			previous_version = '', previous_snapshot = NULL,
 			updated_at = now()
 		WHERE extension_id = $1 AND source = 'catalog' AND NOT blocked
 		  AND version = $2 AND commit_sha = $3 AND previous_snapshot->>'digest' = $4`,
 		extensionID, g.Version, g.CommitSHA, g.SnapshotDigest,
-		snap.Version, []byte(snap.Manifest), snap.CommitSHA, snap.ArtifactSHA256, snap.TrustLevel)
+		snap.Version, []byte(snap.Manifest), snap.CommitSHA, snap.ArtifactSHA256, snap.TrustLevel, catalogScope(snap.CatalogScope))
 	if err != nil {
 		return err
 	}

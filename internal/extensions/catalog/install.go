@@ -194,7 +194,7 @@ func (in *Installer) Install(ctx context.Context, actor uuid.UUID, id string) (*
 		return nil, apiErr(http.StatusConflict, repoinstall.CodeIDConflict, fmt.Sprintf("an extension with id %q is already installed", id))
 	}
 
-	m, err := in.fetchVerified(ctx, e)
+	m, err := in.fetchVerified(ctx, e, false)
 	if err != nil {
 		return nil, err
 	}
@@ -291,20 +291,27 @@ func manifestFromArtifact(art []byte) (json.RawMessage, error) {
 // hashed against the signed catalog digest first, and the manifest is read from
 // those verified bytes; Spark's detail answer only tells whether the release is
 // installable and not yanked. Nothing is stored here.
-func (in *Installer) fetchVerified(ctx context.Context, e *Entry) (extensions.Manifest, error) {
+//
+// exact marks an entry taken from an exact receipt: Spark's detail list hides
+// scoped releases, and the receipt itself already says the release is
+// installable (Spark answers 404 for a yanked, blocked, suspended or
+// non-public selection), so the detail read is skipped.
+func (in *Installer) fetchVerified(ctx context.Context, e *Entry, exact bool) (extensions.Manifest, error) {
 	id, rel := e.ID, e.Latest
-	d, err := in.Detail(ctx, id)
-	if err != nil {
-		return extensions.Manifest{}, err
-	}
-	installable := false
-	for _, r := range d.Releases {
-		if r.Version == rel.Version && r.Installable && !r.Yanked {
-			installable = true
+	if !exact {
+		d, err := in.Detail(ctx, id)
+		if err != nil {
+			return extensions.Manifest{}, err
 		}
-	}
-	if !installable {
-		return extensions.Manifest{}, apiErr(http.StatusUnprocessableEntity, repoinstall.CodeManifestInvalid, "Spark has no installable release "+rel.Version)
+		installable := false
+		for _, r := range d.Releases {
+			if r.Version == rel.Version && r.Installable && !r.Yanked {
+				installable = true
+			}
+		}
+		if !installable {
+			return extensions.Manifest{}, apiErr(http.StatusUnprocessableEntity, repoinstall.CodeManifestInvalid, "Spark has no installable release "+rel.Version)
+		}
 	}
 
 	base, err := in.base()

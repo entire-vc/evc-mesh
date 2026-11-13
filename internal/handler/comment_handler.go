@@ -109,7 +109,7 @@ func (h *CommentHandler) Create(c echo.Context) error {
 	}
 
 	var req createCommentRequest
-	if err := c.Bind(&req); err != nil {
+	if bindErr := c.Bind(&req); bindErr != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
@@ -117,6 +117,10 @@ func (h *CommentHandler) Create(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
 			"body": "body is required",
 		}))
+	}
+	fence, err := resultFenceFromRequest(c, taskID)
+	if err != nil {
+		return handleError(c, err)
 	}
 
 	// Determine author from context.
@@ -148,6 +152,7 @@ func (h *CommentHandler) Create(c echo.Context) error {
 		Body:            req.Body,
 		IsInternal:      req.IsInternal,
 		Metadata:        req.Metadata,
+		Fence:           fence,
 	}
 
 	if err := h.commentService.Create(c.Request().Context(), comment); err != nil {

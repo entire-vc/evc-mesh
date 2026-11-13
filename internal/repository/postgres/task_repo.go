@@ -78,7 +78,7 @@ var timeNow = time.Now
 // We provide two variants below: one without a table alias (for plain
 // FROM tasks queries) and one with "t." (for joined queries).
 const taskBaseColsNoAlias = `
-	id, version, project_id, status_id, title, description,
+	id, version, input_revision, project_id, status_id, title, description,
 	assignee_id, assignee_type, priority, parent_task_id, position,
 	due_date, start_after, start_after_origin, start_after_receipt_id, estimated_hours, custom_fields, labels,
 	task_number, created_by, created_by_type, created_at, updated_at,
@@ -226,19 +226,20 @@ var taskComputedColsAliased = `
 // taskRow is the DB row representation (includes task_number and deleted_at
 // that the domain model does not have, plus 4 computed enrichment fields).
 type taskRow struct {
-	Version      int64               `db:"version"`
-	ID           uuid.UUID           `db:"id"`
-	ProjectID    uuid.UUID           `db:"project_id"`
-	StatusID     uuid.UUID           `db:"status_id"`
-	Title        string              `db:"title"`
-	Description  string              `db:"description"`
-	AssigneeID   *uuid.UUID          `db:"assignee_id"`
-	AssigneeType domain.AssigneeType `db:"assignee_type"`
-	Priority     domain.Priority     `db:"priority"`
-	ParentTaskID *uuid.UUID          `db:"parent_task_id"`
-	Position     float64             `db:"position"`
-	DueDate      *time.Time          `db:"due_date"`
-	StartAfter   *time.Time          `db:"start_after"`
+	Version       int64               `db:"version"`
+	InputRevision int64               `db:"input_revision"`
+	ID            uuid.UUID           `db:"id"`
+	ProjectID     uuid.UUID           `db:"project_id"`
+	StatusID      uuid.UUID           `db:"status_id"`
+	Title         string              `db:"title"`
+	Description   string              `db:"description"`
+	AssigneeID    *uuid.UUID          `db:"assignee_id"`
+	AssigneeType  domain.AssigneeType `db:"assignee_type"`
+	Priority      domain.Priority     `db:"priority"`
+	ParentTaskID  *uuid.UUID          `db:"parent_task_id"`
+	Position      float64             `db:"position"`
+	DueDate       *time.Time          `db:"due_date"`
+	StartAfter    *time.Time          `db:"start_after"`
 	// Read only where the query selects them (taskBaseColsNoAlias); other
 	// lists leave them nil and TaskRepo.Update keeps the stored values.
 	StartAfterOrigin    *string          `db:"start_after_origin"`
@@ -332,6 +333,7 @@ func (r *taskRow) toDomainBase() domain.Task {
 	return domain.Task{
 		ID:                      r.ID,
 		Version:                 r.Version,
+		InputRevision:           r.InputRevision,
 		ProjectID:               r.ProjectID,
 		StatusID:                r.StatusID,
 		Title:                   r.Title,
@@ -742,7 +744,7 @@ func (r *TaskRepo) Search(ctx context.Context, workspaceID uuid.UUID, filter rep
 		return nil, err
 	}
 
-	dataQ := fmt.Sprintf(`SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
+	dataQ := fmt.Sprintf(`SELECT t.id, t.version, t.input_revision, t.project_id, t.status_id, t.title, t.description,
 		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position, t.human_gate,
 		t.due_date, t.start_after, t.start_after_origin, t.start_after_receipt_id, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
@@ -1603,7 +1605,7 @@ func (r *TaskRepo) ListByStatusCategory(ctx context.Context, workspaceID uuid.UU
 		return nil, err
 	}
 
-	dataQ := `SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
+	dataQ := `SELECT t.id, t.version, t.input_revision, t.project_id, t.status_id, t.title, t.description,
 		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
 		t.due_date, t.start_after, t.start_after_origin, t.start_after_receipt_id, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
@@ -1655,7 +1657,7 @@ func (r *TaskRepo) ListTriageQueue(ctx context.Context, workspaceID uuid.UUID, p
 		return nil, err
 	}
 
-	dataQ := `SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
+	dataQ := `SELECT t.id, t.version, t.input_revision, t.project_id, t.status_id, t.title, t.description,
 		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
 		t.due_date, t.start_after, t.start_after_origin, t.start_after_receipt_id, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
@@ -2052,7 +2054,7 @@ func (r *TaskRepo) ListByUserActive(ctx context.Context, workspaceID, userID uui
 		return nil, err
 	}
 
-	dataQ := `SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
+	dataQ := `SELECT t.id, t.version, t.input_revision, t.project_id, t.status_id, t.title, t.description,
 		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
 		t.due_date, t.start_after, t.start_after_origin, t.start_after_receipt_id, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
@@ -2079,7 +2081,7 @@ func (r *TaskRepo) ListByUserActive(ctx context.Context, workspaceID, userID uui
 // ListOpenByRecurringScheduleID returns non-terminal tasks (not done/cancelled/deleted)
 // belonging to the given recurring schedule, excluding exceptTaskID (the new instance).
 func (r *TaskRepo) ListOpenByRecurringScheduleID(ctx context.Context, scheduleID, exceptTaskID uuid.UUID) ([]domain.Task, error) {
-	q := `SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
+	q := `SELECT t.id, t.version, t.input_revision, t.project_id, t.status_id, t.title, t.description,
 		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
 		t.due_date, t.start_after, t.start_after_origin, t.start_after_receipt_id, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,

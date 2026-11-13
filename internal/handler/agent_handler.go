@@ -925,6 +925,40 @@ type reportSessionRequest struct {
 	EstimatedCost float64          `json:"estimated_cost"`
 	TaskID        *string          `json:"task_id"`
 	ToolBreakdown map[string]int64 `json:"tool_breakdown"`
+	// Unknown names the measures the caller has no figure for, each separately:
+	// "tokens_in", "tokens_out", "estimated_cost". A named measure adds nothing and marks the
+	// session's total for it incomplete for good; sending a non-zero number for a measure named
+	// here is a 400, not a silent pick. Absent or empty = every measure is a known figure, as
+	// before (an omitted number is a known 0).
+	Unknown []string `json:"unknown"`
+}
+
+// sessionUsageFromRequest reads the report as a domain.SessionUsage, refusing an unknown
+// measure name or a figure sent for a measure declared unknown.
+func sessionUsageFromRequest(req reportSessionRequest) (domain.SessionUsage, error) {
+	u := domain.SessionUsage{TokensIn: req.TokensIn, TokensOut: req.TokensOut, Cost: req.EstimatedCost}
+	for _, name := range req.Unknown {
+		switch name {
+		case "tokens_in":
+			if req.TokensIn != 0 {
+				return u, fmt.Errorf("tokens_in is listed as unknown but a figure was sent")
+			}
+			u.TokensInUnknown = true
+		case "tokens_out":
+			if req.TokensOut != 0 {
+				return u, fmt.Errorf("tokens_out is listed as unknown but a figure was sent")
+			}
+			u.TokensOutUnknown = true
+		case "estimated_cost":
+			if req.EstimatedCost != 0 {
+				return u, fmt.Errorf("estimated_cost is listed as unknown but a figure was sent")
+			}
+			u.CostUnknown = true
+		default:
+			return u, fmt.Errorf("unknown measure %q: use tokens_in, tokens_out or estimated_cost", name)
+		}
+	}
+	return u, nil
 }
 
 // ReportSession handles POST /agents/me/sessions/report
@@ -955,6 +989,11 @@ func (h *AgentHandler) ReportSession(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
+	usage, uerr := sessionUsageFromRequest(req)
+	if uerr != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest(uerr.Error()))
+	}
+
 	ctx := c.Request().Context()
 
 	// Parse optional task_id FIRST so we can scope the session lookup per-task.
@@ -977,8 +1016,7 @@ func (h *AgentHandler) ReportSession(c echo.Context) error {
 	// agent-wide) active session, created when none exists: concurrent reports
 	// sum exactly. A retry with an Idempotency-Key never reaches this call
 	// twice (middleware replays the first answer).
-	active, err := h.sessionRepo.AddUsage(ctx, agentID, agent.WorkspaceID, reqTaskID,
-		req.TokensIn, req.TokensOut, req.EstimatedCost, req.Model)
+	active, err := h.sessionRepo.ReportUsage(ctx, agentID, agent.WorkspaceID, reqTaskID, usage, req.Model)
 	if err != nil {
 		return handleError(c, err)
 	}
@@ -999,12 +1037,24 @@ func (h *AgentHandler) ReportSession(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{
 		"session_id": active.ID,
 		"totals": map[string]any{
-			"tokens_in":      active.TokensIn,
-			"tokens_out":     active.TokensOut,
-			"estimated_cost": active.EstimatedCost,
-			"model_used":     active.ModelUsed,
+			// A measure with no known figure is null, never 0; *_incomplete is true when any
+			// report said the figure is unknown (or none ever gave one).
+			"tokens_in":                 knownOrNil(active.TokensInKnown, active.TokensIn),
+			"tokens_out":                knownOrNil(active.TokensOutKnown, active.TokensOut),
+			"estimated_cost":            knownOrNil(active.CostKnown, active.EstimatedCost),
+			"tokens_in_incomplete":      active.TokensInUnknown || !active.TokensInKnown,
+			"tokens_out_incomplete":     active.TokensOutUnknown || !active.TokensOutKnown,
+			"estimated_cost_incomplete": active.CostUnknown || !active.CostKnown,
+			"model_used":                active.ModelUsed,
 		},
 	})
+}
+
+func knownOrNil[T any](known bool, v T) any {
+	if !known {
+		return nil
+	}
+	return v
 }
 
 // ListSubAgents handles GET /agents/:agent_id/sub-agents

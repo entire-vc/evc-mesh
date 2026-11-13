@@ -3,6 +3,8 @@ package postgres_test
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +28,10 @@ func TestDependencyConditionState_SQLReadersAgreeWithGoPredicate(t *testing.T) {
 		shipped  bool
 		deployed string // "" none, else the metadata.deployed JSON stored on a link
 		linkType string // link_type of that link; "" means pr
+		sibling  *siblingLink
+		// held: a sibling pr link is still on the way to prod, so the deploy
+		// above does not release a `deployed` edge (Go HasDeployment false).
+		held bool
 	}
 	const deployedMeta = `{"deployed":{"sha":"0123456789abcdef0123456789abcdef01234567","environment":"prod","at":"2026-10-25T10:00:00Z"}}`
 	blockers := []blockerCase{
@@ -44,6 +50,20 @@ func TestDependencyConditionState_SQLReadersAgreeWithGoPredicate(t *testing.T) {
 		{name: "deploy sha without at", category: "in_progress", deployed: `{"deployed":{"sha":"0123456789abcdef0123456789abcdef01234567","environment":"production"}}`},
 		// a deploy record on a non-pr link is not a delivery of the card's change
 		{name: "open+deployed on commit link", category: "in_progress", deployed: deployedMeta, linkType: "commit"},
+		// several pr links: one deployed link releases only when no other pr
+		// link of the card is still open or merged without a prod deploy
+		{name: "open+deployed+open sibling", category: "in_progress", deployed: deployedMeta, sibling: &siblingLink{status: "open", meta: `{}`}, held: true},
+		{name: "open+deployed+sibling without status", category: "in_progress", deployed: deployedMeta, sibling: &siblingLink{meta: `{}`}, held: true},
+		{name: "open+deployed+merged undeployed sibling", category: "in_progress", deployed: deployedMeta, sibling: &siblingLink{status: "merged", meta: `{"merged_sha":"1111111111111111111111111111111111111111"}`}, held: true},
+		{name: "open+deployed+sibling on staging", category: "in_progress", deployed: deployedMeta, sibling: &siblingLink{status: "merged", meta: stagingSiblingMeta}, held: true},
+		{name: "done+deployed+open sibling", category: "done", deployed: deployedMeta, sibling: &siblingLink{status: "open", meta: `{}`}, held: true},
+		{name: "open+shipped+deployed+open sibling", category: "in_progress", shipped: true, deployed: deployedMeta, sibling: &siblingLink{status: "open", meta: `{}`}, held: true},
+		{name: "open+deployed+deployed sibling", category: "in_progress", deployed: deployedMeta, sibling: &siblingLink{status: "merged", meta: deployedMeta}},
+		{name: "open+deployed+closed sibling", category: "in_progress", deployed: deployedMeta, sibling: &siblingLink{status: "closed", meta: `{}`}},
+		{name: "open+deployed+open review-subject sibling", category: "in_progress", deployed: deployedMeta, sibling: &siblingLink{status: "open", meta: `{"role":"review"}`}},
+		{name: "open+deployed+open relates_to sibling", category: "in_progress", deployed: deployedMeta, sibling: &siblingLink{status: "open", meta: `{"relation":"relates_to"}`}},
+		// a review-subject link is not the card's work: its deploy releases nothing
+		{name: "open+deployed on review-subject link only", category: "in_progress", deployed: `{"role":"review","deployed":{"sha":"0123456789abcdef0123456789abcdef01234567","environment":"prod","at":"2026-10-25T10:00:00Z"}}`},
 	}
 	conditions := []domain.DependencyCondition{
 		domain.DependencyConditionTaskDone, domain.DependencyConditionAccessReady,
@@ -52,13 +72,17 @@ func TestDependencyConditionState_SQLReadersAgreeWithGoPredicate(t *testing.T) {
 	}
 	// expected[condition] lists the blocker cases that release the edge.
 	expected := map[domain.DependencyCondition]map[string]bool{
-		domain.DependencyConditionTaskDone:          {"done": true, "cancelled": true, "done+shipped": true, "done+deployed": true, "cancelled+deployed": true},
-		domain.DependencyConditionAccessReady:       {"done": true, "cancelled": true, "done+shipped": true, "done+deployed": true, "cancelled+deployed": true},
-		domain.DependencyConditionContractReady:     {"done": true, "cancelled": true, "done+shipped": true, "done+deployed": true, "cancelled+deployed": true},
-		domain.DependencyConditionArtifactPublished: {"done": true, "cancelled": true, "done+shipped": true, "done+deployed": true, "cancelled+deployed": true},
-		domain.DependencyConditionShipped:           {"done": true, "open+shipped": true, "done+shipped": true, "done+deployed": true},
-		domain.DependencyConditionDeployed:          {"open+shipped": true, "done+shipped": true, "open+deployed": true, "done+deployed": true, "cancelled+deployed": true},
-		domain.DependencyConditionAccepted:          {"done": true, "done+shipped": true, "done+deployed": true},
+		domain.DependencyConditionTaskDone:          {"done": true, "cancelled": true, "done+shipped": true, "done+deployed": true, "cancelled+deployed": true, "done+deployed+open sibling": true},
+		domain.DependencyConditionAccessReady:       {"done": true, "cancelled": true, "done+shipped": true, "done+deployed": true, "cancelled+deployed": true, "done+deployed+open sibling": true},
+		domain.DependencyConditionContractReady:     {"done": true, "cancelled": true, "done+shipped": true, "done+deployed": true, "cancelled+deployed": true, "done+deployed+open sibling": true},
+		domain.DependencyConditionArtifactPublished: {"done": true, "cancelled": true, "done+shipped": true, "done+deployed": true, "cancelled+deployed": true, "done+deployed+open sibling": true},
+		domain.DependencyConditionShipped:           {"done": true, "open+shipped": true, "done+shipped": true, "done+deployed": true, "done+deployed+open sibling": true, "open+shipped+deployed+open sibling": true},
+		domain.DependencyConditionDeployed: {"open+shipped": true, "done+shipped": true, "open+deployed": true, "done+deployed": true, "cancelled+deployed": true,
+			// the terminal is_shipped flag still releases on its own
+			"open+shipped+deployed+open sibling": true,
+			"open+deployed+deployed sibling":     true, "open+deployed+closed sibling": true,
+			"open+deployed+open review-subject sibling": true, "open+deployed+open relates_to sibling": true},
+		domain.DependencyConditionAccepted: {"done": true, "done+shipped": true, "done+deployed": true, "done+deployed+open sibling": true},
 	}
 
 	f := newGraphDBFixture(t, 1)
@@ -97,6 +121,9 @@ func TestDependencyConditionState_SQLReadersAgreeWithGoPredicate(t *testing.T) {
 				}
 				f.exec(t, `INSERT INTO vcs_links(id,task_id,provider,link_type,external_id,url,metadata) VALUES($1,$2,'gitlab',$4,'1','https://git.example/mr/1',$3::jsonb)`, uuid.New(), blk, b.deployed, lt)
 			}
+			if b.sibling != nil {
+				f.exec(t, `INSERT INTO vcs_links(id,task_id,provider,link_type,external_id,url,status,metadata) VALUES($1,$2,'gitlab','pr','2','https://git.example/mr/2',NULLIF($3,''),$4::jsonb)`, uuid.New(), blk, b.sibling.status, b.sibling.meta)
+			}
 			f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type,condition) VALUES($1,$2,$3,'blocks',$4)`, uuid.New(), dep, blk, string(cond))
 			probes = append(probes, probe{cond: cond, blocker: b, dep: dep, blk: blk})
 		}
@@ -112,7 +139,7 @@ func TestDependencyConditionState_SQLReadersAgreeWithGoPredicate(t *testing.T) {
 			require.Len(t, edges, 1)
 			assert.Equal(t, want, edges[0].ConditionSatisfied, "stored edge verdict")
 
-			goState := domain.BlockerState{Category: domain.StatusCategory(p.blocker.category), IsShipped: p.blocker.shipped, HasDeployment: p.blocker.deployed == deployedMeta && p.blocker.linkType == ""}
+			goState := domain.BlockerState{Category: domain.StatusCategory(p.blocker.category), IsShipped: p.blocker.shipped, HasDeployment: p.blocker.deployed == deployedMeta && p.blocker.linkType == "" && !p.blocker.held}
 			assert.Equal(t, want, edges[0].Released(goState), "Go predicate")
 
 			wantOpen := 1
@@ -126,7 +153,7 @@ func TestDependencyConditionState_SQLReadersAgreeWithGoPredicate(t *testing.T) {
 
 			deployedSet, err := repo.DeployedTasks(ctx, []uuid.UUID{p.blk})
 			require.NoError(t, err)
-			assert.Equal(t, p.blocker.deployed == deployedMeta && p.blocker.linkType == "", deployedSet[p.blk], "DeployedTasks")
+			assert.Equal(t, p.blocker.deployed == deployedMeta && p.blocker.linkType == "" && !p.blocker.held, deployedSet[p.blk], "DeployedTasks")
 		})
 	}
 
@@ -137,6 +164,62 @@ func TestDependencyConditionState_SQLReadersAgreeWithGoPredicate(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, edges, 1)
 	assert.True(t, edges[0].ConditionSatisfied, "non-blocks edge is always satisfied")
+}
+
+// siblingLink is a second pr link on a parity-test blocker; status "" is
+// stored as NULL (a link with no recorded status).
+type siblingLink struct{ status, meta string }
+
+const stagingSiblingMeta = `{"merged_sha":"1111111111111111111111111111111111111111","deployed":{"sha":"1111111111111111111111111111111111111111","environment":"staging","at":"2026-10-25T10:00:00Z"}}`
+
+// A card delivered by two MRs. The mcp MR is merged and deployed to
+// prod while the server MR is still open: a `deployed` edge on that card must
+// keep holding until the second MR is merged and deployed too.
+func TestDependencyConditionState_DeployedHoldsWhileSiblingMROpen(t *testing.T) {
+	f := newGraphDBFixture(t, 4)
+	ids := f.ids(t)
+	blocker, waiting, single, waitingSingle := ids[0], ids[1], ids[2], ids[3]
+	repo := postgres.NewTaskDependencyRepo(f.db)
+	taskRepo := postgres.NewTaskRepo(f.db)
+	ctx := context.Background()
+	const deployed = `{"merged_sha":"74d72a45aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","deployed":{"sha":"74d72a45aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","environment":"prod","at":"2026-11-13T07:30:57Z"}}`
+
+	f.exec(t, `INSERT INTO vcs_links(id,task_id,provider,link_type,external_id,url,status,metadata) VALUES($1,$2,'gitlab','pr','220','https://git.example/evc-mesh-mcp/mr/220','merged',$3::jsonb)`, uuid.New(), blocker, deployed)
+	server := uuid.New()
+	f.exec(t, `INSERT INTO vcs_links(id,task_id,provider,link_type,external_id,url,status,metadata) VALUES($1,$2,'gitlab','pr','1860','https://git.example/evc-mesh/mr/1860','open','{}'::jsonb)`, server, blocker)
+	f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type,condition) VALUES($1,$2,$3,'blocks','deployed')`, uuid.New(), waiting, blocker)
+
+	// control: a card with a single deployed MR releases, as before
+	f.exec(t, `INSERT INTO vcs_links(id,task_id,provider,link_type,external_id,url,status,metadata) VALUES($1,$2,'gitlab','pr','7','https://git.example/mr/7','merged',$3::jsonb)`, uuid.New(), single, deployed)
+	f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type,condition) VALUES($1,$2,$3,'blocks','deployed')`, uuid.New(), waitingSingle, single)
+
+	check := func(dep, blk uuid.UUID, want bool, msg string) {
+		t.Helper()
+		edges, err := repo.ListByTask(ctx, dep)
+		require.NoError(t, err)
+		require.Len(t, edges, 1)
+		assert.Equal(t, want, edges[0].ConditionSatisfied, msg+": stored edge verdict")
+		set, err := repo.DeployedTasks(ctx, []uuid.UUID{blk})
+		require.NoError(t, err)
+		assert.Equal(t, want, set[blk], msg+": DeployedTasks")
+		assert.Equal(t, want, edges[0].Released(domain.BlockerState{Category: domain.StatusCategoryTodo, HasDeployment: set[blk]}), msg+": Go predicate")
+		got, err := taskRepo.GetByID(ctx, dep)
+		require.NoError(t, err)
+		wantOpen := 1
+		if want {
+			wantOpen = 0
+		}
+		assert.Equal(t, wantOpen, got.OpenDependencyCount, msg+": open_dependency_count")
+	}
+
+	check(waitingSingle, single, true, "single deployed MR")
+	check(waiting, blocker, false, "one MR deployed, the other open")
+
+	f.exec(t, `UPDATE vcs_links SET status='merged', metadata='{"merged_sha":"2222222222222222222222222222222222222222"}'::jsonb WHERE id=$1`, server)
+	check(waiting, blocker, false, "second MR merged, not deployed")
+
+	f.exec(t, `UPDATE vcs_links SET metadata='{"merged_sha":"2222222222222222222222222222222222222222","deployed":{"sha":"2222222222222222222222222222222222222222","environment":"prod","at":"2026-11-13T09:00:00Z"}}'::jsonb WHERE id=$1`, server)
+	check(waiting, blocker, true, "both MRs merged and deployed")
 }
 
 // An 'accepted' edge on a cancelled blocker keeps holding (cancelled is not
@@ -247,4 +330,63 @@ func TestTaskDependencyDB_TrustedEvidenceRevokedWhenLinkDeleted(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, domain.EvidenceRevoked, got.EvidenceStatus)
 	assert.False(t, got.ConditionSatisfied, "evidence without its receipt no longer releases")
+}
+
+// Migration 20261113100 rewrites deploys stored as "production" to
+// "prod": the held `deployed` edge is released, a staging deploy still is not,
+// and a trusted receipt bound to the rewritten link survives the drift trigger.
+// The Up section runs in a transaction that is rolled back, so the rows other
+// tests in the shared database insert raw are never touched.
+func TestDeployedEnvProdMigration_ReleasesProductionDeploys(t *testing.T) {
+	raw, err := os.ReadFile("../../../migrations/20261113100_vcs_deployed_env_prod.sql")
+	require.NoError(t, err)
+	up := strings.SplitN(string(raw), "-- +goose Up", 2)
+	require.Len(t, up, 2, "migration has no goose Up section")
+	upSQL := strings.SplitN(up[1], "-- +goose Down", 2)[0]
+
+	f := newGraphDBFixture(t, 6)
+	ids := f.ids(t)
+	prodBlk, prodDep, stgBlk, stgDep, evBlk, evDep := ids[0], ids[1], ids[2], ids[3], ids[4], ids[5]
+	const s = "0123456789abcdef0123456789abcdef01234567"
+	meta := func(env string) string {
+		return `{"head_sha":"` + s + `","deployed":{"sha":"` + s + `","environment":"` + env + `","at":"2026-11-10T10:00:00Z"}}`
+	}
+	prodLink, evLink := uuid.New(), uuid.New()
+	f.exec(t, `INSERT INTO vcs_links(id,task_id,provider,link_type,external_id,url,metadata) VALUES($1,$2,'gitlab','pr','1','https://git.example/mr/1',$3::jsonb)`, prodLink, prodBlk, meta(" Production"))
+	f.exec(t, `INSERT INTO vcs_links(id,task_id,provider,link_type,external_id,url,metadata) VALUES($1,$2,'gitlab','pr','2','https://git.example/mr/2',$3::jsonb)`, uuid.New(), stgBlk, meta("staging"))
+	f.exec(t, `INSERT INTO vcs_links(id,task_id,provider,link_type,external_id,url,metadata) VALUES($1,$2,'gitlab','pr','3','https://git.example/mr/3',$3::jsonb)`, evLink, evBlk, meta("production"))
+	prodEdge, stgEdge, evEdge := uuid.New(), uuid.New(), uuid.New()
+	f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type,condition) VALUES($1,$2,$3,'blocks','deployed')`, prodEdge, prodDep, prodBlk)
+	f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type,condition) VALUES($1,$2,$3,'blocks','deployed')`, stgEdge, stgDep, stgBlk)
+	f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type,condition,evidence_url,condition_met_at,evidence_status,evidence_head_sha,evidence_environment,evidence_link_id)
+		VALUES($1,$2,$3,'blocks','deployed','https://mesh.example/e',now(),'trusted',$4,'production',$5)`, evEdge, evDep, evBlk, s, evLink)
+
+	tx, err := f.db.Beginx()
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	released := func(edge uuid.UUID) bool {
+		t.Helper()
+		var ok bool
+		require.NoError(t, tx.Get(&ok, `SELECT `+domain.DependencyReleasedSQL("d", "bt", "bts.category")+`
+			FROM task_dependencies d JOIN tasks bt ON bt.id=d.depends_on_task_id LEFT JOIN task_statuses bts ON bts.id=bt.status_id WHERE d.id=$1`, edge))
+		return ok
+	}
+	require.False(t, released(prodEdge), "red: a deploy stored as production holds the edge before the migration")
+	require.False(t, released(stgEdge))
+
+	_, err = tx.Exec(upSQL)
+	require.NoError(t, err)
+
+	assert.True(t, released(prodEdge), "production deploy releases the deployed edge after the migration")
+	assert.False(t, released(stgEdge), "staging still does not release")
+	var env string
+	require.NoError(t, tx.Get(&env, `SELECT metadata->'deployed'->>'environment' FROM vcs_links WHERE id=$1`, prodLink))
+	assert.Equal(t, domain.VCSEnvProd, env)
+	var evStatus, evEnv string
+	require.NoError(t, tx.QueryRow(`SELECT evidence_status, evidence_environment FROM task_dependencies WHERE id=$1`, evEdge).Scan(&evStatus, &evEnv))
+	assert.Equal(t, string(domain.EvidenceTrusted), evStatus, "bound receipt is not revoked by the rewrite")
+	assert.Equal(t, domain.VCSEnvProd, evEnv)
+	var left int
+	require.NoError(t, tx.Get(&left, `SELECT count(*) FROM vcs_links WHERE lower(btrim(metadata->'deployed'->>'environment'))='production'`))
+	assert.Zero(t, left)
 }

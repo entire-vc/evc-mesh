@@ -35,8 +35,9 @@ func (s IntegrationConnections) Connection(ctx context.Context, workspaceID uuid
 }
 
 // IntegrationConsents adapts the consent recorded on integration_configs to
-// ConsentStore. A connection with no recorded consent (made before consent was
-// stored) keeps what the manifest declares, as a registry without a store does.
+// ConsentStore. A connection with no recorded consent reports none. Declared is
+// a legacy fallback for such a connection; production leaves it nil, because a
+// connection nobody consented for must show as needing consent.
 type IntegrationConsents struct {
 	Repo     repository.ExtensionConsentRepository
 	Declared func(extensionID string) []string

@@ -53,4 +53,7 @@ type TaskTransition struct {
 	// labels and result_kind on the row, refused when another agent holds the
 	// checkout, then the closing comment, the cancelled wait and the outcome.
 	Finish *TaskFinish
+	// Fence is the caller's checkout/input_revision precondition, checked
+	// under the row lock before the UPDATE; refused, nothing is written.
+	Fence *ResultFence
 }

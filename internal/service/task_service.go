@@ -994,6 +994,11 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 	if task == nil {
 		return apierror.NotFound("Task")
 	}
+	// A fenced move under a lost lock is refused even when it would change
+	// nothing; the write below checks the fence again under the row lock.
+	if err := input.Fence.Check(resultFenceStateOf(task)); err != nil {
+		return err
+	}
 
 	oldVersion := task.Version
 	if input.ExpectedVersion != nil && *input.ExpectedVersion != task.Version {
@@ -1330,13 +1335,19 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 		// A caller with preconditions is told they held: confirm the row is still
 		// the one they were checked against, else a write since the pre-read
 		// (a reassignment, say) would be answered with success instead of 409.
-		if input.ExpectedVersion != nil || input.ExpectedStatusID != nil || input.ExpectedUpdatedAt != nil || input.ExpectedAssigneeID != nil {
+		// A fenced no-op never reaches the locked check of the write, so its
+		// lock is confirmed on the fresh row too: a release since the pre-read
+		// is a 409, not a success an Idempotency-Key would replay.
+		if input.Fence != nil || input.ExpectedVersion != nil || input.ExpectedStatusID != nil || input.ExpectedUpdatedAt != nil || input.ExpectedAssigneeID != nil {
 			fresh, err := s.taskRepo.GetByID(ctx, taskID)
 			if err != nil {
 				return err
 			}
 			if fresh == nil {
 				return apierror.NotFound("Task")
+			}
+			if err := input.Fence.Check(resultFenceStateOf(fresh)); err != nil {
+				return err
 			}
 			if fresh.Version != oldVersion {
 				return taskConflictOf(fresh)
@@ -1349,6 +1360,7 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 	transition := domain.TaskTransition{ExpectedVersion: oldVersion, ExpectedStatusID: input.ExpectedStatusID, ExpectedUpdatedAt: input.ExpectedUpdatedAt, ExpectedAssigneeID: input.ExpectedAssigneeID, Reaper: input.Reaper, AlarmDue: input.AlarmDue, AlarmLabels: input.AlarmLabels}
 	transition.DisallowParkedWait = input.Source == "auto_transition"
 	transition.Finish = input.Finish
+	transition.Fence = input.Fence
 	transition.CheckoutStage = input.CheckoutStage && statusChanged
 	transition.Audit = s.moveAudit(ctx, task, input, oldStatusID, oldPosition, oldAssigneeID, oldAssigneeType, statusChanged, positionChanged, assignmentChanged, assignmentReason, transitionViolation)
 	if statusChanged && task.CheckedOutBy != nil {
@@ -1373,7 +1385,7 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 	} else {
 		// Minimal repository doubles can exercise policy without SQL. Reaper guards
 		// are never silently downgraded on an implementation lacking the atomic API.
-		if input.Reaper != nil || input.Finish != nil {
+		if input.Reaper != nil || input.Finish != nil || input.Fence != nil {
 			return fmt.Errorf("repository lacks guarded task transitions")
 		}
 		if input.AlarmDue != nil {
@@ -4515,4 +4527,11 @@ func (s *taskService) ShipTask(ctx context.Context, taskID uuid.UUID, shipped bo
 		}
 	}
 	return nil
+}
+
+// resultFenceStateOf is a task read as the state a result fence is checked
+// against outside the row lock (the early check of a fenced write).
+func resultFenceStateOf(t *domain.Task) domain.ResultFenceState {
+	return domain.ResultFenceState{Holder: t.CheckedOutBy, Token: t.CheckoutToken, Expires: t.CheckoutExpires,
+		SessionID: t.CheckoutSessionID, Generation: t.CheckoutGeneration, InputRevision: t.InputRevision, Now: time.Now()}
 }

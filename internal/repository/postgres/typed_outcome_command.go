@@ -115,6 +115,9 @@ func (r *TurnCommandRepo) CommitTurn(ctx context.Context, cmd *domain.TurnComman
 			return nil, fmt.Errorf("wait command without a wait")
 		}
 		w.TaskID, w.AgentID, w.SessionID = cmd.TaskID, cmd.AgentID, cmd.SessionID
+		// The id is fixed before the edge is read: the receipt and the edge's
+		// owner both name this wait.
+		w.ID = uuid.New()
 		if w.Kind == domain.TaskWaitCard {
 			err = linkWaitTarget(ctx, tx, task.WorkspaceID, waitScopes, cmd.DenySameWorkspaceTarget, w)
 			if err != nil {
@@ -131,9 +134,16 @@ func (r *TurnCommandRepo) CommitTurn(ctx context.Context, cmd *domain.TurnComman
 				return nil, err
 			}
 		}
-		err = declareWaitTx(ctx, tx, w)
+		err = declareWaitWithIDTx(ctx, tx, w)
 		if err != nil {
 			return nil, err
+		}
+		if w.DependencyOwned != nil && *w.DependencyOwned {
+			// The wait row exists now; the owner reference is checked at once.
+			if _, err = tx.ExecContext(ctx, `UPDATE task_dependencies SET owner_wait_id = $2 WHERE id = $1`,
+				*w.DependencyID, w.ID); err != nil {
+				return nil, err
+			}
 		}
 		if w.ServerObserved {
 			// Evidence may already release an existing edge. Do not create a
@@ -352,24 +362,51 @@ func linkWaitTarget(ctx context.Context, tx *sqlx.Tx, workspaceID uuid.UUID, sco
 	if target.Released {
 		return domain.NewOutcomeError(domain.CodeAlreadyMet, "target_task_id: the target card already meets "+cond)
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO task_dependencies (id, task_id, depends_on_task_id, dependency_type, created_at, condition, wait_agent_id)
+	// Ownership: a new edge belongs to this wait. On a conflict the edge passes
+	// to this wait only from an earlier wait of the same agent on the same card;
+	// an edge with no owner (a person's, a lead's, an older one) or another
+	// agent's stays as it is and the receipt says owned=false. The owner column
+	// is written by CommitTurn once the wait row exists; the edge row stays
+	// locked by this upsert until then.
+	var edge struct {
+		ID         uuid.UUID `db:"id"`
+		Generation int64     `db:"generation"`
+		Inserted   bool      `db:"inserted"`
+		Owned      bool      `db:"owned"`
+	}
+	err = tx.GetContext(ctx, &edge, `INSERT INTO task_dependencies (id, task_id, depends_on_task_id, dependency_type, created_at, condition, wait_agent_id)
 		VALUES ($1, $2, $3, 'blocks', now(), $4, $5)
 		ON CONFLICT (task_id, depends_on_task_id) DO UPDATE SET dependency_type = 'blocks',
 		condition = EXCLUDED.condition, wait_agent_id = EXCLUDED.wait_agent_id,
 		evidence_status = CASE WHEN task_dependencies.condition IS DISTINCT FROM EXCLUDED.condition
 		    OR task_dependencies.dependency_type <> 'blocks' THEN 'revoked' ELSE task_dependencies.evidence_status END,
 		generation = task_dependencies.generation + CASE WHEN task_dependencies.condition IS DISTINCT FROM EXCLUDED.condition
-		    OR task_dependencies.dependency_type <> 'blocks' THEN 1 ELSE 0 END`,
-		uuid.New(), w.TaskID, *w.TargetTaskID, cond, edgeAgent)
+		    OR task_dependencies.dependency_type <> 'blocks' THEN 1 ELSE 0 END
+		RETURNING id, generation, (xmax = 0) AS inserted,
+		    (xmax = 0 OR EXISTS (SELECT 1 FROM task_waits ow WHERE ow.id = task_dependencies.owner_wait_id
+		        AND ow.task_id = task_dependencies.task_id AND ow.agent_id = $6)) AS owned`,
+		uuid.New(), w.TaskID, *w.TargetTaskID, cond, edgeAgent, w.AgentID)
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && pqErr.Constraint == "completion_cycle" {
 		return domain.NewOutcomeError(domain.CodeInvalidTarget, "target_task_id: waiting on this card would close a dependency cycle")
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	w.DependencyID, w.DependencyGeneration, w.DependencyOwned = &edge.ID, &edge.Generation, &edge.Owned
+	return nil
 }
 
 // declareWaitTx is TaskWaitRepo.Declare inside the command's transaction.
+// The wait always gets a fresh id; a caller that already named the wait (a
+// card wait's edge points at it) uses declareWaitWithIDTx.
 func declareWaitTx(ctx context.Context, tx *sqlx.Tx, w *domain.TaskWait) error {
+	w.ID = uuid.New()
+	return declareWaitWithIDTx(ctx, tx, w)
+}
+
+// declareWaitWithIDTx inserts w under the id it already carries.
+func declareWaitWithIDTx(ctx context.Context, tx *sqlx.Tx, w *domain.TaskWait) error {
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE task_waits SET resolved_at = now(), resolution = 'superseded'
 		 WHERE task_id = $1 AND agent_id = $2 AND resolved_at IS NULL`, w.TaskID, w.AgentID); err != nil {
@@ -385,9 +422,11 @@ func declareWaitTx(ctx context.Context, tx *sqlx.Tx, w *domain.TaskWait) error {
 			 until_state, until_at, decision_request_id, human_gate_ref, note,
 			 event_ref, evidence_source, evidence_why, until_at_offset, evidence_status,
 			 after_sha, after_pipeline_id, after_status, registration, registration_ref,
-			 addressee, question, server_observed)
+			 addressee, question, server_observed,
+			 id, dependency_id, dependency_generation, dependency_owned)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-			$18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
+			$18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+			$31, $32, $33, $34)
 		RETURNING id, created_at`,
 		w.TaskID, w.AgentID, w.SessionID, w.Kind, w.TargetTaskID, w.TargetCondition,
 		w.VCSLinkID, w.Provider, w.ProjectPath, w.MRIID, w.PipelineID, w.RequiredJobs,
@@ -395,6 +434,7 @@ func declareWaitTx(ctx context.Context, tx *sqlx.Tx, w *domain.TaskWait) error {
 		w.EventRef, w.Source, w.Why, w.UntilAtOffset, w.EvidenceStatus,
 		w.AfterSHA, w.AfterPipelineID, w.AfterStatus, w.Registration, w.RegistrationRef,
 		w.Addressee, w.Question, w.ServerObserved,
+		w.ID, w.DependencyID, w.DependencyGeneration, w.DependencyOwned,
 	).Scan(&w.ID, &w.CreatedAt)
 }
 

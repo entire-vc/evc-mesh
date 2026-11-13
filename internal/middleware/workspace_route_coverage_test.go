@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entire-vc/evc-mesh/internal/apisource"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -464,7 +466,7 @@ func TestEveryIdentifiedRouteIsWorkspaceScoped_CatchesTheRoutesThatShipped(t *te
 // later is proven — not assumed — to be covered.
 func authenticatedRoutes(t *testing.T) []string {
 	t.Helper()
-	src, err := os.ReadFile("../../cmd/api/main.go")
+	src, err := apisource.Read("../../cmd/api")
 	require.NoError(t, err, "cannot read route registrations")
 
 	seen := map[string]bool{}

@@ -613,12 +613,13 @@ describe("NotificationSettingsPage — subscription scope", () => {
 });
 
 describe("NotificationSettingsPage — Telegram instance switch", () => {
-  it("shows the instance status even when the bot is not available", async () => {
+  it("shows only the instance status when the bot is not available, without the connect-a-bot hint", async () => {
     mockApiByRoute({ preferences: [], telegramAvailable: false, telegramInstanceDisabled: true });
     renderPage();
     switchToTab(/Telegram/);
     expect(await screen.findByText("Disabled at instance level")).toBeInTheDocument();
-    expect(screen.getByText(/not connected|not available|isn.t connected/i)).toBeInTheDocument();
+    expect(screen.queryByText("Telegram is not connected")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Save preferences/ })).not.toBeInTheDocument();
   });
 
   it("says the extension is disabled at instance level, and says nothing when it is on", async () => {

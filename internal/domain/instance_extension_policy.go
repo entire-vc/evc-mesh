@@ -16,6 +16,12 @@ const (
 	InstanceJournalUpdated           = "updated"
 	InstanceJournalRolledBack        = "rolled_back"
 	InstanceJournalUpdatePending     = "update_pending_consent"
+	// InstanceJournalMovedToCatalog: a repository install now comes from the
+	// signed catalog (one way; details name both sides, never the token).
+	InstanceJournalMovedToCatalog = "moved_to_catalog"
+	// InstanceJournalRepinned: a repository install was pinned to another ref,
+	// commit, URL or credential by the admin.
+	InstanceJournalRepinned = "repinned"
 )
 
 // InstanceExtensionPolicy is an explicit allow/deny of one extension.

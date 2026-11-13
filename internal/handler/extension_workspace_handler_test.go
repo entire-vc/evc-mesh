@@ -32,6 +32,7 @@ func TestExtensionWorkspaceHandler(t *testing.T) {
 	e.POST(base+"/:ext_id/enable", h.Enable)
 	e.POST(base+"/:ext_id/disable", h.Disable)
 	e.POST(base+"/:ext_id/test", h.Test)
+	e.POST(base+"/:ext_id/consent", h.Reconsent)
 	e.DELETE(base+"/:ext_id", h.Disconnect)
 
 	root := "/workspaces/" + uuid.NewString() + "/extensions"
@@ -84,6 +85,20 @@ func TestExtensionWorkspaceHandler(t *testing.T) {
 	code, out = call(http.MethodPost, root+"/demo/connect", `{"consent":{"capabilities":["api:tasks.read","events:task.updated"]}}`)
 	assert.Equal(t, http.StatusCreated, code)
 	assert.Equal(t, "workspace", out["status"].(map[string]any)["source"])
+
+	// Re-consent to the installed release.
+	code, _ = call(http.MethodPost, "/workspaces/x/extensions/demo/consent", `{"version":"1.0.0"}`)
+	assert.Equal(t, http.StatusBadRequest, code)
+	code, _ = call(http.MethodPost, root+"/demo/consent", `{`)
+	assert.Equal(t, http.StatusBadRequest, code)
+	code, out = call(http.MethodPost, root+"/demo/consent", `{"version":"0.9.0"}`)
+	assert.Equal(t, http.StatusConflict, code)
+	assert.Equal(t, "version_changed", out["error_code"])
+	code, out = call(http.MethodPost, root+"/demo/consent", `{"version":"1.0.0"}`)
+	require.Equal(t, http.StatusOK, code)
+	conn := out["connection"].(map[string]any)
+	assert.Equal(t, "1.0.0", conn["consented_version"])
+	assert.Equal(t, false, conn["needs_consent"])
 }
 
 type instanceOffHTTPStore struct{}

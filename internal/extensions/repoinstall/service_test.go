@@ -115,6 +115,7 @@ type memRepo struct {
 	tokens  map[string]string
 	auto    bool
 	journal []string
+	details []string
 }
 
 func newMemRepo() *memRepo {
@@ -189,6 +190,44 @@ func (m *memRepo) Rollback(_ context.Context, id string) error {
 	return nil
 }
 func (m *memRepo) GetToken(_ context.Context, id string) (string, error) { return m.tokens[id], nil }
+
+// Repin mirrors the postgres transaction: guarded, previous_* kept only on the
+// same URL, pending and skipped cleared, token changed, journal written.
+func (m *memRepo) Repin(_ context.Context, next *domain.InstalledExtension, g domain.ExtensionStateGuard, tok domain.RepoTokenChange, token string, j *domain.InstanceExtensionJournalEntry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r := m.rows[next.ExtensionID]
+	if r == nil {
+		return apierror.NotFound("extension")
+	}
+	if r.Source != g.Source || r.Version != g.Version || r.CommitSHA != g.CommitSHA {
+		return apierror.Conflict("changed")
+	}
+	st := m.state[next.ExtensionID]
+	if st == nil {
+		st = &domain.ExtensionRepoState{}
+		m.state[next.ExtensionID] = st
+	}
+	if r.RepoURL == next.RepoURL {
+		r.PreviousVersion = r.Version
+		*st = domain.ExtensionRepoState{PreviousManifest: r.Manifest, PreviousCommitSHA: r.CommitSHA, PreviousRef: r.RepoRef}
+	} else {
+		r.PreviousVersion = ""
+		*st = domain.ExtensionRepoState{}
+	}
+	r.RepoURL, r.RepoRef, r.CommitSHA, r.Version, r.Manifest = next.RepoURL, next.RepoRef, next.CommitSHA, next.Version, next.Manifest
+	switch tok {
+	case domain.RepoTokenReplace:
+		m.tokens[next.ExtensionID] = token
+	case domain.RepoTokenRemove:
+		delete(m.tokens, next.ExtensionID)
+	}
+	if j != nil {
+		m.journal = append(m.journal, j.Action)
+		m.details = append(m.details, string(j.Details))
+	}
+	return nil
+}
 
 func (m *memRepo) Allowed(context.Context, string) (bool, error) { return true, nil }
 func (m *memRepo) ListPolicies(context.Context) (map[string]domain.InstanceExtensionPolicy, error) {

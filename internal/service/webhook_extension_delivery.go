@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -45,6 +46,50 @@ type extensionDelivery struct {
 	// signatureVersion returns the signature version an extension's manifest
 	// selects (external.signature_version); nil or <2 keeps v1.
 	signatureVersion func(extensionID string) int
+	// consents and declared gate every delivery on the event being both
+	// consented to by the workspace and declared by the installed manifest; nil
+	// consents leaves delivery ungated (tests of the wire format only).
+	consents repository.ExtensionConsentRepository
+	declared func(extensionID string) ([]string, bool)
+}
+
+// WithExtensionConsentGate makes extension delivery follow consent: a
+// connection receives an event only when its recorded consent has
+// "events:<event>" and the installed manifest (declared, flat
+// "kind:value") still declares it. A connection with no consent record, or an
+// extension that is not registered, receives nothing. The subscription table
+// alone never decides: a subscription left from an earlier manifest or made
+// through the API cannot widen what the workspace agreed to.
+func WithExtensionConsentGate(consents repository.ExtensionConsentRepository, declared func(extensionID string) ([]string, bool)) WebhookServiceOption {
+	return func(s *webhookService) {
+		if s.ext != nil {
+			s.ext.consents = consents
+			s.ext.declared = declared
+		}
+	}
+}
+
+// consentAllows reports whether conn may receive event under the consent gate.
+func (e *extensionDelivery) consentAllows(ctx context.Context, conn *domain.IntegrationConfig, event string) bool {
+	if e.consents == nil {
+		return true
+	}
+	if conn == nil {
+		return false
+	}
+	want := "events:" + event
+	if e.declared != nil {
+		d, ok := e.declared(string(conn.Provider))
+		if !ok || !slices.Contains(d, want) {
+			return false
+		}
+	}
+	c, err := e.consents.GetConsent(ctx, conn.WorkspaceID, string(conn.Provider))
+	if err != nil {
+		log.Printf("[webhook] extension consent check for connection %s: %v", conn.ID, err)
+		return false
+	}
+	return c != nil && slices.Contains(c.Capabilities, want)
 }
 
 // ExtensionEventPublisher puts one serialised event on an extension
@@ -177,7 +222,8 @@ func (s *webhookService) dispatchExtensions(ctx context.Context, workspaceID uui
 		ok, seen := inWorkspace[sub.ConnectionID]
 		if !seen {
 			conn, err := s.ext.integrations.GetByID(ctx, sub.ConnectionID)
-			ok = err == nil && s.connectionReceives(ctx, conn, workspaceID, payloadBytes)
+			ok = err == nil && s.connectionReceives(ctx, conn, workspaceID, payloadBytes) &&
+				s.ext.consentAllows(ctx, conn, event)
 			inWorkspace[sub.ConnectionID] = ok
 			schemes[sub.ConnectionID] = s.ext.scheme(conn)
 		}

@@ -192,15 +192,23 @@ type TaskWait struct {
 	TargetCondition *string      `json:"target_condition,omitempty" db:"target_condition"`
 	// ServerObserved waits are resolved by Mesh; the runner reads only the
 	// receipt on this source card, including after target deletion or revoke.
-	ServerObserved bool           `json:"server_observed,omitempty" db:"server_observed"`
-	VCSLinkID      *uuid.UUID     `json:"vcs_link_id,omitempty" db:"vcs_link_id"`
-	Provider       *string        `json:"provider,omitempty" db:"provider"`
-	ProjectPath    *string        `json:"project_path,omitempty" db:"project_path"`
-	MRIID          *int           `json:"mr_iid,omitempty" db:"mr_iid"`
-	PipelineID     *int64         `json:"pipeline_id,omitempty" db:"pipeline_id"`
-	RequiredJobs   pq.StringArray `json:"required_jobs" db:"required_jobs"`
-	Until          *string        `json:"until,omitempty" db:"until_state"`
-	UntilAt        *time.Time     `json:"until_at,omitempty" db:"until_at"`
+	ServerObserved bool `json:"server_observed,omitempty" db:"server_observed"`
+	// A card wait's blocks edge as declared: its id, its generation then, and
+	// whether this wait owns it (created it, or took it over from an earlier
+	// wait of the same agent on the same card). An edge a person or another
+	// agent made is reported with DependencyOwned=false and is never the
+	// runner's to remove; an owner-checked delete needs both id and generation.
+	DependencyID         *uuid.UUID     `json:"dependency_id,omitempty" db:"dependency_id"`
+	DependencyGeneration *int64         `json:"dependency_generation,omitempty" db:"dependency_generation"`
+	DependencyOwned      *bool          `json:"dependency_owned,omitempty" db:"dependency_owned"`
+	VCSLinkID            *uuid.UUID     `json:"vcs_link_id,omitempty" db:"vcs_link_id"`
+	Provider             *string        `json:"provider,omitempty" db:"provider"`
+	ProjectPath          *string        `json:"project_path,omitempty" db:"project_path"`
+	MRIID                *int           `json:"mr_iid,omitempty" db:"mr_iid"`
+	PipelineID           *int64         `json:"pipeline_id,omitempty" db:"pipeline_id"`
+	RequiredJobs         pq.StringArray `json:"required_jobs" db:"required_jobs"`
+	Until                *string        `json:"until,omitempty" db:"until_state"`
+	UntilAt              *time.Time     `json:"until_at,omitempty" db:"until_at"`
 	// A time wait's evidence: the external event, where its deadline is
 	// published, why the card must wait for it, and the offset until_at was
 	// given in. EvidenceStatus is always "unverified" (see TimeEvidenceUnverified).

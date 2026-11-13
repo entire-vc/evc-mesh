@@ -28,6 +28,10 @@ type installMem struct {
 	rows    map[string]*domain.InstalledExtension
 	snaps   map[string]*domain.CatalogSnapshot
 	skipped string
+	// moves are the journal entries MoveRepoToCatalog wrote; tokens the
+	// repository tokens it holds (deleted by a move).
+	moves  []domain.InstanceExtensionJournalEntry
+	tokens map[string]string
 }
 
 func (m *installMem) Get(_ context.Context, id string) (*domain.InstalledExtension, error) {
@@ -48,7 +52,7 @@ func (m *installMem) UpdateCatalog(_ context.Context, e *domain.InstalledExtensi
 		return apierror.Conflict("the extension changed while the update was prepared")
 	}
 	snap := domain.CatalogSnapshot{Version: r.Version, Manifest: r.Manifest, CommitSHA: r.CommitSHA, ArtifactSHA256: r.ArtifactSHA256,
-		TrustLevel: string(r.TrustLevel), Source: string(r.Source), SupersededVersion: e.Version, SupersededCommit: e.CommitSHA}
+		TrustLevel: string(r.TrustLevel), Source: string(r.Source), CatalogScope: scopeName(r.CatalogScope), SupersededVersion: e.Version, SupersededCommit: e.CommitSHA}
 	snap.Seal()
 	if m.snaps == nil {
 		m.snaps = map[string]*domain.CatalogSnapshot{}
@@ -56,6 +60,7 @@ func (m *installMem) UpdateCatalog(_ context.Context, e *domain.InstalledExtensi
 	m.snaps[e.ExtensionID] = &snap
 	r.PreviousVersion = r.Version
 	r.Version, r.Manifest, r.CommitSHA, r.ArtifactSHA256, r.TrustLevel = e.Version, e.Manifest, e.CommitSHA, e.ArtifactSHA256, e.TrustLevel
+	r.CatalogScope = scopeName(e.CatalogScope)
 	m.skipped = ""
 	return nil
 }
@@ -73,14 +78,30 @@ func (m *installMem) RollbackCatalog(_ context.Context, id string, g domain.Cata
 	}
 	m.skipped = r.CommitSHA
 	r.Version, r.Manifest, r.CommitSHA, r.ArtifactSHA256, r.TrustLevel = s.Version, s.Manifest, s.CommitSHA, s.ArtifactSHA256, domain.ExtensionTrustLevel(s.TrustLevel)
+	r.CatalogScope = scopeName(s.CatalogScope)
 	r.PreviousVersion = ""
 	delete(m.snaps, id)
 	return nil
 }
 
 func (m *installMem) InsertCatalog(_ context.Context, e *domain.InstalledExtension) error {
-	m.rows[e.ExtensionID] = e
+	cp := *e
+	cp.CatalogScope = scopeName(e.CatalogScope)
+	m.rows[e.ExtensionID] = &cp
 	return nil
+}
+
+// SetBlocked mirrors the postgres write the enforcer and the exact update use.
+func (m *installMem) SetBlocked(_ context.Context, id string, blocked bool, reason string) (bool, error) {
+	r := m.rows[id]
+	if r == nil || r.Source == domain.ExtensionSourceBuiltin || (r.Blocked == blocked && r.BlockedReason == reason) {
+		return false, nil
+	}
+	if !blocked {
+		reason = ""
+	}
+	r.Blocked, r.BlockedReason = blocked, reason
+	return true, nil
 }
 
 type installFixture struct {

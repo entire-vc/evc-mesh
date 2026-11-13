@@ -92,3 +92,57 @@ func TestNewFixture(t *testing.T) {
 		assert.True(t, ok)
 	}
 }
+
+func TestMemIntegrations_GetByID(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemIntegrations()
+	row := &domain.IntegrationConfig{ID: uuid.New(), WorkspaceID: uuid.New(), Provider: "demo"}
+	require.NoError(t, m.Upsert(ctx, row))
+	got, err := m.GetByID(ctx, row.ID)
+	require.NoError(t, err)
+	assert.Equal(t, row.ID, got.ID)
+	got, err = m.GetByID(ctx, uuid.New())
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	m.Err = errors.New("db down")
+	_, err = m.GetByID(ctx, row.ID)
+	assert.Error(t, err)
+}
+
+func TestMemConsents_Reconsent(t *testing.T) {
+	ctx := context.Background()
+	integ := NewMemIntegrations()
+	inst := &domain.InstalledExtension{ExtensionID: "demo", Version: "0.4.0"}
+	hooked := 0
+	c := &MemConsents{Integ: integ, ByID: map[uuid.UUID]domain.ExtensionConsent{},
+		Installed: map[string]*domain.InstalledExtension{"demo": inst}, Hook: func() { hooked++ }}
+	row := &domain.IntegrationConfig{ID: uuid.New(), WorkspaceID: uuid.New(), Provider: "demo"}
+	require.NoError(t, integ.Upsert(ctx, row))
+
+	var seen *domain.InstalledExtension
+	ok := func(tg domain.ExtensionReconsentTarget) (domain.ExtensionConsent, []byte, error) {
+		seen = tg.Installed
+		return domain.ExtensionConsent{Capabilities: []string{"api:tasks:read"}, Version: "0.4.0"}, []byte(`{"api":["tasks:read"]}`), nil
+	}
+
+	_, err := c.Reconsent(ctx, uuid.New(), "demo", ok)
+	assert.Error(t, err, "no such connection")
+
+	v, err := c.Reconsent(ctx, row.ID, "demo", ok)
+	require.NoError(t, err)
+	assert.Equal(t, "0.4.0", v.Version)
+	assert.Same(t, inst, seen, "resolve sees the installed row")
+	assert.Equal(t, "0.4.0", c.ByID[row.ID].Version)
+	assert.JSONEq(t, `{"api":["tasks:read"]}`, string(c.ActorCaps[row.ID]))
+	assert.Equal(t, 2, hooked)
+
+	refused := errors.New("version changed")
+	_, err = c.Reconsent(ctx, row.ID, "demo", func(domain.ExtensionReconsentTarget) (domain.ExtensionConsent, []byte, error) {
+		return domain.ExtensionConsent{}, nil, refused
+	})
+	assert.ErrorIs(t, err, refused)
+
+	c.Err = errors.New("db down")
+	_, err = c.Reconsent(ctx, row.ID, "demo", ok)
+	assert.ErrorIs(t, err, c.Err)
+}

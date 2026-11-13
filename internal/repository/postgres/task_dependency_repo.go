@@ -36,13 +36,14 @@ func (r *TaskDependencyRepo) AtomicHierarchy() bool { return true }
 // condition_satisfied is the full verdict (evidence OR the blocker's own state
 // for the edge's condition), so every read joins the blocker; the join is LEFT
 // so an edge whose blocker row is gone is still returned.
-var taskDependencySelectCols = `d.id, d.task_id, d.depends_on_task_id, d.dependency_type, d.created_at, d.condition, d.evidence_url, d.condition_met_at, d.criterion, d.generation, d.evidence_status, d.evidence_reason, d.evidence_head_sha, d.evidence_environment, d.evidence_link_id, d.evidence_actor_id, ` +
+var taskDependencySelectCols = `d.id, d.task_id, d.depends_on_task_id, d.dependency_type, d.created_at, d.condition, d.evidence_url, d.condition_met_at, d.criterion, d.generation, d.evidence_status, d.evidence_reason, d.evidence_head_sha, d.evidence_environment, d.evidence_link_id, d.evidence_actor_id, d.owner_wait_id, ow.agent_id AS owner_agent_id, ` +
 	domain.DependencyReleasedSQL("d", "bt", "bts.category") + ` AS condition_satisfied`
 
 // taskDependencyJoins pairs with taskDependencySelectCols: the edge is d, its
 // blocker bt and the blocker's status bts.
 const taskDependencyJoins = `LEFT JOIN tasks bt ON bt.id = d.depends_on_task_id
-	LEFT JOIN task_statuses bts ON bts.id = bt.status_id`
+	LEFT JOIN task_statuses bts ON bts.id = bt.status_id
+	LEFT JOIN task_waits ow ON ow.id = d.owner_wait_id`
 
 const taskDependencyFrom = `task_dependencies d ` + taskDependencyJoins
 
@@ -98,6 +99,17 @@ func (r *TaskDependencyRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain
 // condition updates take, so a concurrent condition change cannot slip between
 // the check and the delete.
 func (r *TaskDependencyRepo) DeleteIfGeneration(ctx context.Context, taskID, id uuid.UUID, gen int64) error {
+	return r.deleteIf(ctx, taskID, id, gen, nil)
+}
+
+// DeleteIfOwned adds the owner to the same DELETE: the runner removes the edge
+// its own wait declared and nothing else. An edge without an owner (a person's,
+// a lead's, one an operator edited) never matches.
+func (r *TaskDependencyRepo) DeleteIfOwned(ctx context.Context, taskID, id uuid.UUID, gen int64, ownerWaitID uuid.UUID) error {
+	return r.deleteIf(ctx, taskID, id, gen, &ownerWaitID)
+}
+
+func (r *TaskDependencyRepo) deleteIf(ctx context.Context, taskID, id uuid.UUID, gen int64, owner *uuid.UUID) error {
 	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
@@ -106,7 +118,11 @@ func (r *TaskDependencyRepo) DeleteIfGeneration(ctx context.Context, taskID, id 
 	if _, err = tx.ExecContext(ctx, `SELECT completion_graph_lock(p.workspace_id) FROM task_dependencies d JOIN tasks t ON t.id=d.task_id JOIN projects p ON p.id=t.project_id WHERE d.id=$1 AND d.task_id=$2`, id, taskID); err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM task_dependencies WHERE id = $1 AND task_id = $2 AND generation = $3`, id, taskID, gen)
+	q, args := `DELETE FROM task_dependencies WHERE id = $1 AND task_id = $2 AND generation = $3`, []any{id, taskID, gen}
+	if owner != nil {
+		q, args = q+` AND owner_wait_id = $4`, append(args, *owner)
+	}
+	res, err := tx.ExecContext(ctx, q, args...)
 	if err != nil {
 		return err
 	}
@@ -148,6 +164,10 @@ func (r *TaskDependencyRepo) Delete(ctx context.Context, id uuid.UUID) error {
 // UpdateCondition implements repository.TaskDependencyRepository. A change of
 // condition or criterion bumps the generation and drops the old evidence;
 // evidence is stored only while the generation is still expectedGen (CAS).
+// Changing what the edge waits for, or clearing its evidence (re-arming it), is
+// an operator's edit: the edge stops belonging to the typed wait that made it
+// (owner_wait_id NULL), so the runner's owner-checked delete no longer matches.
+// Recording evidence is the producer's receipt, not an edit, and keeps the owner.
 func (r *TaskDependencyRepo) UpdateCondition(ctx context.Context, id uuid.UUID, upd domain.DependencyConditionUpdate) (*domain.TaskDependency, error) {
 	if upd.ExpectedGeneration == nil {
 		return nil, errors.New("task dependency update requires expected generation")
@@ -176,7 +196,8 @@ func (r *TaskDependencyRepo) UpdateCondition(ctx context.Context, id uuid.UUID, 
 			evidence_head_sha = CASE WHEN $11 THEN $8 WHEN cur.changed THEN NULL ELSE t.evidence_head_sha END,
 			evidence_environment = CASE WHEN $11 THEN $9 WHEN cur.changed THEN NULL ELSE t.evidence_environment END,
 			evidence_link_id = CASE WHEN $11 THEN $10 WHEN cur.changed THEN NULL ELSE t.evidence_link_id END,
-			evidence_actor_id = CASE WHEN $11 THEN $12 WHEN cur.changed THEN NULL ELSE t.evidence_actor_id END
+			evidence_actor_id = CASE WHEN $11 THEN $12 WHEN cur.changed THEN NULL ELSE t.evidence_actor_id END,
+			owner_wait_id = CASE WHEN cur.changed OR ($11 AND $6::text = 'none') THEN NULL ELSE t.owner_wait_id END
 			FROM cur WHERE t.id = cur.id AND t.generation = $13 RETURNING t.*)
 		SELECT ` + taskDependencySelectCols + ` FROM d ` + taskDependencyJoins
 	var dep domain.TaskDependency
@@ -340,19 +361,16 @@ func (r *TaskDependencyRepo) HasOpenBlockedDependents(ctx context.Context, block
 }
 
 // DeployedTasks implements repository.TaskDependencyRepository. It is the batch
-// form of the vcs_links EXISTS inside domain.DependencyReleasedSQL, for the Go
-// readers that decide per edge with TaskDependency.Released.
+// form of domain.DeploymentReleasesSQL (the deploy half of
+// domain.DependencyReleasedSQL), for the Go readers that decide per edge with
+// TaskDependency.Released: a task is in the set only when one of its pr links
+// is deployed to prod and none of its other pr links is still on the way.
 func (r *TaskDependencyRepo) DeployedTasks(ctx context.Context, taskIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
 	out := make(map[uuid.UUID]bool, len(taskIDs))
 	if len(taskIDs) == 0 {
 		return out, nil
 	}
-	q := `SELECT DISTINCT dv.task_id FROM vcs_links dv
-		WHERE dv.task_id = ANY($1::uuid[])
-		  AND dv.link_type = 'pr'
-		  AND COALESCE(dv.metadata->'deployed'->>'sha', '') <> ''
-		  AND dv.metadata->'deployed'->>'at' IS NOT NULL
-		  AND dv.metadata->'deployed'->>'environment' = '` + domain.VCSEnvProd + `'`
+	q := `SELECT t.id FROM unnest($1::uuid[]) AS t(id) WHERE ` + domain.DeploymentReleasesSQL("t.id")
 	var ids []uuid.UUID
 	if err := r.db.SelectContext(ctx, &ids, q, pq.Array(taskIDs)); err != nil {
 		return nil, err

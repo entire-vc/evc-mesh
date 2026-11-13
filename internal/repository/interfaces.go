@@ -283,6 +283,10 @@ type TaskDependencyRepository interface {
 	// another generation -> domain.ErrStaleDependencyGeneration, nothing is
 	// deleted and no trigger runs.
 	DeleteIfGeneration(ctx context.Context, taskID, id uuid.UUID, gen int64) error
+	// DeleteIfOwned is DeleteIfGeneration that also requires the edge to be
+	// owned by the typed wait ownerWaitID, in the same DELETE. An edge with no
+	// owner or another owner -> domain.ErrStaleDependencyGeneration.
+	DeleteIfOwned(ctx context.Context, taskID, id uuid.UUID, gen int64, ownerWaitID uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
 	ListDependents(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
 	Exists(ctx context.Context, taskID, dependsOnTaskID uuid.UUID) (bool, error)
@@ -1527,6 +1531,11 @@ type RepoExtensionRepository interface {
 	Rollback(ctx context.Context, extensionID string) error
 	// GetToken returns "" when none is stored.
 	GetToken(ctx context.Context, extensionID string) (string, error)
+	// Repin points the source=repo row named by g at next's URL, ref, commit,
+	// version and manifest, applies the token change (the token is stored
+	// encrypted or not at all) and writes journal, in one transaction.
+	// apierror.Conflict when the row is no longer what g names.
+	Repin(ctx context.Context, next *domain.InstalledExtension, g domain.ExtensionStateGuard, tok domain.RepoTokenChange, token string, journal *domain.InstanceExtensionJournalEntry) error
 }
 
 // ExtensionConsentRepository reads and writes the consent recorded on an
@@ -1539,6 +1548,13 @@ type ExtensionConsentRepository interface {
 	GetConsent(ctx context.Context, workspaceID uuid.UUID, extensionID string) (*domain.ExtensionConsent, error)
 	// SetConsent records consent on a connection (integration_configs.id).
 	SetConsent(ctx context.Context, connectionID uuid.UUID, c domain.ExtensionConsent) error
+	// Reconsent replaces the consent of an existing connection and the
+	// capability snapshot of its extension actor (when it has one) in one
+	// transaction. The installed_extensions row of extensionID is locked for the
+	// duration, so an instance update either lands before (resolve sees the new
+	// release and refuses) or waits until the consent is recorded. NotFound when
+	// the connection is gone; resolve's error is returned as is.
+	Reconsent(ctx context.Context, connectionID uuid.UUID, extensionID string, resolve domain.ExtensionReconsentResolve) (*domain.ExtensionConsent, error)
 }
 
 // ExtensionEventSubscriptionRepository manages extension_event_subscriptions.
@@ -1967,6 +1983,10 @@ type AgentSessionRepository interface {
 	// exists, and returns the session after the addition. Concurrent calls sum
 	// exactly and never create two active sessions for one agent and task.
 	AddUsage(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, tokensIn, tokensOut int64, cost float64, model string) (*domain.AgentSession, error)
+	// ReportUsage is AddUsage for a report that may say tokens in, tokens out or cost are
+	// unknown (each separately). An unknown measure adds nothing and sets a flag that no
+	// later report clears, so known + unknown stays an incomplete total.
+	ReportUsage(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, usage domain.SessionUsage, model string) (*domain.AgentSession, error)
 	// GetActiveAgentWide returns the agent's active session that is NOT scoped
 	// to any task (task_id IS NULL), or nil if none exists. This is the
 	// counterpart to GetActiveForTask for untagged reports — it must NOT match

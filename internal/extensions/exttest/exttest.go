@@ -55,6 +55,15 @@ func (m *MemIntegrations) GetByProvider(_ context.Context, ws uuid.UUID, p domai
 	return m.Find(ws, p), nil
 }
 
+func (m *MemIntegrations) GetByID(_ context.Context, id uuid.UUID) (*domain.IntegrationConfig, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.Err != nil {
+		return nil, m.Err
+	}
+	return m.Rows[id], nil
+}
+
 func (m *MemIntegrations) Upsert(_ context.Context, c *domain.IntegrationConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -117,7 +126,13 @@ type MemConsents struct {
 	repository.ExtensionConsentRepository
 	Integ *MemIntegrations
 	ByID  map[uuid.UUID]domain.ExtensionConsent
-	Err   error // SetConsent fails with it when set
+	Err   error // SetConsent and Reconsent fail with it when set
+	// Installed is what Reconsent resolves against, by extension id.
+	Installed map[string]*domain.InstalledExtension
+	// ActorCaps is the actor snapshot Reconsent installed, by connection.
+	ActorCaps map[uuid.UUID][]byte
+	// Hook runs at the start of Reconsent.
+	Hook func()
 }
 
 func (c *MemConsents) GetConsent(_ context.Context, ws uuid.UUID, ext string) (*domain.ExtensionConsent, error) {
@@ -138,6 +153,34 @@ func (c *MemConsents) SetConsent(_ context.Context, id uuid.UUID, v domain.Exten
 	}
 	c.ByID[id] = v
 	return nil
+}
+
+// Reconsent resolves against Installed (nil: no installed row) and records the
+// result; the actor snapshot it returns is kept in ActorCaps. Hook, when set,
+// runs before resolve (a concurrent instance update lands there).
+func (c *MemConsents) Reconsent(_ context.Context, id uuid.UUID, ext string, resolve domain.ExtensionReconsentResolve) (*domain.ExtensionConsent, error) {
+	if c.Hook != nil {
+		c.Hook()
+	}
+	c.Integ.mu.Lock()
+	_, ok := c.Integ.Rows[id]
+	c.Integ.mu.Unlock()
+	if !ok {
+		return nil, errors.New("integration not found")
+	}
+	v, caps, err := resolve(domain.ExtensionReconsentTarget{Installed: c.Installed[ext]})
+	if err != nil {
+		return nil, err
+	}
+	if c.Err != nil {
+		return nil, c.Err
+	}
+	c.ByID[id] = v
+	if c.ActorCaps == nil {
+		c.ActorCaps = map[uuid.UUID][]byte{}
+	}
+	c.ActorCaps[id] = caps
+	return &v, nil
 }
 
 type DemoProvider struct {

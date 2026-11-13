@@ -25,6 +25,7 @@ import { consentTokens, describeCapabilities } from "@/lib/extension-capabilitie
 import { receivingNote, workspaceSettingsSchema } from "@/lib/extension-installed";
 import { OPEN_SETTINGS_PARAM } from "@/lib/extension-settings-route";
 import { extensionState } from "@/lib/extensionState";
+import { ConsentNotice } from "@/components/extensions/consent-notice";
 import { ExtensionStateBadge, ExtensionStateNote } from "@/components/extensions/extension-state";
 import {
   connectWorkspaceExtension, disconnectWorkspaceExtension, saveWorkspaceExtensionSettings,
@@ -225,8 +226,8 @@ function RemoveDialog({ entry, onClose, onConfirm }: {
   );
 }
 
-function Row({ entry, canManage, busy, onToggle, onSettings, onTest, onRemove }: {
-  entry: CatalogEntry; canManage: boolean; busy: boolean;
+function Row({ entry, workspaceId, canManage, busy, onToggle, onSettings, onTest, onRemove, onConsented }: {
+  entry: CatalogEntry; workspaceId: string; canManage: boolean; busy: boolean; onConsented: () => void;
   onToggle: (e: CatalogEntry) => void; onSettings: (e: CatalogEntry) => void;
   onTest: (e: CatalogEntry) => void; onRemove: (e: CatalogEntry) => void;
 }) {
@@ -311,6 +312,7 @@ function Row({ entry, canManage, busy, onToggle, onSettings, onTest, onRemove }:
         </div>
         )}
       </div>
+      <ConsentNotice entry={entry} workspaceId={workspaceId} canManage={canManage} onChanged={onConsented} />
     </li>
   );
 }
@@ -430,7 +432,7 @@ export function InstalledExtensions({ catalog }: { catalog: CatalogState }) {
         {(items) => (
           <ul className="space-y-3 max-w-3xl">
             {items.map((e) => (
-              <Row key={e.id} entry={e} canManage={canManage} busy={busy === e.id}
+              <Row key={e.id} entry={e} workspaceId={wsId} canManage={canManage} onConsented={catalog.refresh} busy={busy === e.id}
                 onToggle={toggle} onSettings={(x) => setDlg({ type: "settings", entry: x, wsId })}
                 onTest={test} onRemove={(x) => setDlg({ type: "remove", entry: x, wsId })} />
             ))}

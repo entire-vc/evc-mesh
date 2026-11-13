@@ -2,11 +2,12 @@ package middleware
 
 import (
 	"fmt"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/entire-vc/evc-mesh/internal/apisource"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -110,7 +111,7 @@ func TestAWorkspaceIDInARequestBodyIsNeverBenign(t *testing.T) {
 // Deleting the middleware argument from a route registration is a one-token edit
 // that leaves every declaration in this package still saying the route is guarded.
 func TestBodyWorkspaceIDGuardsAreWiredToTheirRoutes(t *testing.T) {
-	src, err := os.ReadFile("../../cmd/api/main.go")
+	src, err := apisource.Read("../../cmd/api")
 	require.NoError(t, err, "cannot read route registrations")
 	lines := strings.Split(string(src), "\n")
 

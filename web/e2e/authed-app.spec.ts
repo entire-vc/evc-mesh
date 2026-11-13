@@ -5,6 +5,7 @@ import {
   type BrowserContext,
   type Page,
 } from "@playwright/test";
+import { pinUiLocale } from "./auth-helper";
 
 /**
  * E2E scenarios: authed-app-load + docs-write-path
@@ -93,6 +94,8 @@ async function listDocuments(req: APIRequestContext): Promise<DocumentRow[]> {
 
 test.beforeAll(async ({ browser }) => {
   context = await browser.newContext();
+  // UI language from this context's own /auth/me, never the shared account's stored locale (see pinUiLocale).
+  await pinUiLocale(context, "en");
 
   // Log in through the real endpoint the app uses. The response carries the
   // access token; the httpOnly refresh cookie lands in this context's jar.

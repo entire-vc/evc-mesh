@@ -31,9 +31,10 @@ func (a repoAdmins) IsInstanceAdmin(context.Context, uuid.UUID) (bool, error) { 
 
 // repoStore is one in-memory store behind the three repository interfaces the service needs.
 type repoStore struct {
-	mu    sync.Mutex
-	rows  map[string]*domain.InstalledExtension
-	state map[string]*domain.ExtensionRepoState
+	mu     sync.Mutex
+	rows   map[string]*domain.InstalledExtension
+	state  map[string]*domain.ExtensionRepoState
+	repins []domain.InstanceExtensionJournalEntry
 }
 
 func newRepoStore() *repoStore {
@@ -95,6 +96,19 @@ func (m *repoStore) Rollback(_ context.Context, id string) error {
 	return nil
 }
 func (m *repoStore) GetToken(context.Context, string) (string, error) { return "", nil }
+func (m *repoStore) Repin(_ context.Context, next *domain.InstalledExtension, g domain.ExtensionStateGuard, _ domain.RepoTokenChange, _ string, j *domain.InstanceExtensionJournalEntry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r := m.rows[next.ExtensionID]
+	if r == nil || r.Source != g.Source || r.Version != g.Version || r.CommitSHA != g.CommitSHA {
+		return apierror.Conflict("the extension changed")
+	}
+	r.RepoURL, r.RepoRef, r.CommitSHA, r.Version, r.Manifest = next.RepoURL, next.RepoRef, next.CommitSHA, next.Version, next.Manifest
+	if j != nil {
+		m.repins = append(m.repins, *j)
+	}
+	return nil
+}
 
 func (m *repoStore) Allowed(context.Context, string) (bool, error) { return true, nil }
 func (m *repoStore) ListPolicies(context.Context) (map[string]domain.InstanceExtensionPolicy, error) {
@@ -278,6 +292,22 @@ type fakeCatalogInstaller struct {
 	id      string
 	consent string
 	err     error
+	// exact records the last exact call: "install <id>@<v>" or "update <id>@<v> <sha>".
+	exact string
+}
+
+func (f *fakeCatalogInstaller) InstallExact(_ context.Context, _ uuid.UUID, id, version string) (*domain.InstalledExtension, error) {
+	f.id, f.exact = id, "install "+id+"@"+version
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &domain.InstalledExtension{ExtensionID: id, Version: version, Source: domain.ExtensionSourceCatalog, CatalogScope: "scoped",
+		TrustLevel: "community", CommitSHA: "abc", ArtifactSHA256: "dead"}, nil
+}
+
+func (f *fakeCatalogInstaller) UpdateExact(_ context.Context, _ *uuid.UUID, id, consent, version, sha string) (*repoinstall.UpdateResult, error) {
+	f.id, f.consent, f.exact = id, consent, "update "+id+"@"+version+" "+sha
+	return &repoinstall.UpdateResult{ExtensionID: id, Version: version, CommitSHA: sha, Outcome: repoinstall.OutcomeUpdated, NewCapabilities: []string{}}, nil
 }
 
 func (f *fakeCatalogInstaller) Install(_ context.Context, _ uuid.UUID, id string) (*domain.InstalledExtension, error) {
@@ -452,4 +482,55 @@ func TestRepoInstallHandlerRefreshCatalog(t *testing.T) {
 	var he *echo.HTTPError
 	require.ErrorAs(t, err, &he)
 	assert.Equal(t, http.StatusNotFound, he.Code)
+}
+
+// {source:"catalog", id, version} installs exactly that version from Spark's
+// exact receipt (pinned); without version the default catalogue flow runs.
+func TestRepoInstallHandlerCatalogExactVersion(t *testing.T) {
+	f := newRepoFixture(t, true)
+	fake := &fakeCatalogInstaller{}
+	f.h.WithCatalogInstall(fake)
+
+	rec := repoCall(t, f.h.Install, `{"source":"catalog","id":"memory-service","version":" 0.4.0 "}`, "", false)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	assert.Equal(t, "install memory-service@0.4.0", fake.exact)
+	assert.Contains(t, rec.Body.String(), `"catalog_scope":"scoped"`)
+	assert.Contains(t, rec.Body.String(), `"version":"0.4.0"`)
+
+	fake.exact = ""
+	rec = repoCall(t, f.h.Install, `{"source":"catalog","id":"memory-service"}`, "", false)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	assert.Empty(t, fake.exact, "no version: the default catalogue flow")
+	assert.Contains(t, rec.Body.String(), `"catalog_scope":"default"`)
+
+	fake.err = apierror.NotFound("Spark does not offer memory-service@0.9.9")
+	assert.Equal(t, http.StatusNotFound, repoCall(t, f.h.Install, `{"source":"catalog","id":"memory-service","version":"0.9.9"}`, "", false).Code)
+
+	denied := newRepoFixture(t, false)
+	denied.h.WithCatalogInstall(&fakeCatalogInstaller{})
+	assert.Equal(t, http.StatusForbidden, repoCall(t, denied.h.Install, `{"source":"catalog","id":"memory-service","version":"0.4.0"}`, "", false).Code)
+}
+
+func TestRepoInstallHandlerUpdateTargetScope(t *testing.T) {
+	sha := strings.Repeat("b", 40)
+	f := newRepoFixture(t, true)
+	fake := &fakeCatalogInstaller{}
+	f.h.WithCatalogInstall(fake)
+
+	rec := repoCall(t, f.h.Update, `{"target_version":"0.5.0","expected_target_commit_sha":"`+sha+`","target_scope":"scoped","consent_commit_sha":"`+sha+`"}`, "memory-service", false)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, "update memory-service@0.5.0 "+sha, fake.exact)
+	assert.Equal(t, sha, fake.consent)
+
+	for _, body := range []string{
+		`{"target_version":"0.5.0","expected_target_commit_sha":"` + sha + `","target_scope":"pinned"}`,
+		`{"target_scope":"scoped"}`,
+	} {
+		assert.Equal(t, http.StatusBadRequest, repoCall(t, f.h.Update, body, "memory-service", false).Code, body)
+	}
+	// default scope keeps the default-catalogue target path
+	fake.exact = ""
+	rec = repoCall(t, f.h.Update, `{"target_version":"0.5.0","expected_target_commit_sha":"`+sha+`","target_scope":"default"}`, "memory-service", false)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "the legacy fixture refuses UpdateTarget")
+	assert.Empty(t, fake.exact)
 }

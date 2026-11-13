@@ -33,6 +33,9 @@ func (minimalAgentSessionRepoStub) GetActiveAgentWide(ctx context.Context, agent
 func (minimalAgentSessionRepoStub) AddUsage(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, tokensIn, tokensOut int64, cost float64, model string) (*domain.AgentSession, error) {
 	return &domain.AgentSession{AgentID: agentID, WorkspaceID: workspaceID, TaskID: taskID, TokensIn: tokensIn, TokensOut: tokensOut, EstimatedCost: cost, ModelUsed: model}, nil
 }
+func (s minimalAgentSessionRepoStub) ReportUsage(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, u domain.SessionUsage, model string) (*domain.AgentSession, error) {
+	return s.AddUsage(ctx, agentID, workspaceID, taskID, u.TokensIn, u.TokensOut, u.Cost, model)
+}
 func (minimalAgentSessionRepoStub) GetActiveForTask(ctx context.Context, agentID, taskID uuid.UUID) (*domain.AgentSession, error) {
 	return nil, nil
 }

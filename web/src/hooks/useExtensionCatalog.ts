@@ -50,9 +50,23 @@ export interface ExtensionRepoActivityDto {
   last_event_at?: string;
 }
 
+/** Rights the installed manifest declares beyond what the workspace consented to (docs/extensions/api.md). */
+export interface PendingConsentDto {
+  version: string;
+  commit: string;
+  added_capabilities: string[];
+  added_events: string[];
+}
+
 export interface ConnectionDto {
   settings?: Record<string, unknown>;
   consented_capabilities?: string[];
+  needs_consent?: boolean;
+  pending_consent?: PendingConsentDto | null;
+  /** Set when a consent record exists; version and commit may still be empty on an older or backfilled one. */
+  consented_at?: string | null;
+  consented_version?: string;
+  consented_commit?: string;
 }
 
 /** One catalog row: instance summary merged with the workspace's own status. */

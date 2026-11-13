@@ -1,4 +1,20 @@
-import type { APIRequestContext } from "@playwright/test";
+import type { APIRequestContext, BrowserContext, Page } from "@playwright/test";
+
+/**
+ * The UI language follows users.locale of the signed-in account ahead of the browser language. Every authed-e2e
+ * job (main, each MR, each runner) signs in as the same CI account, so its stored locale is shared state: a job that
+ * writes it changes the language under every other job running at that moment. Branches older than an internal ticket
+ * still write it. A spec therefore never relies on the stored value: the page (or the whole context) answers its own
+ * GET /api/v1/auth/me with the real response and only `locale` replaced. Nothing is written to the account.
+ */
+export async function pinUiLocale(target: BrowserContext | Page, locale: "en" | "ru"): Promise<void> {
+  await target.route("**/api/v1/auth/me", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const res = await route.fetch();
+    if (res.status() !== 200) return route.fulfill({ response: res });
+    return route.fulfill({ response: res, json: { ...((await res.json()) as Record<string, unknown>), locale } });
+  });
+}
 
 export interface LoginResult {
   accessToken: string;
@@ -9,7 +25,7 @@ export interface LoginResult {
  * time on HTTP 429 and honouring the server's own Retry-After header rather
  * than a fixed guess.
  *
- * Why this exists (`#603f340a`, 2026-08-20): /auth/login is capped by
+ * Why this exists (`an internal ticket`, 2026-08-20): /auth/login is capped by
  * AuthRPM (5/min per key — internal/middleware/ratelimit.go). This suite
  * only ever makes ONE legitimate login call per spec file, comfortably under
  * budget on its own — but the same endpoint is shared with everything else
@@ -22,7 +38,7 @@ export interface LoginResult {
  * that instead of guessing.
  *
  * This is defense-in-depth, not the primary fix: the actual root cause
- * (`#603f340a`) was that /auth/login and /auth/refresh silently shared one
+ * (`an internal ticket`) was that /auth/login and /auth/refresh silently shared one
  * Redis counter, so routine fleet refresh traffic alone could exhaust
  * login's 5 RPM budget — fixed at the source by namespacing rate-limit keys
  * per route (RateLimitConfig.Name, internal/middleware/ratelimit*.go). A

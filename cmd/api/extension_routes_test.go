@@ -1,10 +1,11 @@
 package main
 
 import (
-	"os"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/entire-vc/evc-mesh/internal/apisource"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,7 +18,7 @@ import (
 // would grant a capability that opens nothing and make the manifest vocabulary
 // lie about what an extension can do.
 func TestExtensionRouteCapabilities_AreRegisteredRoutes(t *testing.T) {
-	src, err := os.ReadFile("main.go")
+	src, err := apisource.Read(".")
 	require.NoError(t, err)
 	re := regexp.MustCompile(`\bapi\.(GET|POST|PUT|PATCH|DELETE)\("([^"]+)"`)
 	registered := map[string]bool{}
@@ -38,7 +39,7 @@ func TestExtensionRouteCapabilities_AreRegisteredRoutes(t *testing.T) {
 // GET /extensions/catalog answered 404 once; the UI treats 404 as "not
 // deployed" and silently drops the catalog source. The route must stay registered.
 func TestExtensionCatalogRoute_IsRegistered(t *testing.T) {
-	src, err := os.ReadFile("main.go")
+	src, err := apisource.Read(".")
 	require.NoError(t, err)
 	assert.Regexp(t, `api\.GET\("/extensions/catalog",\s*extensionHandler\.Catalog\)`, string(src))
 }

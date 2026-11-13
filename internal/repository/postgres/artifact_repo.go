@@ -77,7 +77,21 @@ func NewArtifactRepo(db *sqlx.DB) *ArtifactRepo {
 }
 
 func (r *ArtifactRepo) Create(ctx context.Context, artifact *domain.Artifact) error {
-	return insertArtifact(ctx, r.db, artifact)
+	if artifact.Fence == nil {
+		return insertArtifact(ctx, r.db, artifact)
+	}
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := checkResultFenceTx(ctx, tx, artifact.Fence); err != nil {
+		return err
+	}
+	if err := insertArtifact(ctx, tx, artifact); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ReserveTaskBytes holds size bytes on the task for an upload that is about to
@@ -137,6 +151,11 @@ func (r *ArtifactRepo) CreateFromReservation(ctx context.Context, reservationID 
 	}
 	defer func() { _ = tx.Rollback() }() // no-op once committed
 
+	// A fenced upload is recorded only while the caller still holds the named
+	// lock; on refusal the caller drops the stored object and the reservation.
+	if fenceErr := checkResultFenceTx(ctx, tx, artifact.Fence); fenceErr != nil {
+		return fenceErr
+	}
 	res, dropErr := tx.ExecContext(ctx,
 		`DELETE FROM artifact_reservations WHERE id = $1 AND expires_at > now()`, reservationID)
 	if dropErr != nil {
