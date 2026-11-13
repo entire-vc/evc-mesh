@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useLocation } from "react-router";
+import { Link, useLocation, useParams } from "react-router";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Check, Save } from "lucide-react";
+import { AlertTriangle, Bell, Check, ChevronRight, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -227,6 +227,30 @@ function AppearanceCard() {
   );
 }
 
+function NotificationsCard() {
+  const { t } = useTranslation("settings");
+  const { wsSlug } = useParams();
+  // Outside a workspace route there is no settings page to link to.
+  if (!wsSlug) return null;
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <Link
+          to={`/w/${wsSlug}/notifications`}
+          className="flex items-center gap-3 rounded-lg p-4 transition-colors hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Bell className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
+          <span className="min-w-0 flex-1">
+            <span className="block font-medium">{t("profilePage.notifications.title")}</span>
+            <span className="block text-sm text-muted-foreground">{t("profilePage.notifications.description")}</span>
+          </span>
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        </Link>
+      </CardContent>
+    </Card>
+  );
+}
+
 function LanguageCard() {
   const { t } = useTranslation("settings");
   return (
@@ -273,6 +297,7 @@ export function ProfilePage() {
         <p className="text-sm text-muted-foreground">{t("profilePage.description")}</p>
       </div>
       <AccountCard />
+      <NotificationsCard />
       <AppearanceCard />
       <LanguageCard />
       <MyAgentsCard />

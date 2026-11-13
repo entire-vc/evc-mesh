@@ -131,6 +131,7 @@ var declaredQueryTenantParams = map[string]string{
 	"memory_handler.go:RechunkStale.workspace_id":        "checked: MemoryHandler.requireWorkspaceID",
 	"memory_handler.go:BackfillDocIndex.workspace_id":    "checked: MemoryHandler.requireWorkspaceID",
 	"memory_handler.go:DocIndexStatus.workspace_id":      "checked: MemoryHandler.requireWorkspaceID",
+	"memory_handler.go:ByKey.workspace_id":               "checked: MemoryHandler.requireWorkspaceID",
 
 	// GET /notifications/telegram-bot-info — the one notification route that
 	// cannot rely on RequireBodyWorkspace (a GET has no body) or an implied
@@ -176,6 +177,7 @@ var declaredQueryTenantParams = map[string]string{
 	"memory_handler.go:ExportMemories.project_id":      "narrows: project_id = $%d — pinned by workspace_id = $1",
 	"memory_handler.go:BackfillDocIndex.project_id":    "keyed: d.project_id = $%d — pinned by p.workspace_id = $1",
 	"memory_handler.go:DocIndexStatus.project_id":      "narrows: d.project_id = $2 — pinned by p.workspace_id = $1",
+	"memory_handler.go:ByKey.project_id":               "narrows: project_id = $%d — pinned by workspace_id = $1",
 
 	// GET /workspaces/:ws_id/analytics — the workspace comes from the path, where
 	// WorkspaceRLS resolves and checks it; project_id only adds a conjunct.

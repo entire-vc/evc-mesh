@@ -344,9 +344,17 @@ type executionRoute struct {
 	ProfileRef    string  `json:"profile_ref"`
 	Harness       string  `json:"harness"`
 	Model         string  `json:"model"`
+	ModelSource   string  `json:"model_source"`
 	Effort        *string `json:"effort"`
 	Order         int     `json:"order"`
 }
+
+// Where executionRoute.Model comes from: the binding's policy.profile_models
+// override, or the profile's own model.
+const (
+	ModelSourceBinding = "binding"
+	ModelSourceProfile = "profile"
+)
 
 type ExecutionConfigured struct {
 	Source   string           `json:"source"`
@@ -786,6 +794,9 @@ func (r *RuntimeRepo) executionAdmitted(ctx context.Context, rt *executionRuntim
 // configuredRoutes is the policy order of one binding: primary profiles first,
 // then their quota-edge reserves, limited to what is admitted. harness/model
 // name the setting, not an execution; effort is null where the catalog has none.
+// model is the binding's policy.profile_models override when it names the
+// profile (model_source "binding"), else the profile's model as written, a
+// placeholder included (model_source "profile").
 func configuredRoutes(c *domain.RuntimeCatalog, ref string, b domain.RuntimeBinding, admitted RuntimeAdmission) []executionRoute {
 	var order []string
 	add := func(profile string) {
@@ -804,7 +815,11 @@ func configuredRoutes(c *domain.RuntimeCatalog, ref string, b domain.RuntimeBind
 	routes := make([]executionRoute, 0, len(order))
 	for _, profile := range order {
 		p := c.Profiles[profile]
-		routes = append(routes, executionRoute{BindingRef: ref, ControllerRef: p.ControllerRef, ProfileRef: profile, Harness: p.Harness, Model: p.Model})
+		model, source := p.Model, ModelSourceProfile
+		if override, ok := b.Policy.ProfileModels[profile]; ok {
+			model, source = override, ModelSourceBinding
+		}
+		routes = append(routes, executionRoute{BindingRef: ref, ControllerRef: p.ControllerRef, ProfileRef: profile, Harness: p.Harness, Model: model, ModelSource: source})
 	}
 	return routes
 }

@@ -504,6 +504,8 @@ func (c *fakeCommentService) ReconcileClosedFollowUpPending(context.Context) (de
 	return 0, 0, 0, nil
 }
 
+func (c *fakeCommentService) ReconcileMarkerGateClasses(context.Context) (int, error) { return 0, nil }
+
 // ---------------------------------------------------------------------------
 // Test fixtures.
 // ---------------------------------------------------------------------------

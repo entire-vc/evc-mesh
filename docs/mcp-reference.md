@@ -2,7 +2,7 @@
 
 ## Overview
 
-evc-mesh exposes **69 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
+evc-mesh exposes **70 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
 Supported transports: **stdio** (default), and over HTTP on port 8081 **SSE** and
 **Streamable HTTP** — the latter also accepting OAuth access tokens, so an MCP
 client can sign in by itself instead of being handed an agent key.
@@ -24,7 +24,7 @@ Tools are organized into 14 categories:
 | Project & Task Management | 14 | CRUD for projects, tasks, subtasks, dependencies, assignments, PR links and deploy marks |
 | Comments & Artifacts | 5 | Task comments, file uploads, artifact retrieval |
 | Documents | 7 | Project document tree: create, read, edit, search, and comment on pages |
-| Memory & Knowledge | 10 | Persistent memory, project knowledge, and the canonical decision layer |
+| Memory & Knowledge | 11 | Persistent memory, project knowledge, and the canonical decision layer |
 | Event Bus | 5 | Publish/subscribe events, context aggregation |
 | Agent Hierarchy | 2 | Register and list sub-agents |
 | Utility | 4 | Heartbeat, error reporting, self-assigned task listing, session metrics |
@@ -117,7 +117,7 @@ Two endpoints are served:
 
 | Endpoint | Profile | Tools |
 |----------|---------|-------|
-| `http://localhost:8081/sse` | full | 69 |
+| `http://localhost:8081/sse` | full | 70 |
 | `http://localhost:8081/core/sse` | core | 25 |
 
 Behind a reverse proxy, see
@@ -136,7 +136,7 @@ every request carries its own credential):
 
 | Endpoint on the binary | Public URL behind the bundled nginx | Profile | Tools |
 |------------------------|-------------------------------------|---------|-------|
-| `http://localhost:8081/mcp` | `https://<host>/mcp` | full | 69 |
+| `http://localhost:8081/mcp` | `https://<host>/mcp` | full | 70 |
 | `http://localhost:8081/core` | `https://<host>/mcp/core` | core | 25 |
 
 Credentials, headers only (a `?agent_key=` here is rejected with `400`):
@@ -176,7 +176,7 @@ and Caddy examples and a `curl` check.
 | `MESH_MCP_HOST` | `0.0.0.0` | No | SSE server bind host |
 | `MESH_MCP_PORT` | `8081` | No | SSE server bind port |
 | `MESH_MCP_PUBLIC_URL` | *(empty)* | No | Public base URL of the SSE server. Empty advertises the message endpoint relative to the URL the client connected to, which is correct unless a proxy serves MCP under a path prefix |
-| `MESH_MCP_PROFILE` | `full` | No | Tool profile for **stdio** mode: `full` (69) or `core` (25). In SSE mode the profile follows the endpoint |
+| `MESH_MCP_PROFILE` | `full` | No | Tool profile for **stdio** mode: `full` (70) or `core` (25). In SSE mode the profile follows the endpoint |
 | `MESH_MCP_OAUTH_ISSUER` | *(empty)* | No | Authorization server named in the OAuth resource metadata. Empty = the origin of the resource URL, correct whenever MCP is served on the Mesh instance's own origin |
 | `MESH_MCP_OAUTH_CACHE_TTL_SEC` | `60` | No | How long an accepted OAuth access token is trusted before it is re-checked with the API — the bound on how long a revoked token keeps working here |
 
@@ -1064,7 +1064,7 @@ Save knowledge to persistent memory. Use for decisions, conventions, and prefere
 | `project_id` | string | No | -- | Project ID (required for `project` scope) |
 | `tags` | array\<string\> | No | -- | Tags for categorization and filtering |
 | `relevance` | number | No | `1.0` | Relevance score 0-1 |
-| `expires_at` | string | No | -- | RFC3339 timestamp or Go duration, e.g. `"72h"` |
+| `expires_at` | string | No | -- | RFC3339 timestamp or Go duration, e.g. `"72h"`. The entry leaves default recall at that moment; the background cleanup (every 6 h) deletes it 7 days later. To take an entry out of recall recoverably, use `archive_memory` |
 | `source_url` | string | No | -- | URL/path to the source (task ID, PR, file path) |
 | `source_task_id` | string | No | auto | UUID of the Mesh task that produced this memory. Auto-populated from the active checkout |
 | `thread_id` | string | No | auto | Thread identifier for same-session grouping. Auto-populated |
@@ -1109,7 +1109,7 @@ knowledge at session start, use `get_project_knowledge` instead.
 | `min_importance` | number | No | `0.4` | Minimum `importance_score`. Entries below this are excluded (`kind:session-checkpoint` scores 0.3). Pass `0` to retrieve everything |
 | `apply_recency_decay` | boolean | No | `false` | Sort by `relevance * 0.95^days_since_created` |
 | `order_by` | string | No | `created_at:desc` | `created_at:desc`, `created_at:asc`, `relevance:desc`, `decayed_relevance:desc` |
-| `include_expired` | boolean | No | `false` | Include expired memories |
+| `include_expired` | boolean | No | `false` | Include memories past `expires_at`; they stay readable until the cleanup deletes them 7 days after expiry |
 | `include_archived` | boolean | No | `false` | Include archived memories |
 | `limit` | number | No | `10` | Max results (max 50). **Hard bound** -- see the note below |
 | `offset` | number | No | `0` | Pagination offset |
@@ -1344,14 +1344,15 @@ failure there is reported in the result but does not undo the canonical write.
 
 #### 36. `get_memory`
 
-Fetch the **full text of one memory entry** by its exact `key`. Use it after a compact `recall` when an item's `content_truncated` is `true`. There is no get-by-key endpoint on the backend, so the tool searches on the key (up to 4 pages of 50) and returns the entry whose key matches exactly; superseded entries are included and the importance floor is not applied.
+Fetch the **full text of one memory entry** by its exact `key`. Use it after a compact `recall` when an item's `content_truncated` is `true`. Backed by `GET /api/v1/memories/by-key`; superseded entries are included and the importance floor is not applied. Archived and expired entries are returned only on request.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `key` | string | **Yes** | -- | Exact memory key |
-| `project_id` | string | No | -- | Restrict the search to a project |
+| `project_id` | string | No | -- | Restrict the lookup to a project |
 | `scope` | string | No | -- | `workspace`, `project`, `agent`, or `all` |
 | `include_archived` | boolean | No | `false` | Include archived memories |
+| `include_expired` | boolean | No | `false` | Include memories past `expires_at` (readable until the cleanup, 7 days after expiry) |
 
 **Example request:**
 ```json
@@ -1365,9 +1366,41 @@ Fetch the **full text of one memory entry** by its exact `key`. Use it after a c
 
 ---
 
+#### 37. `archive_memory`
+
+Take a memory out of default `recall` and `get_memory` without deleting it (`archived=true`), or bring it back (`archived=false`). The reason is required (up to 500 characters) and is stored on a new revision. Backed by `POST /api/v1/memories/{id}/archive` and `/unarchive`.
+
+Who may archive is who may write to the memory's scope: any agent or user with write access to the project for a project entry (not only its author; a project viewer is refused, a workspace owner/admin passes); only the owning agent for an agent entry; workspace owners/admins and lead/CPO/coordinator agents for a workspace entry. A repeat `remember` on an archived key updates the entry but keeps it archived, and its response says so. The revision records the reason and who acted: `actor_agent_id` for an agent, `actor_user_id` for a user.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `memory_id` | string | No* | -- | Memory UUID |
+| `key` | string | No* | -- | Exact key, used when `memory_id` is not given |
+| `scope` | string | No | -- | Narrows a `key` lookup: `workspace`, `project`, `agent` |
+| `project_id` | string | No | -- | Narrows a `key` lookup to a project |
+| `archived` | boolean | No | `true` | `true` archives, `false` restores |
+| `reason` | string | **Yes** | -- | Why the entry leaves (or returns to) recall |
+
+\* One of `memory_id` or `key` is required. A `key` that matches several entries is refused with the candidates listed.
+
+**Example request:**
+```json
+{
+  "name": "archive_memory",
+  "arguments": {
+    "key": "deploy-freeze-2026-08",
+    "scope": "project",
+    "project_id": "550e8400-...",
+    "reason": "freeze lifted; MR merged and released"
+  }
+}
+```
+
+---
+
 ### Event Bus (5 tools)
 
-#### 37. `publish_event`
+#### 38. `publish_event`
 
 Publish an event to the event bus.
 
@@ -1401,7 +1434,7 @@ Publish an event to the event bus.
 
 ---
 
-#### 38. `publish_summary`
+#### 39. `publish_summary`
 
 Publish a work summary event (convenience wrapper for `publish_event` with `type=summary`).
 
@@ -1441,7 +1474,7 @@ Publish a work summary event (convenience wrapper for `publish_event` with `type
 
 ---
 
-#### 39. `get_context`
+#### 40. `get_context`
 
 Get enriched context from the event bus.
 
@@ -1468,7 +1501,7 @@ Get enriched context from the event bus.
 
 ---
 
-#### 40. `get_task_context`
+#### 41. `get_task_context`
 
 Get all context for a task: details, comments, events, artifacts, dependencies. The response also carries `project_update`: the project's latest Updates report (same shape as `latest_update` in `get_project`, including the `missing` and `stale` flags).
 
@@ -1499,7 +1532,7 @@ Get all context for a task: details, comments, events, artifacts, dependencies. 
 
 ---
 
-#### 41. `subscribe_events`
+#### 42. `subscribe_events`
 
 Configure push notification delivery for task events. Optionally sets a callback URL that Mesh will POST events to. Returns SSE and long-poll endpoint URLs for alternative delivery mechanisms.
 
@@ -1539,7 +1572,7 @@ See [Agent Push Notifications](agent-push-notifications.md) for full details on 
 
 ### Agent Hierarchy (2 tools)
 
-#### 42. `register_sub_agent`
+#### 43. `register_sub_agent`
 
 Register a sub-agent under the calling agent. Useful for orchestrating multi-agent workflows.
 
@@ -1566,7 +1599,7 @@ Register a sub-agent under the calling agent. Useful for orchestrating multi-age
 
 ---
 
-#### 43. `list_sub_agents`
+#### 44. `list_sub_agents`
 
 List sub-agents of an agent.
 
@@ -1589,7 +1622,7 @@ List sub-agents of an agent.
 
 ### Utility (4 tools)
 
-#### 44. `heartbeat`
+#### 45. `heartbeat`
 
 Send a heartbeat to indicate the agent is alive.
 
@@ -1611,7 +1644,7 @@ Send a heartbeat to indicate the agent is alive.
 
 ---
 
-#### 45. `get_my_tasks`
+#### 46. `get_my_tasks`
 
 Get tasks assigned to the calling agent.
 
@@ -1633,7 +1666,7 @@ Get tasks assigned to the calling agent.
 
 ---
 
-#### 46. `report_error`
+#### 47. `report_error`
 
 Report an error encountered during work.
 
@@ -1660,7 +1693,7 @@ Report an error encountered during work.
 
 ---
 
-#### 47. `session_report`
+#### 48. `session_report`
 
 Report session metrics. Call before the session ends. Returns a compliance score and session
 statistics.
@@ -1689,7 +1722,7 @@ statistics.
 
 ### Governance Rules (2 tools)
 
-#### 48. `get_my_rules`
+#### 49. `get_my_rules`
 
 Get all governance rules that apply to the calling agent. Call at the start of work to understand constraints and behavioral requirements.
 
@@ -1709,7 +1742,7 @@ Get all governance rules that apply to the calling agent. Call at the start of w
 
 ---
 
-#### 49. `get_project_rules`
+#### 50. `get_project_rules`
 
 Get all rules configured for a project (all scopes: workspace + project).
 
@@ -1731,7 +1764,7 @@ Get all rules configured for a project (all scopes: workspace + project).
 
 ### Team & Configuration (6 tools)
 
-#### 50. `get_team_directory`
+#### 51. `get_team_directory`
 
 Get the workspace team directory listing all agents and human members with their profiles.
 
@@ -1747,7 +1780,7 @@ No parameters required.
 
 ---
 
-#### 51. `get_assignment_rules`
+#### 52. `get_assignment_rules`
 
 Get effective assignment rules for a project, merged from workspace and project level with source annotations.
 
@@ -1767,7 +1800,7 @@ Get effective assignment rules for a project, merged from workspace and project 
 
 ---
 
-#### 52. `get_workflow_rules`
+#### 53. `get_workflow_rules`
 
 Get workflow rules for a project including allowed transitions, policies, and permissions for the calling agent.
 
@@ -1787,7 +1820,7 @@ Get workflow rules for a project including allowed transitions, policies, and pe
 
 ---
 
-#### 53. `update_agent_profile`
+#### 54. `update_agent_profile`
 
 Update the calling agent's profile fields such as role, capabilities, responsibility zone, and working hours.
 
@@ -1820,7 +1853,7 @@ Update the calling agent's profile fields such as role, capabilities, responsibi
 
 ---
 
-#### 54. `import_workspace_config`
+#### 55. `import_workspace_config`
 
 Import workspace configuration from YAML. Applies rules, statuses, and project templates defined in the YAML.
 
@@ -1840,7 +1873,7 @@ Import workspace configuration from YAML. Applies rules, statuses, and project t
 
 ---
 
-#### 55. `export_workspace_config`
+#### 56. `export_workspace_config`
 
 Export the current workspace configuration as YAML, including rules, project templates, and settings.
 
@@ -1858,7 +1891,7 @@ No parameters required.
 
 ### Push Notifications (1 tools)
 
-#### 56. `poll_tasks`
+#### 57. `poll_tasks`
 
 Long-poll for new task assignments. Blocks until a task is assigned to this agent or the timeout expires. Returns current assigned tasks and whether any change occurred.
 
@@ -1902,7 +1935,7 @@ See [Agent Push Notifications](agent-push-notifications.md) for full details on 
 
 ### Recurring Tasks (6 tools)
 
-#### 57. `create_recurring_task`
+#### 58. `create_recurring_task`
 
 Creates a recurring task schedule that automatically spawns task instances on a schedule. Each instance gets access to the previous instance's summary. Use this for regular automated work: weekly reports, daily checks, periodic audits.
 
@@ -1955,7 +1988,7 @@ Creates a recurring task schedule that automatically spawns task instances on a 
 
 ---
 
-#### 58. `list_recurring_schedules`
+#### 59. `list_recurring_schedules`
 
 Lists all recurring task schedules for a project.
 
@@ -1991,7 +2024,7 @@ Lists all recurring task schedules for a project.
 
 ---
 
-#### 59. `get_recurring_history`
+#### 60. `get_recurring_history`
 
 Returns the history of all instances for a recurring task schedule. Call this when you receive a recurring task to get context on what previous instances accomplished, what issues were found, and what artifacts were produced. Use it to continue work intelligently rather than starting from scratch.
 
@@ -2032,7 +2065,7 @@ Returns the history of all instances for a recurring task schedule. Call this wh
 
 ---
 
-#### 60. `trigger_recurring_now`
+#### 61. `trigger_recurring_now`
 
 Immediately creates the next instance of a recurring schedule, without waiting for the scheduled time. Useful for testing schedules or for urgent out-of-cycle execution.
 
@@ -2062,7 +2095,7 @@ Immediately creates the next instance of a recurring schedule, without waiting f
 
 ---
 
-#### 61. `update_recurring_schedule`
+#### 62. `update_recurring_schedule`
 
 Update an existing recurring task schedule -- title, description, frequency, assignee,
 priority -- or pause it with `is_active=false`. Every field is optional; omitted fields are
@@ -2096,7 +2129,7 @@ left as they are.
 
 ---
 
-#### 62. `delete_recurring_schedule`
+#### 63. `delete_recurring_schedule`
 
 Delete a recurring task schedule. **Task instances already created from it are not
 affected** -- they stay where they are; only future generation stops. To stop generation
@@ -2120,7 +2153,7 @@ reversibly, prefer `update_recurring_schedule` with `is_active=false`.
 
 ### Task Checkout (3 tools)
 
-#### 63. `checkout_task`
+#### 64. `checkout_task`
 
 Acquire an exclusive lock on a task to prevent double-work. Only agents can checkout tasks. If the task is already checked out by another non-expired agent, the call fails with a conflict error including details about the current holder. Same-agent re-checkout is idempotent and returns a fresh token.
 
@@ -2164,7 +2197,7 @@ Acquire an exclusive lock on a task to prevent double-work. Only agents can chec
 
 ---
 
-#### 64. `release_task`
+#### 65. `release_task`
 
 Release an exclusive checkout. The `checkout_token` from the checkout response must be provided. Agents should release checkouts when done working on a task to allow others to pick it up immediately rather than waiting for TTL expiry.
 
@@ -2193,7 +2226,7 @@ Release an exclusive checkout. The `checkout_token` from the checkout response m
 
 ---
 
-#### 65. `extend_checkout`
+#### 66. `extend_checkout`
 
 Extend the TTL of an active checkout. Use this when a task takes longer than expected. The checkout must not have expired already.
 
@@ -2229,7 +2262,7 @@ Extend the TTL of an active checkout. Use this when a task takes longer than exp
 
 ### Human Gate (2 tools)
 
-#### 66. `set_human_gate`
+#### 67. `set_human_gate`
 
 Arm the human gate on a task: freeze it and record **who** is waiting, **what** was asked, and **what happens if nobody answers**. Use this instead of hand-writing a blocking comment — the marker still works, but this path records the whole ask on the task itself, so no reader has to re-derive it from comment text.
 
@@ -2281,7 +2314,7 @@ than arming an unnecessary human gate.
 
 ---
 
-#### 67. `clear_human_gate`
+#### 68. `clear_human_gate`
 
 Release a human gate. Read `human_gate_info` on `get_task` first and go by `clear_path` — there are two agent-reachable shapes and they are not interchangeable:
 
@@ -2303,7 +2336,7 @@ Releasing also drops the ask metadata (author, reason, recommended default, dead
 
 ### Project Updates (2 tools)
 
-#### 68. `post_project_update`
+#### 69. `post_project_update`
 
 Post the project's daily status report to its Updates section (`/w/<workspace>/p/<slug>/updates`). The daily cadence is a fleet rule for the project lead; Mesh keeps no schedule. Task counts (`metrics`) are computed by the server, as in `POST /projects/:proj_id/updates`. Requires the right to comment in the project; read-only keys are refused.
 
@@ -2317,7 +2350,7 @@ Post the project's daily status report to its Updates section (`/w/<workspace>/p
 | `blockers` | string[] | No | -- | What is stuck, and on whom |
 | `next_steps` | string[] | No | -- | What happens next |
 
-#### 69. `get_project_updates`
+#### 70. `get_project_updates`
 
 Read a project's Updates feed, newest first. Returns the latest report by default. The latest report also arrives with `get_project` (`latest_update`) and `get_task_context` (`project_update`), so reading it needs no separate step.
 

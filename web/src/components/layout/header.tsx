@@ -3,6 +3,7 @@ import { useProjectExtensionTabs } from "@/lib/project-extension-tabs";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useParams } from "react-router";
 import {
+  Bell,
   ChevronRight,
   LayoutGrid,
   Loader2,
@@ -636,6 +637,15 @@ function UserMenu() {
           </div>
         )}
         <DropdownMenuSeparator />
+        {profileSlug && (
+          <DropdownMenuItem
+            onClick={() => navigate(`/w/${profileSlug}/notifications`)}
+            data-testid="user-menu-notifications"
+          >
+            <Bell className="mr-2 h-4 w-4" />
+            {t("header.userMenu.notifications")}
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onClick={logout}>
           <LogOut className="mr-2 h-4 w-4" />
           {t("header.userMenu.logOut")}

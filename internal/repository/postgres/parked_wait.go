@@ -189,6 +189,12 @@ func (r *TaskRepo) RegisterParkedWait(ctx context.Context, taskID uuid.UUID, p d
 	if checkErr := validateParkedComment(comment, p); checkErr != nil {
 		return nil, checkErr
 	}
+	// The `⏳ WAIT` text match below registers the legacy parked-wait protocol.
+	// Its only caller was retired on 2026-10-16.
+	// It identifies the WAIT comment being registered; it does not decide on its own
+	// whether a card lives. Kept for that driver only, until the parked-waits
+	// endpoint is removed (this change: deadline 2026-12-15). Runner lanes use typed
+	// waits (task_waits) and never reach this path.
 	var latest uuid.UUID
 	if checkErr := tx.GetContext(ctx, &latest, `SELECT id FROM comments WHERE task_id=$1 AND author_id=$2 AND author_type=$3 AND body LIKE '⏳ WAIT %' ORDER BY created_at DESC,id DESC LIMIT 1`, taskID, p.OwnerID, p.OwnerType); checkErr != nil {
 		return nil, checkErr

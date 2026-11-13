@@ -11,8 +11,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { User } from "@/types";
 import { useTranslation } from "react-i18next";
 import { NOTIFICATION_EVENTS } from "./constants";
+import { ScopeSelect } from "./scope-select";
+import type { NotificationScope } from "./constants";
 
 interface EmailTabProps {
+  scope: NotificationScope;
+  onScopeChange: (scope: NotificationScope) => void;
   isLoaded: boolean;
   emailAvailable: boolean;
   emailEnabled: boolean;
@@ -40,6 +44,8 @@ export function EmailTab({
   emailSaving,
   emailSaved,
   onSave,
+  scope,
+  onScopeChange,
 }: EmailTabProps) {
   const { t } = useTranslation("notifications");
   return (
@@ -57,15 +63,27 @@ export function EmailTab({
         {!isLoaded ? (
           <Skeleton className="h-16 w-full" />
         ) : !emailAvailable ? (
-          <div className="flex items-start gap-3 rounded-lg border border-border p-3">
-            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
-            <div>
-              <p className="font-medium">{t("settings.email.unavailableTitle")}</p>
-              <p className="text-sm text-muted-foreground">
-                {t("settings.email.unavailableHint")}
-              </p>
+          <>
+            <div className="flex items-start gap-3 rounded-lg border border-border p-3">
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
+              <div>
+                <p className="font-medium">{t("settings.email.unavailableTitle")}</p>
+                <p className="text-sm text-muted-foreground">
+                  {t("settings.email.unavailableHint")}
+                </p>
+              </div>
             </div>
-          </div>
+            <ScopeSelect channel="email" value={scope} onChange={onScopeChange} />
+            <div className="flex justify-end pt-2">
+              <Button onClick={onSave} disabled={emailSaving} className="gap-2">
+                {emailSaved ? (
+                  <><Check className="h-4 w-4" />{t("settings.actions.saved")}</>
+                ) : (
+                  <><Save className="h-4 w-4" />{emailSaving ? t("settings.actions.saving") : t("settings.actions.save")}</>
+                )}
+              </Button>
+            </div>
+          </>
         ) : (
           <>
             {/* Master toggle */}
@@ -109,6 +127,8 @@ export function EmailTab({
                 className="mt-1 w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
             </div>
+
+            <ScopeSelect channel="email" value={scope} onChange={onScopeChange} />
 
             {/* Per-event toggles */}
             <div

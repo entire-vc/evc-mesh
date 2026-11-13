@@ -1,7 +1,7 @@
 import type { ExtensionStatusDto } from "@/hooks/useExtensionCatalog";
 
 /** The five states an extension shows anywhere in the product: Catalog, Installed, its page, the instance admin. */
-export type ExtensionStateName = "not_installed" | "not_allowed" | "available" | "enabled" | "error" | "blocked";
+export type ExtensionStateName = "not_installed" | "not_allowed" | "available" | "enabled" | "instance_disabled" | "error" | "blocked";
 
 /** Whose keys an enabled extension runs on: the instance admin's or the workspace's own connection. */
 export type KeysFrom = "instance" | "workspace";
@@ -14,7 +14,7 @@ export interface ExtensionStateInput {
   blocked: boolean;
   blockedReason?: string;
   /** From `GET /workspaces/{ws}/extensions`: the one source of health and last error. */
-  status?: Pick<ExtensionStatusDto, "enabled" | "source" | "health" | "last_error">;
+  status?: Pick<ExtensionStatusDto, "enabled" | "source" | "health" | "last_error" | "instance_disabled">;
   /** Themes only: this theme paints the workspace now; undefined when that is not known. */
   themeActive?: boolean;
   /**
@@ -50,11 +50,14 @@ export function extensionState(e: ExtensionStateInput): ExtensionState {
     const on = e.themeActive ?? Boolean(s?.enabled);
     return { state: on ? "enabled" : "available" };
   }
-  if (!s?.enabled) return { state: "available" };
+  // Off because the instance level is off (no workspace connection carries it): say so, not "available".
+  if (!s?.enabled) return s?.instance_disabled ? { state: "instance_disabled" } : { state: "available" };
   const keysFrom: KeysFrom = s.source === "instance" ? "instance" : "workspace";
   if (s.health?.ok === false || s.last_error) {
     return { state: "error", keysFrom, error: s.last_error || s.health?.message || "" };
   }
+  // The workspace row is on, but the instance level is off: say so instead of a plain "Enabled".
+  if (s.instance_disabled) return { state: "instance_disabled", keysFrom };
   return { state: "enabled", keysFrom };
 }
 
@@ -64,6 +67,7 @@ export const EXTENSION_STATE_KEY: Record<ExtensionStateName, string> = {
   not_allowed: "extensionState.notAllowed",
   available: "extensionState.available",
   enabled: "extensionState.enabled",
+  instance_disabled: "extensionState.instanceDisabled",
   error: "extensionState.error",
   blocked: "extensionState.blocked",
 };

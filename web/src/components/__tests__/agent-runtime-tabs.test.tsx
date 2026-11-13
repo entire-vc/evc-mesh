@@ -400,6 +400,28 @@ describe("AgentRuntimeTabs", () => {
       expect(body.policy.quota_edges).toEqual({ main: [] });
     });
 
+    it("keeps profile_models of allowed profiles and drops a removed one", async () => {
+      const policy = example.bindings["worker-b"].policy;
+      policy.profile_models = { main: "model-main", reserve: "model-reserve" };
+      try {
+        await edit({ revision: 5 });
+        fireEvent.click(screen.getByRole("button", { name: "Remove reserve" }));
+        save();
+        await screen.findByText("Saved as revision 5.");
+        const body = (put()[1] as { body: { policy: { profile_models?: Record<string, string> } } }).body;
+        expect(body.policy.profile_models).toEqual({ main: "model-main" });
+      } finally {
+        delete policy.profile_models;
+      }
+    });
+
+    it("a catalog without profile_models saves without the field", async () => {
+      await edit({ revision: 5 });
+      save();
+      await screen.findByText("Saved as revision 5.");
+      expect((put()[1] as { body: { policy: Record<string, unknown> } }).body.policy).not.toHaveProperty("profile_models");
+    });
+
     it("a non-admin (403 on load) gets no editor", async () => {
       vi.mocked(api).mockRejectedValue(apiErr(403));
       renderTabs();

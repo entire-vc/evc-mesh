@@ -45,7 +45,7 @@ func (f *midPipelineFixture) setRuntimeState(t *testing.T, taskID uuid.UUID, kin
 // another lane became the card's latest comment. The sweep read only that latest
 // comment, found no marker line, and parked the card in backlog with a due_date a
 // day out: the standing wait was lost and a calendar wake invented. The same
-// happened to any wait older than LiveWaitMarkerMaxAge, whatever it waited for.
+// happened to any wait older than the 48 h marker cap, whatever it waited for.
 func TestFindStaleUnleasedInProgress_LiveRuntimeStateIsAuthoritative(t *testing.T) {
 	f := newMidPipelineFixture(t)
 	repo := NewTaskRepo(f.db)
@@ -66,8 +66,8 @@ func TestFindStaleUnleasedInProgress_LiveRuntimeStateIsAuthoritative(t *testing.
 			f.insertCommentAs(t, id, "agent", fyi, 3*time.Hour)
 			f.setRuntimeState(t, id, "waiting", "card:#00000000", fresh, nil)
 		}, false},
-		{"waiting for longer than the 48h marker cap", func(id uuid.UUID) {
-			f.insertCommentAs(t, id, "agent", "⏳ WAIT mr:example/product!42", LiveWaitMarkerMaxAge+24*time.Hour)
+		{"waiting for longer than the old 48h marker cap", func(id uuid.UUID) {
+			f.insertCommentAs(t, id, "agent", "⏳ WAIT mr:example/product!42", 72*time.Hour)
 			f.setRuntimeState(t, id, "waiting", "mr:example/product!42", fresh, nil)
 		}, false},
 		{"waiting with no comment at all", func(id uuid.UUID) {
@@ -110,14 +110,14 @@ func TestFindStaleUnleasedInProgress_LiveRuntimeStateIsAuthoritative(t *testing.
 			require.NoError(t, err)
 		}, true},
 
-		// ── the text fallback still serves drivers that publish no state ─────
-		{"no runtime state, live marker in the latest comment", func(id uuid.UUID) {
+		// ── comment text is not a controller: no text fallback ───
+		{"no runtime state, fresh marker in the latest comment", func(id uuid.UUID) {
 			f.insertCommentAs(t, id, "agent", "⏳ WAIT card:#00000000", 3*time.Hour)
-		}, false},
-		{"stale runtime state, live marker in the latest comment", func(id uuid.UUID) {
+		}, true},
+		{"stale runtime state, fresh marker in the latest comment", func(id uuid.UUID) {
 			f.insertCommentAs(t, id, "agent", "⏳ WAIT card:#00000000", 3*time.Hour)
 			f.setRuntimeState(t, id, "waiting", "card:#00000000", old, nil)
-		}, false},
+		}, true},
 	}
 
 	ids := make(map[string]uuid.UUID, len(cases))

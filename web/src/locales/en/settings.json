@@ -1108,6 +1108,10 @@
       "title": "My agents",
       "description": "Agents you created or supervise.",
       "placeholder": "Coming soon."
+    },
+    "notifications": {
+      "title": "Notifications",
+      "description": "What you get, in which channel and how much: in-app, email, Telegram, browser push."
     }
   },
   "themes": {

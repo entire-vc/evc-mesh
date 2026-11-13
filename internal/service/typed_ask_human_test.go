@@ -96,24 +96,32 @@ func TestTurnCommandService_AskHuman(t *testing.T) {
 	// The comment is read by the same helpers the marker path arms from, so a
 	// typed ask and a hand-written line raise the same gate.
 	t.Run("the marker path reads the generated comment", func(t *testing.T) {
-		for _, soft := range []bool{false, true} {
+		// The class is the server's verdict: a hard question stays hard
+		// even with soft: true, a soft-looking one arms soft with or without it.
+		cases := []struct {
+			question, def string
+			soft          bool
+			want          domain.HumanGateClass
+		}{
+			{"Rotate the key now?", "rotate on Monday", false, domain.HumanGateClassHard},
+			{"Rotate the key now?", "rotate on Monday", true, domain.HumanGateClassHard},
+			{"Ship the plan as written?", "ship it on Monday", false, domain.HumanGateClassSoft},
+			{"Ship the plan as written?", "ship it on Monday", true, domain.HumanGateClassSoft},
+		}
+		for _, tc := range cases {
 			e, g := newAskEnv()
-			_, err := e.svc.AskHuman(e.ctx, e.task, AskHumanInput{To: "alex", Question: "Rotate the key now?",
-				RecommendedDefault: "rotate on Monday", Deadline: &deadline, Supersedes: "the old ask", Soft: soft})
+			_, err := e.svc.AskHuman(e.ctx, e.task, AskHumanInput{To: "alex", Question: tc.question,
+				RecommendedDefault: tc.def, Deadline: &deadline, Supersedes: "the old ask", Soft: tc.soft})
 			require.NoError(t, err)
 			c := g.posted[0]
 			assert.True(t, hasBlockingMarker(c.Body))
 			assert.Equal(t, []string{"alex"}, blockingMarkerSlugs(c.Body))
 			in := armInputFromMarker(c, &domain.Task{ID: e.task}, "alex")
-			assert.True(t, strings.HasPrefix(in.Reason, "Rotate the key now?"), in.Reason)
-			assert.Equal(t, "rotate on Monday", in.RecommendedDefault)
+			assert.True(t, strings.HasPrefix(in.Reason, tc.question), in.Reason)
+			assert.Equal(t, tc.def, in.RecommendedDefault)
 			require.NotNil(t, in.Deadline)
 			assert.True(t, in.Deadline.Equal(deadline))
-			want := domain.HumanGateClassHard
-			if soft {
-				want = domain.HumanGateClassSoft
-			}
-			assert.Equal(t, want, in.Class)
+			assert.Equal(t, tc.want, in.Class, "%q soft=%v", tc.question, tc.soft)
 			assert.True(t, citesSupersedes(c))
 		}
 	})

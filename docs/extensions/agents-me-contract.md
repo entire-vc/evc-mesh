@@ -17,12 +17,28 @@ go test ./internal/handler -run Contract
 | `GET /agents/me/tasks` | `tasks`, `count`, `total_count`, `has_more`; filters `status_category`, `project_id`, `limit`/`page_size`; empty feed is `[]`; 400 bad filter, 401, 403 |
 | `GET /agents/me/tasks/poll` | same body plus `changed`; `false` on timeout; bad filter answers 400 before the wait |
 | `GET /agents/me/events/stream` | SSE frames `id:` / `event:` / `data:`; event types `task.assigned`, `task.updated`, `comment.created`; replay in order via `Last-Event-ID`; 410 `cursor_expired` (keys `error`, `error_code`, `code`, `message`), 400 malformed cursor, 401 |
-| `POST /agents/me/sessions/report` | `session_id`, `totals.{tokens_in,tokens_out,estimated_cost,model_used}`; additive per task; 401, 501 |
+| `POST /agents/me/sessions/report` | `session_id`, `totals.{tokens_in,tokens_out,estimated_cost,model_used}`; additive per task; `Idempotency-Key` accepted; 401, 501 |
 
-Retried writes: `POST /tasks/:id/comments`, `/tasks/:id/artifacts` and
-`/tasks/:id/finish` accept an `Idempotency-Key` header; a repeat returns the
+Retried writes: `POST /tasks/:id/comments`, `/tasks/:id/artifacts`,
+`/tasks/:id/finish` and `POST /agents/me/sessions/report` accept an `Idempotency-Key` header; a repeat returns the
 first answer instead of writing again (`docs/idempotency.md`). Events carry a
 stable `event_id` across retries and subscribers (`docs/webhooks.md`).
+
+### Reconciling a lost session report
+
+A report is additive, so repeating it without a key counts it twice. To make a
+report safe to repeat, send one `Idempotency-Key` per report (a UUID) and, if the
+answer is lost, send the **same body with the same key** again:
+
+- the first report was applied: the repeat returns the first answer with
+  `Idempotent-Replayed: true` and adds nothing;
+- the first report never arrived: the repeat is the first and is applied once;
+- the same key with another body answers `409 idempotency_key_reused` and adds
+  nothing. A new report is a new key.
+
+Concurrent reports (different keys) sum exactly onto the one active session for
+the agent and task; two first reports do not create two sessions. A caller that
+sends no key behaves as before. Rules for keys: `docs/idempotency.md`.
 
 Checkout/release live under `/tasks/*`, not `/agents/me/*`, and have no contract
 test in this file; their behaviour is described in the next section.

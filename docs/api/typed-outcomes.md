@@ -469,6 +469,10 @@ hyphens). In order:
 
 1. Input checks: `400` on a missing/long question, a `[soft]` tag inside the
    question (send `soft: true`), a past `deadline`, a multi-line optional field.
+   `soft` is a request, not the verdict: the server classifies every ask
+   (human-gate-decision-recorded.md §5.2a). A question with no hard trait and a
+   stated `recommended_default` arms soft without it; a hard trait (money, keys,
+   publication, outward contact, a hard label) arms hard even with it.
 2. `409 conflict` when the caller does not hold the card's checkout.
 3. The checks `set_human_gate` runs for an agent key: `to` must be a person of
    the workspace (`gate_addressee_not_human`), and the previous ask must not

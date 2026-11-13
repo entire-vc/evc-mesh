@@ -79,8 +79,12 @@ export function PolicyEditor({ workspaceId, bindingRef, binding, catalog, revisi
   const save = () => {
     setResult("saving");
     const preferredAccounts = Object.fromEntries(Object.entries(preferred).filter(([, v]) => v));
+    // A model override may only name an allowed profile: drop the ones taken out.
+    const profileModels =
+      policy.profile_models && Object.fromEntries(Object.entries(policy.profile_models).filter(([p]) => allowed.includes(p)));
     void saveBindingPolicy(workspaceId, bindingRef, revision, allowed, {
       ...policy,
+      ...(profileModels ? { profile_models: profileModels } : {}),
       primary_profiles: allowed.filter((p) => primary.includes(p)),
       quota_edges: orderQuotaEdges(policy.quota_edges, allowed),
       preferred_accounts: preferredAccounts,

@@ -115,6 +115,16 @@ reserve for this agent and provider. No task/project/workspace token quota or
 mandatory local API budget is introduced. Reset affects new selections; a running
 reserve execution is never forcibly returned to the preferred account.
 
+A binding may name the model it runs a permitted profile with:
+`policy.profile_models` maps a profile ref from `permitted_profiles` to a model
+token (`^[a-zA-Z0-9][a-zA-Z0-9._:+-]{0,99}$`). It overrides `profiles[ref].model`
+for that binding only (a subscription profile often carries a placeholder, the
+lane sets the real model) and is what the execution view shows as
+`configured.routes[].model` with `model_source: "binding"`. The field is optional;
+a key outside `permitted_profiles` fails `bindings.<name>.policy.profile_models`
+with `not_permitted`, a bad token with `invalid`. It is not part of the policy
+projection and changes no admission.
+
 Explain responses contain a stable reason per excluded profile, selected and
 preferred/actual account references, observation freshness and policy revision.
 Preview performs no launch, reservation, task status update or account switching.

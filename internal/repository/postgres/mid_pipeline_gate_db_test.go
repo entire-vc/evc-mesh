@@ -157,61 +157,6 @@ func (f *midPipelineFixture) insertCommentAs(t *testing.T, taskID uuid.UUID, aut
 	require.NoError(t, err)
 }
 
-// The fleet rules end a WAIT with release_task, so "in_progress, no lease, quiet" is
-// what a healthy waiting card looks like. The sweep must not park it as abandoned
-// (an internal ticket: a card waiting on an open MR was sent to backlog two hours after its WAIT).
-// Each negative differs from the exempted card in exactly one thing.
-func TestFindStaleUnleasedInProgress_LiveWaitMarker(t *testing.T) {
-	f := newMidPipelineFixture(t)
-	repo := NewTaskRepo(f.db)
-
-	// All five are 5h stale on updated_at, so the grace window alone would take them.
-	exemptWait := f.insertUnleasedTask(t, 5*time.Hour)
-	f.insertCommentAs(t, exemptWait, "agent", "⏳ WAIT mr:entire-vc/evc-mesh!1110\nждём merge", 3*time.Hour)
-
-	exemptNext := f.insertUnleasedTask(t, 5*time.Hour)
-	f.insertCommentAs(t, exemptNext, "agent", "↻ NEXT: добить тесты", 3*time.Hour)
-
-	// control: same quiet card, comment is not a marker
-	plain := f.insertUnleasedTask(t, 5*time.Hour)
-	f.insertCommentAs(t, plain, "agent", "жду merge, потом закрою", 3*time.Hour)
-
-	// control: marker older than the cap no longer protects
-	expired := f.insertUnleasedTask(t, 5*time.Hour)
-	f.insertCommentAs(t, expired, "agent", "⏳ WAIT mr:entire-vc/evc-mesh!1", LiveWaitMarkerMaxAge+time.Hour)
-
-	// control: the marker is not the LATEST non-system comment
-	superseded := f.insertUnleasedTask(t, 5*time.Hour)
-	f.insertCommentAs(t, superseded, "agent", "⏳ WAIT mr:entire-vc/evc-mesh!2", 4*time.Hour)
-	f.insertCommentAs(t, superseded, "agent", "MR влит, продолжаю", 3*time.Hour)
-
-	// control: a marker quoted by the system itself (its own park text) must not exempt
-	systemOnly := f.insertUnleasedTask(t, 5*time.Hour)
-	f.insertCommentAs(t, systemOnly, "system", "⏳ WAIT mr:entire-vc/evc-mesh!3", 3*time.Hour)
-
-	// the handoff: the author's WAIT is followed by another actor's comment, so the
-	// latest non-system comment is no longer a marker and the card is a candidate
-	// (the reaper then returns it to todo instead of parking it)
-	handoff := f.insertUnleasedTask(t, 5*time.Hour)
-	f.insertCommentAs(t, handoff, "agent", "⏳ WAIT mr:entire-vc/evc-mesh!4", 4*time.Hour)
-	f.insertCommentAs(t, handoff, "agent", "VERDICT: DO-NOT-SHIP — нужен фикс", 3*time.Hour)
-
-	got, err := repo.FindStaleUnleasedInProgress(context.Background(), 2*time.Hour)
-	require.NoError(t, err)
-	found := map[uuid.UUID]bool{}
-	for _, task := range got {
-		found[task.ID] = true
-	}
-
-	require.True(t, found[handoff], "a reviewer comment after the author's WAIT left the card exempt: the handoff is never seen")
-	require.False(t, found[exemptWait], "a live ⏳ WAIT card was swept as abandoned")
-	require.False(t, found[exemptNext], "a live ↻ NEXT card was swept as abandoned")
-	require.True(t, found[plain], "an ordinary quiet comment exempted a card; the marker match is too loose")
-	require.True(t, found[expired], "a WAIT older than LiveWaitMarkerMaxAge still protects: a never-answered WAIT is immortal")
-	require.True(t, found[superseded], "a superseded WAIT still protects the card")
-	require.True(t, found[systemOnly], "a system-authored marker exempted a card")
-}
-
 // ── the URL match ─────────────────────────────────────────────────────────
 
 func TestHasCommentWithURL(t *testing.T) {

@@ -50,6 +50,18 @@ describe("extensionState: full table", () => {
 });
 
 describe("extensionState: rules spelled out", () => {
+  it("an active workspace row under a switched-off instance setting reads instance_disabled, not enabled", () => {
+    expect(extensionState({ allowed: true, blocked: false, status: { enabled: true, source: "workspace", health: ok, instance_disabled: true } }))
+      .toEqual({ state: "instance_disabled", keysFrom: "workspace" });
+    // off extension, instance setting off, no connection: also instance_disabled (not "available")
+    expect(extensionState({ allowed: true, blocked: false, status: { enabled: false, source: "none", instance_disabled: true } }).state)
+      .toBe("instance_disabled");
+    expect(extensionState({ allowed: true, blocked: false, status: { enabled: false, source: "none" } }).state)
+      .toBe("available");
+    // positive control: without the flag the same status is plainly enabled
+    expect(extensionState({ allowed: true, blocked: false, status: { enabled: true, source: "workspace", health: ok } }).state)
+      .toBe("enabled");
+  });
   it("instance keys and own keys are both 'enabled', told apart by keysFrom", () => {
     expect(extensionState({ allowed: true, blocked: false, status: { enabled: true, source: "instance", health: ok } }))
       .toEqual({ state: "enabled", keysFrom: "instance" });

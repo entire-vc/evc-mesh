@@ -41,6 +41,9 @@ type Resolved struct {
 	// NotAllowed: the instance allow-list refuses the extension, so it is off
 	// whatever its connection says.
 	NotAllowed bool
+	// InstanceDisabled: the instance-level setting of the extension exists and
+	// is switched off. Informational: it does not change Enabled by itself.
+	InstanceDisabled bool
 }
 
 // HealthReport is the result of a live connection check.

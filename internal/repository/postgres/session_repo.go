@@ -332,6 +332,101 @@ func (r *SessionRepo) IncrementToolBreakdown(ctx context.Context, agentID, works
 	})
 }
 
+// addUsageAgentWide and addUsageTaskScoped are the two fixed query shapes of
+// AddUsage: one UPDATE that adds the report onto the active session row
+// inside the database (`tokens_in = tokens_in + $1`), so the sum is taken
+// against the row's current values under its row lock, never against a copy
+// read earlier. Every value is a bound argument.
+const addUsageAgentWide = `
+	UPDATE agent_sessions
+	SET tokens_in        = tokens_in + $1,
+	    tokens_out       = tokens_out + $2,
+	    estimated_cost   = estimated_cost + $3,
+	    model_used       = COALESCE(NULLIF($4, ''), model_used),
+	    last_activity_at = GREATEST(last_activity_at, now())
+	WHERE status = 'active' AND id = (
+		SELECT id FROM agent_sessions
+		WHERE agent_id = $5 AND status = 'active' AND task_id IS NULL
+		ORDER BY started_at DESC
+		LIMIT 1
+	)
+	RETURNING ` + sessionColumns
+
+const addUsageTaskScoped = `
+	UPDATE agent_sessions
+	SET tokens_in        = tokens_in + $1,
+	    tokens_out       = tokens_out + $2,
+	    estimated_cost   = estimated_cost + $3,
+	    model_used       = COALESCE(NULLIF($4, ''), model_used),
+	    last_activity_at = GREATEST(last_activity_at, now())
+	WHERE status = 'active' AND id = (
+		SELECT id FROM agent_sessions
+		WHERE agent_id = $5 AND status = 'active' AND task_id = $6
+		ORDER BY started_at DESC
+		LIMIT 1
+	)
+	RETURNING ` + sessionColumns
+
+// AddUsage adds one usage report onto the agent's active session (task-scoped
+// when taskID != nil, else agent-wide) and returns the session as it is after
+// the addition. The addition is a single UPDATE (see the constants above), so
+// concurrent reports sum exactly. When there is no active session the call
+// creates one seeded with the report; a transaction-scoped advisory lock keyed
+// on agent + task makes that "update, else insert" step run one at a time, so
+// two first reports for the same agent and task end up on one session, not two.
+func (r *SessionRepo) AddUsage(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, tokensIn, tokensOut int64, cost float64, model string) (*domain.AgentSession, error) {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	lockKey := "agent_session_usage:" + agentID.String() + ":"
+	if taskID != nil {
+		lockKey += taskID.String()
+	}
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
+		return nil, err
+	}
+
+	var row sessionRow
+	if taskID != nil {
+		err = tx.GetContext(ctx, &row, addUsageTaskScoped, tokensIn, tokensOut, cost, model, agentID, *taskID)
+	} else {
+		err = tx.GetContext(ctx, &row, addUsageAgentWide, tokensIn, tokensOut, cost, model, agentID)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		now := time.Now()
+		sess := &domain.AgentSession{
+			ID: uuid.New(), AgentID: agentID, WorkspaceID: workspaceID, TaskID: taskID,
+			StartedAt: now, LastActivityAt: now, Status: domain.AgentSessionStatusActive,
+			ModelUsed: model, TokensIn: tokensIn, TokensOut: tokensOut, EstimatedCost: cost,
+			ToolBreakdown: json.RawMessage(`{}`), ComplianceDetail: json.RawMessage(`{}`),
+			TasksTouched: []uuid.UUID{},
+		}
+		const ins = `
+			INSERT INTO agent_sessions (id, workspace_id, agent_id, task_id, started_at, last_activity_at, status,
+				model_used, tokens_in, tokens_out, estimated_cost)
+			VALUES ($1, $2, $3, $4, $5, $5, $6, $7, $8, $9, $10)`
+		if _, err = tx.ExecContext(ctx, ins, sess.ID, workspaceID, agentID, taskID, now,
+			sess.Status, model, tokensIn, tokensOut, cost); err != nil {
+			return nil, err
+		}
+		if cerr := tx.Commit(); cerr != nil {
+			return nil, cerr
+		}
+		return sess, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	sess := row.toDomain()
+	return &sess, nil
+}
+
 // GetActiveAgentWide returns the agent's active session that is NOT scoped to
 // any task (task_id IS NULL), or nil if none exists. Deliberately filters on
 // task_id IS NULL rather than just "the agent's latest active session,
@@ -462,7 +557,7 @@ func (r *SessionRepo) GetTaskCostSummary(ctx context.Context, taskID uuid.UUID) 
 // terminated.
 //
 // Filters on last_activity_at, NOT started_at (fixed 2026-09-15, task
-// #872f82a2): a fiddler lane's session can legitimately stay active for many
+// this change): a fiddler lane's session can legitimately stay active for many
 // hours across a single long task, and closing it purely for being OLD —
 // while tool calls keep landing on it — force-ends still-live work and
 // starts an uncosted successor session on the very next tool call (see

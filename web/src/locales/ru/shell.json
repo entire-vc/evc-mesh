@@ -64,7 +64,8 @@
     "userMenu": {
       "userFallback": "Пользователь",
       "logOut": "Выйти",
-      "profile": "Открыть профиль"
+      "profile": "Открыть профиль",
+      "notifications": "Уведомления"
     },
     "toggleSidebar": "Свернуть или развернуть панель",
     "breadcrumbs": "Навигация по разделам"

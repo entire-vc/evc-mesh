@@ -293,7 +293,7 @@ func (r *MemoryRepo) ListRevisions(ctx context.Context, memoryID uuid.UUID, limi
 	}
 	var rows []domain.MemoryRevision
 	err := r.db.SelectContext(ctx, &rows, `
-		SELECT id, memory_id, version, content, tags, action, reason, actor_agent_id, created_at, workspace_id
+		SELECT id, memory_id, version, content, tags, action, reason, actor_agent_id, actor_user_id, created_at, workspace_id
 		FROM memory_revisions
 		WHERE memory_id = $1
 		ORDER BY version DESC
@@ -356,7 +356,27 @@ func (r *MemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory,
 // archived = false` sites) — NOT `status = 'active'`, which would wrongly
 // exclude `review_needed` rows that reads still surface as live (see F2).
 func (r *MemoryRepo) GetByKey(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error) {
-	const currentPredicate = "status != 'superseded' AND archived = false"
+	return r.getByKeyWhere(ctx, workspaceID, projectID, agentID, key, scope, "status != 'superseded' AND archived = false")
+}
+
+// handArchivedPredicate matches a row whose latest archive-state revision is a
+// hand archive. A row archived only by automation (supersede, checkpoint ageing)
+// has no such revision and is not matched: a remember on its key keeps creating
+// a fresh live row, exactly as before this change.
+const handArchivedPredicate = `status != 'superseded' AND archived = true
+	  AND (SELECT r.action FROM memory_revisions r
+	       WHERE r.memory_id = memories.id AND r.action IN ('archived', 'unarchived')
+	       ORDER BY r.version DESC LIMIT 1) = 'archived'`
+
+// GetHandArchivedByKey returns the hand-archived memory at this natural key
+// (same identity rules as GetByKey), or nil. Remember uses it so that writing to
+// an archived key updates that row and keeps it archived, instead of creating a
+// live duplicate beside it.
+func (r *MemoryRepo) GetHandArchivedByKey(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error) {
+	return r.getByKeyWhere(ctx, workspaceID, projectID, agentID, key, scope, handArchivedPredicate)
+}
+
+func (r *MemoryRepo) getByKeyWhere(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID, key string, scope domain.MemoryScope, currentPredicate string) (*domain.Memory, error) {
 	var query string
 	args := []interface{}{workspaceID, key, scope}
 
@@ -1446,11 +1466,17 @@ func (r *MemoryRepo) DecayRelevance(ctx context.Context) (int64, error) {
 	return result.RowsAffected()
 }
 
-// CleanExpired deletes all memory rows whose expires_at is non-null and in the past.
-// Returns the count of rows deleted.
+// CleanExpired deletes memory rows whose expires_at passed more than
+// domain.ExpiredMemoryGracePeriod ago. Returns the count of rows deleted.
+//
+// Expiry hides a memory at expires_at; the grace period is what makes
+// include_expired=true mean something. Deleting at expires_at itself (as this did
+// before this change) erased a row on the first 6-hourly run after it expired, so an
+// include_expired read minutes later could already find nothing.
 func (r *MemoryRepo) CleanExpired(ctx context.Context) (int64, error) {
+	cutoff := time.Now().Add(-domain.ExpiredMemoryGracePeriod)
 	result, err := r.db.ExecContext(ctx,
-		`DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at < now()`,
+		`DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at < $1`, cutoff,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("memory clean expired: %w", err)
@@ -2006,6 +2032,106 @@ func (r *MemoryRepo) FindByShortID(ctx context.Context, workspaceID uuid.UUID, p
 	}
 	m := row.toDomain()
 	return &m, nil
+}
+
+// SetArchivedWithRevision is the hand archive/unarchive: one transaction that
+// locks the row, flips archived, bumps version and records a revision with the
+// reason. Returns nil, nil when the memory does not exist. A memory already in the
+// requested state is left untouched (Changed=false, no revision).
+func (r *MemoryRepo) SetArchivedWithRevision(ctx context.Context, id uuid.UUID, archived bool, reason string, actorAgentID, actorUserID *uuid.UUID) (*domain.MemoryArchiveResult, error) {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	// A no-op after Commit; undoes everything on any early return.
+	defer func() { _ = tx.Rollback() }()
+
+	var row memoryRow
+	err = tx.GetContext(ctx, &row,
+		fmt.Sprintf(`SELECT %s FROM memories WHERE id = $1 FOR UPDATE`, memoryColumns), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	mem := row.toDomain()
+	if mem.Archived == archived {
+		if cerr := tx.Commit(); cerr != nil {
+			return nil, cerr
+		}
+		return &domain.MemoryArchiveResult{Memory: &mem, Changed: false}, nil
+	}
+
+	if uerr := tx.GetContext(ctx, &mem.Version,
+		`UPDATE memories SET archived = $2, version = version + 1, updated_at = NOW()
+		 WHERE id = $1 RETURNING version`, id, archived); uerr != nil {
+		return nil, uerr
+	}
+	mem.Archived = archived
+
+	action := domain.MemoryActionArchived
+	if !archived {
+		action = domain.MemoryActionUnarchived
+	}
+	var reasonArg *string
+	if t := strings.TrimSpace(reason); t != "" {
+		reasonArg = &t
+	}
+	tags := mem.Tags
+	if tags == nil {
+		tags = pq.StringArray{}
+	}
+	var revID uuid.UUID
+	if ierr := tx.GetContext(ctx, &revID, `
+		INSERT INTO memory_revisions (memory_id, version, content, tags, action, reason, actor_agent_id, actor_user_id, workspace_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+		mem.ID, mem.Version, mem.Content, tags, action, reasonArg, actorAgentID, actorUserID, mem.WorkspaceID); ierr != nil {
+		return nil, ierr
+	}
+	if cerr := tx.Commit(); cerr != nil {
+		return nil, cerr
+	}
+	version := mem.Version
+	return &domain.MemoryArchiveResult{Memory: &mem, Changed: true, RevisionID: &revID, RevisionVersion: &version}, nil
+}
+
+// ListByKey returns every memory whose key is exactly lookup.Key: live rows
+// first, then newest. Superseded rows are included (a key is an address);
+// archived and expired rows only when the lookup asks for them.
+func (r *MemoryRepo) ListByKey(ctx context.Context, lookup domain.MemoryKeyLookup) ([]domain.Memory, error) {
+	limit := lookup.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	args := []interface{}{lookup.WorkspaceID, lookup.Key}
+	conditions := []string{"workspace_id = $1", "key = $2"}
+	conditions = append(conditions, recallLifecycleConditions(domain.MemorySearchFilter{
+		IncludeExpired:    lookup.IncludeExpired,
+		IncludeArchived:   lookup.IncludeArchived,
+		IncludeSuperseded: true,
+	}, false)...)
+	if lookup.Scope != "" {
+		args = append(args, string(lookup.Scope))
+		conditions = append(conditions, fmt.Sprintf("scope = $%d", len(args)))
+	}
+	if lookup.ProjectID != nil {
+		args = append(args, *lookup.ProjectID)
+		conditions = append(conditions, fmt.Sprintf("project_id = $%d", len(args)))
+	}
+	args = append(args, limit)
+	q := fmt.Sprintf(`SELECT %s FROM memories WHERE %s
+		ORDER BY archived ASC, (status = 'superseded') ASC, updated_at DESC
+		LIMIT $%d`, memoryColumns, joinAnd(conditions), len(args))
+	var rows []memoryRow
+	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
+		return nil, fmt.Errorf("memory list by key: %w", err)
+	}
+	out := make([]domain.Memory, len(rows))
+	for i := range rows {
+		out[i] = rows[i].toDomain()
+	}
+	return out, nil
 }
 
 // SetArchived sets the archived flag on a memory by ID.

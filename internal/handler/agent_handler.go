@@ -932,6 +932,10 @@ type reportSessionRequest struct {
 // a new active session if none exists. Intended to be called by the dispatcher
 // after reaping an agent spawn (with usage summed from the spawn's session log),
 // using the agent's own API key for auth.
+//
+// The addition is one atomic statement (SessionRepo.AddUsage). The route is
+// mounted behind the Idempotency middleware (docs/idempotency.md): a repeat
+// with the same Idempotency-Key adds nothing and gets the first answer.
 func (h *AgentHandler) ReportSession(c echo.Context) error {
 	if h.sessionRepo == nil {
 		return c.JSON(http.StatusNotImplemented, apierror.InternalError("session tracking not configured"))
@@ -961,59 +965,22 @@ func (h *AgentHandler) ReportSession(c echo.Context) error {
 		}
 	}
 
-	// Look up an existing active session scoped to this task (when provided), or
-	// fall back to the agent-wide active session for backward-compat with untagged reports.
-	var active *domain.AgentSession
-	var err error
-	if reqTaskID != nil {
-		active, err = h.sessionRepo.GetActiveForTask(ctx, agentID, *reqTaskID)
-	} else {
-		active, err = h.sessionRepo.GetActiveAgentWide(ctx, agentID)
+	agent, gerr := h.agentService.GetByID(ctx, agentID)
+	if gerr != nil {
+		return handleError(c, gerr)
 	}
-	if err != nil {
-		return handleError(c, err)
+	if agent == nil {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("Agent"))
 	}
 
-	if active == nil {
-		// No active session — resolve the agent's workspace and create one,
-		// seeded with this report's usage.
-		agent, gerr := h.agentService.GetByID(ctx, agentID)
-		if gerr != nil {
-			return handleError(c, gerr)
-		}
-		if agent == nil {
-			return c.JSON(http.StatusNotFound, apierror.NotFound("Agent"))
-		}
-		active = &domain.AgentSession{
-			ID:            uuid.New(),
-			AgentID:       agentID,
-			WorkspaceID:   agent.WorkspaceID,
-			TaskID:        reqTaskID,
-			StartedAt:     time.Now(),
-			Status:        domain.AgentSessionStatusActive,
-			ModelUsed:     req.Model,
-			TokensIn:      req.TokensIn,
-			TokensOut:     req.TokensOut,
-			EstimatedCost: req.EstimatedCost,
-		}
-		if err := h.sessionRepo.Create(ctx, active); err != nil {
-			return handleError(c, err)
-		}
-	} else {
-		// Additive: accumulate this spawn's totals onto the existing active session.
-		active.TokensIn += req.TokensIn
-		active.TokensOut += req.TokensOut
-		active.EstimatedCost += req.EstimatedCost
-		if req.Model != "" {
-			active.ModelUsed = req.Model // latest model wins
-		}
-		// Only set task_id on the first report that carries one; never overwrite.
-		if active.TaskID == nil && reqTaskID != nil {
-			active.TaskID = reqTaskID
-		}
-		if err := h.sessionRepo.Update(ctx, active); err != nil {
-			return handleError(c, err)
-		}
+	// One atomic addition onto the task-scoped (or, without task_id, the
+	// agent-wide) active session, created when none exists: concurrent reports
+	// sum exactly. A retry with an Idempotency-Key never reaches this call
+	// twice (middleware replays the first answer).
+	active, err := h.sessionRepo.AddUsage(ctx, agentID, agent.WorkspaceID, reqTaskID,
+		req.TokensIn, req.TokensOut, req.EstimatedCost, req.Model)
+	if err != nil {
+		return handleError(c, err)
 	}
 
 	// Merge client-reported tool_breakdown, if any, onto whichever session

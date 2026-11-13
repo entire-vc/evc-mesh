@@ -30,6 +30,9 @@ func (minimalAgentSessionRepoStub) Update(ctx context.Context, session *domain.A
 func (minimalAgentSessionRepoStub) GetActiveAgentWide(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error) {
 	return nil, nil
 }
+func (minimalAgentSessionRepoStub) AddUsage(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, tokensIn, tokensOut int64, cost float64, model string) (*domain.AgentSession, error) {
+	return &domain.AgentSession{AgentID: agentID, WorkspaceID: workspaceID, TaskID: taskID, TokensIn: tokensIn, TokensOut: tokensOut, EstimatedCost: cost, ModelUsed: model}, nil
+}
 func (minimalAgentSessionRepoStub) GetActiveForTask(ctx context.Context, agentID, taskID uuid.UUID) (*domain.AgentSession, error) {
 	return nil, nil
 }

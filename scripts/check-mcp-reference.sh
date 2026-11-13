@@ -20,6 +20,12 @@
 # on every evc-mesh MR until the next export was merged (a review, Mesh an internal ticket).
 #
 # Set MCP_SERVER_GO to a local checkout's internal/mcp/server.go to run offline.
+# Set MCP_REF_SOURCE_OUT=<dir> to keep the server source read and the registered tool list
+# (registered.txt) there: scripts/sync-mcp-reference.py writes the sync from them.
+#
+# Exit codes: 0 match, 1 mismatch (the page or README must change), 2 refusal (the source
+# could not be fetched or parsed: nothing was compared). The scheduled sync job opens an MR
+# on 1 only.
 #
 # Usage:  ./scripts/check-mcp-reference.sh [path/to/mcp-reference.md] [path/to/README.md]
 set -euo pipefail
@@ -31,7 +37,7 @@ CANON_API="${MCP_CANON_API:-${CI_API_V4_URL:-https://gitlab.example.invalid/api/
 CANON_REF="${MCP_CANON_REF:-main}"
 CANON_DIR="internal%2Fmcp%2F"
 
-[[ -f "$DOC" ]] || { echo "ERROR: $DOC not found." >&2; exit 1; }
+[[ -f "$DOC" ]] || { echo "ERROR: $DOC not found." >&2; exit 2; }
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -49,18 +55,18 @@ CONST_FILES=(decision_tool_names.go)
 LEGACY_ALIASES=(pavel_decision)
 
 if [[ -n "${MCP_SERVER_GO:-}" ]]; then
-    [[ -f "$MCP_SERVER_GO" ]] || { echo "ERROR: MCP_SERVER_GO='$MCP_SERVER_GO' not found." >&2; exit 1; }
+    [[ -f "$MCP_SERVER_GO" ]] || { echo "ERROR: MCP_SERVER_GO='$MCP_SERVER_GO' not found." >&2; exit 2; }
     cp "$MCP_SERVER_GO" "$tmp/server.go"
     for f in "${CONST_FILES[@]}"; do
         src="$(dirname "$MCP_SERVER_GO")/$f"
-        [[ -f "$src" ]] || { echo "ERROR: $src not found (expected next to MCP_SERVER_GO)." >&2; exit 1; }
+        [[ -f "$src" ]] || { echo "ERROR: $src not found (expected next to MCP_SERVER_GO)." >&2; exit 2; }
         cp "$src" "$tmp/$f"
     done
 else
     if [[ -z "${CI_JOB_TOKEN:-}" && -z "${MCP_CANON_TOKEN:-}" ]]; then
         echo "ERROR: no credentials for the canon repository (CI_JOB_TOKEN / MCP_CANON_TOKEN unset)." >&2
         echo "       Set MCP_SERVER_GO=/path/to/evc-mesh-mcp/internal/mcp/server.go to run offline." >&2
-        exit 1
+        exit 2
     fi
     if [[ -n "${MCP_CANON_TOKEN:-}" ]]; then
         auth=(--header "PRIVATE-TOKEN: $MCP_CANON_TOKEN")
@@ -72,7 +78,7 @@ else
         if ! curl -fsSL --max-time 30 "${auth[@]}" "$CANON_API/${CANON_DIR}$1/raw?ref=$CANON_REF" -o "$tmp/$1"; then
             echo "ERROR: could not fetch internal/mcp/$1 from canon (ref $CANON_REF)." >&2
             echo "       Set MCP_SERVER_GO=/path/to/evc-mesh-mcp/internal/mcp/server.go to run offline." >&2
-            exit 1
+            exit 2
         fi
     }
     fetch_canon server.go
@@ -93,7 +99,7 @@ for ident in $idents; do
     if [[ -z "$name" ]]; then
         echo "ERROR: server.go registers NewTool($ident, ...), but no '$ident = \"...\"' was found in" >&2
         echo "       server.go or ${CONST_FILES[*]}. Add the file that declares it to CONST_FILES." >&2
-        exit 1
+        exit 2
     fi
     echo "$name" >> "$tmp/registered_raw"
 done
@@ -107,7 +113,13 @@ n_registered=$(wc -l < "$tmp/registered" | tr -d ' ')
 if [[ "$n_registered" -lt 10 ]]; then
     echo "ERROR: found only $n_registered tools in the server source — the file is not what" >&2
     echo "       this check expects. Refusing rather than reporting a spurious mismatch." >&2
-    exit 1
+    exit 2
+fi
+
+if [[ -n "${MCP_REF_SOURCE_OUT:-}" ]]; then
+    mkdir -p "$MCP_REF_SOURCE_OUT"
+    cp "$tmp"/*.go "$MCP_REF_SOURCE_OUT/"
+    cp "$tmp/registered" "$MCP_REF_SOURCE_OUT/registered.txt"
 fi
 
 # ── the page's catalogue ─────────────────────────────────────────────────────
@@ -182,6 +194,8 @@ if [[ "$fail" -ne 0 ]]; then
     echo >&2
     echo "The MCP tools live in evc-mesh-mcp; this page is this repo's copy of their catalogue." >&2
     echo "A tool added or removed there is a change to $DOC as well." >&2
+    echo "Fix: MCP_REF_SOURCE_OUT=/tmp/mcp-src $0 && python3 scripts/sync-mcp-reference.py /tmp/mcp-src" >&2
+    echo "(on main the daily mcp-reference-sync-mr job opens that MR by itself)." >&2
     exit 1
 fi
 

@@ -553,6 +553,8 @@ var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/projects/:proj_id/chat/attachments/:attachment_id/download":                          true, // the repo resolves the attachment through its thread with project_id = :proj_id and user_id = caller; anyone else gets 404
 	"/api/v1/memories/:id/related":                                                                true,
 	"/api/v1/memories/:id/revisions":                                                              true,
+	"/api/v1/memories/:id/archive":                                                                true, // MemoryHandler.setArchived resolves the memory and answers 404 unless the caller belongs to its workspace, before anything is written
+	"/api/v1/memories/:id/unarchive":                                                              true, // same handler and check as /archive
 	"/api/v1/notifications/preferences/:pref_id":                                                  true,
 	"/api/v1/oauth/grants/:oauth_grant_id":                                                        true,
 	"/api/v1/workspaces/:ws_id/extensions/:ext_id":                                                true,

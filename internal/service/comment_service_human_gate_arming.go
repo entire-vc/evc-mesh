@@ -1,6 +1,7 @@
 package service
 
 import (
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -10,8 +11,8 @@ import (
 )
 
 // recommendedDefaultRegex matches the OPTIONAL line by which a marker's author states
-// what they will do if nobody answers — the field task #4545660b puts on the task so a
-// reader never has to open the comments to find it, and the field task #060ccaae's
+// what they will do if nobody answers — the field the regression puts on the task so a
+// reader never has to open the comments to find it, and the field the regression's
 // default-on-timeout sweep consumes.
 //
 // Both languages are listed because markers are written in both across the fleet, and a
@@ -108,15 +109,24 @@ func truncateGateReason(s string) string {
 // requests. gate_author is the comment's AUTHENTICATED author — comment_handler.go
 // derives AuthorID/AuthorType from the identity on the request, so this is not
 // forgeable by editing the body, unlike everything the old text-grepping clients read.
+//
+// The default is markerDefault's: the one the ask itself states wins over a "Default:"
+// line elsewhere in the comment's context. The class is markerGateClass's verdict
+// : a question no hard rule
+// matches, with a default its author stated, arms soft so that default applies at the
+// deadline; everything else arms hard.
 func armInputFromMarker(comment *domain.Comment, task *domain.Task, slug string) domain.ArmHumanGateInput {
+	class, rule := markerGateClass(comment.Body, slug, task.Labels)
+	log.Printf("[human-gate] task %s: marker to @%s arms %s (%s)", task.ID, slug, class, rule)
 	return domain.ArmHumanGateInput{
 		TaskID:             task.ID,
 		Author:             comment.AuthorID,
 		AuthorType:         comment.AuthorType,
 		Reason:             gateReasonFromMarker(comment.Body, slug),
-		RecommendedDefault: extractRecommendedDefault(comment.Body),
+		RecommendedDefault: markerDefault(comment.Body, slug),
 		Deadline:           extractGateDeadline(comment.Body),
-		Class:              blockingMarkerClassForSlug(comment.Body, slug),
+		Class:              class,
 		Source:             domain.ArmHumanGateSourceMarker,
+		SourceCommentID:    comment.ID,
 	}
 }

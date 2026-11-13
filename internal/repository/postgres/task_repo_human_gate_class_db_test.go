@@ -15,7 +15,7 @@ import (
 )
 
 // TestTaskRepo_SetHumanGate_ArmDefaultsClassHard proves acceptance criterion 3
-// (contract docs/human-gate-decision-recorded.md §5, task #b1d5c742): a task armed
+// (contract docs/human-gate-decision-recorded.md §5, the regression): a task armed
 // through the ordinary flow — no prior SetHumanGateClass call, i.e. a "живая
 // немаркированная карточка" — ends up human_gate_class='hard', fail-closed, and
 // human_gate_armed_at gets stamped.
@@ -150,4 +150,164 @@ func TestTaskRepo_FindSoftTimedOutGates_RespectsCutoffAndLiveFlag(t *testing.T) 
 	assert.True(t, ids[dueID], "armed decades ago, still live, soft → due")
 	assert.False(t, ids[notYetDueID], "armed moments ago → not due yet")
 	assert.False(t, ids[alreadyReleasedID], "human_gate already false → must not be re-swept")
+}
+
+// TestTaskRepo_ListMarkerArmedHardGateIDs lists exactly the live hard gates whose
+// recorded arm source is a marker: the input of the marker-gate reclassification (task
+// this change). A soft gate, a released one, an API arm and a raw PATCH flip (source
+// unrecorded) are not in it.
+func TestTaskRepo_ListMarkerArmedHardGateIDs(t *testing.T) {
+	db := testDB(t)
+	_, proj, status := createTestProject(t, db)
+	repo := NewTaskRepo(db)
+	ctx := context.Background()
+
+	marker := createTestTaskForComments(t, repo, proj.ID, status.ID)
+	api := createTestTaskForComments(t, repo, proj.ID, status.ID)
+	soft := createTestTaskForComments(t, repo, proj.ID, status.ID)
+	released := createTestTaskForComments(t, repo, proj.ID, status.ID)
+	rearmed := createTestTaskForComments(t, repo, proj.ID, status.ID)
+	for id, arm := range map[uuid.UUID]struct {
+		class  domain.HumanGateClass
+		source domain.ArmHumanGateSource
+	}{
+		marker:   {domain.HumanGateClassHard, domain.ArmHumanGateSourceMarker},
+		api:      {domain.HumanGateClassHard, domain.ArmHumanGateSourceAPI},
+		soft:     {domain.HumanGateClassSoft, domain.ArmHumanGateSourceMarker},
+		released: {domain.HumanGateClassHard, domain.ArmHumanGateSourceMarker},
+		rearmed:  {domain.HumanGateClassHard, domain.ArmHumanGateSourceMarker},
+	} {
+		require.NoError(t, repo.ArmHumanGate(ctx, domain.ArmHumanGateInput{
+			TaskID: id, Author: uuid.New(), AuthorType: domain.ActorTypeAgent, Reason: "why",
+			RecommendedDefault: "go on", Class: arm.class, Source: arm.source,
+		}))
+	}
+	require.NoError(t, repo.SetHumanGate(ctx, released, false))
+	// Released, then flipped back on by a raw PATCH: the old marker source is gone.
+	require.NoError(t, repo.SetHumanGate(ctx, rearmed, false))
+	got, err := repo.GetByID(ctx, rearmed)
+	require.NoError(t, err)
+	got.HumanGate = true
+	require.NoError(t, repo.Update(ctx, got))
+
+	// Walk it one row per page, as the reconciliation walks it: every page is reached.
+	seen := map[uuid.UUID]bool{}
+	after := uuid.Nil
+	for {
+		ids, err := repo.ListMarkerArmedHardGateIDs(ctx, after, 1)
+		require.NoError(t, err)
+		require.LessOrEqual(t, len(ids), 1)
+		if len(ids) == 0 {
+			break
+		}
+		require.NotContains(t, seen, ids[0], "keyset pages never repeat a row")
+		seen[ids[0]] = true
+		after = ids[0]
+	}
+	assert.True(t, seen[marker])
+	assert.NotContains(t, seen, api, "an API arm is never reclassified")
+	assert.NotContains(t, seen, soft)
+	assert.NotContains(t, seen, released)
+	assert.NotContains(t, seen, rearmed, "a raw PATCH arm has no recorded source")
+}
+
+// TestTaskRepo_ReclassifyHumanGateSoft moves a live hard gate to soft with the ask's own
+// default in one statement, only while the recorded arm source is a marker and author and
+// reason are the ones the caller checked; never an API arm, an unrecorded source, a soft
+// gate or a released one.
+func TestTaskRepo_ReclassifyHumanGateSoft(t *testing.T) {
+	db := testDB(t)
+	_, proj, status := createTestProject(t, db)
+	repo := NewTaskRepo(db)
+	ctx := context.Background()
+	marker := domain.ArmHumanGateSourceMarker
+	// The marker comment the arms below come from; the reclassification names it.
+	ask := uuid.New()
+
+	hard := createTestTaskForComments(t, repo, proj.ID, status.ID)
+	released := createTestTaskForComments(t, repo, proj.ID, status.ID)
+	api := createTestTaskForComments(t, repo, proj.ID, status.ID)
+	unrecorded := createTestTaskForComments(t, repo, proj.ID, status.ID)
+	author := uuid.New()
+	for id, source := range map[uuid.UUID]domain.ArmHumanGateSource{hard: marker, released: marker, api: domain.ArmHumanGateSourceAPI, unrecorded: marker} {
+		require.NoError(t, repo.ArmHumanGate(ctx, domain.ArmHumanGateInput{
+			TaskID: id, Author: author, AuthorType: domain.ActorTypeAgent, Reason: "why",
+			RecommendedDefault: "a context default", Class: domain.HumanGateClassHard, Source: source, SourceCommentID: ask,
+		}))
+	}
+	require.NoError(t, repo.SetHumanGate(ctx, released, false))
+
+	// An API arm with the very author and reason a marker would have: never.
+	_, ok, err := repo.ReclassifyHumanGateSoft(ctx, api, author, ask, "why", "x")
+	require.NoError(t, err)
+	assert.False(t, ok, "API arm")
+
+	// No recorded source, author and reason intact: a gate armed before the column
+	// existed. Nothing proves a marker armed it, so it stays hard.
+	_, err = db.ExecContext(ctx, `UPDATE tasks SET human_gate_source = NULL WHERE id = $1`, unrecorded)
+	require.NoError(t, err)
+	_, ok, err = repo.ReclassifyHumanGateSoft(ctx, unrecorded, author, ask, "why", "x")
+	require.NoError(t, err)
+	assert.False(t, ok, "unrecorded source")
+
+	// A re-arm between the caller's read and the UPDATE: another author or reason, or a
+	// newer re-ask by the same author with the same reason (another marker comment).
+	_, ok, err = repo.ReclassifyHumanGateSoft(ctx, hard, author, uuid.New(), "why", "x")
+	require.NoError(t, err)
+	assert.False(t, ok, "another marker comment")
+	_, ok, err = repo.ReclassifyHumanGateSoft(ctx, hard, uuid.New(), ask, "why", "x")
+	require.NoError(t, err)
+	assert.False(t, ok, "another author")
+	_, ok, err = repo.ReclassifyHumanGateSoft(ctx, hard, author, ask, "another reason", "x")
+	require.NoError(t, err)
+	assert.False(t, ok, "another reason")
+
+	_, ok, err = repo.ReclassifyHumanGateSoft(ctx, hard, author, ask, "why", "the ask's own default")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	got, err := repo.GetByID(ctx, hard)
+	require.NoError(t, err)
+	assert.Equal(t, domain.HumanGateClassSoft, got.HumanGateClass)
+	require.NotNil(t, got.RecommendedDefault)
+	assert.Equal(t, "the ask's own default", *got.RecommendedDefault)
+
+	_, ok, err = repo.ReclassifyHumanGateSoft(ctx, hard, author, ask, "why", "again")
+	require.NoError(t, err)
+	assert.False(t, ok, "already soft")
+	_, ok, err = repo.ReclassifyHumanGateSoft(ctx, released, author, ask, "why", "x")
+	require.NoError(t, err)
+	assert.False(t, ok, "gate released")
+
+	// Armed with no default, so no deadline: the reclassification gives it armed_at +
+	// the default window, or the default-on-timeout sweep would never reach it.
+	nodef := createTestTaskForComments(t, repo, proj.ID, status.ID)
+	require.NoError(t, repo.ArmHumanGate(ctx, domain.ArmHumanGateInput{
+		TaskID: nodef, Author: author, AuthorType: domain.ActorTypeAgent, Reason: "why",
+		Class: domain.HumanGateClassHard, Source: marker, SourceCommentID: ask,
+	}))
+	before, err := repo.GetByID(ctx, nodef)
+	require.NoError(t, err)
+	require.Nil(t, before.GateDeadline)
+	require.NotNil(t, before.HumanGateArmedAt)
+	deadline, ok, err := repo.ReclassifyHumanGateSoft(ctx, nodef, author, ask, "why", "the inline default")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotNil(t, deadline)
+	assert.WithinDuration(t, before.HumanGateArmedAt.Add(DefaultGateTimeoutHours*time.Hour), *deadline, time.Second)
+	after, err := repo.GetByID(ctx, nodef)
+	require.NoError(t, err)
+	require.NotNil(t, after.GateDeadline)
+	assert.WithinDuration(t, *deadline, *after.GateDeadline, time.Millisecond)
+
+	// An existing deadline is kept.
+	keep := createTestTaskForComments(t, repo, proj.ID, status.ID)
+	fixed := time.Now().Add(72 * time.Hour).UTC().Truncate(time.Second)
+	require.NoError(t, repo.ArmHumanGate(ctx, domain.ArmHumanGateInput{
+		TaskID: keep, Author: author, AuthorType: domain.ActorTypeAgent, Reason: "why",
+		RecommendedDefault: "x", Deadline: &fixed, Class: domain.HumanGateClassHard, Source: marker, SourceCommentID: ask,
+	}))
+	deadline, ok, err = repo.ReclassifyHumanGateSoft(ctx, keep, author, ask, "why", "y")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.WithinDuration(t, fixed, *deadline, time.Second)
 }

@@ -46,6 +46,8 @@ export interface RuntimeRoutingPolicy {
   primary_profiles: string[];
   quota_edges: Record<string, string[]>;
   preferred_accounts: Record<string, string>;
+  /** Per-binding model of a permitted profile, overriding the profile's own model. */
+  profile_models?: Record<string, string>;
   api_reserve_providers: string[];
   max_attempts: number;
   evidence_max_age_seconds: number;

@@ -63,6 +63,15 @@ A route outside the list, or one whose capability was not consented, answers
 routes that stay closed to extensions by design (deciding a human gate,
 checkout, workspace administration).
 
+A project's statuses are read with `GET /projects/:proj_id/statuses`
+(`projects:read`): the status array of the project, ordered by position, also
+for a project that has no tasks yet. `GET /tasks/:task_id/statuses`
+(`tasks:read`) answers the same for the project of a task. Creating, editing
+and reordering statuses (`POST /projects/:proj_id/statuses`, `PATCH
+/projects/:proj_id/statuses/:status_id`, `PUT
+/projects/:proj_id/statuses/reorder`) stay closed to extensions: 403. A
+project-bound connection reads only the statuses of its bound projects.
+
 ## What is a breaking change
 
 Breaking, and raises `ExtensionsAPIVersion` (see [api-version.md](./api-version.md)):

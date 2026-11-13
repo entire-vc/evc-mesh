@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { useTranslation } from "react-i18next";
 import { Bell } from "lucide-react";
@@ -13,8 +13,10 @@ import { InAppTab } from "./in-app-tab";
 import { BrowserPushTab } from "./browser-push-tab";
 import { EmailTab } from "./email-tab";
 import { TelegramTab } from "./telegram-tab";
-import type { TabId } from "./constants";
+import { readScope, DEFAULT_SCOPE, type NotificationScope, type TabId } from "./constants";
 import { apiErrorMessage } from "@/lib/api-error";
+import { api } from "@/lib/api";
+import type { ExtensionStatusDto } from "@/hooks/useExtensionCatalog";
 
 const VALID_TABS: TabId[] = ["in-app", "push", "email", "telegram"];
 
@@ -61,6 +63,33 @@ export default function NotificationSettingsPage() {
       "document.mentioned", "task.blocking_triage", "task.reviewer_assigned", "task.ready_for_review",
     ]),
   );
+  // Subscription level per channel (config.scope); a missing value is `mine`.
+  const [scopes, setScopes] = useState<Record<string, NotificationScope>>({});
+  const scopeOf = (channel: string) => scopes[channel] ?? DEFAULT_SCOPE;
+  const setScope = (channel: string) => (scope: NotificationScope) =>
+    setScopes((prev) => ({ ...prev, [channel]: scope }));
+  // Keep the keys the row already has: a save replaces config as a whole. The
+  // API takes string values only, so anything else (e.g. telegram_chat_id,
+  // which the server owns) is not echoed back.
+  // While a channel cannot deliver (no SMTP, no bot) a scope-only save must not
+  // switch delivery on: keep whatever the stored preference says, off if none.
+  const storedEnabled = (channel: string) =>
+    preferences.find((p) => p.channel === channel && p.workspace_id === wsID)?.is_enabled ?? false;
+
+  const configFor = (channel: string, extra: Record<string, string> = {}) => {
+    const stored = preferences.find((p) => p.channel === channel && p.workspace_id === wsID)?.config ?? {};
+    const kept = Object.fromEntries(
+      Object.entries(stored).filter(([k, v]) => typeof v === "string" && !k.startsWith("telegram_")),
+    );
+    return { ...kept, ...extra, scope: scopeOf(channel) };
+  };
+  // "Saved" badges reset after 2s; the timers die with the page so a late one
+  // never touches an unmounted component.
+  const flashTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => flashTimers.current.forEach(clearTimeout), []);
+  const flashSaved = (reset: (v: boolean) => void) => {
+    flashTimers.current.push(setTimeout(() => reset(false), 2000));
+  };
   const [isEnabled, setIsEnabled] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -115,6 +144,20 @@ export default function NotificationSettingsPage() {
     void fetchEmailAvailability();
   }, [fetchEmailAvailability]);
 
+  // The Telegram extension's instance-level switch: the channel can look
+  // connected in this workspace while the instance administrator turned it off.
+  const [telegramInstanceDisabled, setTelegramInstanceDisabled] = useState(false);
+  useEffect(() => {
+    if (!wsID) return;
+    let live = true;
+    api<{ extensions?: { id: string; status?: ExtensionStatusDto }[] }>(`/api/v1/workspaces/${wsID}/extensions`)
+      .then((r) => {
+        if (live) setTelegramInstanceDisabled(r?.extensions?.find((e) => e.id === "telegram")?.status?.instance_disabled === true);
+      })
+      .catch(() => { if (live) setTelegramInstanceDisabled(false); });
+    return () => { live = false; };
+  }, [wsID]);
+
   useEffect(() => {
     if (wsID) void fetchTelegramBotInfo(wsID);
   }, [wsID, fetchTelegramBotInfo]);
@@ -161,9 +204,10 @@ export default function NotificationSettingsPage() {
         channel: 'browser_push',
         events: Array.from(pushEvents),
         is_enabled: pushSubscribed,
+        config: configFor("browser_push"),
       });
       setPushEventsSaved(true);
-      setTimeout(() => setPushEventsSaved(false), 2000);
+      flashSaved(setPushEventsSaved);
     } catch (err) {
       toast.error(
         apiErrorMessage(err, t("settings.toast.savePushFailed")),
@@ -184,6 +228,12 @@ export default function NotificationSettingsPage() {
     const webPushPref = preferences.find(
       (p) => p.channel === "web_push" && p.workspace_id === wsID,
     );
+    setScopes({
+      web_push: readScope(webPushPref?.config),
+      browser_push: readScope(preferences.find((p) => p.channel === "browser_push" && p.workspace_id === wsID)?.config),
+      email: readScope(preferences.find((p) => p.channel === "email" && p.workspace_id === wsID)?.config),
+      telegram: readScope(preferences.find((p) => p.channel === "telegram" && p.workspace_id === wsID)?.config),
+    });
     if (webPushPref) {
       setSelectedEvents(new Set(webPushPref.events));
       setIsEnabled(webPushPref.is_enabled);
@@ -257,9 +307,10 @@ export default function NotificationSettingsPage() {
         channel: "web_push",
         events: Array.from(selectedEvents),
         is_enabled: isEnabled,
+        config: configFor("web_push"),
       });
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      flashSaved(setSaved);
     } catch (err) {
       toast.error(
         apiErrorMessage(err, t("settings.toast.saveFailed")),
@@ -285,7 +336,10 @@ export default function NotificationSettingsPage() {
   const handleSaveEmail = async () => {
     if (!wsID) return;
     const trimmed = emailAddress.trim();
-    if (!trimmed) {
+    // Channel not available on this instance: only the subscription level can
+    // be saved (it applies once the channel is connected), so no address is
+    // required and delivery stays off until one is given.
+    if (!trimmed && emailAvailable) {
       toast.error(t("settings.toast.emailRequired"));
       return;
     }
@@ -296,11 +350,11 @@ export default function NotificationSettingsPage() {
         workspace_id: wsID,
         channel: "email",
         events: Array.from(emailEvents),
-        is_enabled: emailEnabled,
-        config: { email: trimmed },
+        is_enabled: emailAvailable ? emailEnabled : storedEnabled("email"),
+        config: configFor("email", trimmed ? { email: trimmed } : {}),
       });
       setEmailSaved(true);
-      setTimeout(() => setEmailSaved(false), 2000);
+      flashSaved(setEmailSaved);
     } catch (err) {
       toast.error(
         apiErrorMessage(err, t("settings.toast.saveEmailFailed")),
@@ -331,8 +385,9 @@ export default function NotificationSettingsPage() {
   const submitTelegram = async (unbind: boolean) => {
     if (!wsID) return;
     const trimmed = telegramUsername.trim();
-    const nextEnabled = unbind ? false : telegramEnabled;
-    if (nextEnabled && !trimmed) {
+    const botAvailable = telegramBotInfo?.available ?? false;
+    const nextEnabled = unbind ? false : botAvailable ? telegramEnabled : storedEnabled("telegram");
+    if (botAvailable && nextEnabled && !trimmed) {
       toast.error(t("settings.toast.telegramUsernameRequired"));
       return;
     }
@@ -345,7 +400,7 @@ export default function NotificationSettingsPage() {
         channel: "telegram",
         events: Array.from(telegramEvents),
         is_enabled: nextEnabled,
-        config: { telegram_username: trimmed },
+        config: configFor("telegram", trimmed ? { telegram_username: trimmed } : {}),
       });
       const cfg = updated.config as TelegramPreferenceConfig | undefined;
       setTelegramChatID(cfg?.telegram_chat_id ?? null);
@@ -359,7 +414,7 @@ export default function NotificationSettingsPage() {
         toast.success(t("settings.toast.telegramDisconnected"));
       } else {
         setTelegramSaved(true);
-        setTimeout(() => setTelegramSaved(false), 2000);
+        flashSaved(setTelegramSaved);
       }
     } catch (err) {
       toast.error(
@@ -398,6 +453,8 @@ export default function NotificationSettingsPage() {
 
       {activeTab === "in-app" && (
         <InAppTab
+          scope={scopeOf("web_push")}
+          onScopeChange={setScope("web_push")}
           isLoaded={isLoaded}
           isEnabled={isEnabled}
           setIsEnabled={setIsEnabled}
@@ -411,6 +468,8 @@ export default function NotificationSettingsPage() {
 
       {activeTab === "push" && (
         <BrowserPushTab
+          scope={scopeOf("browser_push")}
+          onScopeChange={setScope("browser_push")}
           pushPermission={pushPermission}
           pushSubscribed={pushSubscribed}
           pushLoading={pushLoading}
@@ -426,6 +485,8 @@ export default function NotificationSettingsPage() {
 
       {activeTab === "email" && (
         <EmailTab
+          scope={scopeOf("email")}
+          onScopeChange={setScope("email")}
           isLoaded={isLoaded}
           emailAvailable={emailAvailable}
           emailEnabled={emailEnabled}
@@ -443,6 +504,9 @@ export default function NotificationSettingsPage() {
 
       {activeTab === "telegram" && (
         <TelegramTab
+          instanceDisabled={telegramInstanceDisabled}
+          scope={scopeOf("telegram")}
+          onScopeChange={setScope("telegram")}
           telegramBotInfo={telegramBotInfo}
           telegramEnabled={telegramEnabled}
           setTelegramEnabled={setTelegramEnabled}

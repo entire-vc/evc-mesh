@@ -11,8 +11,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { TelegramBotInfo } from "@/types";
 import { Trans, useTranslation } from "react-i18next";
 import { NOTIFICATION_EVENTS } from "./constants";
+import { ScopeSelect } from "./scope-select";
+import type { NotificationScope } from "./constants";
 
 interface TelegramTabProps {
+  /** The instance administrator switched the Telegram extension off. */
+  instanceDisabled?: boolean;
+  scope: NotificationScope;
+  onScopeChange: (scope: NotificationScope) => void;
   telegramBotInfo: TelegramBotInfo | null;
   telegramEnabled: boolean;
   setTelegramEnabled: (updater: (prev: boolean) => boolean) => void;
@@ -44,6 +50,9 @@ export function TelegramTab({
   telegramUnbinding,
   onSave,
   onDisconnect,
+  scope,
+  onScopeChange,
+  instanceDisabled = false,
 }: TelegramTabProps) {
   const { t } = useTranslation("notifications");
   return (
@@ -58,22 +67,44 @@ export function TelegramTab({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {instanceDisabled && (
+          <div role="status" className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 p-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
+            <div>
+              <p className="font-medium">{t("settings.telegram.instanceDisabledTitle")}</p>
+              <p className="text-sm text-muted-foreground">{t("settings.telegram.instanceDisabledHint")}</p>
+            </div>
+          </div>
+        )}
+
         {!telegramBotInfo ? (
           <Skeleton className="h-16 w-full" />
         ) : !telegramBotInfo.available ? (
-          <div className="flex items-start gap-3 rounded-lg border border-border p-3">
-            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
-            <div>
-              <p className="font-medium">{t("settings.telegram.notConnectedTitle")}</p>
-              <p className="text-sm text-muted-foreground">
-                <Trans
-                  t={t}
-                  i18nKey="settings.telegram.notConnectedHint"
-                  components={{ b: <span className="font-medium" /> }}
-                />
-              </p>
+          <>
+            <div className="flex items-start gap-3 rounded-lg border border-border p-3">
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
+              <div>
+                <p className="font-medium">{t("settings.telegram.notConnectedTitle")}</p>
+                <p className="text-sm text-muted-foreground">
+                  <Trans
+                    t={t}
+                    i18nKey="settings.telegram.notConnectedHint"
+                    components={{ b: <span className="font-medium" /> }}
+                  />
+                </p>
+              </div>
             </div>
-          </div>
+            <ScopeSelect channel="telegram" value={scope} onChange={onScopeChange} />
+            <div className="flex justify-end pt-2">
+              <Button onClick={onSave} disabled={telegramSaving} className="gap-2">
+                {telegramSaved ? (
+                  <><Check className="h-4 w-4" />{t("settings.actions.saved")}</>
+                ) : (
+                  <><Save className="h-4 w-4" />{telegramSaving ? t("settings.actions.saving") : t("settings.actions.save")}</>
+                )}
+              </Button>
+            </div>
+          </>
         ) : (
           <>
             {/* A configured bot on a host that cannot reach Telegram is the
@@ -171,6 +202,8 @@ export function TelegramTab({
                 </p>
               )}
             </div>
+
+            <ScopeSelect channel="telegram" value={scope} onChange={onScopeChange} />
 
             {/* Per-event toggles */}
             <div

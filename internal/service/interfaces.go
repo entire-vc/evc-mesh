@@ -404,6 +404,10 @@ type CommentService interface {
 	// system actor context; see comment_closed_task_followup.go for the
 	// error/outcome contract.
 	ReconcileClosedFollowUpPending(ctx context.Context) (delivered, retried, escalated int, err error)
+	// ReconcileMarkerGateClasses reclassifies soft every live marker gate armed
+	// hard that the current class rule calls soft; returns how
+	// many. See human_gate_reclassify.go.
+	ReconcileMarkerGateClasses(ctx context.Context) (int, error)
 }
 
 // UploadArtifactInput holds parameters for uploading an artifact.
@@ -1852,6 +1856,11 @@ type RememberResult struct {
 	// missing reason under MESH_MEMORY_REQUIRE_REASON=warn (see
 	// requireMemoryReasonMode). Empty when there is nothing to warn about.
 	Warning string
+	// Archived is true when the write landed on a hand-archived memory: the
+	// content was updated, the archive flag was kept. Hint then
+	// tells the caller how to bring the memory back into recall.
+	Archived bool
+	Hint     string
 }
 
 // MemoryService provides business logic for agent persistent memory.

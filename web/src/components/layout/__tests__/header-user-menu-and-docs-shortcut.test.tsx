@@ -59,8 +59,8 @@ const OPEN_TASK: Task = {
 
 const USER: User = {
   id: "u1",
-  email: "pavel@example.com",
-  name: "Pavel",
+  email: "alex@example.com",
+  name: "Alex",
   avatar_url: "",
   is_active: true,
   created_at: "2026-01-01T00:00:00Z",
@@ -80,6 +80,7 @@ function renderHeaderAt(path: string) {
           element={<Header onToggleSidebar={() => {}} />}
         />
         <Route path="w/:wsSlug/me" element={<div>PROFILE-SCREEN</div>} />
+        <Route path="w/:wsSlug/notifications" element={<div>NOTIFICATIONS-SCREEN</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -135,7 +136,7 @@ describe("Header — Docs tab on an open task", () => {
 describe("Header — user menu", () => {
   it("has no theme, language or app-access items: those live on the profile screen", () => {
     renderHeaderAt("/w/acme/p/team-a");
-    fireEvent.click(screen.getByRole("button", { name: "P" }));
+    fireEvent.click(screen.getByRole("button", { name: "A" }));
 
     expect(screen.getByRole("menuitem", { name: "Open profile" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Log out" })).toBeInTheDocument();
@@ -147,13 +148,22 @@ describe("Header — user menu", () => {
 
   it("the name and email entry opens /w/:ws/me", () => {
     renderHeaderAt("/w/acme/p/team-a");
-    fireEvent.click(screen.getByRole("button", { name: "P" }));
+    fireEvent.click(screen.getByRole("button", { name: "A" }));
 
     const item = screen.getByRole("menuitem", { name: "Open profile" });
-    expect(item).toHaveTextContent("Pavel");
-    expect(item).toHaveTextContent("pavel@example.com");
+    expect(item).toHaveTextContent("Alex");
+    expect(item).toHaveTextContent("alex@example.com");
     fireEvent.click(item);
 
     expect(screen.getByText("PROFILE-SCREEN")).toBeInTheDocument();
+  });
+
+  it("has a Notifications entry that opens /w/:ws/notifications, independent of the theme's topbar", () => {
+    renderHeaderAt("/w/acme/p/team-a");
+    fireEvent.click(screen.getByRole("button", { name: "A" }));
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Notifications" }));
+
+    expect(screen.getByText("NOTIFICATIONS-SCREEN")).toBeInTheDocument();
   });
 });

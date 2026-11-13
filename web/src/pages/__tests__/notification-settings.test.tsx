@@ -237,9 +237,15 @@ function mockApiByRoute(routes: {
   telegramBotUsername?: string;
   onSave?: (body: unknown) => void;
   onSaveResponse?: (body: unknown) => object;
+  telegramInstanceDisabled?: boolean;
 }) {
   mockedApi.mockImplementation(
     (url: string, opts?: { method?: string; body?: unknown }) => {
+      if (url.endsWith("/extensions")) {
+        return Promise.resolve({
+          extensions: [{ id: "telegram", status: { enabled: true, source: "workspace", instance_disabled: routes.telegramInstanceDisabled === true } }],
+        });
+      }
       if (url === "/api/v1/notifications/email-availability") {
         return Promise.resolve({ available: routes.available ?? true });
       }
@@ -309,6 +315,9 @@ describe("NotificationSettingsPage — Email channel", () => {
       expect(screen.getByText("Email notifications are not available")).toBeInTheDocument(),
     );
     expect(screen.queryByLabelText("Email address")).not.toBeInTheDocument();
+    // The subscription level is still choosable and savable before the channel is connected.
+    expect(screen.getByRole("radio", { name: /Only my tasks/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Save preferences/ })).toBeInTheDocument();
   });
 
   it("marks the Email tab itself as unavailable when SMTP is not configured", async () => {
@@ -354,6 +363,8 @@ describe("NotificationSettingsPage — Telegram channel", () => {
       expect(screen.getByText("Telegram is not connected")).toBeInTheDocument(),
     );
     expect(screen.queryByLabelText("Telegram username")).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Only my tasks/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Save preferences/ })).toBeInTheDocument();
   });
 
   it("marks the Telegram tab itself as unavailable when no bot is connected", async () => {
@@ -443,5 +454,184 @@ describe("NotificationSettingsPage — Telegram channel", () => {
       config: { telegram_username: "alice" },
       workspace_id: "ws1",
     });
+  });
+});
+
+describe("NotificationSettingsPage — subscription scope", () => {
+  const scopeRadio = (name: RegExp) => screen.getByRole("radio", { name });
+
+  it("shows `mine` for a row without config.scope", async () => {
+    mockApiByRoute({
+      preferences: [pref({ channel: "email", config: { email: "a@b.co" } })],
+    });
+    renderPage();
+    switchToTab(/Email/);
+    await waitFor(() =>
+      expect(scopeRadio(/Only my tasks/)).toHaveAttribute("aria-checked", "true"),
+    );
+    expect(scopeRadio(/All workspace events/)).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("saves config.scope=all on the email tab and keeps the other config keys", async () => {
+    let savedBody: unknown;
+    mockApiByRoute({
+      preferences: [pref({ channel: "email", config: { email: "a@b.co", digest: "daily" } })],
+      onSave: (b) => { savedBody = b; },
+    });
+    renderPage();
+    switchToTab(/Email/);
+    await waitFor(() => expect(screen.getByLabelText("Email address")).toHaveValue("a@b.co"));
+
+    fireEvent.click(scopeRadio(/All workspace events/));
+    fireEvent.click(screen.getByRole("button", { name: /Save preferences/ }));
+
+    await waitFor(() => expect(savedBody).toBeDefined());
+    expect(savedBody).toMatchObject({
+      channel: "email",
+      config: { email: "a@b.co", digest: "daily", scope: "all" },
+    });
+  });
+
+  it("saves config.scope on the telegram tab without echoing the server-owned chat id back", async () => {
+    let savedBody: { config?: Record<string, unknown> } | undefined;
+    mockApiByRoute({
+      preferences: [pref({ channel: "telegram", config: { telegram_username: "alice", telegram_chat_id: 555, scope: "mentions" } })],
+      telegramAvailable: true,
+      telegramBotUsername: "mesh_bot",
+      onSave: (b) => { savedBody = b as typeof savedBody; },
+    });
+    renderPage();
+    switchToTab(/Telegram/);
+    await waitFor(() => expect(scopeRadio(/Mentions and assignments only/)).toHaveAttribute("aria-checked", "true"));
+
+    fireEvent.click(scopeRadio(/All workspace events/));
+    fireEvent.click(screen.getByRole("button", { name: /Save preferences/ }));
+
+    await waitFor(() => expect(savedBody).toBeDefined());
+    // The API takes string values only; chat_id is written by the bot's /start, never by this form.
+    expect(savedBody?.config).toEqual({ telegram_username: "alice", scope: "all" });
+  });
+
+  it("saves config.scope on the in-app and browser push tabs", async () => {
+    const bodies: { channel: string; config?: Record<string, unknown> }[] = [];
+    mockApiByRoute({ preferences: [], onSave: (b) => { bodies.push(b as (typeof bodies)[number]); } });
+    renderPage();
+
+    fireEvent.click(scopeRadio(/Mentions and assignments only/));
+    fireEvent.click(screen.getByRole("button", { name: /Save preferences/ }));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0]).toMatchObject({ channel: "web_push", config: { scope: "mentions" } });
+
+    switchToTab(/Browser/);
+    await waitFor(() => expect(scopeRadio(/All workspace events/)).toBeInTheDocument());
+    fireEvent.click(scopeRadio(/All workspace events/));
+    fireEvent.click(screen.getByRole("button", { name: /Save preferences/ }));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]).toMatchObject({ channel: "browser_push", config: { scope: "all" } });
+  });
+
+  it("lets an unsubscribed browser choose and save a Browser Push scope", async () => {
+    mockedIsSubscribed.mockResolvedValue(false);
+    let savedBody: { channel?: string; is_enabled?: boolean; config?: Record<string, unknown> } | undefined;
+    mockApiByRoute({ preferences: [], onSave: (b) => { savedBody = b as typeof savedBody; } });
+    renderPage();
+    switchToTab(/Browser/);
+    await waitFor(() => expect(scopeRadio(/Mentions and assignments only/)).toBeInTheDocument());
+
+    fireEvent.click(scopeRadio(/Mentions and assignments only/));
+    fireEvent.click(screen.getByRole("button", { name: /Save preferences/ }));
+
+    await waitFor(() => expect(savedBody).toBeDefined());
+    expect(savedBody).toMatchObject({ channel: "browser_push", is_enabled: false, config: { scope: "mentions" } });
+  });
+
+  it("saves the email scope while the channel is unavailable, without requiring an address", async () => {
+    let savedBody: { channel?: string; is_enabled?: boolean; config?: Record<string, unknown> } | undefined;
+    mockApiByRoute({ preferences: [], available: false, onSave: (b) => { savedBody = b as typeof savedBody; } });
+    renderPage();
+    switchToTab(/Email/);
+    await waitFor(() => expect(screen.getByText("Email notifications are not available")).toBeInTheDocument());
+
+    fireEvent.click(scopeRadio(/All workspace events/));
+    fireEvent.click(screen.getByRole("button", { name: /Save preferences/ }));
+
+    await waitFor(() => expect(savedBody).toBeDefined());
+    // The account email prefills the address, but an unavailable channel must not be switched on by a scope save.
+    expect(savedBody).toMatchObject({ channel: "email", is_enabled: false, config: { scope: "all" } });
+  });
+
+  it("keeps a stored enabled email preference enabled when only the scope is saved on an unavailable channel", async () => {
+    let savedBody: { channel?: string; is_enabled?: boolean; config?: Record<string, unknown> } | undefined;
+    mockApiByRoute({
+      preferences: [pref({ channel: "email", is_enabled: true, config: { email: "a@b.co" } })],
+      available: false,
+      onSave: (b) => { savedBody = b as typeof savedBody; },
+    });
+    renderPage();
+    switchToTab(/Email/);
+    await waitFor(() => expect(screen.getByText("Email notifications are not available")).toBeInTheDocument());
+    fireEvent.click(scopeRadio(/Mentions and assignments only/));
+    fireEvent.click(screen.getByRole("button", { name: /Save preferences/ }));
+    await waitFor(() => expect(savedBody).toBeDefined());
+    expect(savedBody).toMatchObject({ channel: "email", is_enabled: true, config: { email: "a@b.co", scope: "mentions" } });
+  });
+
+  it("positive control: an available email channel still saves is_enabled:true", async () => {
+    let savedBody: { is_enabled?: boolean } | undefined;
+    mockApiByRoute({ preferences: [], onSave: (b) => { savedBody = b as typeof savedBody; } });
+    renderPage();
+    switchToTab(/Email/);
+    await waitFor(() => expect(screen.getByLabelText("Email address")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /Save preferences/ }));
+    await waitFor(() => expect(savedBody).toBeDefined());
+    expect(savedBody?.is_enabled).toBe(true);
+  });
+
+  it("saves the telegram scope while no bot is connected, with delivery left off and no username required", async () => {
+    let savedBody: { channel?: string; is_enabled?: boolean; config?: Record<string, unknown> } | undefined;
+    mockApiByRoute({ preferences: [], telegramAvailable: false, onSave: (b) => { savedBody = b as typeof savedBody; } });
+    renderPage();
+    switchToTab(/Telegram/);
+    await waitFor(() => expect(screen.getByText("Telegram is not connected")).toBeInTheDocument());
+
+    fireEvent.click(scopeRadio(/Mentions and assignments only/));
+    fireEvent.click(screen.getByRole("button", { name: /Save preferences/ }));
+
+    await waitFor(() => expect(savedBody).toBeDefined());
+    expect(savedBody).toMatchObject({ channel: "telegram", is_enabled: false, config: { scope: "mentions" } });
+    expect(savedBody?.config).not.toHaveProperty("telegram_username");
+  });
+
+  it("offers the scope choice on every channel tab", async () => {
+    mockApiByRoute({ preferences: [], telegramAvailable: true, telegramBotUsername: "bot" });
+    renderPage();
+    for (const tab of [/In-App/, /Browser/, /Email/, /Telegram/]) {
+      switchToTab(tab);
+      await waitFor(() => expect(scopeRadio(/Mentions and assignments only/)).toBeInTheDocument());
+    }
+  });
+});
+
+describe("NotificationSettingsPage — Telegram instance switch", () => {
+  it("shows the instance status even when the bot is not available", async () => {
+    mockApiByRoute({ preferences: [], telegramAvailable: false, telegramInstanceDisabled: true });
+    renderPage();
+    switchToTab(/Telegram/);
+    expect(await screen.findByText("Disabled at instance level")).toBeInTheDocument();
+    expect(screen.getByText(/not connected|not available|isn.t connected/i)).toBeInTheDocument();
+  });
+
+  it("says the extension is disabled at instance level, and says nothing when it is on", async () => {
+    mockApiByRoute({ preferences: [], telegramAvailable: true, telegramBotUsername: "bot", telegramInstanceDisabled: true });
+    const first = renderPage();
+    switchToTab(/Telegram/);
+    expect(await screen.findByText("Disabled at instance level")).toBeInTheDocument();
+    first.unmount();
+
+    mockApiByRoute({ preferences: [], telegramAvailable: true, telegramBotUsername: "bot" });
+    renderPage();
+    switchToTab(/Telegram/);
+    await screen.findByText("Enable Telegram notifications");
+    expect(screen.queryByText("Disabled at instance level")).not.toBeInTheDocument();
   });
 });

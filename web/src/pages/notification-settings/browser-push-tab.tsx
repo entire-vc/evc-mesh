@@ -9,8 +9,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "react-i18next";
 import { NOTIFICATION_EVENTS } from "./constants";
+import { ScopeSelect } from "./scope-select";
+import type { NotificationScope } from "./constants";
 
 interface BrowserPushTabProps {
+  scope: NotificationScope;
+  onScopeChange: (scope: NotificationScope) => void;
   pushPermission: NotificationPermission;
   pushSubscribed: boolean;
   pushLoading: boolean;
@@ -34,6 +38,8 @@ export function BrowserPushTab({
   pushEventsSaving,
   pushEventsSaved,
   onSavePushEvents,
+  scope,
+  onScopeChange,
 }: BrowserPushTabProps) {
   const { t } = useTranslation("notifications");
   return (
@@ -80,6 +86,9 @@ export function BrowserPushTab({
           )}
         </div>
 
+        {/* The scope is a standing preference like the event set: it can be chosen and saved before subscribing. */}
+        <ScopeSelect channel="push" value={scope} onChange={onScopeChange} />
+
         {/* Per-event toggles (only shown when subscribed) */}
         {pushSubscribed && (
           <>
@@ -110,21 +119,22 @@ export function BrowserPushTab({
                 </div>
               ))}
             </div>
-            <div className="flex justify-end pt-2">
-              <Button
-                onClick={onSavePushEvents}
-                disabled={pushEventsSaving}
-                className="gap-2"
-              >
-                {pushEventsSaved ? (
-                  <><Check className="h-4 w-4" />{t("settings.actions.saved")}</>
-                ) : (
-                  <><Save className="h-4 w-4" />{pushEventsSaving ? t('settings.actions.saving') : t('settings.actions.save')}</>
-                )}
-              </Button>
-            </div>
           </>
         )}
+
+        <div className="flex justify-end pt-2">
+          <Button
+            onClick={onSavePushEvents}
+            disabled={pushEventsSaving}
+            className="gap-2"
+          >
+            {pushEventsSaved ? (
+              <><Check className="h-4 w-4" />{t("settings.actions.saved")}</>
+            ) : (
+              <><Save className="h-4 w-4" />{pushEventsSaving ? t('settings.actions.saving') : t('settings.actions.save')}</>
+            )}
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );

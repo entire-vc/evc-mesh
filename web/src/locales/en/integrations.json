@@ -1391,6 +1391,8 @@
     },
     "errorUnknown": "The check failed without a message",
     "blockedNoReason": "no reason given",
-    "check": "Check"
+    "check": "Check",
+    "instanceDisabled": "Disabled at instance level",
+    "instanceDisabledNote": "The instance administrator has switched this extension off. The workspace connection is kept."
   }
 }

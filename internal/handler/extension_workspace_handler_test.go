@@ -1,6 +1,7 @@
 package handler_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/extensions/exttest"
 	"github.com/entire-vc/evc-mesh/internal/handler"
 	"github.com/entire-vc/evc-mesh/internal/service"
@@ -82,4 +84,57 @@ func TestExtensionWorkspaceHandler(t *testing.T) {
 	code, out = call(http.MethodPost, root+"/demo/connect", `{"consent":{"capabilities":["api:tasks.read","events:task.updated"]}}`)
 	assert.Equal(t, http.StatusCreated, code)
 	assert.Equal(t, "workspace", out["status"].(map[string]any)["source"])
+}
+
+type instanceOffHTTPStore struct{}
+
+func (instanceOffHTTPStore) InstanceSetting(context.Context, string) (*extensions.InstanceSetting, error) {
+	return &extensions.InstanceSetting{Enabled: false}, nil
+}
+
+// The list endpoint carries status.instance_disabled in its JSON: the UI reads
+// it to say "disabled at instance level" while the workspace row is enabled.
+func TestExtensionWorkspaceHandler_ListJSONReportsInstanceDisabled(t *testing.T) {
+	list := func(instance extensions.InstanceStore, connect bool) map[string]any {
+		fx, err := exttest.NewFixture(instance, false)
+		require.NoError(t, err)
+		h := handler.NewExtensionWorkspaceHandler(service.NewExtensionWorkspaceService(fx.Registry, fx.Integ, fx.Consents))
+		e := echo.New()
+		e.GET("/workspaces/:ws_id/extensions", h.List)
+		e.POST("/workspaces/:ws_id/extensions/:ext_id/connect", h.Connect)
+		root := "/workspaces/" + uuid.NewString() + "/extensions"
+		if connect {
+			req := httptest.NewRequest(http.MethodPost, root+"/demo/connect",
+				strings.NewReader(`{"settings":{"base_url":"https://x.example"},"consent":{"capabilities":["api:tasks.read","events:task.updated"]}}`))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+		}
+		req := httptest.NewRequest(http.MethodGet, root, http.NoBody)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code)
+		var out struct {
+			Extensions []struct {
+				ID     string         `json:"id"`
+				Status map[string]any `json:"status"`
+			} `json:"extensions"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out), rec.Body.String())
+		for _, it := range out.Extensions {
+			if it.ID == "demo" {
+				return it.Status
+			}
+		}
+		t.Fatalf("demo not in list: %s", rec.Body.String())
+		return nil
+	}
+
+	off := list(instanceOffHTTPStore{}, true)
+	assert.Equal(t, true, off["enabled"], "workspace row is enabled")
+	assert.Equal(t, true, off["instance_disabled"])
+
+	on := list(exttest.InstanceOn{}, true)
+	assert.NotContains(t, on, "instance_disabled", "an enabled instance reports nothing")
 }

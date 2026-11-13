@@ -44,7 +44,9 @@ var cyrillicLiteralAllowlist = map[string]string{
 	"comment_service.go:explicitNonWithdrawalMarkers":              "withdrawal dictionary",
 	"comment_service.go:repeatPingWords":                           "withdrawal dictionary",
 	"post_merge_ac.go:postMergeACPattern":                          "post-merge acceptance recognition regexp",
-	// Two handler messages still Russian; they belong to the L3.3 error-code work (card an internal ticket, a review).
+	"human_gate_ask_class.go:hardAskPatterns":                      "hard-ask recognition dictionary (mirrors the Runner's asks.py)",
+	"human_gate_ask_class.go:inlineDefaultRegex":                   "inline default recognition regexp (default keywords of recommendedDefaultRegex)",
+	// Two handler messages still Russian; they belong to the L3.3 error-code work.
 	"task_handler.go:handleError":      "mention-handoff error text (L3.3)",
 	"task_handler.go:gateClearRefusal": "lists the Russian withdrawal words the marker accepts (L3.3)",
 	// Error hints of the task handler belong to L3.3.

@@ -67,6 +67,9 @@ var mcpToolRoutes = map[string]string{
 	"GET /api/v1/memories/search":              "recall",
 	"GET /api/v1/memories/recall_graph":        "recall_with_graph",
 	"DELETE /api/v1/memories/:id":              "forget",
+	"GET /api/v1/memories/by-key":              "get_memory",
+	"POST /api/v1/memories/:id/archive":        "archive_memory",
+	"POST /api/v1/memories/:id/unarchive":      "archive_memory",
 	"GET /api/v1/projects/:proj_id/knowledge":  "get_project_knowledge",
 	"POST /api/v1/projects/:proj_id/knowledge": "set_project_knowledge", // also pavel_decision — see doc comment above
 	"GET /api/v1/canonical_updates":            "get_canonical_updates",

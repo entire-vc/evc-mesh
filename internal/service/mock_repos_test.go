@@ -290,7 +290,13 @@ type MockTaskRepository struct {
 	LastCreateActivity *domain.ActivityLog
 	mu                 sync.RWMutex
 	items              map[uuid.UUID]*domain.Task
-	errToReturn        error
+	// gateSource is tasks.human_gate_source: written by ArmHumanGate, dropped by
+	// SetHumanGate. Absent = not recorded.
+	gateSource map[uuid.UUID]domain.ArmHumanGateSource
+	// gateSourceComment is tasks.human_gate_source_comment_id, kept and dropped with
+	// gateSource.
+	gateSourceComment map[uuid.UUID]uuid.UUID
+	errToReturn       error
 	// getByIDErr fails ONLY GetByID, leaving every other method working. Added
 	// 2026-09-09 because errToReturn fails them all, so a test that
 	// sets it and then asserts "the write was refused" passes whether the guard
@@ -833,6 +839,14 @@ func (m *MockTaskRepository) ArmHumanGate(_ context.Context, in domain.ArmHumanG
 		t.HumanGate = true
 		t.HumanGateArmedAt = &armedAt
 		t.HumanGateClass = in.Class
+		if m.gateSource == nil {
+			m.gateSource = map[uuid.UUID]domain.ArmHumanGateSource{}
+		}
+		m.gateSource[in.TaskID] = in.Source
+		if m.gateSourceComment == nil {
+			m.gateSourceComment = map[uuid.UUID]uuid.UUID{}
+		}
+		m.gateSourceComment[in.TaskID] = in.SourceCommentID
 		author, authorType := in.Author, in.AuthorType
 		t.GateAuthor, t.GateAuthorType = &author, &authorType
 		if in.Reason != "" {
@@ -868,6 +882,8 @@ func (m *MockTaskRepository) SetHumanGate(_ context.Context, taskID uuid.UUID, v
 	defer m.mu.Unlock()
 	if t, ok := m.items[taskID]; ok {
 		t.HumanGate = value
+		delete(m.gateSource, taskID)
+		delete(m.gateSourceComment, taskID)
 		// Mirror the real SQL's clear branch (task_repo.go SetHumanGate): releasing
 		// resets the class to hard and drops the ask metadata. Modelled here because a
 		// mock that keeps a soft class or a stale recommended_default across a release
@@ -919,6 +935,63 @@ func (m *MockTaskRepository) FindSoftTimedOutGates(_ context.Context, cutoff tim
 		out = append(out, domain.HumanGateSoftTimeoutCandidate{TaskID: t.ID, ArmedAt: *t.HumanGateArmedAt})
 	}
 	return out, nil
+}
+
+func (m *MockTaskRepository) ListMarkerArmedHardGateIDs(_ context.Context, after uuid.UUID, limit int) ([]uuid.UUID, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []uuid.UUID
+	for id, t := range m.items {
+		if t.HumanGate && t.HumanGateClass == domain.HumanGateClassHard &&
+			m.gateSource[id] == domain.ArmHumanGateSourceMarker && id.String() > after.String() {
+			out = append(out, id)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (m *MockTaskRepository) ReclassifyHumanGateSoft(_ context.Context, taskID, author, marker uuid.UUID, reason, recommendedDefault string) (*time.Time, bool, error) {
+	if m.errToReturn != nil {
+		return nil, false, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.items[taskID]
+	if !ok || !t.HumanGate || t.HumanGateClass != domain.HumanGateClassHard ||
+		m.gateSource[taskID] != domain.ArmHumanGateSourceMarker || m.gateSourceComment[taskID] != marker ||
+		t.GateAuthor == nil || *t.GateAuthor != author || t.GateReason == nil || *t.GateReason != reason {
+		return nil, false, nil
+	}
+	t.HumanGateClass = domain.HumanGateClassSoft
+	d := recommendedDefault
+	t.RecommendedDefault = &d
+	// Mirrors the SQL: a gate with no deadline gets armed_at + the default window.
+	if t.GateDeadline == nil {
+		armedAt := timeNow()
+		if t.HumanGateArmedAt != nil {
+			armedAt = *t.HumanGateArmedAt
+		}
+		dl := armedAt.Add(time.Duration(pgRepo.DefaultGateTimeoutHours) * time.Hour)
+		t.GateDeadline = &dl
+	}
+	return t.GateDeadline, true, nil
+}
+
+// setGateSource stands in for tasks.human_gate_source on a gate a test seeds directly.
+func (m *MockTaskRepository) setGateSource(taskID uuid.UUID, source domain.ArmHumanGateSource) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.gateSource == nil {
+		m.gateSource = map[uuid.UUID]domain.ArmHumanGateSource{}
+	}
+	m.gateSource[taskID] = source
 }
 
 func (m *MockTaskRepository) FindExpiredDefaultGates(_ context.Context, now time.Time) ([]domain.HumanGateDefaultTimeoutCandidate, error) {

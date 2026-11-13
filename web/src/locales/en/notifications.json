@@ -111,7 +111,9 @@
       "disconnecting": "Disconnecting...",
       "disconnect": "Disconnect",
       "openBot": "Open @{{bot}} to finish connecting",
-      "noLink": "Save with the toggle above enabled to get a connection link."
+      "noLink": "Save with the toggle above enabled to get a connection link.",
+      "instanceDisabledTitle": "Disabled at instance level",
+      "instanceDisabledHint": "The instance administrator switched the Telegram extension off, so Telegram notifications may not be delivered."
     },
     "toast": {
       "enablePushFailed": "Failed to enable browser push",
@@ -124,6 +126,21 @@
       "telegramDisconnected": "Telegram disconnected — the bot can no longer message you",
       "telegramDisconnectFailed": "Failed to disconnect Telegram",
       "saveTelegramFailed": "Failed to save Telegram notification settings"
+    },
+    "scope": {
+      "title": "What to receive",
+      "all": {
+        "label": "All workspace events",
+        "description": "Everything that happens in the workspace."
+      },
+      "mine": {
+        "label": "Only my tasks",
+        "description": "Events on tasks you created, are assigned to or watch."
+      },
+      "mentions": {
+        "label": "Mentions and assignments only",
+        "description": "Only when someone mentions you or assigns a task to you."
+      }
     }
   },
   "dashboard": {
