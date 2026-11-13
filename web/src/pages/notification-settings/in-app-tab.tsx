@@ -10,8 +10,12 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTranslation } from "react-i18next";
 import { NOTIFICATION_EVENTS } from "./constants";
+import { ScopeSelect } from "./scope-select";
+import type { NotificationScope } from "./constants";
 
 interface InAppTabProps {
+  scope: NotificationScope;
+  onScopeChange: (scope: NotificationScope) => void;
   isLoaded: boolean;
   isEnabled: boolean;
   setIsEnabled: (updater: (prev: boolean) => boolean) => void;
@@ -31,6 +35,8 @@ export function InAppTab({
   isSaving,
   saved,
   onSave,
+  scope,
+  onScopeChange,
 }: InAppTabProps) {
   const { t } = useTranslation("notifications");
   return (
@@ -65,6 +71,8 @@ export function InAppTab({
             />
           </button>
         </div>
+
+        <ScopeSelect channel="in-app" value={scope} onChange={onScopeChange} />
 
         {/* Per-event toggles */}
         {!isLoaded ? (

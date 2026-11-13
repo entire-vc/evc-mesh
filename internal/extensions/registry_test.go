@@ -191,3 +191,48 @@ func TestDecodeSettings(t *testing.T) {
 	_, err = extensions.DecodeSettings[cfg](map[string]any{"base_url": 5})
 	require.Error(t, err)
 }
+
+// An active workspace connection wins over the instance row (Enabled stays
+// true), but the UI must still learn that the instance level is switched off.
+func TestResolve_InstanceDisabledIsReportedEvenWithWorkspaceConnection(t *testing.T) {
+	ctx := context.Background()
+	ws := uuid.New()
+	active := &extensions.Connection{IsActive: true, Settings: map[string]any{"k": "v"}}
+	off := &extensions.InstanceSetting{Enabled: false}
+	on := &extensions.InstanceSetting{Enabled: true}
+
+	res, err := extensions.ResolveSettings(ctx, fakeConns{row: active}, fakeInst{s: off}, nil, ws, "telegram")
+	require.NoError(t, err)
+	require.True(t, res.Enabled)
+	require.Equal(t, extensions.SourceWorkspace, res.Source)
+	require.True(t, res.InstanceDisabled)
+
+	// Positive controls: no row, and an enabled row, are not "disabled".
+	res, err = extensions.ResolveSettings(ctx, fakeConns{row: active}, fakeInst{}, nil, ws, "telegram")
+	require.NoError(t, err)
+	require.False(t, res.InstanceDisabled)
+	res, err = extensions.ResolveSettings(ctx, fakeConns{row: active}, fakeInst{s: on}, nil, ws, "telegram")
+	require.NoError(t, err)
+	require.False(t, res.InstanceDisabled)
+}
+
+type failingInst struct{}
+
+func (failingInst) InstanceSetting(context.Context, string) (*extensions.InstanceSetting, error) {
+	return nil, errors.New("instance store down")
+}
+
+// The instance row is informational when a workspace connection exists: its
+// lookup failing must not break resolution of the workspace-governed extension.
+func TestResolve_InstanceLookupErrorDoesNotBreakWorkspaceConnection(t *testing.T) {
+	ctx := context.Background()
+	active := &extensions.Connection{IsActive: true}
+	res, err := extensions.ResolveSettings(ctx, fakeConns{row: active}, failingInst{}, nil, uuid.New(), "telegram")
+	require.NoError(t, err)
+	require.True(t, res.Enabled)
+	require.False(t, res.InstanceDisabled)
+
+	// Without a workspace row the instance level governs, so its error still propagates.
+	_, err = extensions.ResolveSettings(ctx, fakeConns{}, failingInst{}, nil, uuid.New(), "telegram")
+	require.Error(t, err)
+}

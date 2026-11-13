@@ -771,6 +771,9 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		    recurring_schedule_id = $16, recurring_instance_number = $17,
 		    delegation_level = $18, thread_id = $19,
 		    human_gate = $20, is_shipped = $21, assigned_by = $22,
+		    -- A PATCH that flips human_gate arms or ends a gate no arm source describes.
+		    human_gate_source = CASE WHEN human_gate = $20 THEN human_gate_source ELSE NULL END,
+		    human_gate_source_comment_id = CASE WHEN human_gate = $20 THEN human_gate_source_comment_id ELSE NULL END,
 		    completion_signal = $23, status_changed_at = $24,
 		    pre_review_assignee_id = $25, pre_review_assignee_type = $26,
 		    reviewer_id = $27, reviewer_type = $28, start_after = $29,
@@ -913,13 +916,16 @@ func (r *TaskRepo) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateInput
 				WHEN NULLIF($6, '') IS NULL THEN NULL
 				ELSE (CASE WHEN human_gate THEN human_gate_armed_at ELSE NOW() END) + make_interval(hours => $8)
 			END,
+			human_gate_source = NULLIF($9, ''),
+			human_gate_source_comment_id = $10,
 			updated_at = NOW()
 		WHERE id = $1 AND deleted_at IS NULL`
+	sourceComment := uuid.NullUUID{UUID: in.SourceCommentID, Valid: in.SourceCommentID != uuid.Nil}
 	dbStart := time.Now()
 	res, err := r.db.ExecContext(ctx, q,
 		in.TaskID, in.Class, in.Author, string(in.AuthorType),
 		in.Reason, in.RecommendedDefault, in.Deadline,
-		r.defaultGateTimeoutHoursOrDefault(),
+		r.defaultGateTimeoutHoursOrDefault(), string(in.Source), sourceComment,
 	)
 	pkgmetrics.RecordDBQuery("task.arm_human_gate", time.Since(dbStart))
 	if err != nil {
@@ -959,6 +965,10 @@ func (r *TaskRepo) SetHumanGate(ctx context.Context, taskID uuid.UUID, value boo
 			gate_reason = CASE WHEN $2 THEN gate_reason ELSE NULL END,
 			recommended_default = CASE WHEN $2 THEN recommended_default ELSE NULL END,
 			gate_deadline = CASE WHEN $2 THEN gate_deadline ELSE NULL END,
+			-- An arm through here is the raw, unattributed one; a clear ends the ask.
+			-- Either way the stored arm source no longer describes the live gate.
+			human_gate_source = NULL,
+			human_gate_source_comment_id = NULL,
 			updated_at = NOW()
 		WHERE id = $1 AND deleted_at IS NULL`
 	dbStart := time.Now()
@@ -989,6 +999,59 @@ func (r *TaskRepo) SetHumanGateClass(ctx context.Context, taskID uuid.UUID, clas
 		return apierror.NotFound("Task")
 	}
 	return nil
+}
+
+// ReclassifyHumanGateSoft moves a live hard gate to soft with the recommended default
+// that will apply at its deadline, in one statement guarded on the gate still being the
+// one the caller proved came from its marker: armed hard, recorded arm source marker,
+// armed by that very marker comment, same author and reason
+// (service.ReconcileMarkerGateClasses, the regression). An API arm, an unrecorded source
+// and a re-arm between the caller's read and this statement (a newer re-ask by the same
+// author with the same question line included) are all left alone.
+//
+// A gate armed with no default has no deadline; it gets the one ArmHumanGate computes
+// (armed_at + the default window), so the default-on-timeout sweep can reach it. An
+// existing deadline is kept. Returns that deadline; ok false: no such gate.
+func (r *TaskRepo) ReclassifyHumanGateSoft(ctx context.Context, taskID, author, marker uuid.UUID, reason, recommendedDefault string) (*time.Time, bool, error) {
+	const q = `UPDATE tasks SET human_gate_class = 'soft', recommended_default = $4,
+			gate_deadline = COALESCE(gate_deadline, COALESCE(human_gate_armed_at, NOW()) + make_interval(hours => $5)),
+			updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL AND human_gate = true AND human_gate_class = 'hard'
+		  AND human_gate_source = 'marker' AND human_gate_source_comment_id = $6
+		  AND gate_author = $2 AND gate_reason = $3
+		RETURNING gate_deadline`
+	dbStart := time.Now()
+	var deadline time.Time
+	err := r.db.QueryRowxContext(ctx, q, taskID, author, reason, recommendedDefault,
+		r.defaultGateTimeoutHoursOrDefault(), marker).Scan(&deadline)
+	pkgmetrics.RecordDBQuery("task.reclassify_human_gate_soft", time.Since(dbStart))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return &deadline, true, nil
+}
+
+// ListMarkerArmedHardGateIDs returns one page of the tasks whose live human gate is
+// hard-classified and was armed from a "❓ Blocking" marker (human_gate_source), the
+// input of the marker-gate reclassification (the regression,
+// service.ReconcileMarkerGateClasses), which re-checks every row itself. Keyset pages
+// by id: rows with id > after, at most limit. The caller walks every page, so gates
+// that stay ineligible never crowd out the ones behind them.
+func (r *TaskRepo) ListMarkerArmedHardGateIDs(ctx context.Context, after uuid.UUID, limit int) ([]uuid.UUID, error) {
+	const q = `
+		SELECT id FROM tasks
+		WHERE deleted_at IS NULL AND human_gate = true AND human_gate_class = 'hard'
+		  AND human_gate_source = 'marker' AND id > $1
+		ORDER BY id
+		LIMIT $2`
+	var ids []uuid.UUID
+	dbStart := time.Now()
+	err := r.db.SelectContext(ctx, &ids, q, after, limit)
+	pkgmetrics.RecordDBQuery("task.list_marker_armed_hard_gate_ids", time.Since(dbStart))
+	return ids, err
 }
 
 // FindSoftTimedOutGates returns armed, soft-classified gates armed at or before cutoff.
@@ -1728,59 +1791,31 @@ func (r *TaskRepo) FindExpiredInProgressCheckouts(ctx context.Context) ([]domain
 	return taskRowsToSlice(rows), nil
 }
 
-// LiveWaitMarkerMaxAge bounds how long a trailing `⏳ WAIT` / `↻ NEXT` comment keeps an
-// unleased in_progress card out of FindStaleUnleasedInProgress.
-const LiveWaitMarkerMaxAge = 48 * time.Hour
-
-// liveMarkerLineRE is the Postgres ARE that recognises a live outcome marker in a
-// comment body. It mirrors the fleet drivers' parsers (bob scripts/fleet_wait.py
-// DECLARATION, fleet_turn_outcome.py OUTCOME_LINE_RE), which test every line of
-// the declaration, stripped, against `⏳\s*WAIT\b|↻ NEXT(\s*:|$)` with re.I:
-//
-//   - (?n) newline-sensitive: `^` and `$` match at every line boundary, so a
-//     marker on ANY line counts, not only one that opens the whole body. Without
-//     it `^` anchors to the start of the body, and a report that ends with its
-//     WAIT line (the normal way a lead writes it) is invisible: an internal ticket was
-//     parked on 11.10 two hours after a comment whose last line was
-//     `⏳ WAIT card:#00000000`, and the card it blocked stalled ~16 h.
-//   - (?i) case-insensitive, as re.I.
-//   - `[[:space:]]*` before the marker: the fleet strips each line. A marker that
-//     does not open its line (prose quoting one) is not a declaration.
-//   - `⏳[[:blank:]]*WAIT\M`: word boundary after WAIT, so `⏳ WAITING` is prose.
-//     [[:blank:]] (space/tab), not [[:space:]], keeps the gap inside one line.
-//   - `↻ NEXT` followed by `:` or end of line, as `↻ NEXT(\s*:|$)`. The trailing
-//     [[:space:]]* also absorbs a CR before the LF of a CRLF body.
-//
-// Two known differences from the fleet, both deliberate or harmless:
-//   - `❓ Blocking` is a fleet declaration too but is NOT exempted here: a card
-//     waiting on a human is held by human_gate, which this query already excludes.
-//   - [[:space:]] follows the DB locale while Python \s is Unicode, so a marker
-//     indented with a no-break space is a declaration to the fleet only.
-const liveMarkerLineRE = `(?in)^[[:space:]]*(⏳[[:blank:]]*WAIT\M|↻ NEXT([[:blank:]]*:|[[:space:]]*$))`
-
 // liveRuntimeStateSQL is true for a card whose controller currently says it holds it:
 // a runtime_state of kind working, waiting or queued that is live by the same rule
 // ResolveRuntimeState applies on read (domain/runtime_state.go) — refreshed within
-// RuntimeStateStaleAfter ($3), or written from a declared wait (ref LIKE $4, kept by the
+// RuntimeStateStaleAfter ($2), or written from a declared wait (ref LIKE $3, kept by the
 // wait itself), and in both cases not past its own `until`.
 //
-// This is the authority on "is this card waiting", and it comes before the comment
-// marker below. The marker is a guess from text: it reads only the LATEST non-system
-// comment, so any later comment by anyone — an FYI, a reviewer's note, another lane's
-// answer — erased a standing wait and the card was parked with a due_date a day out
-// (runtime wait regression); and it expires after LiveWaitMarkerMaxAge whatever the card waits for.
-// The controller's own state has neither flaw: the runner republishes it on every pass
-// for as long as its attempt holds the card, and stops when the attempt ends or the
-// runner is gone, after which this exemption lapses on its own.
+// This is the only authority on "is this card waiting". Comment text is not read: the
+// `⏳ WAIT` / `↻ NEXT` marker fallback that used to sit next to it read
+// only the LATEST non-system comment, so any later comment by anyone — an FYI, a
+// reviewer's note, another lane's answer — erased a standing wait and the card was
+// parked with a due_date a day out; it expired after 48 h whatever the
+// card waited for; and it kept a card whose controller was gone out of the sweep for
+// up to 48 h because of a line of text. The controller's own state has none of these
+// flaws: the runner republishes it on every pass for as long as its attempt holds the
+// card, and stops when the attempt ends or the runner is gone, after which this
+// exemption lapses on its own. Typed turn commands (wait_for) write a state with a
+// wait: ref that the wait itself keeps.
 //
 // `stopped` is deliberately not exempt: it means nobody is going to move the card.
 // A state with no updated_at (NULL in three-valued logic) claims nothing: the caller
 // wraps this in COALESCE(..., false), so an incomplete record never holds a card.
-// The marker exemption stays for drivers that publish no runtime state.
 const liveRuntimeStateSQL = `t.runtime_state IS NOT NULL
 		      AND t.runtime_state->>'kind' IN ('working', 'waiting', 'queued')
-		      AND ((t.runtime_state->>'updated_at')::timestamptz > now() - $3::interval
-		           OR t.runtime_state->>'ref' LIKE $4)
+		      AND ((t.runtime_state->>'updated_at')::timestamptz > now() - $2::interval
+		           OR t.runtime_state->>'ref' LIKE $3)
 		      AND (t.runtime_state->>'until' IS NULL
 		           OR (t.runtime_state->>'until')::timestamptz > now())`
 
@@ -1828,16 +1863,12 @@ const liveRuntimeStateSQL = `t.runtime_state IS NOT NULL
 // whatever its comments say: see liveRuntimeStateSQL. That is the controller's own
 // statement and is checked first.
 //
-// For drivers that publish no runtime state, the text fallback remains:
-// a card whose latest non-system comment carries a canonical outcome marker at the
-// start of any of its lines (`⏳ WAIT …` / `↻ NEXT …`, see liveMarkerLineRE) is NOT
-// abandoned, even with no checkout: the fleet rules
-// make release_task the LAST step after a WAIT, so "in_progress, no lease, quiet" is
-// exactly what a healthy waiting card looks like. Without this exclusion the sweep
-// parked such a card in backlog ~2h after its WAIT, with start_after pushing the wake
-// a day out regardless of the event (an internal ticket: a card waiting on an open MR).
-// The exemption is capped at LiveWaitMarkerMaxAge so a WAIT nobody ever answers does
-// not make a card immortal; past the cap it is swept like any other quiet card.
+// A `⏳ WAIT` / `↻ NEXT` line in a comment is NOT an exemption. It was,
+// for drivers that published no runtime state (this change: a card waiting on an open
+// MR was parked ~2h after its WAIT); every lane now runs under the Runner, which
+// publishes runtime_state, and the last such driver (fiddler) was retired on
+// 2026-10-16. A card that only says it waits, with no live controller behind the
+// words, is exactly the abandoned card this sweep exists for.
 //
 // Only a stage the checkout itself set is a candidate (checkout_stage_status_id
 // = status_id). "No lease and quiet" says nothing about who put the card in
@@ -1884,24 +1915,11 @@ func (r *TaskRepo) FindStaleUnleasedInProgress(ctx context.Context, olderThan ti
 		        COALESCE((SELECT max(a.created_at)  FROM artifacts a WHERE a.task_id  = t.id), t.updated_at),
 		        COALESCE((SELECT max(v.created_at)  FROM vcs_links v WHERE v.task_id  = t.id), t.updated_at)
 		      ) < now() - $1::interval
-		  AND NOT COALESCE((` + liveRuntimeStateSQL + `), false)
-		  AND NOT EXISTS (
-		      SELECT 1
-		      FROM (
-		          SELECT c.body, c.created_at
-		          FROM comments c
-		          WHERE c.task_id = t.id AND c.author_type <> 'system'
-		          ORDER BY c.created_at DESC
-		          LIMIT 1
-		      ) lc
-		      WHERE lc.body ~ '` + liveMarkerLineRE + `'
-		        AND lc.created_at > now() - $2::interval
-		  )`
+		  AND NOT COALESCE((` + liveRuntimeStateSQL + `), false)`
 	var rows []taskRow
 	iv := fmt.Sprintf("%d seconds", int64(olderThan.Seconds()))
-	waitCap := fmt.Sprintf("%d seconds", int64(LiveWaitMarkerMaxAge.Seconds()))
 	stale := fmt.Sprintf("%d seconds", int64(domain.RuntimeStateStaleAfter.Seconds()))
-	if err := r.db.SelectContext(ctx, &rows, q, iv, waitCap, stale, domain.WaitRuntimeRefPrefix+"%"); err != nil {
+	if err := r.db.SelectContext(ctx, &rows, q, iv, stale, domain.WaitRuntimeRefPrefix+"%"); err != nil {
 		return nil, err
 	}
 	return taskRowsToSlice(rows), nil

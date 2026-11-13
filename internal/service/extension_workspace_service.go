@@ -78,6 +78,8 @@ type ExtensionStatusView struct {
 	// NotAllowed: the instance administrator does not allow the extension, so
 	// it is off whatever the connection says; the connection itself is kept.
 	NotAllowed bool `json:"not_allowed,omitempty"`
+	// InstanceDisabled: the instance-level setting is switched off (read-only).
+	InstanceDisabled bool `json:"instance_disabled,omitempty"`
 	// Degraded: the status could not be resolved right now (the secret store
 	// or the allow-list did not answer), so Enabled says nothing; the list
 	// still shows the extension instead of failing whole.
@@ -726,6 +728,7 @@ func statusView(st extensions.Status) ExtensionStatusView {
 		Enabled: st.Enabled, Source: string(st.Source), Version: st.Version,
 		ConsentedCapabilities: append([]string{}, st.ConsentedCapabilities...),
 		NotAllowed:            st.NotAllowed,
+		InstanceDisabled:      st.InstanceDisabled,
 	}
 	if st.Enabled {
 		v.Health = &ExtensionHealthView{OK: st.Health.OK, Message: st.Health.Message}

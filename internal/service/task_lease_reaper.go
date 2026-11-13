@@ -148,8 +148,7 @@ const (
 const (
 	parkedCommentFmt = "🅿️ The task sat in in_progress **without a checkout** and without signs of work " +
 		"(no comment, artifact, VCS link or status update within the idle window; no controller " +
-		"reports it as working, waiting or queued; the last " +
-		"comment has no line starting with `⏳ WAIT`/`↻ NEXT`, or it is older than 48 h; " +
+		"reports it as working, waiting or queued; " +
 		"no open task depends on it) — **parked in backlog** " +
 		"with a `due_date` in %d h and the `kind:monitor` label.\n\n" +
 		"Why backlog and not todo: a return to todo puts the card straight back into the feed, " +
@@ -351,7 +350,7 @@ func (r *checkoutLeaseReaper) handBack(ctx context.Context, tasks []domain.Task,
 			}
 			// A card that open work formally waits on is not parked either:
 			// backlog takes it out of every feed, and the dependent then waits on
-			// a card nobody is working (#53f30091 blocked #14580276 for ~16 h on
+			// a card nobody is working (this change blocked this change for ~16 h on
 			// 11.10). Hand it back to its own assignee's todo instead.
 			//
 			// Unreadable dependency state decides nothing: the card stays where it
@@ -393,7 +392,7 @@ func (r *checkoutLeaseReaper) handBack(ctx context.Context, tasks []domain.Task,
 const blockerReturnedComment = "↩️ The card sat in in_progress without a checkout and without signs of work, " +
 	"but is **not parked**: an open task waits on it through a `blocks` dependency, and nobody feeds " +
 	"a card from backlog. Returned to todo for the same assignee. If you are waiting for an external event, " +
-	"leave a `⏳ WAIT …` line in the last comment."
+	"declare the wait with `wait_for`: a line of text in a comment does not hold the card."
 
 // blocksOpenDependent reports whether parking task would strand an open task
 // that has it as a `blocks` dependency. With no source wired it answers false
@@ -514,7 +513,7 @@ func (r *checkoutLeaseReaper) parkTask(ctx context.Context, task *domain.Task, d
 	// failed, and rewriting the same alarm buys nothing while doing real harm:
 	// each rewrite pushes due_date another dueHours out, so the wake-up the park
 	// depends on recedes once per tick and can never arrive. Measured on prod
-	// 2026-09-06, #2921ff07: 145 rewrites, due_date sliding to now+24h every 60s.
+	// 2026-09-06, this change: 145 rewrites, due_date sliding to now+24h every 60s.
 	//
 	// A previously-fired alarm (due_date in the past) is deliberately NOT treated
 	// as armed, so a card that parked, woke, and stalled again is re-armed with a

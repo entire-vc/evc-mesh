@@ -26,7 +26,7 @@ export function NotificationSettingsTabs({
 }: NotificationSettingsTabsProps) {
   const { t } = useTranslation("notifications");
   return (
-    <div className="flex items-center gap-0 border-b border-border" role="tablist">
+    <div className="flex max-w-full items-center gap-0 overflow-x-auto border-b border-border" role="tablist">
       {TABS.map(({ id, labelKey, Icon }) => {
         const isActive = activeTab === id;
         const unavailable =
@@ -39,7 +39,7 @@ export function NotificationSettingsTabs({
             aria-selected={isActive}
             onClick={() => onChange(id)}
             className={cn(
-              "flex h-10 items-center gap-1.5 border-b-2 px-3 text-sm transition-colors",
+              "flex h-10 shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 text-sm transition-colors",
               isActive
                 ? "border-primary font-medium text-foreground"
                 : "border-transparent font-normal text-muted-foreground hover:text-foreground",

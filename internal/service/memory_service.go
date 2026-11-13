@@ -690,11 +690,29 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent
 		return RememberResult{}, fmt.Errorf("memory remember: lookup existing: %w", err)
 	}
 
+	// A hand-archived row is not "current" for GetByKey, yet it IS this key: a
+	// remember must update it in place and leave it archived, not create a live
+	// duplicate beside it. Bringing it back is a separate, recorded decision
+	// (POST /memories/:id/unarchive), never a side effect of a write.
+	archivedTarget := false
+	if existing == nil {
+		archived, archErr := s.memRepo.GetHandArchivedByKey(ctx, mem.WorkspaceID, mem.ProjectID, mem.AgentID, mem.Key, mem.Scope)
+		if archErr != nil {
+			return RememberResult{}, fmt.Errorf("memory remember: lookup archived: %w", archErr)
+		}
+		if archived != nil {
+			existing = archived
+			archivedTarget = true
+		}
+	}
+
 	outcome := "created"
 	if existing != nil {
 		outcome = "updated"
 		// Preserve the original ID so the upsert constraint matches.
 		mem.ID = existing.ID
+		// Upsert never writes the archived column; report what is stored.
+		mem.Archived = existing.Archived
 	}
 
 	// Compute importance_score when not explicitly set by the caller.
@@ -878,7 +896,13 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent
 		}
 	}
 
-	return RememberResult{Outcome: outcome, Version: mem.Version, EmbeddingPending: embeddingPending, Warning: reasonWarning}, nil
+	result := RememberResult{Outcome: outcome, Version: mem.Version, EmbeddingPending: embeddingPending, Warning: reasonWarning}
+	if archivedTarget {
+		result.Archived = true
+		result.Hint = fmt.Sprintf("memory %s is archived: this write updated it, and it stays out of recall and get_memory "+
+			"(include_archived=true still reads it); to restore it call archive_memory memory_id=%s archived=false reason=<why>", mem.ID, mem.ID)
+	}
+	return result, nil
 }
 
 // enforceReservedTags refuses a write carrying a tag in reservedMemoryTags
@@ -1275,9 +1299,14 @@ func (s *memoryService) recallCandidates(ctx context.Context, opts domain.Recall
 	// AND leaves the pool sized by ineligible rows. Pre-filtering makes poolSize a budget
 	// over the eligible set instead. See an internal ticket.
 	searchFilter := opts.SearchFilter()
+	// Both read paths honour include_expired/include_archived in the arms. The
+	// legacy search (feedback=true) used to drop them, so get_memory and
+	// /memories/search could never see an expired or archived row whatever the
+	// caller asked for. Superseded stays final-recall only: the
+	// legacy path decides it in applyExtendedFilters.
+	searchFilter.IncludeExpired = opts.IncludeExpired
+	searchFilter.IncludeArchived = opts.IncludeArchived
 	if !feedback {
-		searchFilter.IncludeExpired = opts.IncludeExpired
-		searchFilter.IncludeArchived = opts.IncludeArchived
 		searchFilter.IncludeSuperseded = !opts.ExcludeSuperseded
 	}
 

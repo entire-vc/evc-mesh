@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"math"
 	"net/http"
@@ -9,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
@@ -23,6 +26,38 @@ type MemoryHandler struct {
 	memoryService service.MemoryService
 	docIndexer    *service.DocumentIndexer // optional; nil → doc-index endpoints answer 503
 	members       repository.WorkspaceMemberRepository
+	// agentRole resolves a calling agent's team-directory role for the archive
+	// bar on workspace memories. Nil → agents are never curators (fail closed).
+	agentRole func(ctx context.Context, agentID uuid.UUID) (string, error)
+	// projectRole resolves the caller's project role for the archive rule.
+	projectRole ProjectRoleLookup
+}
+
+// SetAgentRoleLookup wires the directory-role lookup used by archive/unarchive.
+func (h *MemoryHandler) SetAgentRoleLookup(f func(ctx context.Context, agentID uuid.UUID) (string, error)) {
+	h.agentRole = f
+}
+
+// ProjectRoleLookup returns the caller's project_members role in a project ("" with
+// no row). Exactly one of userID and agentID is set.
+type ProjectRoleLookup func(ctx context.Context, projectID uuid.UUID, userID, agentID *uuid.UUID) (string, error)
+
+// SetProjectRoleLookup wires the project-role lookup that keeps project viewers
+// from archiving: project access alone is membership, archiving is a write.
+func (h *MemoryHandler) SetProjectRoleLookup(f ProjectRoleLookup) { h.projectRole = f }
+
+// ProjectMemberRoleFromDB is the production ProjectRoleLookup over project_members.
+func ProjectMemberRoleFromDB(db sqlx.QueryerContext) ProjectRoleLookup {
+	return func(ctx context.Context, projectID uuid.UUID, userID, agentID *uuid.UUID) (string, error) {
+		var role string
+		err := db.QueryRowxContext(ctx,
+			`SELECT role::text FROM project_members WHERE project_id = $1 AND (user_id = $2 OR agent_id = $3) LIMIT 1`,
+			projectID, userID, agentID).Scan(&role)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return role, err
+	}
 }
 
 // NewMemoryHandler creates a new MemoryHandler with the given service.
@@ -75,6 +110,10 @@ type rememberResponse struct {
 	// omitempty so a clean write's JSON stays exactly as it was before this
 	// field existed; existing callers that don't look for it are unaffected.
 	Warning string `json:"warning,omitempty"`
+	// Archived/Hint report a write that landed on a hand-archived memory: it
+	// was updated and stays archived. Omitted otherwise.
+	Archived bool   `json:"archived,omitempty"`
+	Hint     string `json:"hint,omitempty"`
 }
 
 // listMemoriesQuery represents query params for listing memories.
@@ -263,6 +302,8 @@ func (h *MemoryHandler) Remember(c echo.Context) error {
 		Version:          result.Version,
 		EmbeddingPending: result.EmbeddingPending,
 		Warning:          result.Warning,
+		Archived:         result.Archived,
+		Hint:             result.Hint,
 	})
 }
 
@@ -440,6 +481,7 @@ func (h *MemoryHandler) search(c echo.Context, final bool) error {
 		Tags:              tags,
 		TagsAny:           tagsAny,
 		IncludeExpired:    q.IncludeExpired == "true" || q.IncludeExpired == "1",
+		IncludeArchived:   c.QueryParam("include_archived") == "true" || c.QueryParam("include_archived") == "1",
 		ExcludeSuperseded: excludeSuperseded,
 		OrderBy:           q.OrderBy,
 		ApplyDecay:        q.ApplyRecencyDecay == "true" || q.ApplyRecencyDecay == "1",
@@ -793,6 +835,159 @@ func (h *MemoryHandler) Delete(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+// archiveMemoryRequest is the body of POST /memories/:id/archive and /unarchive.
+type archiveMemoryRequest struct {
+	Reason string `json:"reason"`
+}
+
+// Archive handles POST /api/v1/memories/:id/archive: take a memory out of
+// default recall and get_memory without deleting it. The reason is recorded on
+// a new revision. See authorizeMemoryArchive for who may do it.
+func (h *MemoryHandler) Archive(c echo.Context) error { return h.setArchived(c, true) }
+
+// Unarchive handles POST /api/v1/memories/:id/unarchive.
+func (h *MemoryHandler) Unarchive(c echo.Context) error { return h.setArchived(c, false) }
+
+func (h *MemoryHandler) setArchived(c echo.Context, archived bool) error {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid memory id"))
+	}
+	var req archiveMemoryRequest
+	if berr := c.Bind(&req); berr != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+	svc, ok := h.memoryService.(service.MemoryArchiveService)
+	if !ok {
+		return c.JSON(http.StatusServiceUnavailable, apierror.ServiceUnavailable("memory archive is unavailable"))
+	}
+	ctx := c.Request().Context()
+
+	// Addressed by primary key: hold it to the caller's workspace first, as 404.
+	target, err := h.memoryService.GetByID(ctx, id)
+	if err != nil {
+		return handleError(c, err)
+	}
+	if target == nil || !h.workspaceAllowed(c, target.WorkspaceID) {
+		return handleError(c, apierror.NotFound("Memory"))
+	}
+
+	// The project rule reads the workspace off the request; a user token has
+	// none of its own, so pin it to the memory's (membership proven above).
+	c.Set(mw.ContextKeyWorkspaceID, target.WorkspaceID)
+	var actor service.MemoryArchiveActor
+	actor.MayWriteProject = func(pid uuid.UUID) bool { return h.mayWriteProject(c, pid, actor) }
+	if mw.IsAgent(c) {
+		if aid, ok := c.Get("agent_id").(uuid.UUID); ok {
+			actor.AgentID = &aid
+			if h.agentRole != nil {
+				if role, rerr := h.agentRole(ctx, aid); rerr == nil {
+					actor.AgentRole = role
+				}
+			}
+		}
+		if actor.AgentID == nil {
+			return handleError(c, apierror.Forbidden("agent identity is missing"))
+		}
+	} else {
+		userID, uerr := mw.GetUserID(c)
+		if uerr != nil {
+			return handleError(c, apierror.NotFound("Memory"))
+		}
+		role, rerr := h.members.GetRole(ctx, target.WorkspaceID, userID)
+		if rerr != nil {
+			return handleError(c, apierror.NotFound("Memory"))
+		}
+		actor.UserID = &userID
+		actor.UserRole = role
+		c.Set(mw.ContextKeyWorkspaceRole, role)
+	}
+
+	res, err := svc.SetMemoryArchived(ctx, id, archived, req.Reason, actor)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, echo.Map{
+		"memory":           res.Memory,
+		"archived":         res.Memory.Archived,
+		"changed":          res.Changed,
+		"revision_id":      res.RevisionID,
+		"revision_version": res.RevisionVersion,
+	})
+}
+
+// mayWriteProject is the project half of the archive rule: the caller reaches
+// the project (membership, or the workspace owner/admin bypass for a user) and is
+// not a project viewer. A missing or failing role lookup refuses.
+func (h *MemoryHandler) mayWriteProject(c echo.Context, pid uuid.UUID, actor service.MemoryArchiveActor) bool {
+	if !mw.MayAccessProject(c, pid) {
+		return false
+	}
+	if actor.AgentID == nil && (actor.UserRole == domain.RoleOwner || actor.UserRole == domain.RoleAdmin) {
+		return true
+	}
+	if h.projectRole == nil {
+		return false
+	}
+	role, err := h.projectRole(c.Request().Context(), pid, actor.UserID, actor.AgentID)
+	return err == nil && role != domain.ProjectRoleViewer
+}
+
+// ByKey handles GET /api/v1/memories/by-key?key=&scope=&project_id=&include_archived=&include_expired=
+//
+// The exact-key read behind get_memory. get_memory used to page through the
+// full-text search and pick the matching key, which could never return an
+// archived or expired entry whatever flag the caller passed.
+func (h *MemoryHandler) ByKey(c echo.Context) error {
+	svc, ok := h.memoryService.(service.MemoryArchiveService)
+	if !ok {
+		return c.JSON(http.StatusServiceUnavailable, apierror.ServiceUnavailable("memory key lookup is unavailable"))
+	}
+	wsID, err := h.requireWorkspaceID(c, c.QueryParam("workspace_id"))
+	if err != nil {
+		return handleError(c, err)
+	}
+	lookup := domain.MemoryKeyLookup{WorkspaceID: wsID, Key: strings.TrimSpace(c.QueryParam("key"))}
+	if lookup.Key == "" {
+		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{"key": "key is required"}))
+	}
+	switch sc := c.QueryParam("scope"); sc {
+	case "", "all":
+	case string(domain.ScopeAgent), string(domain.ScopeProject), string(domain.ScopeWorkspace):
+		lookup.Scope = domain.MemoryScope(sc)
+	default:
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid scope"))
+	}
+	if raw := c.QueryParam("project_id"); raw != "" {
+		pid, perr := uuid.Parse(raw)
+		if perr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
+		}
+		lookup.ProjectID = &pid
+	}
+	for name, target := range map[string]*bool{"include_archived": &lookup.IncludeArchived, "include_expired": &lookup.IncludeExpired} {
+		if raw := c.QueryParam(name); raw != "" {
+			v, perr := strconv.ParseBool(raw)
+			if perr != nil {
+				return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid "+name))
+			}
+			*target = v
+		}
+	}
+	if raw := c.QueryParam("limit"); raw != "" {
+		n, perr := strconv.Atoi(raw)
+		if perr != nil || n < 1 || n > 100 {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid limit"))
+		}
+		lookup.Limit = n
+	}
+	items, err := svc.ListMemoriesByKey(c.Request().Context(), lookup)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, echo.Map{"items": items, "total": len(items)})
 }
 
 // GetProjectKnowledge handles GET /api/v1/projects/:proj_id/knowledge

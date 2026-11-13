@@ -179,7 +179,7 @@ type ScoredMemory struct {
 	// point: the mesh-mcp noise gate needs "semantically close, just phrased
 	// without any shared word" to be distinguishable from noise, and the fused
 	// RRF score — rank-only, tightly clustered in [0.010, 0.016] — cannot carry
-	// that (#116875c2). Additive response field; existing clients ignore it.
+	// that. Additive response field; existing clients ignore it.
 	DenseScore *float64 `json:"dense_score,omitempty"`
 }
 
@@ -245,7 +245,7 @@ type RecallStats struct {
 
 // Canonical `order_by` values. These were bare string literals repeated across
 // four files (domain doc comments, the REST handler, the SQL ORDER BY switch, and
-// the recall service's decay predicate) until 2026-08-09 (#655c6d12) — and they had
+// the recall service's decay predicate) until 2026-08-09 — and they had
 // already drifted: the service compared against "decayed_relevance" while every
 // producer in the codebase emits "decayed_relevance:desc", so that comparison was
 // dead code from the day it was written. Nothing failed; the branch simply never
@@ -305,7 +305,7 @@ type RecallOpts struct {
 	RelevanceMin    *float32         // relevance >=
 	MinImportance   *float32         // importance_score >= (default 0.4 applied at service layer)
 	IncludeExpired  bool             // if false, filters expires_at > now() OR expires_at IS NULL
-	IncludeArchived bool             // final-recall opt-in only; legacy search is unchanged
+	IncludeArchived bool             // if false (default), archived rows are excluded
 	OrderBy         string           // "created_at:desc", "relevance:desc", "decayed_relevance:desc"
 	ApplyDecay      bool             // if true, sort by relevance * pow(0.95, days_since_created)
 	// RecencyWeight blends an exponential recency-decay factor into the full-text
@@ -381,7 +381,7 @@ type MemoryListResult struct {
 // Scope in particular is an isolation contract, not an optimisation: it was previously
 // passed to the vector arm only, which left it unenforced on every BM25-arm row and
 // entirely unenforced in bm25-only mode (the fail-open path taken whenever the embedder
-// is down). See task #2c087b2a.
+// is down). See the regression.
 type MemorySearchFilter struct {
 	IncludeExpired    bool
 	IncludeArchived   bool
@@ -481,7 +481,7 @@ const (
 // CompositeScore = seed_score × Π(edge_weight along the chain from seed to this node).
 //
 // Key/Scope/Tags exist so the CALLER can verify a scope/tag filter for itself,
-// not just trust that the server applied one. Task #37e9344c found that a
+// not just trust that the server applied one. the regression found that a
 // graph-boosted row carrying no metadata at all is indistinguishable from a
 // row that legitimately passed a filter — the missing fields hid the fact
 // that filters weren't reaching this arm in the first place.
@@ -509,7 +509,7 @@ type RecallGraphOpts struct {
 	// Scope/Tags/TagsAny restrict BOTH the seed recall and the BFS-expanded neighbours.
 	// Graph expansion walks memory_edges, which carry no notion of scope, so without an
 	// explicit check here an out-of-scope memory adjacent to an in-scope seed would be
-	// returned — a filter bypass through the side door. See task #2c087b2a.
+	// returned — a filter bypass through the side door. See the regression.
 	Scope   string
 	Tags    []string
 	TagsAny []string
@@ -522,7 +522,7 @@ func (o RecallGraphOpts) SearchFilter() MemorySearchFilter {
 
 // MemoryChunk is one embedded slice of a longer memory (ADR-0002). The prod
 // embedder silently truncates input past ~512 tokens, so any memory longer
-// than that needs more than one vector to be fully searchable — see #e8063a65.
+// than that needs more than one vector to be fully searchable — see this change.
 //
 // ChunkStart/ChunkEnd are BYTE offsets (half-open [start, end)) into the
 // parent Memory's Content. Embedding is base64(little-endian float32 bytes),
@@ -563,7 +563,46 @@ const (
 	// MemoryActionForgotten records the content a forget removed, so that
 	// "what did this say before someone deleted it" stays answerable.
 	MemoryActionForgotten = "forgotten"
+	// MemoryActionArchived records a hand archive: the memory leaves default
+	// recall but keeps its content, and the revision carries the reason.
+	MemoryActionArchived = "archived"
+	// MemoryActionUnarchived records a hand restore into default recall.
+	MemoryActionUnarchived = "unarchived"
 )
+
+// MemoryArchiveReasonMaxLen bounds the reason of a hand archive/unarchive (runes).
+const MemoryArchiveReasonMaxLen = 500
+
+// ExpiredMemoryGracePeriod is how long an expired memory stays readable with
+// include_expired=true before the background cleanup deletes it physically.
+// Expiry hides a memory at expires_at; deletion happens at the first cleanup run
+// (every 6 hours) after expires_at + this period.
+const ExpiredMemoryGracePeriod = 7 * 24 * time.Hour
+
+// MemoryArchiveResult is the outcome of a hand archive or unarchive.
+type MemoryArchiveResult struct {
+	Memory *Memory `json:"memory"`
+	// Changed is false when the memory already was in the requested state:
+	// nothing was written and no revision was recorded.
+	Changed bool `json:"changed"`
+	// RevisionID/RevisionVersion name the revision row this change wrote; nil
+	// when Changed is false.
+	RevisionID      *uuid.UUID `json:"revision_id,omitempty"`
+	RevisionVersion *int       `json:"revision_version,omitempty"`
+}
+
+// MemoryKeyLookup asks for every memory with exactly this key. Scope and
+// ProjectID narrow it; the lifecycle flags widen it beyond live rows.
+// Superseded rows are always included: a key is an address, not a search.
+type MemoryKeyLookup struct {
+	WorkspaceID     uuid.UUID
+	Key             string
+	Scope           MemoryScope // empty = every scope
+	ProjectID       *uuid.UUID
+	IncludeArchived bool
+	IncludeExpired  bool
+	Limit           int
+}
 
 // MemoryRevision is one historical version of a memory: what it asserted at
 // that version, and why the author says it came to assert it.
@@ -586,7 +625,10 @@ type MemoryRevision struct {
 	// rejected by a table CHECK, absent means "this predates the requirement".
 	Reason       *string    `json:"reason,omitempty" db:"reason"`
 	ActorAgentID *uuid.UUID `json:"actor_agent_id,omitempty" db:"actor_agent_id"`
-	CreatedAt    time.Time  `json:"created_at" db:"created_at"`
+	// ActorUserID names the user behind a hand archive/unarchive; nil for agent
+	// writes and for every revision written before this change.
+	ActorUserID *uuid.UUID `json:"actor_user_id,omitempty" db:"actor_user_id"`
+	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
 }
 
 // MemoryWriteIntent carries the caller's intent for a single memory write:

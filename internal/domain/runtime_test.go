@@ -218,3 +218,83 @@ func TestNormalizeRuntimeConfig(t *testing.T) {
 		t.Fatal("a corrupted catalog must not be replaced")
 	}
 }
+
+// policy.profile_models overrides a permitted profile's model for one binding:
+// a key outside permitted_profiles or a value that is not one token is refused
+// at bindings.<name>.policy.profile_models; absent or empty is the old catalog.
+func TestRuntimeCatalogProfileModels(t *testing.T) {
+	const field = "bindings.worker-b.policy.profile_models"
+	for _, tc := range []struct {
+		name   string
+		models any // nil: the key is absent
+		code   string
+	}{
+		{"absent", nil, ""},
+		{"empty", map[string]any{}, ""},
+		{"permitted profile", map[string]any{"preferred": "claude-opus-5-5"}, ""},
+		{"profile not permitted", map[string]any{"no-such-profile": "claude-opus-5-5"}, RuntimeFieldPermitted},
+		{"model with a space", map[string]any{"preferred": "no-such model"}, RuntimeFieldInvalid},
+		{"empty model", map[string]any{"preferred": ""}, RuntimeFieldInvalid},
+		{"model with a path", map[string]any{"reserve": "../no-such"}, RuntimeFieldInvalid},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var doc map[string]any
+			require.NoError(t, json.Unmarshal(runtimeExample(t), &doc))
+			if tc.models != nil {
+				doc["bindings"].(map[string]any)["worker-b"].(map[string]any)["policy"].(map[string]any)["profile_models"] = tc.models
+			}
+			data, err := json.Marshal(doc)
+			require.NoError(t, err)
+			c, err := ParseRuntimeCatalog(data)
+			if tc.code == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, ErrRuntimeInput)
+			var fields RuntimeFieldErrors
+			require.ErrorAs(t, err, &fields)
+			require.Equal(t, map[string]string{field: tc.code}, map[string]string(fields))
+			require.NotContains(t, err.Error(), "no-such")
+			require.Nil(t, c)
+		})
+	}
+
+	// Positive control for the round trip: the override survives a parse, and a
+	// catalog without it marshals back without the key, so its digest is unchanged.
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(runtimeExample(t), &doc))
+	doc["bindings"].(map[string]any)["worker-b"].(map[string]any)["policy"].(map[string]any)["profile_models"] = map[string]any{"preferred": "claude-opus-5-5"}
+	data, err := json.Marshal(doc)
+	require.NoError(t, err)
+	c, err := ParseRuntimeCatalog(data)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"preferred": "claude-opus-5-5"}, c.Bindings["worker-b"].Policy.ProfileModels)
+	plain, err := ParseRuntimeCatalog(runtimeExample(t))
+	require.NoError(t, err)
+	out, err := json.Marshal(plain)
+	require.NoError(t, err)
+	require.NotContains(t, string(out), "profile_models")
+}
+
+// A controller's desired slice carries only the overrides of its own profiles.
+func TestRuntimeDesiredForNarrowsProfileModels(t *testing.T) {
+	c, err := ParseRuntimeCatalog(runtimeExample(t))
+	require.NoError(t, err)
+	other := c.Controllers["runner-a"]
+	other.Host = "other-host"
+	c.Controllers["runner-b"] = other
+	p := c.Profiles["preferred"]
+	p.ControllerRef = "runner-b"
+	c.Profiles["only-b"] = p
+	b := c.Bindings["worker-b"]
+	b.PermittedProfiles = append(b.PermittedProfiles, "only-b")
+	b.Policy.ProfileModels = map[string]string{"preferred": "model-a", "only-b": "model-b"}
+	c.Bindings["worker-b"] = b
+
+	require.Equal(t, map[string]string{"preferred": "model-a"}, c.mustDesired(t, "runner-a").Bindings["worker-b"].Policy.ProfileModels)
+	require.Equal(t, map[string]string{"only-b": "model-b"}, c.mustDesired(t, "runner-b").Bindings["worker-b"].Policy.ProfileModels)
+
+	b.Policy.ProfileModels = nil
+	c.Bindings["worker-b"] = b
+	require.Nil(t, c.mustDesired(t, "runner-a").Bindings["worker-b"].Policy.ProfileModels)
+}

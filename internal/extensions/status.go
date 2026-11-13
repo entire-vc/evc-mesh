@@ -30,6 +30,8 @@ type Status struct {
 	ConsentedCapabilities []string
 	// NotAllowed comes from Resolve: the instance allow-list refuses it.
 	NotAllowed bool
+	// InstanceDisabled mirrors Resolved.InstanceDisabled (read-only, no secrets).
+	InstanceDisabled bool
 }
 
 // ConsentStore returns the capabilities a workspace consented to. A nil store
@@ -109,11 +111,12 @@ func (r *Registry) status(ctx context.Context, workspaceID uuid.UUID, extensionI
 	}
 	m := p.Manifest()
 	st := Status{
-		ExtensionID: extensionID,
-		Enabled:     res.Enabled,
-		Source:      res.Source,
-		Version:     m.Version,
-		NotAllowed:  res.NotAllowed,
+		ExtensionID:      extensionID,
+		Enabled:          res.Enabled,
+		Source:           res.Source,
+		Version:          m.Version,
+		NotAllowed:       res.NotAllowed,
+		InstanceDisabled: res.InstanceDisabled,
 	}
 
 	r.mu.RLock()

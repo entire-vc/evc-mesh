@@ -70,7 +70,11 @@ type ArmHumanGateInput struct {
 	// fail-closed, matching the column default and SetHumanGate's release behaviour.
 	Class  HumanGateClass
 	Source ArmHumanGateSource
-	// Predicate is the four-question check from an internal ticket. REQUIRED for
+	// SourceCommentID is the "❓ Blocking" comment a marker arm comes from (uuid.Nil for
+	// an API arm). Stored with the source so a later reclassification can tell the
+	// marker it checked from a newer re-ask that re-armed the gate.
+	SourceCommentID uuid.UUID
+	// Predicate is the four-question check from the regression. REQUIRED for
 	// ArmHumanGateSourceAPI; nil is allowed for ArmHumanGateSourceMarker, for the same
 	// reason RecommendedDefault is (see ArmHumanGateSourceMarker's note) — a marker is a
 	// live ask arriving through a channel we do not control, and refusing it is silent

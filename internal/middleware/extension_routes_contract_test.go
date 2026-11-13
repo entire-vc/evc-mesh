@@ -33,6 +33,7 @@ var pinnedExtensionRoutes = map[string]string{
 	"GET /api/v1/projects/:proj_id":                  "projects:read",
 	"POST /api/v1/workspaces/:ws_id/projects":        "projects:write",
 	"PATCH /api/v1/projects/:proj_id":                "projects:write",
+	"GET /api/v1/projects/:proj_id/statuses":         "projects:read",
 	"GET /api/v1/workspaces/:ws_id/export/hierarchy": "workspaces:read",
 
 	"GET /api/v1/workspaces/:ws_id/members": "members:read",
@@ -128,6 +129,10 @@ func TestContract_ExtensionRoutes_StayClosed(t *testing.T) {
 		"DELETE /api/v1/tasks/:task_id/checkout",
 		"POST /api/v1/workspaces/:ws_id/members",
 		"POST /api/v1/integrations/:int_id/rotate-token",
+		// A project's workflow is read only for extensions.
+		"POST /api/v1/projects/:proj_id/statuses",
+		"PATCH /api/v1/projects/:proj_id/statuses/:status_id",
+		"PUT /api/v1/projects/:proj_id/statuses/reorder",
 	} {
 		_, mapped := got[route]
 		assert.False(t, mapped, "%s must stay closed to extensions", route)
@@ -181,4 +186,7 @@ func TestContract_ExtensionGuard_Answers(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, call(http.MethodHead, "/api/v1/tasks/:task_id", "tasks:read"), "HEAD is checked as GET")
 	assert.Equal(t, http.StatusForbidden, call(http.MethodPatch, "/api/v1/tasks/:task_id", "tasks:read"), "mapped, not consented")
 	assert.Equal(t, http.StatusForbidden, call(http.MethodPost, "/api/v1/tasks/:task_id/checkout", "tasks:write"), "not in the table")
+	assert.Equal(t, http.StatusNoContent, call(http.MethodGet, "/api/v1/projects/:proj_id/statuses", "projects:read"))
+	assert.Equal(t, http.StatusForbidden, call(http.MethodGet, "/api/v1/projects/:proj_id/statuses", "tasks:read"), "statuses need projects:read")
+	assert.Equal(t, http.StatusForbidden, call(http.MethodPost, "/api/v1/projects/:proj_id/statuses", "projects:read", "projects:write"), "status writes stay closed")
 }

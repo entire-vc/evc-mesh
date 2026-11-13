@@ -58,7 +58,10 @@ report does not make a managed project unmanaged: it is `freshness: "unknown"`.
 
 `configured.routes[]` is the policy order of the admitted binding(s): primary
 profiles first, then their quota-edge reserves. `harness`/`model` name a setting;
-`effort` is `null` because the catalog has none.
+`effort` is `null` because the catalog has none. `model` is the binding's
+`policy.profile_models[profile_ref]` when set (`model_source: "binding"`), otherwise
+the profile's own `model` as the catalog has it, placeholder included
+(`model_source: "profile"`).
 `configured.revision` is the *current* server policy; an attempt's
 `resolved_route.revision` is immutable evidence of what that attempt selected, and
 `policy_matches` says whether the two are the same revision (and digest, if sent).

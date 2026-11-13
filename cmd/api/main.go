@@ -1207,6 +1207,14 @@ func main() {
 	autoTransHandler := handler.NewAutoTransitionHandler(autoTransitionSvc)
 	memoryHandler := handler.NewMemoryHandler(memoryService, workspaceMemberRepo)
 	memoryHandler.SetDocumentIndexer(documentIndexer)
+	memoryHandler.SetAgentRoleLookup(func(ctx context.Context, agentID uuid.UUID) (string, error) {
+		a, err := agentRepo.GetByID(ctx, agentID)
+		if err != nil || a == nil {
+			return "", err
+		}
+		return a.Role, nil
+	})
+	memoryHandler.SetProjectRoleLookup(handler.ProjectMemberRoleFromDB(db))
 	mentionHandler := handler.NewMentionHandler(mentionService)
 	documentMentionHandler := handler.NewDocumentMentionHandler(documentMentionService)
 	userUIStateHandler := handler.NewUserUIStateHandler(db)
@@ -2255,7 +2263,7 @@ func main() {
 	api.GET("/agents/me/tasks", agentHandler.GetMyTasks)
 	api.GET("/agents/me/events/stream", agentHandler.EventStream)
 	api.GET("/agents/me/tasks/poll", agentHandler.PollTasks)
-	api.POST("/agents/me/sessions/report", agentHandler.ReportSession)
+	api.POST("/agents/me/sessions/report", agentHandler.ReportSession, idempotent)
 	api.POST("/agents/me/controller", agentControllerHandler.Announce)
 	// GET /agents/me/workspaces — the calling agent's OWN connections, self
 	// only, no permission check (mirrors the rest of /agents/me/*). Must
@@ -2794,7 +2802,10 @@ func main() {
 	api.POST("/memories/rechunk-stale", memoryHandler.RechunkStale, rbac(mw.PermMemoryIndex))
 	api.POST("/memories/backfill-doc-index", memoryHandler.BackfillDocIndex, rbac(mw.PermMemoryIndex))
 	api.GET("/memories/doc-index-status", memoryHandler.DocIndexStatus)
+	api.GET("/memories/by-key", memoryHandler.ByKey)
 	api.GET("/memories/:id", memoryHandler.GetByID)
+	api.POST("/memories/:id/archive", memoryHandler.Archive, connectorRBAC(mw.PermWriteMemory))
+	api.POST("/memories/:id/unarchive", memoryHandler.Unarchive, connectorRBAC(mw.PermWriteMemory))
 	api.GET("/memories/:id/related", memoryHandler.FindRelated)
 	api.GET("/memories/:id/revisions", memoryHandler.Revisions)
 	api.DELETE("/memories/:id", memoryHandler.Delete, connectorRBAC(mw.PermWriteMemory))
@@ -3219,6 +3230,14 @@ func main() {
 			select {
 			case <-ticker.C:
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				// Regression: first give marker gates armed hard under the old
+				// tag-only rule their current class, so a stated default that is
+				// already past its deadline is applied in this same pass.
+				if rn, rerr := commentService.ReconcileMarkerGateClasses(ctx); rerr != nil {
+					log.Printf("[human-gate-reclassify] ERROR: %v", rerr)
+				} else if rn > 0 {
+					log.Printf("[human-gate-reclassify] reclassified %d marker gate(s) soft", rn)
+				}
 				n, err := humanGateDefaultTimeoutSvc.SweepExpiredDefaultGates(ctx)
 				cancel()
 				if err != nil {

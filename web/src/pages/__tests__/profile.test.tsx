@@ -14,8 +14,8 @@ import type { User } from "@/types";
 
 const USER: User = {
   id: "u1",
-  email: "pavel@example.com",
-  name: "Pavel",
+  email: "alex@example.com",
+  name: "Alex",
   avatar_url: "",
   is_active: true,
   created_at: "2026-01-01T00:00:00Z",
@@ -75,5 +75,11 @@ describe("ProfilePage", () => {
 
     fireEvent.change(screen.getByLabelText("Language"), { target: { value: "ru" } });
     expect(setLocale).toHaveBeenCalledWith("ru");
+  });
+
+  it("links to the notification settings of the current workspace", () => {
+    renderPage();
+    const link = screen.getByRole("link", { name: /Notifications/ });
+    expect(link).toHaveAttribute("href", "/w/acme/notifications");
   });
 });

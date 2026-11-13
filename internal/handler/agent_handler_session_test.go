@@ -74,6 +74,42 @@ func (m *mockSessionRepo) Update(ctx context.Context, s *domain.AgentSession) er
 	return nil
 }
 
+// AddUsage mirrors the real repo's contract (add onto the active session,
+// create on miss) under the mock's mutex.
+func (m *mockSessionRepo) AddUsage(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, tokensIn, tokensOut int64, cost float64, model string) (*domain.AgentSession, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var target *domain.AgentSession
+	if taskID != nil {
+		target = m.byAgentTask[agentTaskKey(agentID, *taskID)]
+	} else {
+		target = m.byAgentWide[agentID]
+	}
+	if target == nil {
+		target = &domain.AgentSession{ID: uuid.New(), AgentID: agentID, WorkspaceID: workspaceID, TaskID: taskID,
+			StartedAt: time.Now(), Status: domain.AgentSessionStatusActive}
+		m.createN++
+	} else {
+		m.updateN++
+	}
+	target.TokensIn += tokensIn
+	target.TokensOut += tokensOut
+	target.EstimatedCost += cost
+	if model != "" {
+		target.ModelUsed = model
+	}
+	stored := *target
+	if taskID != nil {
+		m.byAgentTask[agentTaskKey(agentID, *taskID)] = &stored
+	} else {
+		m.byAgentWide[agentID] = &stored
+	}
+	// The caller gets its own snapshot: the stored row is mutated by the next
+	// call, concurrently with the handler reading this answer.
+	snapshot := stored
+	return &snapshot, nil
+}
+
 func (m *mockSessionRepo) GetActiveAgentWide(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -475,7 +511,7 @@ func TestReportSession_MergesClientToolBreakdown(t *testing.T) {
 // semantics as every other numeric field on this endpoint — including the
 // consequence that a naive retry of an identical report double-counts, which
 // is the existing, accepted behavior for tokens_in/tokens_out/estimated_cost
-// on this same endpoint (there is no idempotency key on any of them). This
+// on this same endpoint (a caller without an Idempotency-Key header gets no dedup). This
 // test documents that this is a deliberate, pre-existing tradeoff extended
 // to tool_breakdown for consistency, not a new one introduced by it.
 func TestReportSession_ToolBreakdownAccumulatesAcrossReports(t *testing.T) {

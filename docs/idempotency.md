@@ -12,6 +12,7 @@ answer.
 | `POST /api/v1/tasks/{task_id}/comments` | the comment |
 | `POST /api/v1/tasks/{task_id}/artifacts` | the artifact |
 | `POST /api/v1/tasks/{task_id}/finish` | the published result |
+| `POST /api/v1/agents/me/sessions/report` | the reported tokens and cost, added to the session a second time |
 
 Without the header these routes behave as before.
 

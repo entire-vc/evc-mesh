@@ -86,6 +86,9 @@ type mockMemoryRepo struct {
 	touchAccessedFn                    func(ctx context.Context, ids []uuid.UUID) error
 	findByShortIDFn                    func() (*domain.Memory, error)
 	setArchivedFn                      func() error
+	setArchivedWithRevisionFn          func(ctx context.Context, id uuid.UUID, archived bool, reason string, actor, user *uuid.UUID) (*domain.MemoryArchiveResult, error)
+	getHandArchivedByKeyFn             func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
+	listByKeyFn                        func(ctx context.Context, lookup domain.MemoryKeyLookup) ([]domain.Memory, error)
 	findByThreadIDFn                   func(ctx context.Context, wsID uuid.UUID, threadID string, excludeID uuid.UUID) ([]domain.Memory, error)
 	findBySourceTaskIDsFn              func(ctx context.Context, wsID uuid.UUID, taskIDs []uuid.UUID) ([]domain.Memory, error)
 	archiveStaleWorkspaceCheckpointsFn func(ctx context.Context, olderThan time.Duration, maxImportance float64) (int64, error)
@@ -273,6 +276,27 @@ func (m *mockMemoryRepo) List(_ context.Context, _ domain.MemoryListFilter) (*do
 func (m *mockMemoryRepo) FindByShortID(_ context.Context, _ uuid.UUID, _ string) (*domain.Memory, error) {
 	if m.findByShortIDFn != nil {
 		return m.findByShortIDFn()
+	}
+	return nil, nil
+}
+
+func (m *mockMemoryRepo) SetArchivedWithRevision(ctx context.Context, id uuid.UUID, archived bool, reason string, actor, user *uuid.UUID) (*domain.MemoryArchiveResult, error) {
+	if m.setArchivedWithRevisionFn != nil {
+		return m.setArchivedWithRevisionFn(ctx, id, archived, reason, actor, user)
+	}
+	return nil, nil
+}
+
+func (m *mockMemoryRepo) GetHandArchivedByKey(ctx context.Context, wsID uuid.UUID, projID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error) {
+	if m.getHandArchivedByKeyFn != nil {
+		return m.getHandArchivedByKeyFn(ctx, wsID, projID, agentID, key, scope)
+	}
+	return nil, nil
+}
+
+func (m *mockMemoryRepo) ListByKey(ctx context.Context, lookup domain.MemoryKeyLookup) ([]domain.Memory, error) {
+	if m.listByKeyFn != nil {
+		return m.listByKeyFn(ctx, lookup)
 	}
 	return nil, nil
 }

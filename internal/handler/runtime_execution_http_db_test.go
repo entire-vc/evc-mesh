@@ -436,3 +436,67 @@ func TestAgentExecutionHTTPRejectsMalformedRequests(t *testing.T) {
 	code, _, _ = f.do(http.MethodPost, f.execBase+"/execution-reports", `{"schema_version":1,"instance_id":"x"}`, f.reporterHdrs)
 	require.Equal(t, http.StatusBadRequest, code, "an incomplete report is refused")
 }
+
+// policy.profile_models saved through the policy route comes back on the
+// binding and becomes the route's model in the execution view; a profile
+// without an override keeps its catalog model.
+func TestExecutionViewTakesTheBindingProfileModel(t *testing.T) {
+	f := newExecFixture(t)
+	routesOf := func() []map[string]any {
+		code, out := f.read("", f.receiver)
+		require.Equal(t, http.StatusOK, code)
+		items, _ := out["items"].([]any)
+		require.NotEmpty(t, items)
+		configured, _ := items[0].(map[string]any)["configured"].(map[string]any)
+		require.NotNil(t, configured, "managed and admitted: configured is present")
+		raw, _ := configured["routes"].([]any)
+		routes := make([]map[string]any, 0, len(raw))
+		for _, r := range raw {
+			routes = append(routes, r.(map[string]any))
+		}
+		return routes
+	}
+
+	// Before: no override anywhere, every route says where its model came from.
+	before := routesOf()
+	require.Len(t, before, 2)
+	for _, r := range before {
+		require.Equal(t, "profile", r["model_source"], r)
+		require.Equal(t, "model-a", r["model"], r)
+	}
+
+	policyURL := "/workspaces/" + f.runtimeHTTP.receiver.String() + "/runtime/bindings/worker-b/policy?resource_owner_workspace_id=" + f.runtimeHTTP.owner.String()
+	policy := func(models string) string {
+		return `{"if_revision":1,"policy":{"primary_profiles":["preferred"],"quota_edges":{"preferred":["reserve"]},"preferred_accounts":{},"api_reserve_providers":[],"max_attempts":2,"evidence_max_age_seconds":60,"qa":{"mode":"strict","quota_fallback":false},"profile_models":` + models + `}}`
+	}
+	// Red controls: a profile outside permitted_profiles, a model that is not one token.
+	code, _, body := f.do(http.MethodPut, policyURL, policy(`{"no-such-profile":"claude-opus-5-5"}`), f.owner)
+	require.Equal(t, http.StatusBadRequest, code, body)
+	code, _, body = f.do(http.MethodPut, policyURL, policy(`{"preferred":"two words"}`), f.owner)
+	require.Equal(t, http.StatusBadRequest, code, body)
+	// A full catalog save names the offending field.
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(f.catalog, &doc))
+	doc["bindings"].(map[string]any)["worker-b"].(map[string]any)["policy"].(map[string]any)["profile_models"] = map[string]any{"no-such-profile": "claude-opus-5-5"}
+	bad, err := json.Marshal(doc)
+	require.NoError(t, err)
+	code, _, body = f.do(http.MethodPut, f.base, `{"if_revision":1,"enabled":true,"config":`+string(bad)+`}`, f.owner)
+	require.Equal(t, http.StatusBadRequest, code, body)
+	require.Contains(t, body, `"config.bindings.worker-b.policy.profile_models":"not_permitted"`)
+
+	code, view, body := f.do(http.MethodPut, policyURL, policy(`{"preferred":"claude-opus-5-5"}`), f.owner)
+	require.Equal(t, http.StatusOK, code, body)
+	saved := view["binding"].(map[string]any)["policy"].(map[string]any)
+	require.Equal(t, map[string]any{"preferred": "claude-opus-5-5"}, saved["profile_models"])
+
+	after := routesOf()
+	require.Len(t, after, 2)
+	byProfile := map[string]map[string]any{}
+	for _, r := range after {
+		byProfile[r["profile_ref"].(string)] = r
+	}
+	require.Equal(t, "claude-opus-5-5", byProfile["preferred"]["model"])
+	require.Equal(t, "binding", byProfile["preferred"]["model_source"])
+	require.Equal(t, "model-a", byProfile["reserve"]["model"])
+	require.Equal(t, "profile", byProfile["reserve"]["model_source"])
+}

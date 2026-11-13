@@ -145,6 +145,8 @@ var auditConnectorGuards = map[string]string{
 	"POST /memories":                               "connectorRBAC(mw.PermWriteMemory)",
 	"POST /memories/import":                        "connectorRBAC(mw.PermWriteMemory)",
 	"DELETE /memories/:id":                         "connectorRBAC(mw.PermWriteMemory)",
+	"POST /memories/:id/archive":                   "connectorRBAC(mw.PermWriteMemory)",
+	"POST /memories/:id/unarchive":                 "connectorRBAC(mw.PermWriteMemory)",
 	// /memories/reindex, /backfill-chunks, /rechunk-stale, /backfill-doc-index
 	// moved to rbac(mw.PermMemoryIndex): connectorRBAC left a
 	// plain human JWT, including a viewer, untouched on these routes.

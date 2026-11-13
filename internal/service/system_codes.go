@@ -134,7 +134,11 @@ const (
 	// params: none.
 	// SysCodeGateAutoDefault — hard-gate deadline passed, the declared
 	// recommended_default was applied. params: {"default": "<text>", "decision": "<ref>"}.
-	SysCodeGateAutoDefault                  = "gate_auto_default"
+	SysCodeGateAutoDefault = "gate_auto_default"
+	// SysCodeGateReclassifiedSoft — a live marker gate armed hard before the
+	// class rule of the regression was reclassified soft: its stated default now
+	// applies at the deadline. params: {"rule": "<text>", "deadline": "<time>", "default": "<text>"}.
+	SysCodeGateReclassifiedSoft             = "gate_reclassified_soft"
 	SysCodeWithdrawalBlockedRawArmed        = "raw_arm"
 	SysCodeWithdrawalBlockedReaffirmPending = "reaffirm_pending"
 )
@@ -155,7 +159,7 @@ var SystemCodes = []string{
 	SysCodeWithdrawalBlockedRawArmed, SysCodeWithdrawalBlockedReaffirmPending,
 	SysCodeGateArmedDefault, SysCodeGateDecisionRecorded, SysCodeGateDecisionRevoked,
 	SysCodeGateDecisionExisting, SysCodeAssigneeMentionLift, SysCodeRepeatAskRefused,
-	SysCodeGateAutoDefault,
+	SysCodeGateAutoDefault, SysCodeGateReclassifiedSoft,
 }
 
 // sysCode returns the pointer form comments.system_code is stored as.

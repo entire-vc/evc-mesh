@@ -60,6 +60,14 @@ func resolveLevels(ctx context.Context, conns ConnectionStore, inst InstanceStor
 			if c.IsActive {
 				res.Settings = c.Settings
 			}
+			// The instance row does not govern here. It is read only to tell the
+			// UI the instance level is off, so a failing lookup must not break
+			// resolution: the flag is simply left unset.
+			if inst != nil {
+				if s, err := inst.InstanceSetting(ctx, extensionID); err == nil {
+					res.InstanceDisabled = s != nil && !s.Enabled
+				}
+			}
 			return res, nil
 		}
 	}
@@ -74,6 +82,7 @@ func resolveLevels(ctx context.Context, conns ConnectionStore, inst InstanceStor
 			res.Enabled = true
 			res.Settings = s.Settings
 		}
+		res.InstanceDisabled = s != nil && !s.Enabled
 	}
 	return res, nil
 }

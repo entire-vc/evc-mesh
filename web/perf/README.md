@@ -189,6 +189,18 @@ safe refs/fallbacks and the RU/EN strings; dropping any of it removes an AC. Loc
 other ceiling changes. Not covered: any total above 739.0, which needs a new signature.
 Revert: revert the renderer MR and restore 736.9.
 
+## `total_js_kb_gz` 741.3 → 743.0 for the notification subscription level (!1836)
+
+`total_js_kb_gz` 741.3 → 743.0 (**+1.7 KB gz**, !1836): the profile and user-menu
+entry to the notification settings, the subscription-level radiogroup
+(`ScopeSelect`, all / mine / mentions) on the four channel tabs, the
+"disabled at instance" state in `extension-state`, and the RU/EN strings. No new
+dependency. CI measured 742.96 against the 741.3 ceiling (pipeline 30635, job
+645462, head `d36d64fd`); the only failure was the total ceiling. The metric sums
+every chunk, so moving code or the RU locale into a lazy chunk does not lower it.
+The ceiling moved by the smallest step above the measurement. `login.initial_js_kb_gz`
+unchanged. Revert: revert the MR and restore 741.3. Lead sign-off recorded.
+
 ## Proving the gate actually gates (do this again after touching the script)
 
 A budget check that can't go red isn't a check (a deliberate failure proves enforcement). Two

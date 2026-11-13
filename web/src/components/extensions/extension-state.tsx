@@ -8,6 +8,7 @@ const VARIANT: Record<ExtensionStateName, "warning" | "outline" | "success" | "d
   not_allowed: "warning",
   available: "outline",
   enabled: "success",
+  instance_disabled: "warning",
   error: "destructive",
   blocked: "destructive",
 };
@@ -29,7 +30,8 @@ export function ExtensionStateNote({ state, className }: { state: ExtensionState
   const { t } = useTranslation("integrations");
   let text = "";
   let tone = "text-muted-foreground";
-  if (state.state === "enabled" && state.keysFrom) text = t(KEYS_FROM_KEY[state.keysFrom]);
+  if (state.state === "instance_disabled") { text = t("extensionState.instanceDisabledNote");  }
+  else if (state.state === "enabled" && state.keysFrom) text = t(KEYS_FROM_KEY[state.keysFrom]);
   else if (state.state === "error") { text = state.error || t("extensionState.errorUnknown"); tone = "text-destructive"; }
   else if (state.state === "blocked") { text = state.blockedReason || t("extensionState.blockedNoReason"); tone = "text-destructive"; }
   if (!text) return null;

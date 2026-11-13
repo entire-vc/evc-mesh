@@ -27,6 +27,7 @@
               "profile_ref": "sol-high",
               "harness": "codex",
               "model": "gpt-6.1-sol",
+              "model_source": "profile",
               "effort": null,
               "order": 0
             },
@@ -36,6 +37,7 @@
               "profile_ref": "opus-reserve",
               "harness": "claude",
               "model": "opus",
+              "model_source": "profile",
               "effort": null,
               "order": 1
             }

@@ -4509,6 +4509,7 @@ paths:
       operationId: reportAgentSession
       security:
         - AgentKeyAuth: []
+      description: Additive. Send an Idempotency-Key header to make a repeat safe (docs/idempotency.md); the same key with another body answers 409 idempotency_key_reused.
       requestBody:
         content:
           application/json:

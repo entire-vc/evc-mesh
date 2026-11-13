@@ -64,7 +64,8 @@
     "userMenu": {
       "userFallback": "User",
       "logOut": "Log out",
-      "profile": "Open profile"
+      "profile": "Open profile",
+      "notifications": "Notifications"
     },
     "toggleSidebar": "Toggle sidebar",
     "breadcrumbs": "Breadcrumbs"

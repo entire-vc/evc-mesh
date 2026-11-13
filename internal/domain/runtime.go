@@ -85,6 +85,10 @@ type RuntimePolicy struct {
 	MaxAttempts           int                 `json:"max_attempts"`
 	EvidenceMaxAgeSeconds int                 `json:"evidence_max_age_seconds"`
 	QA                    RuntimeQA           `json:"qa"`
+	// ProfileModels overrides profiles[ref].model for this binding: the model a
+	// lane actually runs a subscription profile with (the profile itself often
+	// carries only a placeholder). Optional; absent means the profile's model.
+	ProfileModels map[string]string `json:"profile_models,omitempty"`
 }
 
 type RuntimeBinding struct {
@@ -532,6 +536,13 @@ func (c *RuntimeCatalog) ValidateReferences() error {
 				errs.add(RuntimeFieldPermitted, "bindings", name, "policy", "preferred_accounts")
 			}
 		}
+		for _, profile := range sortedKeys(b.Policy.ProfileModels) {
+			if !slices.Contains(b.PermittedProfiles, profile) {
+				errs.add(RuntimeFieldPermitted, "bindings", name, "policy", "profile_models")
+			} else if !ValidExecutionToken(b.Policy.ProfileModels[profile]) {
+				errs.add(RuntimeFieldInvalid, "bindings", name, "policy", "profile_models")
+			}
+		}
 	}
 	return errs.orNil()
 }
@@ -639,6 +650,15 @@ func (c *RuntimeCatalog) DesiredFor(ref string) (RuntimeDesiredCatalog, bool) {
 			}
 		}
 		b.Policy.PreferredAccounts = preferred
+		if b.Policy.ProfileModels != nil {
+			models := map[string]string{}
+			for profile, model := range b.Policy.ProfileModels {
+				if own(profile) {
+					models[profile] = model
+				}
+			}
+			b.Policy.ProfileModels = models
+		}
 		providers := []string{}
 		for _, provider := range b.Policy.APIReserveProviders {
 			for _, account := range out.Accounts {

@@ -699,6 +699,22 @@
               },
               "default": {}
             },
+            "profile_models": {
+              "type": "object",
+              "title": "Model per profile",
+              "title_i18n": {
+                "ru": "Модель для профиля"
+              },
+              "x-help": "For an allowed profile, the model this agent runs it with, instead of the profile's own.",
+              "x-help_i18n": {
+                "ru": "Для разрешённого профиля — модель, с которой этот агент его запускает, вместо модели профиля."
+              },
+              "x-key-ref": "permitted_profiles",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
             "api_reserve_providers": {
               "type": "array",
               "title": "Providers held in API reserve",

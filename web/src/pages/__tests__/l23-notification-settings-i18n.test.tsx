@@ -14,6 +14,8 @@ const RAW_KEY = /\b(settings|events|actions|tabs|inApp|telegram)\.[a-zA-Z]+/;
 function renderInApp() {
   return render(
     <InAppTab
+      scope="mine"
+      onScopeChange={() => {}}
       isLoaded
       isEnabled
       setIsEnabled={() => {}}
@@ -30,6 +32,8 @@ function renderTelegramNotConnected() {
   const info = { available: false } as TelegramBotInfo;
   return render(
     <TelegramTab
+      scope="mine"
+      onScopeChange={() => {}}
       telegramBotInfo={info}
       telegramEnabled={false}
       setTelegramEnabled={() => {}}

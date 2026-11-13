@@ -297,9 +297,23 @@ func linkWaitTarget(ctx context.Context, tx *sqlx.Tx, workspaceID uuid.UUID, sco
 		WorkspaceID uuid.UUID `db:"workspace_id"`
 		Released    bool      `db:"released"`
 	}
+	// Lock the target row alone first. Under READ COMMITTED a locking join
+	// that waits on a concurrent UPDATE re-checks the join against the old
+	// status/project rows; a status or project change then drops the row and
+	// the card reads as missing (invalid_target instead of already_met).
+	// With the row already held, the verdict query below sees its latest
+	// committed version and nothing can move it under us.
+	var locked uuid.UUID
+	err := tx.GetContext(ctx, &locked, `SELECT id FROM tasks WHERE id = $1 AND deleted_at IS NULL FOR SHARE`, *w.TargetTaskID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.NewOutcomeError(domain.CodeInvalidTarget, "target_task_id: target card not found")
+	}
+	if err != nil {
+		return err
+	}
 	// The verdict is the same expression dependency reads use, over the edge
 	// this wait is about to create.
-	err := tx.GetContext(ctx, &target, `SELECT bp.workspace_id, `+domain.DependencyReleasedSQL("d", "bt", "bts.category")+` AS released
+	err = tx.GetContext(ctx, &target, `SELECT bp.workspace_id, `+domain.DependencyReleasedSQL("d", "bt", "bts.category")+` AS released
 		FROM (SELECT 'blocks'::dependency_type AS dependency_type, $2::text AS condition,
 		             NULL::text AS evidence_url, NULL::timestamptz AS condition_met_at, 'none'::text AS evidence_status) d,
 		     tasks bt

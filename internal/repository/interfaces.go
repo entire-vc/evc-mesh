@@ -1814,6 +1814,15 @@ type MemoryRepository interface {
 	FindByShortID(ctx context.Context, workspaceID uuid.UUID, prefix string) (*domain.Memory, error)
 	// SetArchived marks a memory as archived (true) or unarchived (false) by ID.
 	SetArchived(ctx context.Context, id uuid.UUID, archived bool) error
+	// SetArchivedWithRevision is the hand archive/unarchive: flips
+	// archived, bumps version and records a revision with the reason in one
+	// transaction. nil, nil when the memory does not exist.
+	SetArchivedWithRevision(ctx context.Context, id uuid.UUID, archived bool, reason string, actorAgentID, actorUserID *uuid.UUID) (*domain.MemoryArchiveResult, error)
+	// GetHandArchivedByKey returns the hand-archived memory at a natural key
+	// (GetByKey identity), or nil.
+	GetHandArchivedByKey(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID, key string, scope domain.MemoryScope) (*domain.Memory, error)
+	// ListByKey returns every memory with exactly this key (exact-key read).
+	ListByKey(ctx context.Context, lookup domain.MemoryKeyLookup) ([]domain.Memory, error)
 	// FindByThreadID returns non-archived memories in workspaceID whose thread_id
 	// matches, excluding the memory identified by excludeID (the calling memory).
 	// Used by Amendment 2 to create same-thread relates_to edges.
@@ -1953,6 +1962,11 @@ type WorkspaceInviteRepository interface {
 type AgentSessionRepository interface {
 	Create(ctx context.Context, session *domain.AgentSession) error
 	Update(ctx context.Context, session *domain.AgentSession) error
+	// AddUsage atomically adds one usage report onto the agent's active session
+	// (task-scoped when taskID != nil, else agent-wide), creating it when none
+	// exists, and returns the session after the addition. Concurrent calls sum
+	// exactly and never create two active sessions for one agent and task.
+	AddUsage(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, tokensIn, tokensOut int64, cost float64, model string) (*domain.AgentSession, error)
 	// GetActiveAgentWide returns the agent's active session that is NOT scoped
 	// to any task (task_id IS NULL), or nil if none exists. This is the
 	// counterpart to GetActiveForTask for untagged reports — it must NOT match

@@ -952,3 +952,28 @@ func TestExtensionWorkspace_PassingCheckClearsLastErrorInList(t *testing.T) {
 	require.True(t, list[0].Status.Health.OK)
 	require.Empty(t, list[0].Status.LastError, "the list shows the check the window just ran")
 }
+
+type instanceOffStore struct{}
+
+func (instanceOffStore) InstanceSetting(context.Context, string) (*extensions.InstanceSetting, error) {
+	return &extensions.InstanceSetting{Enabled: false}, nil
+}
+
+// The workspace list tells the UI that the instance level is off even though
+// the workspace's own connection is active ("Enabled in workspace" alone is
+// misleading); an instance that is on reports nothing.
+func TestExtensionWorkspace_ListReportsInstanceDisabled(t *testing.T) {
+	ctx := context.Background()
+	f := newFx(t, instanceOffStore{}, false)
+	_, err := f.svc.Connect(ctx, f.ws, "demo", nil, map[string]any{"base_url": "https://x.example"}, fullConsent)
+	require.NoError(t, err)
+	list, err := f.svc.List(ctx, f.ws)
+	require.NoError(t, err)
+	require.True(t, list[0].Status.Enabled)
+	require.True(t, list[0].Status.InstanceDisabled)
+
+	g := newFx(t, exttest.InstanceOn{}, false)
+	list, err = g.svc.List(ctx, g.ws)
+	require.NoError(t, err)
+	require.False(t, list[0].Status.InstanceDisabled)
+}

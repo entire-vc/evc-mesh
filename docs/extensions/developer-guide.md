@@ -362,6 +362,85 @@ column: schema downgrade deliberately refuses to discard a scope. Before
 rolling application code back to a version without scoped-catalogue support,
 yank every scoped release so legacy selection cannot promote it.
 
+### Installing and updating a scoped release in Mesh
+
+This part is for the admin of a Mesh instance. The requests below go to the
+Mesh API, not to Spark.
+
+**Unlisted, not private.** Spark serves the receipt and the artifact of a
+scoped release to anyone who names the ID and the version, without
+authentication. Do not put secrets in a scoped release.
+
+- **Install:** `POST /api/v1/extensions/install` with
+  `{"source": "catalog", "id": "YOUR_ID", "version": "0.1.1"}`. Mesh fetches the
+  exact receipt and verifies it with the instance's catalogue key. It refuses a
+  receipt whose `selection` is not the requested ID and version, or that carries
+  more than one entry or release. The artifact must match the receipt's SHA256.
+  Nothing is written on a refusal.
+- **Update to another exact version:** `POST /api/v1/extensions/YOUR_ID/update`
+  with `{"target_version": "0.1.2", "expected_target_commit_sha": "<receipt commit>", "target_scope": "scoped"}`.
+  The version must be newer than the installed one. Added permissions need
+  `consent_commit_sha` as for any catalogue update.
+- **Move a repository install:** `move-to-catalog` (and its `/plan`) with
+  `"target_scope": "scoped"`; see "Move an existing repository install to the
+  catalog" below.
+
+**Pinned.** A scoped install stays on its version. Automatic updates and the
+Updates list never offer it the default catalogue's `latest`, and a plain
+`update` answers `up_to_date`, also after the ID appears in the default
+catalogue. It moves only when an admin chooses a version: an exact one keeps it
+pinned, a default-catalogue version (`"target_scope": "default"`) unpins it.
+
+**Yank and block.** Spark answers the exact receipt of a yanked, blocked or
+suspended scoped release with 404. Mesh re-reads the exact receipt of every
+pinned install on each catalogue refresh: on a 404 the extension is switched
+off and instance admins are notified; when the receipt is served again it is
+switched back on. If Spark is unreachable or a receipt does not verify, nothing
+changes.
+
+## Move an existing repository install to the catalog
+
+A Mesh instance may already run your extension installed straight from its
+repository. Once the extension is published in Spark, the instance admin can
+switch that install to the catalogue release without uninstalling it.
+
+What you do as the publisher:
+
+- Publish the extension in Spark under the **same ID** as the repository
+  install, at the **same or a newer version**. An older version is refused
+  (`409 extension_move_downgrade`), and the release must be approved and
+  installable in the signed catalogue.
+- Tell the instance admin which version to move to.
+
+What the instance admin does is `move-to-catalog`, in two steps:
+
+1. **Plan** (`POST /extensions/{id}/move-to-catalog/plan`) changes nothing. It
+   shows the current and the target source, version, commit and the permissions
+   the target adds or removes. The target artifact is verified exactly as for a
+   catalogue install.
+2. **Apply** (`POST /extensions/{id}/move-to-catalog`) with the version and
+   commit of both sides from the plan. If anything changed in between, the
+   apply is refused and nothing is touched.
+
+Workspace connections and their consent, project bindings, instance settings,
+event subscriptions and the extension's own token stay as they are. New
+permissions in the target release require the admin's consent in the same
+apply; nothing is parked as pending.
+
+**The move is one way.** The repository URL, ref and stored repository token
+are deleted. From then on updates and rollback go through the catalogue only.
+Going back to the repository means uninstalling and installing it again.
+
+An install that stays on the repository can instead be **re-pinned**
+(`POST /extensions/{id}/repin/plan`, then `POST /extensions/{id}/repin`) to a
+branch, a tag or a full 40-character commit SHA. Auto-update leaves a commit
+pin where it is; a tag pin moves to a newer semver tag and a branch pin follows
+its head.
+
+Request fields, refusal codes and idempotent retries: Mesh
+`docs/extensions/api.md`, sections "Moving a repository install to the
+catalog" and "Re-pinning a repository install".
+
 ## Independent publication check
 
 A reviewer who has not participated in implementation should use only this

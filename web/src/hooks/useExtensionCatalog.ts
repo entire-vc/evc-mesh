@@ -16,6 +16,8 @@ export interface ExtensionStatusDto {
   last_error?: string;
   /** The instance administrator does not allow it: off whatever the connection says; the connection is kept. */
   not_allowed?: boolean;
+  /** The instance-level setting is switched off, even if the workspace connection is active. Read-only. */
+  instance_disabled?: boolean;
 }
 
 export interface ExtensionManifest {
@@ -67,7 +69,7 @@ export interface CatalogEntry {
   source: string;
   blocked: boolean;
   blockedReason: string;
-  /** False only when the instance admin's list excludes it (field arrives with W2.8). */
+  /** False only when the instance admin's list excludes it. */
   allowed: boolean;
   /** Present in this instance (built-in or installed); false for catalog-only entries. */
   installed: boolean;
@@ -203,7 +205,7 @@ export interface CatalogState {
 /**
  * `GET /extensions` (installed + built-in) merged with
  * `GET /workspaces/{ws}/extensions` (status). The Spark-backed
- * `GET /extensions/catalog` joins in W4.1: a 404 means "not deployed yet" and is
+ * `GET /extensions/catalog`: a 404 means "not deployed yet" and is
  * silent; any other failure raises the "catalog unavailable" banner.
  */
 export function useExtensionCatalog(): CatalogState {

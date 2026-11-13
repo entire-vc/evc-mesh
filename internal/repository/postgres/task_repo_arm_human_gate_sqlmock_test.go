@@ -17,7 +17,7 @@ import (
 )
 
 // TaskRepo.ArmHumanGate is the ONLY statement that persists gate authorship to Postgres
-// (task #4545660b). Everything above it — the service, the handler, the marker path — is
+// . Everything above it — the service, the handler, the marker path — is
 // covered against fake repositories, which means every one of those tests would stay
 // green if this UPDATE silently stopped writing a column.
 //
@@ -61,6 +61,8 @@ var armedColumns = []string{
 	"gate_reason",
 	"recommended_default",
 	"gate_deadline",
+	"human_gate_source",
+	"human_gate_source_comment_id",
 }
 
 func TestTaskRepo_ArmHumanGate_SetsEveryGateColumn(t *testing.T) {
@@ -71,11 +73,12 @@ func TestTaskRepo_ArmHumanGate_SetsEveryGateColumn(t *testing.T) {
 
 	// Arg order is asserted too: a statement can name every column and still bind them
 	// in the wrong order, which no column-name check would catch. The 8th arg is the
-	// configured default-on-timeout window (task #060ccaae) — unused by this particular
-	// call since an explicit Deadline is given, but still always bound.
+	// configured default-on-timeout window — unused by this particular
+	// call since an explicit Deadline is given, but still always bound. The 9th is the
+	// arm source, which the marker-gate reclassification relies on.
 	mock.ExpectExec("").
 		WithArgs(taskID, domain.HumanGateClassSoft, author, string(domain.ActorTypeAgent),
-			"why", "what I will do otherwise", deadline, DefaultGateTimeoutHours).
+			"why", "what I will do otherwise", deadline, DefaultGateTimeoutHours, "api", uuid.NullUUID{}).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	require.NoError(t, repo.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
@@ -86,6 +89,7 @@ func TestTaskRepo_ArmHumanGate_SetsEveryGateColumn(t *testing.T) {
 		RecommendedDefault: "what I will do otherwise",
 		Deadline:           &deadline,
 		Class:              domain.HumanGateClassSoft,
+		Source:             domain.ArmHumanGateSourceAPI,
 	}))
 	require.NoError(t, mock.ExpectationsWereMet())
 
@@ -100,7 +104,7 @@ func TestTaskRepo_ArmHumanGate_SetsEveryGateColumn(t *testing.T) {
 // the column's presence. Re-arming refreshes the ask (a later marker supersedes an
 // earlier one) but must not restart the age the soft-timeout sweep measures — otherwise a
 // driver's repeat ping keeps a soft gate alive forever, which is the latch shape of
-// #84ab54fd. `human_gate_armed_at = NOW()` unconditionally would satisfy the
+// this change. `human_gate_armed_at = NOW()` unconditionally would satisfy the
 // column-presence check above while reintroducing exactly that bug.
 func TestTaskRepo_ArmHumanGate_DoesNotResetArmedAtOnReArm(t *testing.T) {
 	repo, mock, captured := captureTaskRepoSQL(t)
@@ -120,7 +124,7 @@ func TestTaskRepo_ArmHumanGate_DoesNotResetArmedAtOnReArm(t *testing.T) {
 
 // TestTaskRepo_SetHumanGate_ReleaseNullsTheAsk covers the other half of the same
 // contract. The ask metadata describes a LIVE question; a recommended_default left on a
-// released task is a default that something (task #060ccaae's timeout sweep) will
+// released task is a default that something (the regression's timeout sweep) will
 // eventually apply to a settled question.
 func TestTaskRepo_SetHumanGate_ReleaseNullsTheAsk(t *testing.T) {
 	repo, mock, captured := captureTaskRepoSQL(t)
@@ -137,6 +141,10 @@ func TestTaskRepo_SetHumanGate_ReleaseNullsTheAsk(t *testing.T) {
 			*captured,
 			"releasing must null %s — an ask that outlives its question is residue every "+
 				"reader has to learn to ignore", col)
+	}
+	for _, col := range []string{"human_gate_source", "human_gate_source_comment_id"} {
+		assert.Regexp(t, regexp.MustCompile(`\b`+regexp.QuoteMeta(col)+`\s*=\s*NULL\b`), *captured,
+			"any SetHumanGate drops the recorded arm source: %s", col)
 	}
 }
 
@@ -156,7 +164,7 @@ func TestTaskRepo_ArmHumanGate_MissingTaskIsNotFound(t *testing.T) {
 }
 
 // TestTaskRepo_ArmHumanGate_DeadlineCASE_ExplicitAlwaysWins pins the FIRST branch of the
-// gate_deadline CASE (task #060ccaae): a caller-supplied deadline is used verbatim,
+// gate_deadline CASE: a caller-supplied deadline is used verbatim,
 // regardless of class or recommended_default — the auto-default exists to fill in what
 // the caller left unset, never to override what they actually said.
 func TestTaskRepo_ArmHumanGate_DeadlineCASE_ExplicitAlwaysWins(t *testing.T) {
@@ -171,7 +179,7 @@ func TestTaskRepo_ArmHumanGate_DeadlineCASE_ExplicitAlwaysWins(t *testing.T) {
 }
 
 // TestTaskRepo_ArmHumanGate_DeadlineCASE_HardTakesSameComputedBranchAsSoft pins task
-// 1.4b (#4d61d867 / #4d61d877): the class-based `WHEN $2 = 'hard' THEN NULL` branch that
+// 1.4b (this change / this change): the class-based `WHEN $2 = 'hard' THEN NULL` branch that
 // used to force a hard gate's deadline to NULL unconditionally is GONE from the query
 // text — a hard-classified arm with a real recommended_default and no explicit deadline
 // reaches the exact same ELSE branch a soft one does
@@ -235,7 +243,7 @@ func TestTaskRepo_ArmHumanGate_DeadlineCASE_NoDefaultMeansNoDeadline(t *testing.
 // the final branch AND that the interval is a BOUND parameter, not a literal: the one case
 // that actually produces a computed deadline is non-hard class + a real
 // recommended_default + no explicit deadline, and the window is
-// HUMAN_GATE_DEFAULT_TIMEOUT_H (default 24h, task #060ccaae / Pavel decision 2026-09-06 —
+// HUMAN_GATE_DEFAULT_TIMEOUT_H (default 24h, the regression —
 // the original spec said 72h, changed before ship), never baked into the query text.
 func TestTaskRepo_ArmHumanGate_DeadlineCASE_SoftWithDefaultComputesFromConfiguredHours(t *testing.T) {
 	repo, mock, captured := captureTaskRepoSQL(t)
@@ -265,7 +273,7 @@ func TestTaskRepo_ArmHumanGate_DefaultTimeoutHours_UsesBuiltinDefaultWhenUnset(t
 	repo, mock, _ := captureTaskRepoSQL(t)
 	mock.ExpectExec("").WithArgs(
 		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), DefaultGateTimeoutHours,
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), DefaultGateTimeoutHours, sqlmock.AnyArg(), sqlmock.AnyArg(),
 	).WillReturnResult(sqlmock.NewResult(0, 1))
 	require.NoError(t, repo.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
 		TaskID: uuid.New(), Author: uuid.New(), AuthorType: domain.ActorTypeAgent,
@@ -282,7 +290,7 @@ func TestTaskRepo_ArmHumanGate_DefaultTimeoutHours_UsesConfiguredValue(t *testin
 	repo.SetDefaultGateTimeoutHours(48)
 	mock.ExpectExec("").WithArgs(
 		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), 48,
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), 48, sqlmock.AnyArg(), sqlmock.AnyArg(),
 	).WillReturnResult(sqlmock.NewResult(0, 1))
 	require.NoError(t, repo.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
 		TaskID: uuid.New(), Author: uuid.New(), AuthorType: domain.ActorTypeAgent,
@@ -299,7 +307,7 @@ func TestTaskRepo_ArmHumanGate_DefaultTimeoutHours_NonPositiveOverrideFallsBack(
 	repo.SetDefaultGateTimeoutHours(-5)
 	mock.ExpectExec("").WithArgs(
 		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), DefaultGateTimeoutHours,
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), DefaultGateTimeoutHours, sqlmock.AnyArg(), sqlmock.AnyArg(),
 	).WillReturnResult(sqlmock.NewResult(0, 1))
 	require.NoError(t, repo.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
 		TaskID: uuid.New(), Author: uuid.New(), AuthorType: domain.ActorTypeAgent,

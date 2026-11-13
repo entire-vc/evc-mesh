@@ -281,6 +281,8 @@ func (m *MockCommentService) ReconcileClosedFollowUpPending(ctx context.Context)
 	return 0, 0, 0, nil
 }
 
+func (m *MockCommentService) ReconcileMarkerGateClasses(context.Context) (int, error) { return 0, nil }
+
 // MockTaskDependencyService implements service.TaskDependencyService for testing.
 type MockTaskDependencyService struct {
 	CreateFunc                   func(ctx context.Context, dep *domain.TaskDependency) error
@@ -1256,6 +1258,9 @@ func (m *MockAgentSessionRepository) Update(ctx context.Context, session *domain
 }
 func (m *MockAgentSessionRepository) GetActiveAgentWide(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error) {
 	return nil, nil
+}
+func (m *MockAgentSessionRepository) AddUsage(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, tokensIn, tokensOut int64, cost float64, model string) (*domain.AgentSession, error) {
+	return &domain.AgentSession{AgentID: agentID, WorkspaceID: workspaceID, TaskID: taskID, TokensIn: tokensIn, TokensOut: tokensOut, EstimatedCost: cost, ModelUsed: model}, nil
 }
 func (m *MockAgentSessionRepository) GetActiveForTask(ctx context.Context, agentID, taskID uuid.UUID) (*domain.AgentSession, error) {
 	return nil, nil

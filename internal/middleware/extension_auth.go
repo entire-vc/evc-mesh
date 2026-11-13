@@ -128,6 +128,9 @@ var extensionRouteCapabilities = map[string]string{
 	"GET /api/v1/projects/:proj_id":           "projects:read",
 	"POST /api/v1/workspaces/:ws_id/projects": "projects:write",
 	"PATCH /api/v1/projects/:proj_id":         "projects:write",
+	// The project's workflow, readable without a task in it. Read only:
+	// creating, editing and reordering statuses stay closed to extensions.
+	"GET /api/v1/projects/:proj_id/statuses": "projects:read",
 
 	// hierarchy export (the handler additionally requires projects:read,
 	// members:read and agents:read: it carries all of them)
