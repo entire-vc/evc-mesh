@@ -1,10 +1,13 @@
-import { test, expect, type Page, type Request } from "@playwright/test";
+import { test, expect, type Locator, type Page, type Request } from "@playwright/test";
 // Board drag-and-drop on the shared primitives, against the loopback fixture
 // (same stand as board-pagination.spec.ts). The move request IS the proof: a
 // repaint is not a move.
 const BOARD_URL = "/w/board-fixture/p/contenthub";
 const API = "http://127.0.0.1:8019";
 const BOOT_MS = 60_000;
+// The live region of the card's own DnD container: dnd-kit renders it right after the instructions the card's
+// aria-describedby names. Not «the first [aria-live]»: the sidebar's dashboard menu has a drag container of its own.
+const liveOf = async (card: Locator) => card.page().locator(`#${await card.getAttribute("aria-describedby")} + [aria-live]`);
 const isMove = (r: Request) => r.method() === "POST" && /\/tasks\/[^/]+\/move/.test(r.url());
 
 const openBoard = async (page: Page) => {
@@ -43,7 +46,7 @@ test("keyboard: Space picks up, ArrowRight moves to the next column, Space drops
   expect(await card.getAttribute("tabindex")).toBe("0");
   await card.focus();
   const moved = page.waitForRequest(isMove);
-  const live = page.locator("[aria-live]").first();
+  const live = await liveOf(card);
   await page.keyboard.press("Space");
   await expect(live).toContainText("is over");
   await page.waitForTimeout(250); // dnd-kit attaches its key listeners a tick after pickup
@@ -65,7 +68,7 @@ test("keyboard: ArrowDown inside a column moves the card below the next one", as
   const second = await cards.nth(1).getAttribute("data-task-id");
   await cards.nth(0).focus();
   const moved = page.waitForRequest(isMove);
-  const live = page.locator("[aria-live]").first();
+  const live = await liveOf(cards.nth(0));
   await page.keyboard.press("Space");
   await expect(live).toContainText("is over");
   await page.waitForTimeout(250); // dnd-kit attaches its key listeners a tick after pickup
@@ -87,7 +90,7 @@ test("keyboard: Escape cancels the move", async ({ page }) => {
   let moves = 0;
   page.on("request", (r) => { if (isMove(r)) moves++; });
   await card.focus();
-  const live = page.locator("[aria-live]").first();
+  const live = await liveOf(card);
   await page.keyboard.press("Space");
   await expect(live).toContainText("is over");
   await page.waitForTimeout(250); // dnd-kit attaches its key listeners a tick after pickup

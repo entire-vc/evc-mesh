@@ -92,3 +92,33 @@ func TestHostAllowed(t *testing.T) {
 	assert.True(t, HostAllowed("Svc.Example.com", []string{"https://svc.example.com:8443/x"}))
 	assert.False(t, HostAllowed("", []string{""}))
 }
+
+func TestFrameForWidget(t *testing.T) {
+	m := helloManifest("hello.example.com")
+	m.Widgets = []extensions.Widget{
+		{ID: "status", Title: "Status", Render: extensions.WidgetRender{Frame: &extensions.WidgetFrame{Path: "/mesh/ui/widget"}}},
+		{ID: "native", Title: "Native", Render: extensions.WidgetRender{Builtin: "x"}},
+	}
+	settings := map[string]any{"hello_url": "https://hello.example.com"}
+	f, err := FrameForWidget(m, settings, "status")
+	require.NoError(t, err)
+	assert.Equal(t, "https://hello.example.com/mesh/ui/widget", f.URL)
+	assert.Equal(t, "Status", f.Title)
+
+	t.Run("red: unknown widget id", func(t *testing.T) {
+		_, err := FrameForWidget(m, settings, "nope")
+		assert.ErrorIs(t, err, ErrUnknownWidget)
+	})
+	t.Run("red: builtin widget has no frame", func(t *testing.T) {
+		_, err := FrameForWidget(m, settings, "native")
+		assert.ErrorIs(t, err, ErrUnknownWidget)
+	})
+	t.Run("red: host outside allowed_domains", func(t *testing.T) {
+		_, err := FrameForWidget(m, map[string]any{"hello_url": "https://evil.example"}, "status")
+		assert.ErrorIs(t, err, ErrDomainNotAllowed)
+	})
+	t.Run("red: the slot form has no widget screen", func(t *testing.T) {
+		_, err := FrameFor(m, settings, SlotDashboardWidget)
+		assert.ErrorIs(t, err, ErrNoScreen)
+	})
+}

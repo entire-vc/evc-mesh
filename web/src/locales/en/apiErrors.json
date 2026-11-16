@@ -11,6 +11,7 @@
   "cas_conflict": "The task was changed by someone else. Reload it and try again.",
   "document_version_conflict": "The document was changed since you opened it. Reload it and re-apply your edit.",
   "document_slug_taken": "A document with this slug already exists in this folder. Rename one of them or choose another slug.",
+  "document_shrink_refused": "This edit would remove most of the document. Nothing was saved.",
   "external_source_conflict": "The original document changed since you opened it. Nothing was saved. Reopen it and re-apply your edit.",
   "external_source_write_landed": "Your edit reached the original document and will appear here at the next sync.",
   "list_revision_stale": "The list changed while you were paging. Start again from the first page.",
@@ -52,5 +53,12 @@
   "chat_not_started": "The turn has not been started yet.",
   "chat_seq_gap": "An event is missing: resend from the expected sequence number.",
   "chat_batch_too_large": "The event batch is too large.",
-  "chat_rate_limited": "Too many event batches for this turn. Try again shortly."
+  "chat_rate_limited": "Too many event batches for this turn. Try again shortly.",
+  "stale_layout": "The dashboard changed elsewhere. Re-apply your change.",
+  "last_dashboard": "The last dashboard cannot be deleted.",
+  "dashboard_limit": "Dashboard limit reached.",
+  "dashboard_order_mismatch": "The menu changed. Reload and try again.",
+  "dashboard_not_hideable": "Only a shared dashboard can be hidden.",
+  "layout_invalid": "The dashboard layout is not valid.",
+  "not_default_dashboard": "Only the default dashboard can be reset."
 }

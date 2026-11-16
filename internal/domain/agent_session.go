@@ -114,6 +114,9 @@ type SessionUsage struct {
 	TokensInUnknown  bool
 	TokensOutUnknown bool
 	CostUnknown      bool
+	// Receipt, when set, binds the request's Idempotency-Key to the session
+	// in the addition's transaction.
+	Receipt *IdempotencyReceipt
 }
 
 // TaskCostSummary aggregates cost and quality metrics for a single task

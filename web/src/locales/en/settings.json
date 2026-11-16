@@ -63,6 +63,7 @@
     "name": "Name",
     "namePlaceholder": "My Project",
     "slug": "Slug",
+    "iconLabel": "Project icon",
     "descriptionLabel": "Description",
     "descriptionPlaceholder": "Optional description...",
     "cancel": "Cancel",
@@ -193,7 +194,10 @@
       "targetDate": "Target Date",
       "cancel": "Cancel",
       "creating": "Creating...",
-      "create": "Create Initiative"
+      "create": "Create Initiative",
+      "editHeading": "Edit initiative",
+      "save": "Save",
+      "saving": "Saving..."
     },
     "toast": {
       "created": "Initiative created",
@@ -203,7 +207,9 @@
       "unlinked": "Project unlinked",
       "unlinkFailed": "Failed to unlink project",
       "deleted": "Initiative deleted",
-      "deleteFailed": "Failed to delete initiative"
+      "deleteFailed": "Failed to delete initiative",
+      "updated": "Initiative updated",
+      "updateFailed": "Failed to update initiative"
     },
     "confirmDelete": "Delete initiative \"{{name}}\"? This cannot be undone.",
     "detail": {
@@ -212,13 +218,24 @@
       "selectProject": "Select a project...",
       "link": "Link",
       "linkedProjects": "Linked Projects ({{n}})",
-      "noLinked": "No projects linked yet."
+      "noLinked": "No projects linked yet.",
+      "unlink": "Unlink {{name}}",
+      "backToDashboard": "Dashboard",
+      "notFound": "This initiative was not found or you have no access to it.",
+      "edit": "Edit",
+      "delete": "Delete initiative"
     },
     "page": {
       "newInitiative": "New Initiative",
       "emptyTitle": "No initiatives yet",
       "emptyText": "Create strategic objectives to group and track related projects.",
       "createInitiative": "Create Initiative"
+    },
+    "widget": {
+      "loadFailed": "Could not load initiatives.",
+      "noneWithStatus": "No initiatives with the selected statuses.",
+      "pickOne": "Choose an initiative in the widget settings.",
+      "openPage": "Open the initiative page"
     }
   },
   "install": {
@@ -352,7 +369,7 @@
       "description": "Description",
       "descriptionPlaceholder": "Optional project description...",
       "icon": "Icon",
-      "iconPlaceholder": "Emoji or short text (e.g. \\uD83D\\uDE80)",
+      "iconHint": "Emoji or a theme icon. It shows in the menu, the rail and the breadcrumbs.",
       "saveChanges": "Save Changes"
     },
     "statuses": {
@@ -745,38 +762,6 @@
       "completedExpand": "✓ {{n}} completed · expand",
       "previousPage": "Previous page",
       "loadNext": "Load next 50 · {{n}} remaining"
-    }
-  },
-  "triage": {
-    "priority": {
-      "urgent": "urgent",
-      "high": "high",
-      "medium": "medium",
-      "low": "low",
-      "none": "none"
-    },
-    "move": {
-      "title": "Move Task",
-      "targetProject": "Target Project",
-      "targetStatus": "Target Status",
-      "noStatuses": "No statuses available",
-      "cancel": "Cancel",
-      "moving": "Moving...",
-      "newStatus": "new status",
-      "movedTo": "Moved to \"{{status}}\"",
-      "failed": "Failed to move task"
-    },
-    "row": {
-      "by": "by {{name}}",
-      "editTask": "Edit task",
-      "move": "Move"
-    },
-    "page": {
-      "awaiting_one": "{{count}} task awaiting triage",
-      "awaiting_other": "{{count}} tasks awaiting triage",
-      "inboxEmpty": "Inbox is empty",
-      "inboxEmptyText": "Tasks assigned to a \"triage\" status category will appear here.",
-      "unknownProject": "Unknown Project"
     }
   },
   "updates": {

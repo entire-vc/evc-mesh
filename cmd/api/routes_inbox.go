@@ -5,6 +5,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/entire-vc/evc-mesh/internal/handler"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -71,5 +72,8 @@ func registerInboxRoutes(deps *apiDeps) {
 
 	// Activity feed — my comments + workspace-wide recent comments.
 	api.GET("/me/comments", commentHandler.GetMyComments)
+	// The caller's own keyed write, found by its Idempotency-Key.
+	idempotencyReceiptHandler := handler.NewIdempotencyReceiptHandler(deps.idempotencyRepo)
+	api.GET("/me/idempotency-receipts", idempotencyReceiptHandler.Get)
 	api.GET("/workspaces/:ws_id/comments/recent", commentHandler.GetRecentByWorkspace, wsAccess)
 }

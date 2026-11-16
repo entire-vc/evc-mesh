@@ -38,6 +38,8 @@ pkg/apierror <- web/src/locales/**/apiErrors.json
 tests/integration <- cmd/api/*.go
 internal/extensions/repoinstall <- internal/extensions/schema/**/*
 internal/extensions/migrationlint <- internal/extensions/**/migrations/*.sql
+internal/extensions/dashboards <- migrations/20261114100_ext_dashboards.sql web/src/core/dashboard/core-widgets.json
 internal/themes <- packages/mesh-theme-sdk/cli/**/* packages/mesh-theme-sdk/fixtures/**/*
 internal/extensions/external <- examples/external-extension/mesh-extension.json
 internal/extensions/catalog <- internal/extensions/catalog/testdata/**/*
+examples/external-extension/refext <- web/board-e2e/refext-widget.html

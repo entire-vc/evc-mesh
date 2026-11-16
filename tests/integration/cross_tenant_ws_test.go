@@ -224,33 +224,35 @@ func TestCrossTenantWS_MemberStillReceivesOwnEvents(t *testing.T) {
 
 // TestCrossTenantWS_AgentKeyStillWorks is the fleet's canary. Our agents connect
 // over /ws with X-Agent-Key credentials; if this path breaks, every agent goes
-// dark at once. The agent must reach its own workspace and be refused another's.
+// dark at once. An agent reaches the frames of the projects it is a member of,
+// as through the REST API; an agent of the same workspace that is not a member
+// of the project is refused its channel and gets none of its task frames.
 func TestCrossTenantWS_AgentKeyStillWorks(t *testing.T) {
 	victim := newVictimFixture(t, "xtws-agent")
 
-	resp := victim.env.Post(t, fmt.Sprintf("/api/v1/workspaces/%s/agents", victim.wsID), map[string]any{
-		"name":       "ws-canary-agent",
-		"agent_type": "claude_code",
+	memberID, memberKey := victim.env.CreateAgent(t, victim.wsID, "ws-canary-agent")
+	_, outsiderKey := victim.env.CreateAgent(t, victim.wsID, "ws-outsider-agent")
+	resp := victim.env.Post(t, fmt.Sprintf("/api/v1/projects/%s/members/agents", victim.projectID), map[string]any{
+		"agent_id": memberID, "role": "member",
 	})
-	require.Equal(t, http.StatusCreated, resp.StatusCode)
-	var registered map[string]any
-	victim.env.DecodeJSON(t, resp, &registered)
-	agentKey := registered["api_key"].(string)
-	agentID := registered["agent"].(map[string]any)["id"].(string)
-	victim.env.OnCleanup(func() {
-		_, _ = victim.env.DB.ExecContext(context.Background(), "DELETE FROM agents WHERE id = $1", agentID)
-	})
+	require.Equal(t, http.StatusCreated, resp.StatusCode, string(victim.env.ReadBody(t, resp)))
 
-	conn, _, err := dialWS(t, wsURL(victim.env.BaseURL, "agent_key="+agentKey))
+	member, _, err := dialWS(t, wsURL(victim.env.BaseURL, "agent_key="+memberKey))
 	require.NoError(t, err, "an agent was refused its own workspace event feed")
-	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
+	defer func() { _ = member.Close(websocket.StatusNormalClosure, "") }()
+	outsider, _, err := dialWS(t, wsURL(victim.env.BaseURL, "agent_key="+outsiderKey))
+	require.NoError(t, err, "an agent was refused its own workspace event feed")
+	defer func() { _ = outsider.Close(websocket.StatusNormalClosure, "") }()
 
-	// The agent may subscribe to a project in its own workspace.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	payload, err := json.Marshal(map[string]string{"action": "subscribe", "channel": "project:" + victim.projectID})
 	require.NoError(t, err)
-	require.NoError(t, conn.Write(ctx, websocket.MessageText, payload))
+	require.NoError(t, member.Write(ctx, websocket.MessageText, payload))
+	require.NoError(t, outsider.Write(ctx, websocket.MessageText, payload))
+
+	_, denied := waitForEvent(outsider, "subscribe.denied", 3*time.Second)
+	assert.True(t, denied, "an agent outside the project was allowed to subscribe to its channel")
 
 	time.Sleep(300 * time.Millisecond)
 	const title = "Agent event round trip"
@@ -260,9 +262,12 @@ func TestCrossTenantWS_AgentKeyStillWorks(t *testing.T) {
 	require.Equal(t, http.StatusCreated, createResp.StatusCode)
 	_ = createResp.Body.Close()
 
-	frame, ok := waitForEvent(conn, title, 8*time.Second)
-	require.True(t, ok, "an agent received no event for a task created in its own workspace")
+	frame, ok := waitForEvent(member, title, 8*time.Second)
+	require.True(t, ok, "a project member agent received no event for a task created in its project")
 	assert.NotContains(t, frame, "subscribe.denied")
+
+	_, leaked := waitForEvent(outsider, title, 3*time.Second)
+	assert.False(t, leaked, "an agent outside the project received its task title over ws:<slug>")
 }
 
 // TestCrossTenantWS_AgentCannotReachAnotherWorkspace: the agent path reads its

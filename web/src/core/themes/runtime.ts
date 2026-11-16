@@ -12,7 +12,7 @@ import { errText, reportThemeIssue } from "./log";
 import { useThemeStore } from "./store";
 import { setThemeModes } from "./mode";
 import { registerSlotViewOverride, setThemeSettings } from "@/core/slots/registry";
-import { setThemeWidgets } from "@/core/dashboard/theme-widgets";
+import { majorOf, setLayoutMajor, setThemeWidgets } from "@/core/dashboard/theme-widgets";
 
 export interface ThemeAnswer {
   theme_id: string;
@@ -38,6 +38,7 @@ function dropViews(settings: Record<string, unknown> = {}): void {
   disposers.forEach((d) => d());
   disposers = [];
   setThemeWidgets([]);
+  setLayoutMajor(2);
   viewsSlug = null;
   setThemeSettings(settings);
   useThemeStore.getState().set({ viewsThemeId: DEFAULT_VIEWS, settings });
@@ -110,6 +111,7 @@ export async function applyWorkspaceTheme(slug: string, isStale: () => boolean =
     disposers.forEach((d) => d());
     disposers = ok.map((slot) => registerSlotViewOverride(slot, bundle.views[slot]!.view));
     setThemeWidgets(ownWidgets(t.theme_id, bundle, ok));
+    setLayoutMajor(ok.includes("dashboard.layout") ? majorOf(bundle.views["dashboard.layout"]?.contract) : 2);
     viewsSlug = slug;
     setThemeSettings(t.settings ?? {});
     useThemeStore.getState().set({ viewsThemeId: t.theme_id, settings: t.settings ?? {} });

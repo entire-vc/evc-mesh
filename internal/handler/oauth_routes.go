@@ -98,6 +98,10 @@ func (l OAuthRateLimits) costLimiter(name string, rpm int) mw.RateLimitConfig {
 // the tests exercise are the routes production serves, limiters included.
 func RegisterOAuthPublicRoutes(e *echo.Echo, h *OAuthHandler, repo repository.OAuthRepository, limits OAuthRateLimits) {
 	e.GET("/.well-known/oauth-authorization-server", h.ServerMetadata)
+	// OpenID Connect discovery and JWKS: JSON 404 while no
+	// signing key is configured.
+	e.GET("/.well-known/openid-configuration", h.OIDCDiscovery)
+	e.GET("/oauth/jwks", h.JWKS)
 	e.POST("/oauth/register", h.Register, mw.RateLimit(limits.costLimiter("oauth-register", limits.Register)))
 
 	// A lookup failure counts as "new client": fail toward the stricter limit.

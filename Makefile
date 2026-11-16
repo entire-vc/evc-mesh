@@ -1,5 +1,6 @@
 .PHONY: ci-prepush build test lint migrate-up migrate-down docker-up docker-down generate clean \
-        ci ci-lint ci-test ci-test-web ci-build ci-services-up ci-services-down ci-install-tools
+        ci ci-lint ci-test ci-test-web ci-build ci-services-up ci-services-down ci-install-tools \
+        test-pkg test-affected lint-affected
 
 # Binary output directory
 BIN_DIR := bin
@@ -99,7 +100,15 @@ GOOSE                 := $(shell go env GOPATH)/bin/goose
 # basename, which is already unique per checkout (and per ephemeral
 # session-worktree, whose names are randomly prefixed). ?= so an operator can
 # still force a specific value.
-CHECKOUT_ID          := $(shell printf '%s' '$(notdir $(CURDIR))' | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-')
+#
+# The basename alone is not unique either: lane worktrees are
+# `<lane>/evc-mesh/slot-<n>`, so every lane's `slot-2` resolved to the same
+# project `mesh-ci-slot-2` on the same ports, and one lane's `up`/`down -v`
+# acted on another lane's live stack. A hash of the full checkout path is
+# appended; the basename stays in front so `docker ps` still reads.
+CHECKOUT_BASE        := $(shell printf '%s' '$(notdir $(CURDIR))' | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-')
+CHECKOUT_HASH        := $(shell printf '%s' '$(CURDIR)' | cksum | awk '{printf "%06x", $$1 % 16777216}')
+CHECKOUT_ID          := $(CHECKOUT_BASE)-$(CHECKOUT_HASH)
 # Modulus must stay under the SMALLEST gap between any two of the four base
 # ports below (4223/5437/6383/8223 -> smallest consecutive gap is 946,
 # between 5437 and 6383), or two checkouts with different offsets could
@@ -134,6 +143,12 @@ CI_REDIS_URL    ?= redis://localhost:$(REDIS_PORT)
 CI_NATS_URL     ?= nats://localhost:$(NATS_PORT)
 
 DEPLOY_COMPOSE := $(DEPLOY_DIR)/docker-compose.yml
+# Passed to every CI compose call. Shell environment beats the compose .env
+# file, so a .env written by an older derivation (ci-project-env never
+# overwrites one) cannot steer this checkout onto another checkout's project
+# or ports.
+CI_COMPOSE_ENV := COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) DB_PORT=$(DB_PORT) \
+	REDIS_PORT=$(REDIS_PORT) NATS_PORT=$(NATS_PORT) NATS_MONITOR_PORT=$(NATS_MONITOR_PORT)
 
 ## ci-prepush: What the pre-push hook runs. Same stages as `ci`, but test failures
 ## that are already red on the latest main pipeline only warn; new ones, lint and
@@ -194,7 +209,7 @@ ci-services-up: ci-project-env
 	@echo "── Reaping stale CI containers from killed sessions ─────────────"
 	@python3 $(CURDIR)/scripts/ci/reap_stale_ci_containers.py || true
 	@echo "── Starting CI services (postgres redis nats) ──────────────────"
-	docker compose -f $(DEPLOY_COMPOSE) up -d --wait postgres redis nats
+	$(CI_COMPOSE_ENV) docker compose -f $(DEPLOY_COMPOSE) up -d --wait postgres redis nats
 	@echo "── Services ready ✓"
 
 ## ci-services-down: Stop AND REMOVE this checkout's CI containers + network
@@ -207,7 +222,7 @@ ci-services-up: ci-project-env
 ## whole address pool was exhausted and `ci-services-up` started failing for
 ## everyone, not just the checkout that leaked.
 ci-services-down:
-	docker compose -f $(DEPLOY_COMPOSE) down -v
+	$(CI_COMPOSE_ENV) docker compose -f $(DEPLOY_COMPOSE) down -v
 
 ## ci-test: Run migrations + go test ./... -race (requires ci-services-up).
 ##
@@ -246,6 +261,96 @@ ci-test: ci-services-up
 	NATS_URL="$(CI_NATS_URL)" \
 		go test ./... -v -race -timeout $(GO_TEST_TIMEOUT) $(GO_TEST_P_FLAG) -coverprofile=coverage.out -covermode=atomic && \
 	echo "── Tests OK ✓"
+
+# ── Before every push: affected packages only ────────────────────────────────
+# `make lint-affected test-affected` checks what the diff against origin/main
+# reaches, with the same package selection as the CI `test` job
+# (scripts/ci/go_affected_packages.py). The full suite, e2e and shards stay in
+# CI: when the selector answers ALL, test-affected runs nothing locally.
+#
+# The selector diffs committed history (merge-base..HEAD); commit first.
+# AFFECTED_BASE overrides the base commit (default: merge-base with origin/main,
+# so `git fetch origin` keeps it honest).
+AFFECTED_BASE ?=
+# The package selector; scripts/ci/test_make_affected.py swaps in a stand-in.
+GO_AFFECTED_SELECTOR ?= python3 scripts/ci/go_affected_packages.py
+
+define go_affected_select
+base="$(AFFECTED_BASE)"; \
+if [ -z "$$base" ]; then \
+	base=$$(git merge-base origin/main HEAD) || { echo "no merge base with origin/main: run git fetch origin" >&2; exit 2; }; \
+fi; \
+sel=$$($(GO_AFFECTED_SELECTOR) --base "$$base")
+endef
+
+## test-pkg: go test -race on PKG (space-separated) against a throwaway
+## postgres + redis + nats stack of this checkout, migrated with goose.
+##   make test-pkg PKG="./internal/analytics/... ./internal/handler"
+## The stack is this checkout's own compose project (ci-services-up) and is
+## removed on every exit path, the same trap as ci-test: pass, fail, Ctrl+C,
+## kill. Everything, including `compose up`, runs inside the trapped shell, so an
+## interrupt during startup does not leave a half-started stack behind.
+## Host ports are docker's to choose (host port 0) and read back with
+## `compose port`: the path-hash offset of ci-test has only 900 values, so two
+## checkouts can draw the same ports; a port docker hands out cannot be taken.
+## compose is called directly (not via ci-services-up) so ci-project-env never
+## writes these zero ports into the checkout's .env.
+TEST_PKG_PORTS   := DB_PORT=0 REDIS_PORT=0 NATS_PORT=0 NATS_MONITOR_PORT=0
+TEST_PKG_COMPOSE := COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) $(TEST_PKG_PORTS) \
+	docker compose -f $(DEPLOY_COMPOSE)
+test-pkg: ci-install-tools
+	@if [ -z "$(strip $(PKG))" ]; then \
+		echo 'usage: make test-pkg PKG="./internal/foo/... ./internal/bar"' >&2; exit 2; \
+	fi
+	@trap '$(TEST_PKG_COMPOSE) down -v; rm -f $(DEPLOY_DIR)/.ci-active-pid' EXIT; \
+	trap 'exit 130' INT; \
+	trap 'exit 143' TERM HUP; \
+	printf '%s\n%s\n' "$$$$" "$$(ps -o lstart= -p $$$$)" > $(DEPLOY_DIR)/.ci-active-pid; \
+	python3 $(CURDIR)/scripts/ci/reap_stale_ci_containers.py || true; \
+	echo "── Starting $(COMPOSE_PROJECT_NAME) (postgres redis nats) ──────" && \
+	$(TEST_PKG_COMPOSE) up -d --wait postgres redis nats && \
+	db_port=$$($(TEST_PKG_COMPOSE) port postgres 5432 | sed -n '1s/.*://p') && \
+	redis_port=$$($(TEST_PKG_COMPOSE) port redis 6379 | sed -n '1s/.*://p') && \
+	nats_port=$$($(TEST_PKG_COMPOSE) port nats 4222 | sed -n '1s/.*://p') && \
+	[ -n "$$db_port" ] && [ -n "$$redis_port" ] && [ -n "$$nats_port" ] && \
+	dsn="postgres://mesh:mesh@localhost:$$db_port/mesh?sslmode=disable" && \
+	echo "── Stack $(COMPOSE_PROJECT_NAME): postgres :$$db_port redis :$$redis_port nats :$$nats_port" && \
+	echo "── Migrations ──────────────────────────────────────────────────" && \
+	GOOSE_DRIVER=postgres GOOSE_DBSTRING="$$dsn" \
+		$(GOOSE) -dir migrations up && \
+	echo "── Tests (go test -race) $(strip $(PKG))" && \
+	DATABASE_URL="$$dsn" \
+	TEST_DATABASE_URL="$$dsn" \
+	REDIS_URL="redis://localhost:$$redis_port" \
+	NATS_URL="nats://localhost:$$nats_port" \
+		go test -race -count=1 -timeout $(GO_TEST_TIMEOUT) $(GO_TEST_P_FLAG) $(PKG) && \
+	echo "── Tests OK ✓"
+
+## test-affected: test-pkg on the packages the diff against origin/main reaches.
+## Selector answer ALL (go.mod, a migration, a CI file, ...) -> nothing runs
+## locally, exit 0: the full suite is the CI `test` job's work.
+test-affected:
+	@$(go_affected_select); \
+	if [ "$$sel" = ALL ]; then \
+		echo "ALL — the full suite runs in CI; nothing to run locally."; exit 0; \
+	fi; \
+	if [ -z "$$sel" ]; then echo "No Go package affected — nothing to test."; exit 0; fi; \
+	$(MAKE) --no-print-directory test-pkg PKG="$$(echo $$sel)"
+
+## lint-affected: golangci-lint (pinned, see ci-install-tools) on the same
+## packages. A package's lint result depends only on that package and what it
+## imports, so linting the selection gives the CI `lint` verdict for the diff
+## (CI lints ./..., and main is lint-clean). ALL -> the whole module, as CI.
+lint-affected: ci-install-tools
+	@$(go_affected_select); \
+	if [ "$$sel" = ALL ]; then \
+		echo "── Lint (golangci-lint $(GOLANGCI_LINT_VERSION)) ./... — selector answered ALL"; \
+		exec $(GOLANGCI_LINT) run ./...; \
+	fi; \
+	if [ -z "$$sel" ]; then echo "No Go package affected — nothing to lint."; exit 0; fi; \
+	dirs=$$(go list -f '{{.Dir}}' $$sel | sed 's|^$(CURDIR)/|./|') || exit 2; \
+	echo "── Lint (golangci-lint $(GOLANGCI_LINT_VERSION))" $$dirs; \
+	$(GOLANGCI_LINT) run $$dirs && echo "── Lint OK ✓"
 
 ## ci-test-web: Run the frontend test suite (vitest). Until this target
 ## existed, `make ci` compiled and typechecked web/ but never executed a

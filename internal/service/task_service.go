@@ -83,6 +83,10 @@ type taskService struct {
 	agentGrantRepo    repository.AgentWorkspaceGrantRepository
 	listRevisionRepo  repository.TaskListRevisionRepository
 	batchMover        repository.TaskBatchMover
+
+	// reassignReleasesCheckout: a change of assignee ends the previous holder's
+	// checkout in the same write (instance setting, default off).
+	reassignReleasesCheckout bool
 }
 
 // NewTaskService returns a new TaskService backed by the given repositories.
@@ -184,6 +188,16 @@ func WithContextCacheInvalidator(inv ContextCacheInvalidator) TaskServiceOption 
 	return func(s *taskService) {
 		s.ctxCacheInv = inv
 	}
+}
+
+// WithReassignReleasesCheckout makes a change of assignee end the lock of the
+// previous holder in the same write as the assignment. Off, a reassignment
+// leaves the lock and its extend to the holder (the behaviour before it).
+// Turn it on only where every Runner taking locks on the instance sends the
+// result-write fence and stops a turn whose lock is gone; otherwise the old
+// turn keeps writing next to the new assignee's.
+func WithReassignReleasesCheckout(on bool) TaskServiceOption {
+	return func(s *taskService) { s.reassignReleasesCheckout = on }
 }
 
 // WithNotificationService sets the optional notification service.
@@ -1374,6 +1388,17 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 		transition.ReleaseCheckout = true
 		transition.Audit.Entries = append(transition.Audit.Entries, domain.TaskAuditEntry{Action: "task.checkout_released_auto", Changes: map[string]any{"reason": "finish_task"}})
 	}
+	if s.reassignReleasesCheckout && !transition.ReleaseCheckout && assignmentChanged && reassignmentEndsLock(ctx, task.CheckedOutBy, oldAssigneeID, oldAssigneeType, task.AssigneeID, task.AssigneeType) {
+		// A move that hands the card to someone else ends the old holder's lock
+		// like an assignment does, under the same version check of this write.
+		transition.ReleaseCheckout = true
+		transition.Audit.Entries = append(transition.Audit.Entries, domain.TaskAuditEntry{Action: "task.checkout_released_auto", Changes: map[string]any{"reason": "reassignment", "holder": *task.CheckedOutBy, "new_assignee": task.AssigneeID}})
+	}
+	if input.Finish != nil && len(transition.Audit.Entries) == 0 {
+		// finish_task into the status the card already has, with no lease to
+		// hand back, changes nothing else: the result itself is the action.
+		transition.Audit.Entries = append(transition.Audit.Entries, domain.TaskAuditEntry{Action: "task.finished", Changes: map[string]any{"result_kind": string(input.Finish.ResultKind), "reason": "finish_same_status"}})
+	}
 	durable := false
 	if writer, ok := s.taskRepo.(interface {
 		UpdateTransition(context.Context, *domain.Task, domain.TaskTransition) error
@@ -1611,7 +1636,15 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 	}); ok {
 		audit := newTransitionAudit(ctx, task, MoveTaskInput{Source: "api"})
 		audit.Entries = []domain.TaskAuditEntry{{Action: "task.assigned", Changes: changes}}
-		if err := writer.UpdateTransition(ctx, task, domain.TaskTransition{ExpectedVersion: task.Version, AssignedBy: &source, Audit: audit}); err != nil {
+		transition := domain.TaskTransition{ExpectedVersion: task.Version, AssignedBy: &source, Audit: audit}
+		if s.reassignReleasesCheckout && reassignmentEndsLock(ctx, task.CheckedOutBy, oldAssigneeID, oldAssigneeType, input.AssigneeID, resolvedType) {
+			// Under the same version check as the assignment: a checkout taken
+			// after this read refuses the whole write, it is never cleared blind.
+			transition.ReleaseCheckout = true
+			audit.Entries = append(audit.Entries, domain.TaskAuditEntry{Action: "task.checkout_released_auto",
+				Changes: map[string]any{"reason": "reassignment", "holder": *task.CheckedOutBy, "new_assignee": input.AssigneeID}})
+		}
+		if err := writer.UpdateTransition(ctx, task, transition); err != nil {
 			return err
 		}
 		durable = true
@@ -1641,6 +1674,31 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 	s.notifyAssignee(ctx, task, "Task assigned: "+task.Title)
 
 	return nil
+}
+
+// reassignmentEndsLock: the assignee changes (to another principal or to none)
+// while somebody other than the new assignee holds the checkout. A principal is
+// its id and its type: the same UUID as a user is another principal than as an
+// agent. Handing the card to the agent that already holds its lock keeps the
+// lock; the holder of a checkout is always an agent.
+//
+// The holder giving its own card away (a reviewer returning it to the author:
+// assign, then move or hand_off in the same turn) is not a takeover: its lock
+// stays until its own turn command or finish ends it, so the rest of that turn
+// keeps writing under its fence. Only another actor's reassignment ends it.
+func reassignmentEndsLock(ctx context.Context, holder, oldAssignee *uuid.UUID, oldType domain.AssigneeType, newAssignee *uuid.UUID, newType domain.AssigneeType) bool {
+	if holder == nil {
+		return false
+	}
+	if actorID, actorType := actorctx.FromContext(ctx); actorType == domain.ActorTypeAgent && actorID == *holder {
+		return false
+	}
+	principalChanged := uuidPtrChanged(oldAssignee, newAssignee) ||
+		(oldAssignee != nil && newAssignee != nil && oldType != newType)
+	if !principalChanged {
+		return false
+	}
+	return newAssignee == nil || newType != domain.AssigneeTypeAgent || *newAssignee != *holder
 }
 
 // resolveSubtaskStatusID picks the status a new subtask is born into: the caller's
@@ -2274,8 +2332,11 @@ func (s *taskService) logTransitionViolation(ctx context.Context, task *domain.T
 	}
 }
 
+// logActivity writes the audit row (when an activity repository is wired) and
+// publishes the same action to the event bus (when one is wired). Callers must
+// not publish the action again: that put every turn command in the feed twice.
 func (s *taskService) logActivity(ctx context.Context, projectID, entityID uuid.UUID, action string, changes map[string]interface{}) {
-	if s.activityRepo == nil {
+	if s.activityRepo == nil && s.eventBusSvc == nil {
 		return
 	}
 
@@ -2294,20 +2355,22 @@ func (s *taskService) logActivity(ctx context.Context, projectID, entityID uuid.
 	// Extract actor from Go context (set by auth middleware).
 	actorID, actorType := actorctx.FromContext(ctx)
 
-	changesJSON, _ := json.Marshal(changes)
-	entry := &domain.ActivityLog{
-		ID:          uuid.New(),
-		WorkspaceID: wsID,
-		EntityType:  "task",
-		EntityID:    entityID,
-		Action:      action,
-		ActorID:     actorID,
-		ActorType:   actorType,
-		Changes:     changesJSON,
-		CreatedAt:   timeNow(),
-	}
-	if err := s.activityRepo.Create(ctx, entry); err != nil {
-		log.Printf("[activity] WARNING: failed to log %s for task %s: %v", action, entityID, err)
+	if s.activityRepo != nil {
+		changesJSON, _ := json.Marshal(changes)
+		entry := &domain.ActivityLog{
+			ID:          uuid.New(),
+			WorkspaceID: wsID,
+			EntityType:  "task",
+			EntityID:    entityID,
+			Action:      action,
+			ActorID:     actorID,
+			ActorType:   actorType,
+			Changes:     changesJSON,
+			CreatedAt:   timeNow(),
+		}
+		if err := s.activityRepo.Create(ctx, entry); err != nil {
+			log.Printf("[activity] WARNING: failed to log %s for task %s: %v", action, entityID, err)
+		}
 	}
 
 	// Also publish to the event bus so the Events page shows task activity.

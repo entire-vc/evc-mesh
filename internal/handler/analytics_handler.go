@@ -5,11 +5,16 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
+	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -56,10 +61,16 @@ func (h *AnalyticsHandler) GetMetrics(c echo.Context) error {
 		to = parsed
 	}
 
+	viewer, ok := analyticsViewer(c)
+	if !ok {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("user or agent context required"))
+	}
+
 	filter := service.AnalyticsFilter{
 		WorkspaceID: wsID,
 		From:        from,
 		To:          to,
+		Viewer:      viewer,
 	}
 
 	if projIDStr := c.QueryParam("project_id"); projIDStr != "" {
@@ -128,10 +139,16 @@ func (h *AnalyticsHandler) ExportMetrics(c echo.Context) error {
 		to = parsed
 	}
 
+	viewer, ok := analyticsViewer(c)
+	if !ok {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("user or agent context required"))
+	}
+
 	filter := service.AnalyticsFilter{
 		WorkspaceID: wsID,
 		From:        from,
 		To:          to,
+		Viewer:      viewer,
 	}
 
 	if projIDStr := c.QueryParam("project_id"); projIDStr != "" {
@@ -172,12 +189,25 @@ func (h *AnalyticsHandler) ExportMetrics(c echo.Context) error {
 
 	// Summary task metrics.
 	_ = w.Write([]string{"Task Summary", "total", fmt.Sprintf("%d", metrics.TaskMetrics.Total)})
+	_ = w.Write([]string{"Task Summary", "overdue", fmt.Sprintf("%d", metrics.TaskMetrics.Overdue)})
 	_ = w.Write([]string{"Task Summary", "created_this_period", fmt.Sprintf("%d", metrics.TaskMetrics.CreatedThisPeriod)})
 	_ = w.Write([]string{"Task Summary", "completed_this_period", fmt.Sprintf("%d", metrics.TaskMetrics.CompletedThisPeriod)})
 
+	// Tasks by assignee and by project.
+	for _, row := range metrics.TaskMetrics.ByAssignee {
+		name := row.Name
+		if row.AssigneeType == "unassigned" {
+			name = "unassigned"
+		}
+		_ = w.Write([]string{"Tasks by Assignee", csvText(name), fmt.Sprintf("%d", row.Count)})
+	}
+	for _, row := range metrics.TaskMetrics.ByProject {
+		_ = w.Write([]string{"Tasks by Project", csvText(row.ProjectName), fmt.Sprintf("%d", row.Count)})
+	}
+
 	// Agent activity.
 	for _, row := range metrics.AgentMetrics.TasksByAgent {
-		_ = w.Write([]string{"Agent Activity", row.AgentName, fmt.Sprintf("%d", row.Completed)})
+		_ = w.Write([]string{"Agent Activity", csvText(row.AgentName), fmt.Sprintf("%d", row.Completed)})
 	}
 
 	// Events by type.
@@ -209,10 +239,52 @@ func (h *AnalyticsHandler) ExportMetrics(c echo.Context) error {
 	return nil
 }
 
+// analyticsViewer is the caller whose project access bounds the aggregates, by
+// the rule of RequireProjectMember: owner and admin see every project, other
+// users and every agent only their project memberships. Any other principal
+// (an extension) gets nothing: analytics is not one of its capabilities.
+func analyticsViewer(c echo.Context) (service.AnalyticsViewer, bool) {
+	if middleware.IsExtension(c) {
+		return service.AnalyticsViewer{}, false
+	}
+	if middleware.IsAgent(c) {
+		id, err := middleware.GetAgentID(c)
+		return service.AnalyticsViewer{ActorID: id, Agent: true}, err == nil
+	}
+	id, err := middleware.GetUserID(c)
+	if err != nil {
+		return service.AnalyticsViewer{}, false
+	}
+	role, _ := c.Get(middleware.ContextKeyWorkspaceRole).(string)
+	return service.AnalyticsViewer{ActorID: id, AllProjects: role == domain.RoleOwner || role == domain.RoleAdmin}, true
+}
+
 // parseAnalyticsDate parses either RFC3339 or YYYY-MM-DD date strings.
 func parseAnalyticsDate(s string) (time.Time, error) {
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
 		return t, nil
 	}
 	return time.Parse("2006-01-02", s)
+}
+
+// csvText keeps a user-chosen name (assignee, project, agent) a text cell. A
+// spreadsheet may run a cell as a formula when it starts with a control
+// character (tab, CR, LF) or when its first non-space character is = + - @ or
+// their full-width forms; such a name gets a leading apostrophe (OWASP CSV
+// injection). Other names, a plain leading space included, stay as they are.
+func csvText(s string) string {
+	if s == "" {
+		return s
+	}
+	if first, _ := utf8.DecodeRuneInString(s); first == '\t' || first == '\r' || first == '\n' {
+		return "'" + s
+	}
+	rest := strings.TrimLeftFunc(s, unicode.IsSpace)
+	if rest == "" {
+		return s
+	}
+	if lead, _ := utf8.DecodeRuneInString(rest); strings.ContainsRune("=+-@＝＋－＠", lead) {
+		return "'" + s
+	}
+	return s
 }

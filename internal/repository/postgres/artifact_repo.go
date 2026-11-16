@@ -77,7 +77,7 @@ func NewArtifactRepo(db *sqlx.DB) *ArtifactRepo {
 }
 
 func (r *ArtifactRepo) Create(ctx context.Context, artifact *domain.Artifact) error {
-	if artifact.Fence == nil {
+	if artifact.Fence == nil && artifact.Receipt == nil {
 		return insertArtifact(ctx, r.db, artifact)
 	}
 	tx, err := r.db.BeginTxx(ctx, nil)
@@ -89,6 +89,9 @@ func (r *ArtifactRepo) Create(ctx context.Context, artifact *domain.Artifact) er
 		return err
 	}
 	if err := insertArtifact(ctx, tx, artifact); err != nil {
+		return err
+	}
+	if err := recordReceiptTx(ctx, tx, artifact.Receipt, artifact.ID, artifact); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -166,6 +169,11 @@ func (r *ArtifactRepo) CreateFromReservation(ctx context.Context, reservationID 
 	}
 	if insertErr := insertArtifact(ctx, tx, artifact); insertErr != nil {
 		return insertErr
+	}
+	// A keyed upload records its receipt here; a concurrent repeat that
+	// committed first makes this one roll back and drop its object.
+	if rcErr := recordReceiptTx(ctx, tx, artifact.Receipt, artifact.ID, artifact); rcErr != nil {
+		return rcErr
 	}
 	return tx.Commit()
 }

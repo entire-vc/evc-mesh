@@ -71,6 +71,10 @@ type Artifact struct {
 	// Artifacts tab of its task, so the link a human wants is the task's own url
 	// (task_id is on this struct). DownloadPath is the machine address. Adding a
 	// url that pointed anywhere else would invent a page that does not exist.
+
+	// Receipt, when set, binds the request's Idempotency-Key to this row in the
+	// insert's transaction; never bound from JSON, never stored.
+	Receipt *IdempotencyReceipt `json:"-" db:"-"`
 }
 
 // sensitiveArtifactMetadataKeys are Metadata fields the service layer needs

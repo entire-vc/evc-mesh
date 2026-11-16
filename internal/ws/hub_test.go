@@ -53,18 +53,43 @@ func TestHub_FanOut_PersonalChannelIsExactMatchOnly(t *testing.T) {
 // contract for project events published on the workspace channel.
 func TestHub_FanOut_WorkspaceEventReachesProjectSubscribers(t *testing.T) {
 	h := NewHub(nil)
-	project := uuid.New().String()
+	f := newProjectAccessFixture()
+	project := f.project.String()
 
-	projectOnly := subscribedClient(h, uuid.New(), "project:"+project)
-	workspace := subscribedClient(h, uuid.New(), "ws:ws-mine")
-	unrelated := subscribedClient(h, uuid.New(), "project:"+uuid.New().String())
+	projectOnly := clientOn(h, f.authz, f.member, "project:"+project)
+	workspace := clientOn(h, f.authz, f.admin, "ws:"+f.slug)
+	unrelated := clientOn(h, f.authz, f.member, "project:"+uuid.New().String())
 
 	h.fanOut(&redis.Message{
-		Channel: "ws:ws-mine",
+		Channel: "ws:" + f.slug,
 		Payload: `{"event_type":"task.updated","project_id":"` + project + `"}`,
 	})
 
 	assert.True(t, received(projectOnly), "project subscriber must get project events")
 	assert.True(t, received(workspace), "workspace subscriber must get workspace events")
 	assert.False(t, received(unrelated), "subscriber of another project must not get them")
+}
+
+// dashboard.updated (Dashboards §6.2) carries no project_id: it reaches every
+// subscriber of the workspace channel and no one outside it.
+func TestHub_FanOut_DashboardUpdatedReachesWorkspaceSubscribers(t *testing.T) {
+	h := NewHub(nil)
+	member := subscribedClient(h, uuid.New(), "ws:ws-mine")
+	projectOnly := subscribedClient(h, uuid.New(), "project:"+uuid.New().String())
+	otherWorkspace := subscribedClient(h, uuid.New(), "ws:ws-other")
+
+	h.fanOut(&redis.Message{
+		Channel: "ws:ws-mine",
+		Payload: `{"event_type":"dashboard.updated","workspace_id":"` + uuid.New().String() + `","id":"` + uuid.New().String() + `","version":3}`,
+	})
+
+	select {
+	case msg := <-member.Send:
+		assert.Contains(t, string(msg), `"dashboard.updated"`)
+		assert.Contains(t, string(msg), `"version":3`)
+	default:
+		t.Fatal("a workspace subscriber must get dashboard.updated")
+	}
+	assert.False(t, received(projectOnly), "no project_id: project-only subscribers are not addressed")
+	assert.False(t, received(otherWorkspace), "another workspace must not get it")
 }

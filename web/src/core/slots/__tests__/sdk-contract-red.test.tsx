@@ -122,3 +122,32 @@ describe("contract suites go red on broken views and green on the fixed one", ()
     expect(globalThis.fetch).toBe(original);
   });
 });
+
+describe("dashboard.layout 2 and 1 suites go red on a view of the other contract", () => {
+  const DashV2 = resolveDash();
+  function resolveDash() {
+    return import("@/core/dashboard").then((m) => m.MeshDefaultLayout);
+  }
+
+  it("v2 suite: a layout that draws array order and ignores coordinates fails CT-dash-01; the real one passes", async () => {
+    const Layout = (await DashV2) as unknown as ComponentType<{ data: { widgets: { instance: unknown; descriptor: { id: string } }[]; components: { Widget: ComponentType<{ instance: unknown }> } } }>;
+    // Same layout, but the array is drawn as it comes: the contract says (y, x).
+    const Ignoring: ComponentType<never> = ((props: { data: { widgets: { instance: unknown; descriptor: { id: string } }[]; components: { Widget: ComponentType<{ instance: unknown }> } } }) => {
+      const W = props.data.components.Widget;
+      return <div>{props.data.widgets.map((w) => <W key={w.descriptor.id} instance={w.instance} />)}</div>;
+    }) as never;
+    const red = await runSlotSuite("dashboard.layout", Ignoring, 2);
+    show("RED dashboard.layout 2 (coordinates ignored):", red);
+    expect(failedIds(red)).toContain("CT-dash-01");
+    const green = await runSlotSuite("dashboard.layout", Layout as never, 2);
+    show("GREEN dashboard.layout 2 (mesh-default):", green);
+    expect(failedIds(green)).toEqual([]);
+  });
+
+  it("v2 data does not satisfy a v1 view: the v1 suite fails a layout written for coordinates, and a major without a suite is red", async () => {
+    const Layout = (await DashV2) as never;
+    const asV1 = await runSlotSuite("dashboard.layout", Layout, 1);
+    expect(asV1.passed).toBe(false);
+    expect((await runSlotSuite("board.card", Layout, 2)).passed).toBe(false);
+  });
+});

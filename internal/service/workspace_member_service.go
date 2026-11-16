@@ -44,7 +44,32 @@ type workspaceMemberService struct {
 	// (workspace_member_account.go); wired by SetAccountEditDeps.
 	workspaceRepo repository.WorkspaceRepository
 	refreshTokens RefreshTokenRevoker
+	// removalHooks see a member leave; see MemberRemovalHook.
+	removalHooks []MemberRemovalHook
 }
+
+// MemberRemovalHook lets an extension react to a member leaving the workspace
+// when its own rows change through foreign keys on the membership row (the
+// database cascades them, so the extension's service never runs).
+// PrepareMemberRemoval runs before the membership row is deleted, while the
+// rows that reference it are still visible, and returns what to run once the
+// delete has succeeded (nil: nothing). It is best effort: it logs its own
+// failures and never blocks the removal.
+type MemberRemovalHook interface {
+	PrepareMemberRemoval(ctx context.Context, workspaceID, userID uuid.UUID) func(context.Context)
+}
+
+// AddMemberRemovalHook registers a hook for RemoveMember. It is a setter for
+// the same reason as SetEventDispatcher: extensions are built after this
+// service.
+func (s *workspaceMemberService) AddMemberRemovalHook(h MemberRemovalHook) {
+	s.removalHooks = append(s.removalHooks, h)
+}
+
+// cmd/api registers hooks through this interface on the WorkspaceMemberService.
+var _ interface {
+	AddMemberRemovalHook(MemberRemovalHook)
+} = (*workspaceMemberService)(nil)
 
 // SetEventDispatcher wires the dispatcher for the member events.
 func (s *workspaceMemberService) SetEventDispatcher(d PublicEventDispatcher) { s.events = d }
@@ -421,9 +446,21 @@ func (s *workspaceMemberService) RemoveMember(ctx context.Context, workspaceID, 
 		return fmt.Errorf("workspace_member_service.RemoveMember: %w", err)
 	}
 
+	// Hooks look before the delete: afterwards the foreign keys have already
+	// rewritten the rows they need to report.
+	var afterRemoval []func(context.Context)
+	for _, h := range s.removalHooks {
+		if after := h.PrepareMemberRemoval(ctx, workspaceID, targetUserID); after != nil {
+			afterRemoval = append(afterRemoval, after)
+		}
+	}
+
 	// Remove from workspace.
 	if err := s.memberRepo.Delete(ctx, workspaceID, targetUserID); err != nil {
 		return fmt.Errorf("workspace_member_service.RemoveMember: %w", err)
+	}
+	for _, after := range afterRemoval {
+		after(ctx)
 	}
 
 	s.logMemberActivity(ctx, workspaceID, existing.ID, "member.removed", map[string]interface{}{

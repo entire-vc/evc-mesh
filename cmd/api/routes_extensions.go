@@ -132,7 +132,7 @@ func registerExtensionRoutes(deps *apiDeps) {
 		Catalog:   extensionCatalog,
 		SparkURL:  func() string { return sparkIntegrationResolver.CatalogConfig(context.Background()).URL },
 		CounterOn: func() bool { return sparkIntegrationResolver.CatalogConfig(context.Background()).CounterOn },
-		Store:     installedExtRepo, Journal: extensionPolicyRepo,
+		Store:     installedExtRepo, Journal: extensionPolicyRepo, RunnerVersions: installedExtRepo,
 		OnChange: func(ctx context.Context) {
 			if syncErr := externalRuntime.Sync(ctx); syncErr != nil {
 				log.Printf("[extensions] external runtime sync after catalog install: %v", syncErr)
@@ -167,6 +167,9 @@ func registerExtensionRoutes(deps *apiDeps) {
 	api.GET("/workspaces/:ws_id/integrations", integrationHandler.List, handler.DeprecatedAlias("/api/v1/workspaces/{ws}/extensions"))
 	api.POST("/workspaces/:ws_id/integrations", integrationHandler.Configure, handler.DeprecatedAlias("/api/v1/workspaces/{ws}/extensions/{id}/connect"), rbac(mw.PermManageWebhooks))
 	api.GET("/workspaces/:ws_id/extensions", extensionWorkspaceHandler.List)
+	// Data of the GitLab extension's dashboard widget; a person only (PRD Dashboards §6.2).
+	gitlabWidgetHandler := handler.NewGitLabWidgetHandler(extensionRegistry, extensionProjectScopeRepo, deps.vcsLinkRepo)
+	api.GET("/workspaces/:ws_id/widgets/gitlab/failed-pipelines", gitlabWidgetHandler.FailedPipelines, mw.RequireUserAuth())
 	// The workspace is named in the body, not the path: bodyWS checks the caller against it.
 	api.POST("/ext/:ext_id/ui-context", extensionUIHandler.UIContext, mw.RequireUserAuth(), bodyWS)
 	api.POST("/workspaces/:ws_id/extensions/:ext_id/connect", extensionWorkspaceHandler.Connect, rbac(mw.PermManageWebhooks))

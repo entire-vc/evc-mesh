@@ -37,7 +37,8 @@ func (r *TaskDependencyRepo) AtomicHierarchy() bool { return true }
 // for the edge's condition), so every read joins the blocker; the join is LEFT
 // so an edge whose blocker row is gone is still returned.
 var taskDependencySelectCols = `d.id, d.task_id, d.depends_on_task_id, d.dependency_type, d.created_at, d.condition, d.evidence_url, d.condition_met_at, d.criterion, d.generation, d.evidence_status, d.evidence_reason, d.evidence_head_sha, d.evidence_environment, d.evidence_link_id, d.evidence_actor_id, d.owner_wait_id, ow.agent_id AS owner_agent_id, ` +
-	domain.DependencyReleasedSQL("d", "bt", "bts.category") + ` AS condition_satisfied`
+	domain.DependencyReleasedSQL("d", "bt", "bts.category") + ` AS condition_satisfied, ` +
+	domain.DependencyReleasedBySQL("d", "bt", "bts.category") + ` AS released_by`
 
 // taskDependencyJoins pairs with taskDependencySelectCols: the edge is d, its
 // blocker bt and the blocker's status bts.

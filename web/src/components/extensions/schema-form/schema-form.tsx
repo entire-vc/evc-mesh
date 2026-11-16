@@ -11,7 +11,7 @@ import { useProjectStore } from "@/stores/project";
 import { useAgentStore } from "@/stores/agent";
 import { useCustomFieldStore } from "@/stores/custom-field";
 import { CORE_WIDGETS } from "@/core/dashboard";
-import { ColorWidget, FontWidget, ImageWidget, LayoutWidget, OrderedWidget, type PickerOption } from "./widgets";
+import { ColorWidget, FontWidget, ImageWidget, LayoutWidget, OrderedWidget, PeriodWidget, type PickerOption } from "./widgets";
 import { GrantWidget, WorkspaceWidget } from "./mesh-refs";
 import { resolveSchema } from "./resolve";
 import { buildPayload, initialState, setAtPath } from "./state";
@@ -54,6 +54,8 @@ export interface SchemaFormProps {
   fieldOptions?: PickerOption[];
   /** Options of `widget-picker` (default: the core dashboard widgets). */
   widgetOptions?: PickerOption[];
+  /** Options of `event-type-picker` (default: the field's `x-options` / `items.enum`). */
+  eventTypeOptions?: PickerOption[];
   /** Called with the current draft on every edit and on mount: the live preview reads it. */
   onValuesChange?: (values: Values) => void;
   /** Id of the <form>: lets a button outside it (a sticky action bar) submit it. */
@@ -210,6 +212,7 @@ interface Ctx {
   agentOptions: PickerOption[];
   fieldOptions: PickerOption[];
   widgetOptions: PickerOption[];
+  eventTypeOptions?: PickerOption[];
   tokenValues?: Record<string, string>;
   onChange: (path: string[], v: unknown) => void;
   idBase: string;
@@ -430,6 +433,16 @@ function Field({
         onChange={(v) => ctx.onChange(path, v)}
       />
     );
+  } else if (widget === "period") {
+    control = <PeriodWidget {...common} label={label} value={value} onChange={(v) => ctx.onChange(path, v)} />;
+  } else if (widget === "event-type-picker") {
+    // Event types the widget can count: `x-options` (value -> label) or `items.enum`, or the host's list.
+    const items = Array.isArray(value) ? value.map(String) : [];
+    const known = Object.keys(field["x-options"] ?? {}).length ? Object.keys(field["x-options"]!) : (field.items?.enum ?? []).map(String);
+    const options = (ctx.eventTypeOptions ?? known.map((v) => ({ value: v, label: field["x-options"]?.[v] ?? v }))).concat(
+      items.filter((v) => !known.includes(v) && !ctx.eventTypeOptions?.some((o) => o.value === v)).map((v) => ({ value: v, label: t("schemaForm.missingOption", { value: v }) })),
+    );
+    control = <Checklist id={id} label={label} options={options} value={items} disabled={ctx.disabled} describedBy={describedBy} onChange={(v) => ctx.onChange(path, v)} />;
   } else if (widget === "checklist") {
     const items = Array.isArray(value) ? value.map(String) : [];
     control = (
@@ -516,7 +529,7 @@ function Field({
   );
 }
 
-export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, hideSubmit = false, disabled = false, projectOptions, agentOptions, fieldOptions, widgetOptions, onValuesChange, formId, actions, serverErrors: initialServerErrors, tokenValues }: SchemaFormProps) {
+export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, hideSubmit = false, disabled = false, projectOptions, agentOptions, fieldOptions, widgetOptions, eventTypeOptions, onValuesChange, formId, actions, serverErrors: initialServerErrors, tokenValues }: SchemaFormProps) {
   const { t } = useTranslation("integrations");
   const idBase = useId();
   const resolved = useMemo(() => resolveSchema(schema, manifest ?? {}), [schema, manifest]);
@@ -558,6 +571,7 @@ export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, hid
     agentOptions: aOpts,
     fieldOptions: fOpts,
     widgetOptions: wOpts,
+    eventTypeOptions,
     tokenValues,
     onChange: (path, v) => {
       setValues((prev) => setAtPath(prev, path, v));
@@ -637,19 +651,22 @@ export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, hid
           {formError}
         </p>
       )}
-      <div className={cn("flex items-center gap-3", actions && "flex-wrap justify-end gap-2")}>
-        {actions}
-        {!hideSubmit && (
-          <Button type="submit" disabled={disabled || saving}>
-            {submitLabel ?? t("schemaForm.save")}
-          </Button>
-        )}
-        {saved && (
-          <span role="status" className="text-sm text-muted-foreground">
-            {t("schemaForm.saved")}
-          </span>
-        )}
-      </div>
+      {/* With the buttons outside the form (hideSubmit, a dialog footer) an empty row would only add a gap. */}
+      {(actions || !hideSubmit || saved) && (
+        <div className={cn("flex items-center gap-3", actions && "flex-wrap justify-end gap-2")}>
+          {actions}
+          {!hideSubmit && (
+            <Button type="submit" disabled={disabled || saving}>
+              {submitLabel ?? t("schemaForm.save")}
+            </Button>
+          )}
+          {saved && (
+            <span role="status" className="text-sm text-muted-foreground">
+              {t("schemaForm.saved")}
+            </span>
+          )}
+        </div>
+      )}
     </form>
   );
 }

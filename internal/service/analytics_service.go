@@ -8,6 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 // analyticsService implements AnalyticsService using raw SQL for efficiency.
@@ -20,8 +22,24 @@ func NewAnalyticsService(db *sqlx.DB) AnalyticsService {
 	return &analyticsService{db: db}
 }
 
-// GetMetrics returns aggregated workspace/project metrics for the given filter.
+// GetMetrics returns aggregated workspace/project metrics for the given filter,
+// counted only over the projects filter.Viewer may access. An explicit project
+// must belong to the workspace for every role (owner and admin included) and be
+// visible to the viewer; otherwise the answer is 403.
 func (s *analyticsService) GetMetrics(ctx context.Context, filter AnalyticsFilter) (*AnalyticsMetrics, error) {
+	if filter.ProjectID != nil {
+		var ok bool
+		a := &sqlArgs{}
+		q := fmt.Sprintf(`SELECT EXISTS (SELECT 1 FROM projects p WHERE p.id = %s AND p.workspace_id = %s AND %s)`,
+			a.add(*filter.ProjectID), a.add(filter.WorkspaceID), visibleProject(a, filter.Viewer, "p.id"))
+		if err := s.db.GetContext(ctx, &ok, q, a.vals...); err != nil {
+			return nil, fmt.Errorf("analytics project access: %w", err)
+		}
+		if !ok {
+			return nil, apierror.Forbidden("not a member of this project")
+		}
+	}
+
 	taskMetrics, err := s.queryTaskMetrics(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("analytics task metrics: %w", err)
@@ -56,6 +74,37 @@ func (s *analyticsService) GetMetrics(ctx context.Context, filter AnalyticsFilte
 	}, nil
 }
 
+// sqlArgs collects positional arguments; add returns the placeholder of the value.
+type sqlArgs struct{ vals []interface{} }
+
+func (a *sqlArgs) add(v interface{}) string {
+	a.vals = append(a.vals, v)
+	return fmt.Sprintf("$%d", len(a.vals))
+}
+
+// visibleProject is the predicate "the viewer may access the project in projCol",
+// the SQL form of middleware.UserMayAccessProject (agents: own membership only).
+func visibleProject(a *sqlArgs, v AnalyticsViewer, projCol string) string {
+	if v.AllProjects {
+		return "TRUE"
+	}
+	col := "vm.user_id"
+	if v.Agent {
+		col = "vm.agent_id"
+	}
+	return fmt.Sprintf("EXISTS (SELECT 1 FROM project_members vm WHERE vm.project_id = %s AND %s = %s)", projCol, col, a.add(v.ActorID))
+}
+
+// projectScope narrows task rows (alias t) to the workspace, the optional
+// project filter and the viewer's projects. The caller joins projects p.
+func projectScope(a *sqlArgs, f AnalyticsFilter) string {
+	w := "p.workspace_id = " + a.add(f.WorkspaceID)
+	if f.ProjectID != nil {
+		w += " AND t.project_id = " + a.add(*f.ProjectID)
+	}
+	return w + " AND " + visibleProject(a, f.Viewer, "t.project_id")
+}
+
 // taskStatusCategoryRow holds one row from the status-category aggregation.
 type taskStatusCategoryRow struct {
 	Category string `db:"category"`
@@ -68,40 +117,44 @@ type taskPriorityRow struct {
 	Count    int    `db:"cnt"`
 }
 
+// assigneeCountQueryRow holds one row from the per-assignee aggregation.
+type assigneeCountQueryRow struct {
+	AssigneeID   *uuid.UUID `db:"assignee_id"`
+	AssigneeType string     `db:"assignee_type"`
+	Name         string     `db:"name"`
+	Count        int        `db:"cnt"`
+}
+
+// projectCountQueryRow holds one row from the per-project aggregation.
+type projectCountQueryRow struct {
+	ProjectID   uuid.UUID `db:"project_id"`
+	ProjectName string    `db:"project_name"`
+	Count       int       `db:"cnt"`
+}
+
+// breakdownLimit caps the assignee and project breakdowns; the rest is "other" for the client.
+const breakdownLimit = 50
+
 func (s *analyticsService) queryTaskMetrics(ctx context.Context, filter AnalyticsFilter) (*TaskMetrics, error) {
-	// Build common WHERE clause depending on whether a project_id filter is set.
-	var projectFilter string
-	var args []interface{}
-
-	if filter.ProjectID != nil {
-		projectFilter = "AND t.project_id = $2"
-		args = []interface{}{filter.WorkspaceID, *filter.ProjectID}
-	} else {
-		args = []interface{}{filter.WorkspaceID}
-	}
-
 	// Total tasks.
-	totalQ := fmt.Sprintf(`
-		SELECT COUNT(*) FROM tasks t
-		JOIN projects p ON p.id = t.project_id
-		WHERE p.workspace_id = $1 %s
-	`, projectFilter)
+	a := &sqlArgs{}
+	totalQ := `SELECT COUNT(*) FROM tasks t JOIN projects p ON p.id = t.project_id WHERE ` + projectScope(a, filter)
 	var total int
-	if err := s.db.GetContext(ctx, &total, totalQ, args...); err != nil {
+	if err := s.db.GetContext(ctx, &total, totalQ, a.vals...); err != nil {
 		return nil, err
 	}
 
 	// By status category.
-	catQ := fmt.Sprintf(`
+	a = &sqlArgs{}
+	catQ := `
 		SELECT ts.category, COUNT(*) AS cnt
 		FROM tasks t
 		JOIN task_statuses ts ON ts.id = t.status_id
 		JOIN projects p ON p.id = t.project_id
-		WHERE p.workspace_id = $1 %s
-		GROUP BY ts.category
-	`, projectFilter)
+		WHERE ` + projectScope(a, filter) + `
+		GROUP BY ts.category`
 	var catRows []taskStatusCategoryRow
-	if err := s.db.SelectContext(ctx, &catRows, catQ, args...); err != nil {
+	if err := s.db.SelectContext(ctx, &catRows, catQ, a.vals...); err != nil {
 		return nil, err
 	}
 	byCategory := map[string]int{
@@ -117,15 +170,15 @@ func (s *analyticsService) queryTaskMetrics(ctx context.Context, filter Analytic
 	}
 
 	// By priority.
-	priQ := fmt.Sprintf(`
+	a = &sqlArgs{}
+	priQ := `
 		SELECT t.priority, COUNT(*) AS cnt
 		FROM tasks t
 		JOIN projects p ON p.id = t.project_id
-		WHERE p.workspace_id = $1 %s
-		GROUP BY t.priority
-	`, projectFilter)
+		WHERE ` + projectScope(a, filter) + `
+		GROUP BY t.priority`
 	var priRows []taskPriorityRow
-	if err := s.db.SelectContext(ctx, &priRows, priQ, args...); err != nil {
+	if err := s.db.SelectContext(ctx, &priRows, priQ, a.vals...); err != nil {
 		return nil, err
 	}
 	byPriority := map[string]int{
@@ -139,45 +192,96 @@ func (s *analyticsService) queryTaskMetrics(ctx context.Context, filter Analytic
 		byPriority[row.Priority] = row.Count
 	}
 
-	// Created this period.
-	var periodArgs []interface{}
-	var periodFilter string
-	if filter.ProjectID != nil {
-		periodArgs = []interface{}{filter.WorkspaceID, *filter.ProjectID, filter.From, filter.To}
-		periodFilter = "AND t.project_id = $2"
-	} else {
-		periodArgs = []interface{}{filter.WorkspaceID, filter.From, filter.To}
-		periodFilter = ""
+	// By assignee: an agent by its name, a user by display name, nobody as "unassigned".
+	a = &sqlArgs{}
+	assigneeQ := fmt.Sprintf(`
+		SELECT CASE WHEN t.assignee_type IN ('agent', 'user') THEN t.assignee_id END AS assignee_id,
+		       CASE WHEN t.assignee_type IN ('agent', 'user') AND t.assignee_id IS NOT NULL THEN t.assignee_type::text ELSE 'unassigned' END AS assignee_type,
+		       COALESCE(MAX(CASE t.assignee_type WHEN 'agent' THEN ag.name WHEN 'user' THEN u.display_name END), '') AS name,
+		       COUNT(*) AS cnt
+		FROM tasks t
+		JOIN projects p ON p.id = t.project_id
+		LEFT JOIN agents ag ON t.assignee_type = 'agent' AND ag.id = t.assignee_id
+		LEFT JOIN users u ON t.assignee_type = 'user' AND u.id = t.assignee_id
+		WHERE %s
+		GROUP BY 1, 2
+		ORDER BY cnt DESC, name ASC
+		LIMIT %d`, projectScope(a, filter), breakdownLimit)
+	var assigneeRows []assigneeCountQueryRow
+	if err := s.db.SelectContext(ctx, &assigneeRows, assigneeQ, a.vals...); err != nil {
+		return nil, err
+	}
+	byAssignee := make([]AssigneeCountRow, len(assigneeRows))
+	for i, r := range assigneeRows {
+		byAssignee[i] = AssigneeCountRow(r)
 	}
 
+	// By project.
+	a = &sqlArgs{}
+	projectQ := fmt.Sprintf(`
+		SELECT p.id AS project_id, p.name AS project_name, COUNT(*) AS cnt
+		FROM tasks t
+		JOIN projects p ON p.id = t.project_id
+		WHERE %s
+		GROUP BY p.id, p.name
+		ORDER BY cnt DESC, p.name ASC
+		LIMIT %d`, projectScope(a, filter), breakdownLimit)
+	var projectRows []projectCountQueryRow
+	if err := s.db.SelectContext(ctx, &projectRows, projectQ, a.vals...); err != nil {
+		return nil, err
+	}
+	byProject := make([]ProjectCountRow, len(projectRows))
+	for i, r := range projectRows {
+		byProject[i] = ProjectCountRow(r)
+	}
+
+	// Created this period.
+	a = &sqlArgs{}
+	scope := projectScope(a, filter)
 	createdQ := fmt.Sprintf(`
 		SELECT COUNT(*) FROM tasks t
 		JOIN projects p ON p.id = t.project_id
-		WHERE p.workspace_id = $1 %s
-		AND t.created_at >= $%d AND t.created_at <= $%d
-	`, periodFilter, len(periodArgs)-1, len(periodArgs))
+		WHERE %s AND t.created_at >= %s AND t.created_at <= %s`, scope, a.add(filter.From), a.add(filter.To))
 	var createdCount int
-	if err := s.db.GetContext(ctx, &createdCount, createdQ, periodArgs...); err != nil {
+	if err := s.db.GetContext(ctx, &createdCount, createdQ, a.vals...); err != nil {
 		return nil, err
 	}
 
+	a = &sqlArgs{}
+	scope = projectScope(a, filter)
 	completedQ := fmt.Sprintf(`
 		SELECT COUNT(*) FROM tasks t
 		JOIN projects p ON p.id = t.project_id
-		WHERE p.workspace_id = $1 %s
-		AND t.completed_at >= $%d AND t.completed_at <= $%d
-	`, periodFilter, len(periodArgs)-1, len(periodArgs))
+		WHERE %s AND t.completed_at >= %s AND t.completed_at <= %s`, scope, a.add(filter.From), a.add(filter.To))
 	var completedCount int
-	if err := s.db.GetContext(ctx, &completedCount, completedQ, periodArgs...); err != nil {
+	if err := s.db.GetContext(ctx, &completedCount, completedQ, a.vals...); err != nil {
+		return nil, err
+	}
+
+	// Overdue now: a due date in the past and a status that is neither done nor
+	// cancelled, the board's rule. A snapshot like Total, not bound to the period.
+	a = &sqlArgs{}
+	scope = projectScope(a, filter)
+	overdueQ := fmt.Sprintf(`
+		SELECT COUNT(*) FROM tasks t
+		JOIN projects p ON p.id = t.project_id
+		JOIN task_statuses ts ON ts.id = t.status_id
+		WHERE %s AND t.due_date IS NOT NULL AND t.due_date < now()
+		  AND ts.category NOT IN ('done', 'cancelled')`, scope)
+	var overdueCount int
+	if err := s.db.GetContext(ctx, &overdueCount, overdueQ, a.vals...); err != nil {
 		return nil, err
 	}
 
 	return &TaskMetrics{
 		Total:               total,
+		Overdue:             overdueCount,
 		ByStatusCategory:    byCategory,
 		ByPriority:          byPriority,
 		CreatedThisPeriod:   createdCount,
 		CompletedThisPeriod: completedCount,
+		ByAssignee:          byAssignee,
+		ByProject:           byProject,
 	}, nil
 }
 
@@ -195,6 +299,8 @@ type agentTaskQueryRow struct {
 }
 
 func (s *analyticsService) queryAgentMetrics(ctx context.Context, filter AnalyticsFilter) (*AgentMetrics, error) {
+	// The agent roster is workspace-level (the team directory shows it to every
+	// member), so the counts are not narrowed by project.
 	const countQ = `
 		SELECT COUNT(*) AS total,
 		       COUNT(*) FILTER (WHERE status IN ('online', 'busy')) AS active_count
@@ -206,20 +312,20 @@ func (s *analyticsService) queryAgentMetrics(ctx context.Context, filter Analyti
 		return nil, err
 	}
 
-	// Per-agent completed task count.
-	const tasksQ = `
+	// Per-agent count of tasks in a done status, over the projects in scope.
+	a := &sqlArgs{}
+	tasksQ := `
 		SELECT a.id AS agent_id, a.name AS agent_name, COUNT(t.id) AS completed
 		FROM agents a
 		JOIN tasks t ON t.assignee_id = a.id AND t.assignee_type = 'agent'
 		JOIN task_statuses ts ON ts.id = t.status_id AND ts.category = 'done'
 		JOIN projects p ON p.id = t.project_id
-		WHERE a.workspace_id = $1 AND a.deleted_at IS NULL AND p.workspace_id = $1
+		WHERE a.deleted_at IS NULL AND a.workspace_id = p.workspace_id AND ` + projectScope(a, filter) + `
 		GROUP BY a.id, a.name
 		ORDER BY completed DESC
-		LIMIT 20
-	`
+		LIMIT 20`
 	var rows []agentTaskQueryRow
-	if err := s.db.SelectContext(ctx, &rows, tasksQ, filter.WorkspaceID); err != nil {
+	if err := s.db.SelectContext(ctx, &rows, tasksQ, a.vals...); err != nil {
 		return nil, err
 	}
 	agentTasks := make([]AgentTaskRow, len(rows))
@@ -240,26 +346,25 @@ type eventTypeRow struct {
 	Count     int    `db:"cnt"`
 }
 
-func (s *analyticsService) queryEventMetrics(ctx context.Context, filter AnalyticsFilter) (*EventMetrics, error) {
-	var scopeArgs []interface{}
-	var projectFilter string
-	if filter.ProjectID != nil {
-		scopeArgs = []interface{}{filter.WorkspaceID, *filter.ProjectID}
-		projectFilter = "AND em.project_id = $2"
-	} else {
-		scopeArgs = []interface{}{filter.WorkspaceID}
+// eventScope narrows event_bus_messages em (every row has a project) to the
+// workspace, the optional project filter and the viewer's projects.
+func eventScope(a *sqlArgs, f AnalyticsFilter) string {
+	w := "em.workspace_id = " + a.add(f.WorkspaceID)
+	if f.ProjectID != nil {
+		w += " AND em.project_id = " + a.add(*f.ProjectID)
 	}
+	return w + " AND " + visibleProject(a, f.Viewer, "em.project_id")
+}
 
+func (s *analyticsService) queryEventMetrics(ctx context.Context, filter AnalyticsFilter) (*EventMetrics, error) {
 	// floorQ finds the oldest row the TTL-bounded queue still physically
 	// holds for this scope RIGHT NOW — deliberately without a period filter.
 	// It tells us how far back the queue's current contents can be trusted,
 	// not what happened in the requested period.
-	floorQ := fmt.Sprintf(`
-		SELECT MIN(em.created_at) FROM event_bus_messages em
-		WHERE em.workspace_id = $1 %s
-	`, projectFilter)
+	a := &sqlArgs{}
+	floorQ := `SELECT MIN(em.created_at) FROM event_bus_messages em WHERE ` + eventScope(a, filter)
 	var retainedSince sql.NullTime
-	if err := s.db.GetContext(ctx, &retainedSince, floorQ, scopeArgs...); err != nil {
+	if err := s.db.GetContext(ctx, &retainedSince, floorQ, a.vals...); err != nil {
 		return nil, err
 	}
 	var retainedSincePtr *time.Time
@@ -272,28 +377,26 @@ func (s *analyticsService) queryEventMetrics(ctx context.Context, filter Analyti
 	// for this scope proves nothing about the past — it stays uncovered.
 	fullyCovered := retainedSincePtr != nil && !filter.From.Before(*retainedSincePtr)
 
-	periodArgs := append(append([]interface{}{}, scopeArgs...), filter.From, filter.To)
-	fromIdx := len(scopeArgs) + 1
-	toIdx := len(scopeArgs) + 2
-
+	a = &sqlArgs{}
+	scope := eventScope(a, filter)
 	totalQ := fmt.Sprintf(`
 		SELECT COUNT(*) FROM event_bus_messages em
-		WHERE em.workspace_id = $1 %s AND em.created_at >= $%d AND em.created_at <= $%d
-	`, projectFilter, fromIdx, toIdx)
+		WHERE %s AND em.created_at >= %s AND em.created_at <= %s`, scope, a.add(filter.From), a.add(filter.To))
 	var total int
-	if err := s.db.GetContext(ctx, &total, totalQ, periodArgs...); err != nil {
+	if err := s.db.GetContext(ctx, &total, totalQ, a.vals...); err != nil {
 		return nil, err
 	}
 
+	a = &sqlArgs{}
+	scope = eventScope(a, filter)
 	byTypeQ := fmt.Sprintf(`
 		SELECT em.event_type, COUNT(*) AS cnt
 		FROM event_bus_messages em
-		WHERE em.workspace_id = $1 %s AND em.created_at >= $%d AND em.created_at <= $%d
+		WHERE %s AND em.created_at >= %s AND em.created_at <= %s
 		GROUP BY em.event_type
-		ORDER BY cnt DESC
-	`, projectFilter, fromIdx, toIdx)
+		ORDER BY cnt DESC`, scope, a.add(filter.From), a.add(filter.To))
 	var typeRows []eventTypeRow
-	if err := s.db.SelectContext(ctx, &typeRows, byTypeQ, periodArgs...); err != nil {
+	if err := s.db.SelectContext(ctx, &typeRows, byTypeQ, a.vals...); err != nil {
 		return nil, err
 	}
 	byType := make(map[string]int, len(typeRows))
@@ -317,19 +420,9 @@ type dayMetricRow struct {
 }
 
 func (s *analyticsService) queryTimeline(ctx context.Context, filter AnalyticsFilter) ([]DayMetric, error) {
-	var args []interface{}
-	var projectFilter string
-	if filter.ProjectID != nil {
-		args = []interface{}{filter.WorkspaceID, *filter.ProjectID, filter.From, filter.To}
-		projectFilter = "AND t.project_id = $2"
-	} else {
-		args = []interface{}{filter.WorkspaceID, filter.From, filter.To}
-		projectFilter = ""
-	}
-
-	fromArgIdx := len(args) - 1
-	toArgIdx := len(args)
-
+	a := &sqlArgs{}
+	scope := projectScope(a, filter)
+	from, to := a.add(filter.From), a.add(filter.To)
 	timelineQ := fmt.Sprintf(`
 		SELECT
 			day::date AS day,
@@ -339,21 +432,20 @@ func (s *analyticsService) queryTimeline(ctx context.Context, filter AnalyticsFi
 			SELECT date_trunc('day', t.created_at) AS day, 1 AS created, 0 AS completed
 			FROM tasks t
 			JOIN projects p ON p.id = t.project_id
-			WHERE p.workspace_id = $1 %s
-			AND t.created_at >= $%d AND t.created_at <= $%d
+			WHERE %[1]s
+			AND t.created_at >= %[2]s AND t.created_at <= %[3]s
 			UNION ALL
 			SELECT date_trunc('day', t.completed_at) AS day, 0 AS created, 1 AS completed
 			FROM tasks t
 			JOIN projects p ON p.id = t.project_id
-			WHERE p.workspace_id = $1 %s
-			AND t.completed_at >= $%d AND t.completed_at <= $%d
+			WHERE %[1]s
+			AND t.completed_at >= %[2]s AND t.completed_at <= %[3]s
 		) sub
 		GROUP BY day
-		ORDER BY day ASC
-	`, projectFilter, fromArgIdx, toArgIdx, projectFilter, fromArgIdx, toArgIdx)
+		ORDER BY day ASC`, scope, from, to)
 
 	var rows []dayMetricRow
-	if err := s.db.SelectContext(ctx, &rows, timelineQ, args...); err != nil {
+	if err := s.db.SelectContext(ctx, &rows, timelineQ, a.vals...); err != nil {
 		return nil, err
 	}
 
@@ -426,6 +518,9 @@ func (s *analyticsService) queryCostMetrics(ctx context.Context, filter Analytic
 	// agent_sessions carries its own workspace_id but only an optional task_id — project
 	// grouping requires a join through tasks, so sessions never joined to a task have no
 	// project affiliation and are naturally excluded from the by-project/top-tasks views.
+	// ags.workspace_id says nothing about the task's workspace: a session may point at a
+	// task of another workspace. The joins keep only tasks of this workspace's projects;
+	// a session whose task is elsewhere counts as a session without a task.
 	args := []interface{}{filter.WorkspaceID, filter.From, filter.To}
 	leftJoinProjectFilter := ""
 	innerJoinProjectFilter := ""
@@ -433,6 +528,15 @@ func (s *analyticsService) queryCostMetrics(ctx context.Context, filter Analytic
 		args = append(args, *filter.ProjectID)
 		leftJoinProjectFilter = "AND t.project_id = $4"
 		innerJoinProjectFilter = "AND t.project_id = $4"
+	}
+	// Outside owner/admin a session counts only through a task of a project the
+	// viewer may access; a session without a task cannot be placed, so it is left out.
+	if !filter.Viewer.AllProjects {
+		a := &sqlArgs{vals: args}
+		vis := " AND t.project_id IS NOT NULL AND " + visibleProject(a, filter.Viewer, "t.project_id")
+		args = a.vals
+		leftJoinProjectFilter += vis
+		innerJoinProjectFilter += vis
 	}
 
 	totalsQ := fmt.Sprintf(`
@@ -446,6 +550,7 @@ func (s *analyticsService) queryCostMetrics(ctx context.Context, filter Analytic
 		       COALESCE(bool_or(ags.tokens_out_unknown), false) AS tokens_out_incomplete
 		FROM agent_sessions ags
 		LEFT JOIN tasks t ON t.id = ags.task_id
+			AND EXISTS (SELECT 1 FROM projects tp WHERE tp.id = t.project_id AND tp.workspace_id = $1)
 		WHERE ags.workspace_id = $1
 		  AND ags.started_at >= $2 AND ags.started_at <= $3
 		  %s
@@ -463,6 +568,7 @@ func (s *analyticsService) queryCostMetrics(ctx context.Context, filter Analytic
 		FROM agent_sessions ags
 		JOIN agents a ON a.id = ags.agent_id
 		LEFT JOIN tasks t ON t.id = ags.task_id
+			AND EXISTS (SELECT 1 FROM projects tp WHERE tp.id = t.project_id AND tp.workspace_id = $1)
 		WHERE ags.workspace_id = $1
 		  AND ags.started_at >= $2 AND ags.started_at <= $3
 		  %s
@@ -486,7 +592,7 @@ func (s *analyticsService) queryCostMetrics(ctx context.Context, filter Analytic
 		       COALESCE(SUM(ags.tokens_out), 0) AS tokens_out
 		FROM agent_sessions ags
 		JOIN tasks t ON t.id = ags.task_id
-		JOIN projects p ON p.id = t.project_id
+		JOIN projects p ON p.id = t.project_id AND p.workspace_id = $1
 		WHERE ags.workspace_id = $1
 		  AND ags.started_at >= $2 AND ags.started_at <= $3
 		  %s
@@ -510,6 +616,7 @@ func (s *analyticsService) queryCostMetrics(ctx context.Context, filter Analytic
 		       COALESCE(SUM(ags.tokens_out), 0) AS tokens_out
 		FROM agent_sessions ags
 		LEFT JOIN tasks t ON t.id = ags.task_id
+			AND EXISTS (SELECT 1 FROM projects tp WHERE tp.id = t.project_id AND tp.workspace_id = $1)
 		WHERE ags.workspace_id = $1
 		  AND ags.started_at >= $2 AND ags.started_at <= $3
 		  %s
@@ -549,6 +656,7 @@ func (s *analyticsService) queryCostMetrics(ctx context.Context, filter Analytic
 		       COUNT(*) AS session_count
 		FROM agent_sessions ags
 		JOIN tasks t ON t.id = ags.task_id
+		JOIN projects p ON p.id = t.project_id AND p.workspace_id = $1
 		WHERE ags.workspace_id = $1
 		  AND ags.started_at >= $2 AND ags.started_at <= $3
 		  %s

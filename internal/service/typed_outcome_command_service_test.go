@@ -246,11 +246,46 @@ func TestTurnCommandService_WaitForTargets(t *testing.T) {
 		other := uuid.New()
 		_, err := e.svc.WaitFor(e.ctx, e.task, WaitForInput{On: "card", TargetTaskID: &other})
 		require.NoError(t, err)
-		assert.Equal(t, "Waiting on card "+other.String()[:8]+" (task_done).", e.store.committed[0].CommentBody)
+		assert.Equal(t, "Waiting on #"+other.String()[:8]+" to be done.", e.store.committed[0].CommentBody)
 		_, err = e.svc.WaitFor(e.ctx, e.task, WaitForInput{On: "card", TargetTaskID: &other, TargetCondition: ptr("shipped"), Note: "deploy first"})
 		require.NoError(t, err)
-		assert.Equal(t, "Waiting on card "+other.String()[:8]+" (shipped).\n\ndeploy first", e.store.committed[1].CommentBody)
+		assert.Equal(t, "Waiting on #"+other.String()[:8]+" to ship.\n\ndeploy first", e.store.committed[1].CommentBody)
 	})
+}
+
+// TestDescribeWait_CardReadsAsASentence pins the card-wait comment people read
+// on the board: a #<8hex> card reference and the condition in words, not its slug.
+func TestDescribeWait_CardReadsAsASentence(t *testing.T) {
+	target := uuid.MustParse("00000000-0000-4000-8000-000000000000")
+	cases := []struct {
+		name      string
+		condition *string
+		criterion *string
+		want      string
+	}{
+		{"no condition", nil, nil, "Waiting on #00000000 to be done."},
+		{"task_done", ptr("task_done"), nil, "Waiting on #00000000 to be done."},
+		{"shipped", ptr("shipped"), nil, "Waiting on #00000000 to ship."},
+		{"deployed", ptr("deployed"), nil, "Waiting on #00000000 to be deployed."},
+		{"accepted", ptr("accepted"), nil, "Waiting on #00000000 to be accepted."},
+		{"artifact_published", ptr("artifact_published"), ptr("X"), "Waiting on #00000000 to publish: X."},
+		{"condition without a phrase", ptr("contract_ready"), nil, "Waiting on #00000000 (contract_ready)."},
+		{"condition newer than the server", ptr("brand_new"), nil, "Waiting on #00000000 (brand_new)."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := &domain.TaskWait{Kind: domain.TaskWaitCard, TargetTaskID: &target, TargetCondition: tc.condition, Criterion: tc.criterion}
+			assert.Equal(t, tc.want, "Waiting on "+describeWait(w)+".")
+		})
+	}
+
+	// The text fallback does not widen the input: wait_for still refuses a
+	// condition this server does not know, and writes nothing.
+	e := newTurnEnv(nil)
+	other := uuid.New()
+	_, err := e.svc.WaitFor(e.ctx, e.task, WaitForInput{On: "card", TargetTaskID: &other, TargetCondition: ptr("brand_new")})
+	assert.Equal(t, domain.CodeInvalidTarget, outcomeCode(t, err))
+	assert.Empty(t, e.store.committed)
 }
 
 func TestTurnCommandService_WaitForMRLinks(t *testing.T) {
@@ -568,6 +603,33 @@ func TestTurnHooksFor(t *testing.T) {
 	err := (&taskService{}).ensureAssigneeProjectMember(ctx, task.ProjectID, &agent, domain.AssigneeType("bot"))
 	require.ErrorAs(t, err, &unresolved, "control: the shared check refuses an untyped principal")
 	assert.NoError(t, hooks.CheckHandoffAssignee(context.Background(), task.ProjectID, uuid.Nil), "a nil principal is a no-op")
+}
+
+// The event feed does not depend on the audit log: a service with an event bus
+// and no activity repository still announces each turn command, once.
+func TestAfterTurn_PublishesOnceWithoutActivityRepo(t *testing.T) {
+	repo := NewMockTaskRepository()
+	projects := NewMockProjectRepository()
+	ws := uuid.New()
+	project := &domain.Project{ID: uuid.New(), WorkspaceID: ws}
+	projects.items[project.ID] = project
+	agent := uuid.New()
+	task := &domain.Task{ID: uuid.New(), ProjectID: project.ID, AssigneeID: &agent, AssigneeType: domain.AssigneeTypeAgent}
+	repo.items[task.ID] = task
+	bus := NewMockEventBusService()
+	hooks := TurnHooksFor(&taskService{taskRepo: repo, projectRepo: projects, eventBusSvc: bus})
+	ctx := actorctx.WithActor(context.Background(), agent, domain.ActorTypeAgent)
+
+	hooks.AfterTurn(ctx, task.ID, domain.TurnOutcomeWait)
+	hooks.AfterTurn(ctx, task.ID, domain.TurnOutcomeNext)
+	hooks.AfterTurn(ctx, task.ID, domain.TurnOutcomeHandoff)
+
+	var subjects []string
+	for _, m := range bus.Messages {
+		require.Equal(t, ws, m.WorkspaceID)
+		subjects = append(subjects, m.Subject+"/"+fmt.Sprint(m.Payload["outcome"]))
+	}
+	assert.Equal(t, []string{"task.updated/wait", "task.updated/next", "task.assigned/handoff"}, subjects)
 }
 
 // A project of another GitLab group: the workspace's access cannot read it, the

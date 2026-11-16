@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
+	"github.com/entire-vc/evc-mesh/internal/extensions/dashboards"
 	"github.com/entire-vc/evc-mesh/internal/extensions/external"
 	"github.com/entire-vc/evc-mesh/internal/extensions/uictx"
 	"github.com/entire-vc/evc-mesh/internal/middleware"
@@ -47,6 +49,13 @@ type extUIBindings interface {
 	GetBinding(ctx context.Context, projectID uuid.UUID, extensionID string) (*domain.ProjectIntegration, error)
 }
 
+// extUIDashboards finds a saved widget instance on a dashboard the user reads
+// (dashboards.Service); a dashboard they may not read, or an instance that is
+// not on it, is a *dashboards.Error with status 404 or 403.
+type extUIDashboards interface {
+	WidgetInstance(ctx context.Context, workspaceID, userID, dashboardID, instanceID uuid.UUID) (*dashboards.WidgetInstance, error)
+}
+
 // ExtensionUIHandler serves the Mesh side of iframe screens of external
 // extensions: the JWKS and the context token (docs/extensions/ui-iframe.md).
 type ExtensionUIHandler struct {
@@ -66,6 +75,17 @@ type ExtensionUIHandler struct {
 	scope repository.ExtensionProjectScopeRepository
 	// selfHosts are lower-cased hostnames the Mesh UI is served from (configured URLs).
 	selfHosts []string
+	// dashboards checks the dashboard and the instance a dashboard.widget token names;
+	// without it no widget token is issued (fail closed).
+	dashboards extUIDashboards
+}
+
+// WithDashboards lets dashboard.widget tokens be issued: the dashboard must be one
+// the user reads, the instance must be on it, of this extension's widget, and a
+// project-scoped instance must be set to the project the token names.
+func (h *ExtensionUIHandler) WithDashboards(d extUIDashboards) *ExtensionUIHandler {
+	h.dashboards = d
+	return h
 }
 
 func NewExtensionUIHandler(reg *extensions.Registry, signer UIContextSigner, members extUIMembers, users extUIUsers, tasks extUITasks, projects extUIProjects, projectMembers middleware.ProjectMembership) *ExtensionUIHandler {
@@ -164,6 +184,11 @@ type uiContextRequest struct {
 	Slot        string     `json:"slot"`
 	ProjectID   *uuid.UUID `json:"project_id"`
 	TaskID      *uuid.UUID `json:"task_id"`
+	// DashboardID and InstanceID identify the widget of a dashboard.widget screen.
+	DashboardID *uuid.UUID `json:"dashboard_id"`
+	InstanceID  *uuid.UUID `json:"instance_id"`
+	// WidgetID is the widget of the manifest's widgets[] (the part after the dot of the instance type).
+	WidgetID string `json:"widget_id"`
 }
 
 type uiContextResponse struct {
@@ -187,11 +212,19 @@ func (h *ExtensionUIHandler) UIContext(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("workspace_id and slot are required"))
 	}
 	if !external.IsFrameSlot(req.Slot) {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("slot must be sidebar.item, task.panel or project.view"))
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("slot must be sidebar.item, task.panel, project.view or dashboard.widget"))
 	}
 	// A project tab is about its project only: named explicitly, never derived from a task.
 	if req.Slot == external.SlotProjectView && (req.ProjectID == nil || req.TaskID != nil) {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("project.view takes project_id and no task_id"))
+	}
+	// A widget is about its dashboard instance: both ids are required, a task is not part of it,
+	// and a project only when the widget is project-scoped.
+	if req.Slot == external.SlotDashboardWidget && (req.DashboardID == nil || req.InstanceID == nil || req.WidgetID == "" || req.TaskID != nil) {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("dashboard.widget takes dashboard_id, instance_id and widget_id and no task_id"))
+	}
+	if req.Slot != external.SlotDashboardWidget && (req.DashboardID != nil || req.InstanceID != nil || req.WidgetID != "") {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("dashboard_id, instance_id and widget_id belong to dashboard.widget only"))
 	}
 	role, err := h.members.GetRole(ctx, req.WorkspaceID, uid)
 	if err != nil || role == "" {
@@ -209,7 +242,28 @@ func (h *ExtensionUIHandler) UIContext(c echo.Context) error {
 	if !res.Enabled {
 		return c.JSON(http.StatusConflict, apierror.Conflict("the extension is not enabled in this workspace"))
 	}
-	frame, err := external.FrameFor(p.Manifest(), res.Settings, req.Slot)
+	var frame external.Frame
+	if req.Slot == external.SlotDashboardWidget {
+		// Widgets are offered only while the dashboard.widget slot is consented to (the catalog's rule).
+		ok, werr := h.reg.WidgetsAvailable(ctx, req.WorkspaceID, extID)
+		if werr != nil {
+			return handleError(c, werr)
+		}
+		if !ok {
+			return c.JSON(http.StatusConflict, apierror.Conflict("the extension's dashboard widgets are not available in this workspace"))
+		}
+		frame, err = external.FrameForWidget(p.Manifest(), res.Settings, req.WidgetID)
+		// The token names a project only for a widget declared with scope "project", and such a
+		// widget always names one: a workspace widget never gets project context it did not declare.
+		if err == nil {
+			projectScoped := widgetScope(p.Manifest(), req.WidgetID) == extensions.WidgetScopeProject
+			if projectScoped != (req.ProjectID != nil) {
+				return c.JSON(http.StatusBadRequest, apierror.BadRequest("project_id is required for a project-scoped widget and not allowed for any other"))
+			}
+		}
+	} else {
+		frame, err = external.FrameFor(p.Manifest(), res.Settings, req.Slot)
+	}
 	if err != nil {
 		if errors.Is(err, external.ErrNoScreen) {
 			return c.JSON(http.StatusNotFound, apierror.NotFound("screen"))
@@ -218,6 +272,11 @@ func (h *ExtensionUIHandler) UIContext(c echo.Context) error {
 	}
 	if h.servedFromMesh(frame.Origin, c.Request()) {
 		return c.JSON(http.StatusConflict, apierror.Conflict("the extension service must not be served from the Mesh host"))
+	}
+	if req.Slot == external.SlotDashboardWidget {
+		if resp := h.checkWidgetInstance(c, uid, req, p.Manifest().ID, extID); resp != nil {
+			return resp()
+		}
 	}
 
 	projectID, taskID := req.ProjectID, req.TaskID
@@ -267,7 +326,7 @@ func (h *ExtensionUIHandler) UIContext(c echo.Context) error {
 	}
 	token, exp, err := h.signer.Issue(ctx, uictx.Claims{
 		UserID: uid, Email: user.Email, WorkspaceID: req.WorkspaceID,
-		ProjectID: projectID, TaskID: taskID, Roles: []string{role}, Audience: extID,
+		ProjectID: projectID, TaskID: taskID, DashboardID: req.DashboardID, InstanceID: req.InstanceID, Roles: []string{role}, Audience: extID,
 	})
 	if err != nil {
 		if errors.Is(err, uictx.ErrKeyUnavailable) {
@@ -277,4 +336,51 @@ func (h *ExtensionUIHandler) UIContext(c echo.Context) error {
 	}
 	c.Response().Header().Set("Cache-Control", "no-store")
 	return c.JSON(http.StatusOK, uiContextResponse{Token: token, ExpiresAt: exp, FrameURL: frame.URL, Origin: frame.Origin, Title: frame.Title})
+}
+
+// checkWidgetInstance verifies what a dashboard.widget token will name: the dashboard is one
+// the user reads in this workspace, the instance is on it, it is an instance of this
+// extension's widget, and a project-scoped instance is set to the requested project. The
+// token is signed only after this; every refusal is the same 404, so it confirms nothing
+// about dashboards or instances the user cannot see. A nil result means the check passed.
+func (h *ExtensionUIHandler) checkWidgetInstance(c echo.Context, uid uuid.UUID, req uiContextRequest, manifestID, extID string) func() error {
+	gone := func() error { return c.JSON(http.StatusNotFound, apierror.NotFound("widget instance")) }
+	if h.dashboards == nil {
+		return func() error {
+			return c.JSON(http.StatusServiceUnavailable, apierror.ServiceUnavailable("dashboards are not available on this instance"))
+		}
+	}
+	inst, err := h.dashboards.WidgetInstance(c.Request().Context(), req.WorkspaceID, uid, *req.DashboardID, *req.InstanceID)
+	if err != nil {
+		var de *dashboards.Error
+		if errors.As(err, &de) && (de.Status == http.StatusNotFound || de.Status == http.StatusForbidden) {
+			return gone
+		}
+		return func() error { return handleError(c, err) }
+	}
+	if inst.Type != extensions.WidgetType(manifestID, req.WidgetID) && inst.Type != extensions.WidgetType(extID, req.WidgetID) {
+		return gone
+	}
+	if req.ProjectID != nil {
+		var settings struct {
+			ProjectID string `json:"project_id"`
+		}
+		if len(inst.Settings) == 0 || json.Unmarshal(inst.Settings, &settings) != nil {
+			return gone
+		}
+		if pid, perr := uuid.Parse(settings.ProjectID); perr != nil || pid != *req.ProjectID {
+			return gone
+		}
+	}
+	return nil
+}
+
+// widgetScope is the declared scope of widget id in manifest m ("" when absent).
+func widgetScope(m extensions.Manifest, id string) string {
+	for _, w := range m.Widgets {
+		if w.ID == id {
+			return w.Scope
+		}
+	}
+	return ""
 }

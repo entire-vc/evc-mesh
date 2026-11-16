@@ -1,19 +1,23 @@
-import { test, expect, type Browser, type Page, type Request } from "@playwright/test";
+import { test, expect, type Browser, type Locator, type Page, type Request } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 // The theme system end to end: mesh-default on the SDK with workspace settings, and the control theme
 // board-studio loaded from the Go binary's own builtin bundle. Against the loopback fixture (same stand as
 // board-dnd.spec.ts): the fixture keeps moves and edits and tells every connected page, so "a second user sees it" is a
 // second browser context on the same stand. Screenshots (1440/393 x light/dark) go to $STUDIO_SHOTS.
-const API = "http://127.0.0.1:8019";
+const API = process.env.BOARD_FIXTURE_API ?? "http://127.0.0.1:8019";
 const BOARD_URL = "/w/board-fixture/p/contenthub";
 const DASH_URL = "/w/board-fixture/dashboard";
 const BOOT_MS = 60_000;
 const SHOTS = process.env.STUDIO_SHOTS;
+// The live region of the card's own DnD container: dnd-kit renders it right after the instructions the card's
+// aria-describedby names. Not «the first [aria-live]»: the sidebar's dashboard menu has a drag container of its own.
+const liveOf = async (card: Locator) => card.page().locator(`#${await card.getAttribute("aria-describedby")} + [aria-live]`);
 const isMove = (r: Request) => r.method() === "POST" && /\/tasks\/[^/]+\/move/.test(r.url());
 
 type Scheme = "light" | "dark";
 const fixture = async (page: Page, data: Record<string, unknown> = {}) => {
-  await page.request.post(`${API}/__fixture`, { data: { mode: "normal", role: "owner", resetTheme: true, resetTasks: true, ...data } });
+  // the theme's dashboard is drawn on the legacy page: a server without the dashboards API
+  await page.request.post(`${API}/__fixture`, { data: { mode: "normal", role: "owner", resetTheme: true, resetTasks: true, dashboards: "missing", ...data } });
 };
 const writes = async (page: Page) => ((await (await page.request.get(`${API}/__fixture`)).json()) as { writes: Record<string, unknown>[] }).writes;
 const prepare = async (page: Page, scheme: Scheme) => {
@@ -32,7 +36,8 @@ const openBoard = async (page: Page, scheme: Scheme = "light") => {
 };
 const openDash = async (page: Page, scheme: Scheme = "light") => {
   await prepare(page, scheme);
-  const mine = page.waitForResponse((r) => r.url().startsWith(API) && r.url().includes("/me/tasks"), { timeout: BOOT_MS });
+  // the default dashboard's "My tasks" reads /me/tasks, a theme's own widget reads through useTasks (/tasks/query)
+  const mine = page.waitForResponse((r) => r.url().startsWith(API) && /\/(me\/tasks|tasks\/query)(\?|$)/.test(r.url()), { timeout: BOOT_MS });
   await page.goto(DASH_URL);
   await mine;
   await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}" });
@@ -115,7 +120,7 @@ test.describe("board-studio: the board", () => {
     expect(await card.getAttribute("tabindex")).toBe("0");
     await card.focus();
     const moved = page.waitForRequest(isMove);
-    const live = page.locator("[aria-live]").first();
+    const live = await liveOf(card);
     await page.keyboard.press("Space");
     await expect(live).toContainText("is over");
     await page.waitForTimeout(250); // dnd-kit attaches its key listeners a tick after pickup
@@ -138,7 +143,7 @@ test.describe("board-studio: the board", () => {
     const id = (await card.getAttribute("data-task-id"))!;
     await card.focus();
     const moved = page.waitForRequest(isMove);
-    const live = page.locator("[aria-live]").first();
+    const live = await liveOf(card);
     await page.keyboard.press("Space");
     await expect(live).toContainText("is over");
     await page.waitForTimeout(250); // dnd-kit attaches its key listeners a tick after pickup
@@ -220,7 +225,7 @@ test.describe("board-studio: the dashboard", () => {
   test("its own grid and its own widget show the user's tasks, read through the app's request", async ({ page }) => {
     await fixture(page, { studio: true });
     const mine: { auth: string | undefined }[] = [];
-    page.on("request", (r) => { if (r.url().includes("/me/tasks")) mine.push({ auth: r.headers()["authorization"] }); });
+    page.on("request", (r) => { if (r.url().startsWith(API) && r.url().includes("/tasks/query")) mine.push({ auth: r.headers()["authorization"] }); });
     await openDash(page);
     await expect(page.getByRole("heading", { name: "Team focus" })).toBeVisible();
     const widget = page.getByRole("heading", { name: "Due this week" }).locator("..");
@@ -239,7 +244,8 @@ test.describe("board-studio: the dashboard", () => {
   test("the horizon is a setting: 30 days brings the far task in", async ({ page }) => {
     await fixture(page, { studio: { focus_horizon_days: 30 } });
     await openDash(page);
-    await expect(page.getByRole("link", { name: "Assigned task 4", exact: true })).toBeVisible();
+    const widget = page.getByRole("heading", { name: "Due this week" }).locator("..");
+    await expect(widget.getByRole("link", { name: "Assigned task 4", exact: true })).toBeVisible();
   });
 
   test("the widget's error state has a way back, and an empty list says so", async ({ page }) => {

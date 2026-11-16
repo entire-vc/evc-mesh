@@ -7,6 +7,7 @@ An external extension (`runtime: external`) can show its own screens inside Mesh
 | `sidebar.item` | a navigation item in the sidebar, opens `/w/<workspace>/x/<extension id>` | the whole content area |
 | `task.panel` | a tab in the task view | the tab body |
 | `project.view` | a tab of the project strip, opens `/w/<workspace>/p/<project>/x/<extension id>` | the whole content area |
+| `dashboard.widget` | a widget on a dashboard (see [Widgets](#widgets-dashboardwidget-protocol-v2)) | the widget's cell |
 
 The screen is a page of **your service**. Mesh puts it in an `<iframe>` and tells it who opened it with a short-lived signed token. Mesh never sends your extension's own `ext_` token to the browser.
 
@@ -34,11 +35,11 @@ The screen is a page of **your service**. Mesh puts it in an `<iframe>` and tell
 }
 ```
 
-A slot shows only if it is listed in `capabilities.ui` **and** has an entry in `external.ui`. The address of a screen is the workspace's `base_url_setting` value plus `path`.
+A slot shows only if it is listed in `capabilities.ui` **and** has an entry in `external.ui` (`dashboard.widget` is the exception: its screens are per widget in `widgets[]`, see [Widgets](#widgets-dashboardwidget-protocol-v2)). The address of a screen is the workspace's `base_url_setting` value plus `path`.
 
 `project.view` also needs the `project_view` block and `levels.project: true` (the manifest schema enforces both), and its tab shows only in projects where the extension is enabled. A per-project extension without a `project.view` screen gets a project tab with its `sidebar.item` screen instead; that token carries the `project_id` and takes the same checks as `project.view` (the extension is enabled in the project, `409` otherwise).
 
-Only these three slots take an iframe screen. Any other key in `external.ui` (for example `task.badge`, `task.actions`, `project.panel`) is accepted in the manifest but **ignored**: nothing is rendered for it, and `ui-context` refuses a token for it with `400` (`slot must be sidebar.item, task.panel or project.view`). New iframe slots will be listed here when they exist.
+Only these four slots take an iframe screen. Any other key in `external.ui` (for example `task.badge`, `task.actions`, `project.panel`) is accepted in the manifest but **ignored**: nothing is rendered for it, and `ui-context` refuses a token for it with `400` (`slot must be sidebar.item, task.panel, project.view or dashboard.widget`). New iframe slots will be listed here when they exist.
 
 Rules Mesh enforces before it opens a frame:
 
@@ -80,17 +81,26 @@ Keys rotate (every 30 days) with an overlap of 24 hours: the old key stays in th
 
 ## postMessage protocol
 
-All messages are plain objects with a `type`. Version: `1`. The lifecycle messages below (`mesh.context.error`, `mesh.revoked`, `mesh.app-ready`, `mesh.app-error`) were added to version 1 without changing it: a screen that ignores unknown types keeps working, and Mesh ignores nothing a v1 screen used to send.
+All messages are plain objects with a `type`. Version: `1` (the `dashboard.widget` slot speaks `2`, see [Widgets](#widgets-dashboardwidget-protocol-v2)). The lifecycle messages below (`mesh.context.error`, `mesh.revoked`, `mesh.app-ready`, `mesh.app-error`), the `theme` field of `mesh.context` and the `mesh.theme` message were added to version 1 without changing it: a screen that ignores unknown types keeps working, and Mesh ignores nothing a v1 screen used to send.
 
 Mesh → screen (to your origin only):
 
 ```json
 { "type": "mesh.context", "version": 1, "token": "<JWT>", "expires_at": "2026-10-17T12:01:00Z",
   "workspace_id": "…", "workspace_slug": "acme", "project_id": null, "task_id": null, "locale": "en",
-  "path": "/memory/search#recent" }
+  "path": "/memory/search#recent",
+  "theme": { "mode": "dark", "tokens": { "--background": "222 14% 9%", "--foreground": "210 20% 96%" } } }
 ```
 
 Sent when the frame has loaded, again on every `mesh.ready`, and on its own when Mesh renews the token: at about 80% of its lifetime (≈48 s for a 60 s token), so a screen that keeps `token` from the latest `mesh.context` always holds a valid one without asking. It is also sent when the Mesh address moves to another section without the screen asking (back/forward, a pasted link): then go to `path`. `path` is the section (see below), `""` for the start of the screen.
+
+`theme` is the Mesh theme at that moment, in every slot (`sidebar.item`, `project.view`, `task.panel`, `dashboard.widget`): `mode` is `light` or `dark`, `tokens` are the CSS variables of the Mesh theme (`--background`, `--foreground`, `--card`, `--primary`, `--muted`, `--muted-foreground`, `--accent`, `--destructive`, `--border`, `--input`, `--ring`, `--radius`, `--font-sans` and their `-foreground` pairs); colour values are HSL components, as in Mesh (`hsl(var(--background))`). Paint the screen with them to look like Mesh: see [`applyMeshTheme`](#applymeshthemetokens).
+
+```json
+{ "type": "mesh.theme", "version": 2, "mode": "light", "tokens": { "--background": "0 0% 100%", "…": "…" } }
+```
+
+Sent to every loaded frame of every slot when the person switches light/dark or the theme's tokens change; `mode` and `tokens` have the shape of `theme` in `mesh.context`. Apply it without a reload. It is the same message a widget gets, hence `version: 2`; a screen that ignores unknown types is unaffected. Nothing is sent after `mesh.revoked`.
 
 ```json
 { "type": "mesh.context.error", "version": 1, "status": 409, "reason": "conflict" }
@@ -111,7 +121,7 @@ Sent when a renewal (proactive or on `mesh.ready`) is refused. Keep using the la
 { "type": "mesh.revoked", "version": 1, "reason": "conflict" }
 ```
 
-Sent right after a `mesh.context.error` with status `403`, `404` or `409`: access to the screen is gone. Mesh then removes the frame and shows "switched off or access removed" with a retry button. Stop work and drop the token on receipt; delivery is best effort because the frame is closed right after, so the server side must not depend on it (it also stops getting valid tokens). A switched-off extension is noticed at the next renewal, within about 50 seconds.
+Sent right after a `mesh.context.error` with status `403`, `404` or `409`: access to the screen is gone. Mesh then shows "switched off or access removed" with a retry button; the frame stays in the page, hidden, for 2 seconds so the message reaches it, and is removed after that. Mesh no longer listens to it in that time. Stop work and drop the token on receipt; the server side must not depend on the message alone (it also stops getting valid tokens). A switched-off extension is noticed at the next renewal, within about 50 seconds.
 
 Screen → Mesh (`window.parent.postMessage(msg, "<Mesh origin>")`):
 
@@ -126,6 +136,78 @@ Screen → Mesh (`window.parent.postMessage(msg, "<Mesh origin>")`):
 | `{ "type": "mesh.app-error", "message": "Backend is down" }` | Optional. The screen cannot work. Mesh replaces the frame with "<name> reported an error on this screen", your `message` (plain text, up to 300 characters, may be empty) and a retry button that opens the screen anew |
 
 Mesh acts on a message only if it came from the iframe's own window **and** its `origin` is exactly the origin of your service. Anything else is ignored silently. Unknown types and malformed payloads are ignored too.
+
+## Widgets (`dashboard.widget`, protocol v2)
+
+A dashboard widget is an iframe screen in the cell of a dashboard. `capabilities.ui` lists `dashboard.widget` and every widget type is an entry of `widgets[]` with `render.frame.path` (the manifest schema requires `widgets[]` once the slot is listed; `external.ui["dashboard.widget"]` is not read). An instance on a dashboard has the type `<ext_id>.<widget_id>`. The screen follows every rule above (allowed host, own origin, sandbox), with these differences:
+
+- **Token.** `POST /ext/<id>/ui-context` takes `slot: "dashboard.widget"`, `dashboard_id`, `instance_id` and `widget_id` (all required, no `task_id`) and `project_id` exactly when the widget is declared with `scope: project` (missing there, or sent for any other widget: `400`). Mesh resolves the frame from `widgets[<widget_id>].render.frame.path`; an id the manifest does not declare (or a builtin-rendered one) is `409`, so is a workspace whose connection has not consented to the slot. The token carries `dashboard_id`, `instance_id` and `project_id` (only with `scope: project`). The membership check is the one every `ui-context` does: a person who may not open the project gets `404` and no token. Before signing, Mesh also checks the instance: the dashboard must be one the person reads in this workspace (their own or a shared one), `instance_id` must be a widget on that dashboard, its type must be `<ext_id>.<widget_id>`, and for `scope: project` its saved `project_id` must equal the requested one. Any mismatch is `404` with no token, the same answer for a missing dashboard and a foreign one.
+- **Sandbox.** `allow-scripts allow-forms allow-popups allow-same-origin`; never `allow-top-navigation`. A popup opened by the widget is a new tab, the Mesh page is never navigated by it.
+- **Lazy.** The frame is created only when the widget comes near the viewport (100 px margin). A widget that was never in view costs no request and no frame. At most **6 frames load at a time**; the rest wait in a queue and start as earlier ones send `mesh.app-ready`, fail or are removed.
+- **Start-up deadline.** Send `mesh.app-ready` within **15 s** of the load start. Without it Mesh replaces the frame with "did not start in 15 seconds" and a Retry button. A widget must therefore always send it (also when it has nothing to show yet).
+- **Size.** `mesh.resize` is ignored in this slot: the dashboard cell sets the size (`widget.size`, in grid units, arrives in the context and with `mesh.widget.settings`).
+
+`mesh.context` (version `2`) adds two blocks to the v1 message, `slot` and `widget`; `theme` is the same as in every slot (see [postMessage protocol](#postmessage-protocol)):
+
+```json
+{ "type": "mesh.context", "version": 2, "slot": "dashboard.widget",
+  "widget": { "type": "release-health", "instance_id": "…", "dashboard_id": "…",
+              "settings": { "title": "Releases" }, "size": { "w": 2, "h": 2 } },
+  "theme": { "mode": "dark", "tokens": { "--background": "222 14% 9%", "--foreground": "210 20% 96%" } },
+  "token": "<JWT>", "expires_at": "…", "workspace_id": "…", "workspace_slug": "acme",
+  "project_id": null, "task_id": null, "locale": "en", "path": "" }
+```
+
+`locale` is the language of the interface.
+
+Mesh → widget, after the context (all to your origin only):
+
+| Message | When | Payload |
+|---|---|---|
+| `mesh.theme` | the person switches light/dark, or the theme's tokens change (as in every slot, see above) | `{ "mode": "light"\|"dark", "tokens": {…} }` |
+| `mesh.widget.settings` | the instance settings or size changed in the dashboard | `{ "settings": {…}, "size": {"w","h"} }` |
+| `mesh.widget.refresh` | the person pressed refresh on the widget or the dashboard | none: reload your data |
+| `mesh.widget.visibility` | the widget enters or leaves the viewport (also once with the context) | `{ "visible": true\|false }`: pause polling when `false` |
+| `mesh.revoked` | access is gone (as above) | the cell shows a stub at once, while the frame stays mounted, hidden, for 2 s so that `mesh.context.error` and `mesh.revoked` reach it; then it is removed. Stop work |
+
+Widget → Mesh:
+
+| Message | Effect |
+|---|---|
+| `{ "type": "mesh.open", "kind": "task", "id": "<uuid>" }` | Opens a task (`kind`: `task`, `doc`, `project`). **Mesh checks access itself** with the person's own session; no access (or no such object) means nothing opens and the person sees a "no access" toast. `id` is an id only: anything with a `/`, `.` or other characters is dropped |
+| `{ "type": "mesh.widget.configure" }` | The person asked for the widget's settings: Mesh opens the settings of this instance |
+| `mesh.ready`, `mesh.app-ready`, `mesh.app-error`, `mesh.toast`, `mesh.navigate` | As in v1. `mesh.state` and `mesh.resize` are ignored |
+
+A v1 screen keeps working: it never receives a widget message (`mesh.widget.*`), and Mesh sends `mesh.context` with `version: 1` in every other slot. The only `version: 2` message a screen slot gets is `mesh.theme`.
+
+### `applyMeshTheme(tokens)`
+
+Paint a widget or a screen (`sidebar.item`, `project.view`, `task.panel`) with the Mesh theme in a few lines (the reference widget does exactly this):
+
+```js
+function applyMeshTheme(theme) {
+  const root = document.documentElement;
+  for (const [name, value] of Object.entries(theme.tokens || {})) {
+    if (/^--[a-z0-9-]+$/i.test(name)) root.style.setProperty(name, value); // only variable names
+  }
+  root.style.colorScheme = theme.mode === "dark" ? "dark" : "light";      // form controls, scrollbars
+}
+
+window.addEventListener("message", (e) => {
+  if (e.origin !== MESH_ORIGIN || e.source !== window.parent) return;
+  if (e.data.type === "mesh.context") applyMeshTheme(e.data.theme);
+  if (e.data.type === "mesh.theme") applyMeshTheme(e.data);   // mode switch: no reload
+});
+// body { background: hsl(var(--background)); color: hsl(var(--foreground)); border-radius: var(--radius) }
+window.parent.postMessage({ type: "mesh.app-ready" }, MESH_ORIGIN);
+```
+
+### Reference widget and its contract tests
+
+`examples/external-extension` serves `/mesh/ui/widget`: it applies the theme, shows its settings, reacts to `mesh.theme`, `mesh.widget.settings`, `mesh.widget.refresh`, `mesh.widget.visibility`, turns into a stub on `mesh.revoked`, and has buttons for `mesh.open` (its own task, another task) and `mesh.widget.configure`. Contract tests:
+
+- the widget side: `go test ./examples/external-extension/refext -run Widget` (theme in `mesh.context` and `mesh.theme`, settings, revoked stub, `mesh.open` payload, foreign origin/window ignored);
+- the Mesh side: `web/src/components/extensions/__tests__/external-widget-frame.test.tsx` (theme change by message, settings, `mesh.revoked`, `mesh.open` on a foreign task refused and on an own task opened, `mesh.resize` ignored, the 15 s deadline, at most 6 frames of 10, invisible widgets not loaded).
 
 ## Sections (deep links)
 

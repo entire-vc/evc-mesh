@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { cn } from "@/lib/cn";
 import { hexToHsl, hslToHex } from "@/components/themes/color";
+import type { PeriodValue } from "@entire-vc/mesh-theme-sdk";
 import type { FieldSchema } from "./types";
 
 export interface PickerOption {
@@ -254,6 +255,54 @@ export function OrderedWidget({
           ))}
         </Select>
       )}
+    </div>
+  );
+}
+
+// -- period ---------------------------------------------------------------------------------------------
+
+const PERIOD_DAYS = [7, 30, 90] as const;
+const RANGE = "range";
+
+/** The `period` control: the last 7/30/90 days or a date range. Value: `{days}` or `{from, to}` (ISO dates). */
+export function PeriodWidget({ id, label, value, disabled, onChange, ...aria }: {
+  id: string; label: string; value: unknown; disabled?: boolean; onChange: (v: PeriodValue) => void;
+  "aria-invalid"?: boolean; "aria-describedby"?: string;
+}) {
+  const { t } = useTranslation("integrations");
+  const v = (value && typeof value === "object" ? value : {}) as { days?: number; from?: string; to?: string };
+  const isRange = v.days === undefined && (v.from !== undefined || v.to !== undefined);
+  const mode = isRange ? RANGE : String(PERIOD_DAYS.find((d) => d === v.days) ?? PERIOD_DAYS[0]);
+  const from = v.from ?? "";
+  const to = v.to ?? "";
+  const bad = isRange && from !== "" && to !== "" && from > to;
+  return (
+    <div className="grid gap-2" role="group" aria-label={label}>
+      <Select
+        id={id}
+        value={mode}
+        disabled={disabled}
+        aria-invalid={aria["aria-invalid"] || bad || undefined}
+        aria-describedby={aria["aria-describedby"]}
+        onChange={(e) => {
+          const m = e.target.value;
+          if (m === RANGE) {
+            const today = new Date().toISOString().slice(0, 10);
+            onChange({ from: today, to: today });
+          } else onChange({ days: Number(m) as 7 | 30 | 90 });
+        }}
+      >
+        {PERIOD_DAYS.map((d) => <option key={d} value={String(d)}>{t("schemaForm.period.days", { count: d })}</option>)}
+        <option value={RANGE}>{t("schemaForm.period.range")}</option>
+      </Select>
+      {isRange && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Input type="date" aria-label={t("schemaForm.period.from")} value={from} max={to || undefined} disabled={disabled} onChange={(e) => onChange({ from: e.target.value, to })} />
+          <span aria-hidden="true">–</span>
+          <Input type="date" aria-label={t("schemaForm.period.to")} value={to} min={from || undefined} disabled={disabled} onChange={(e) => onChange({ from, to: e.target.value })} />
+        </div>
+      )}
+      {bad && <p role="alert" className="text-xs text-destructive">{t("schemaForm.period.invalid")}</p>}
     </div>
   );
 }

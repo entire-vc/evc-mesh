@@ -267,7 +267,10 @@ type UpdateInfo struct {
 	// CatalogScope is "scoped" for a catalog install pinned to an exact
 	// receipt: no update is offered until an admin chooses a version.
 	CatalogScope string `json:"catalog_scope,omitempty"`
-	Error        string `json:"error,omitempty"`
+	// ReportedVersions are the Agent Runner versions its controllers report
+	// running, oldest first; only the agent-runner row carries them.
+	ReportedVersions []string `json:"reported_versions,omitempty"`
+	Error            string   `json:"error,omitempty"`
 }
 
 type candidate struct {

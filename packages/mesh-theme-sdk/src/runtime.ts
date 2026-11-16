@@ -4,7 +4,7 @@
 // the core builds its export object against `typeof import("@entire-vc/mesh-theme-sdk")`, so a
 // declaration the core does not implement, or implements differently, fails its typecheck.
 import type { FC, ReactElement } from "react";
-import type { DashboardAsync, MentionsData, TaskQuery, TasksData, WidgetViewDataMap, SessionItem } from "./dashboard";
+import type { CommentsData, DashboardAsync, MentionsData, TaskQuery, TasksData, WidgetViewDataMap, SessionItem } from "./dashboard";
 import type {
   CanProps,
   DndProviderProps,
@@ -57,10 +57,14 @@ export declare function useRealtime(topic: RealtimeTopic, onEvent: (e: RealtimeE
 export declare function useTasks(q: TaskQuery): DashboardAsync<TasksData>;
 
 /** The registry's data hook for `widgetId`; the id must stay the same for the life of the caller. */
-export declare function useWidgetData<K extends keyof WidgetViewDataMap>(widgetId: K): WidgetViewDataMap[K];
-export declare function useWidgetData(widgetId: string): DashboardAsync<unknown>;
+/** `settings`: the widget instance's settings (limit, project, filters); a widget without settings ignores them. */
+export declare function useWidgetData<K extends keyof WidgetViewDataMap>(widgetId: K, settings?: Readonly<Record<string, unknown>>): WidgetViewDataMap[K];
+export declare function useWidgetData(widgetId: string, settings?: Readonly<Record<string, unknown>>): DashboardAsync<unknown>;
 
 export declare function useMentions(): DashboardAsync<MentionsData>;
+export declare function useUnseenMentionCount(): DashboardAsync<number>;
+export declare function useMyComments(): DashboardAsync<CommentsData> & { loadMore(): void };
+export declare function useRecentComments(): DashboardAsync<CommentsData> & { loadMore(): void };
 export declare function useMyTasks(): DashboardAsync<TasksData>;
 export declare function useTriageTasks(): DashboardAsync<TasksData>;
 export declare function useActiveSessions(): DashboardAsync<{ items: SessionItem[] }>;

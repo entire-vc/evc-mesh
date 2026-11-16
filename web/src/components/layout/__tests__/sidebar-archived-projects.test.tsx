@@ -1,5 +1,5 @@
 /**
- * #ddd219f4 — an archived project stayed in the sidebar's Projects list as if
+ * an internal ticket — an archived project stayed in the sidebar's Projects list as if
  * nothing had happened. The store keeps archived projects (lookups by id still
  * need their names); the sidebar must list only live ones and move the rest
  * under "Archived", with an Unarchive action that hits the dedicated route.
@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 
-vi.mock("@/lib/api", () => ({ api: vi.fn() }));
+vi.mock("@/lib/api", () => ({ api: vi.fn(), getAccessToken: vi.fn(() => null) }));
 vi.mock("@/lib/mentions/inbox", () => ({
   fetchUnseenMentionCount: vi.fn().mockResolvedValue(0),
 }));

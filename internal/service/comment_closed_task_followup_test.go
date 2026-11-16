@@ -1357,3 +1357,66 @@ func TestCommentIsInformational(t *testing.T) {
 		})
 	}
 }
+
+// --- Owner of a card closed out of review ----------------------
+
+// closedOutOfReview reshapes the source card the way a close from review leaves
+// it: the reviewer holds assignee_id, the agent who did the work is stashed in
+// pre_review_assignee_id. Returns (owner, reviewer).
+func (env followUpEnv) closedOutOfReview() (owner, reviewer uuid.UUID) {
+	owner = env.assignee
+	reviewer = uuid.New()
+	ownerType := domain.AssigneeTypeAgent
+	src := env.taskRepo.items[env.sourceID]
+	src.AssigneeID = &reviewer
+	src.AssigneeType = domain.AssigneeTypeAgent
+	src.PreReviewAssigneeID = &owner
+	src.PreReviewAssigneeType = &ownerType
+	return owner, reviewer
+}
+
+// A remark on a card closed out of review is for whoever did the work, not for
+// the reviewer the close left in assignee_id: the reviewer is done with it, and
+// routing there is exactly how the owner never hears about the remark.
+func TestClosedFollowUp_ClosedFromReviewRoutesToPreReviewOwner(t *testing.T) {
+	env := setupFollowUpEnv(t)
+	owner, reviewer := env.closedOutOfReview()
+
+	env.comment(t, "Шапка не sticky, вес 600 вместо 400.")
+
+	created := env.taskSvc.createdTasks()
+	require.Len(t, created, 1)
+	require.NotNil(t, created[0].AssigneeID)
+	assert.Equal(t, owner, *created[0].AssigneeID, "follow-up goes to the pre-review owner")
+	assert.NotEqual(t, reviewer, *created[0].AssigneeID, "follow-up must not go to the reviewer")
+	assert.Equal(t, domain.AssigneeTypeAgent, created[0].AssigneeType)
+}
+
+// The owner's own remark on their own closed card is a loop, even though the
+// card's assignee_id is now the reviewer.
+func TestClosedFollowUp_PreReviewOwnerOwnCommentCreatesNothing(t *testing.T) {
+	env := setupFollowUpEnv(t)
+	owner, _ := env.closedOutOfReview()
+
+	env.comment(t, "Пост-мортем: причина была в порядке миграций.", func(c *domain.Comment) {
+		c.AuthorID = owner
+		c.AuthorType = domain.ActorTypeAgent
+	})
+
+	assert.Empty(t, env.taskSvc.createdTasks(),
+		"the owner's own remark on their own closed card must not route back to them or to the reviewer")
+	assert.Empty(t, env.systemNotices())
+}
+
+// A human owner has a notification channel of their own: no card, and no
+// fallback to the agent reviewer either — that fallback is the defect.
+func TestClosedFollowUp_HumanPreReviewOwnerIsNotRoutedToReviewer(t *testing.T) {
+	env := setupFollowUpEnv(t)
+	env.closedOutOfReview()
+	userType := domain.AssigneeTypeUser
+	env.taskRepo.items[env.sourceID].PreReviewAssigneeType = &userType
+
+	env.comment(t, "Шапка не sticky.")
+
+	assert.Empty(t, env.taskSvc.createdTasks())
+}

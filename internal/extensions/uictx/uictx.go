@@ -77,6 +77,9 @@ type Claims struct {
 	WorkspaceID uuid.UUID
 	ProjectID   *uuid.UUID
 	TaskID      *uuid.UUID
+	// DashboardID and InstanceID name the widget a dashboard.widget screen was opened for.
+	DashboardID *uuid.UUID
+	InstanceID  *uuid.UUID
 	Roles       []string
 	Audience    string // extension id
 }
@@ -144,6 +147,12 @@ func (s *Service) Issue(ctx context.Context, c Claims) (string, time.Time, error
 	}
 	if c.TaskID != nil {
 		m["task_id"] = c.TaskID.String()
+	}
+	if c.DashboardID != nil {
+		m["dashboard_id"] = c.DashboardID.String()
+	}
+	if c.InstanceID != nil {
+		m["instance_id"] = c.InstanceID.String()
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodES256, m)
 	tok.Header["kid"] = ak.kid

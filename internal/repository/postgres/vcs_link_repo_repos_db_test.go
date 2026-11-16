@@ -34,9 +34,18 @@ func TestVCSLinkRepo_ProviderRepos(t *testing.T) {
 	// recent sits seconds before the seeding on purpose: Upsert stamps
 	// status_synced_at with the database now(), so last_event_at is the
 	// moment of the last seed, not recent, and the check below bounds it by
-	// the wall clock around seeding instead of a tolerance around recent.
+	// the database clock around seeding instead of a tolerance around recent.
+	// The database clock, not this process's: a local Postgres runs in a VM
+	// whose clock can lead the host's by a fraction of a second, which put a
+	// correct stamp "after" a host-clock window.
+	dbNow := func() time.Time {
+		t.Helper()
+		var ts time.Time
+		require.NoError(t, db.GetContext(ctx, &ts, `SELECT clock_timestamp()`))
+		return ts.UTC()
+	}
 	old, recent := time.Now().Add(-2*time.Hour).UTC().Truncate(time.Second), time.Now().Add(-3*time.Second).UTC().Truncate(time.Second)
-	seededFrom := time.Now().UTC().Truncate(time.Microsecond)
+	seededFrom := dbNow()
 	seed(domain.VCSProviderGitLab, domain.VCSLinkTypePR, "https://GIT.Example.com/G/P-"+fx.suffix+"/-/merge_requests/1", old)
 	seed(domain.VCSProviderGitLab, domain.VCSLinkTypePR, "https://git.example.com/"+gl+"/merge_requests/2", old)
 	seed(domain.VCSProviderGitLab, domain.VCSLinkTypeCommit, "https://git.example.com/"+gl+"/-/commit/abc", recent)
@@ -44,7 +53,7 @@ func TestVCSLinkRepo_ProviderRepos(t *testing.T) {
 	seed(domain.VCSProviderGitLab, domain.VCSLinkTypePR, "https://git.example.com/"+gl+"/sub/-/merge_requests/3", old)
 	seed(domain.VCSProviderGitLab, domain.VCSLinkTypePR, "https://git.example.com/no-repo-segment", old)
 	seed(domain.VCSProviderGitHub, domain.VCSLinkTypePR, "https://github.com/"+gh+"/pull/7", old)
-	seededTo := time.Now().UTC()
+	seededTo := dbNow()
 
 	byRepo := func(rows []repository.VCSRepoActivity) map[string]repository.VCSRepoActivity {
 		m := map[string]repository.VCSRepoActivity{}

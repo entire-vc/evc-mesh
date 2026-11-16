@@ -159,7 +159,6 @@
       "back": "Back",
       "backToBoard": "Back to board",
       "backToParent": "Back to parent task",
-      "backToTriage": "Back to triage",
       "close": "Close",
       "copyLink": "Copy link",
       "duplicate": "Duplicate task",
@@ -265,7 +264,9 @@
     "unavailable": "{{name}} is unavailable right now.",
     "retry": "Retry",
     "revoked": "{{name}} was switched off or your access to it was removed.",
-    "appError": "{{name}} reported an error on this screen."
+    "appError": "{{name}} reported an error on this screen.",
+    "widgetTimeout": "{{name}} did not start in 15 seconds.",
+    "openDenied": "You can't open this: no access."
   },
   "subtasks": {
     "add": "Add subtask",

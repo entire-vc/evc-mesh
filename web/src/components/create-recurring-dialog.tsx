@@ -195,6 +195,8 @@ export function CreateRecurringDialog({
       handleAddLabel();
     }
     if (e.key === "Escape") {
+      // Cancel only the label draft, not the whole dialog.
+      e.stopPropagation();
       setAddingLabel(false);
       setLabelDraft("");
     }

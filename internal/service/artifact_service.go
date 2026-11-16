@@ -171,6 +171,7 @@ func (s *artifactService) Upload(ctx context.Context, input UploadArtifactInput)
 		UploadedByType: input.UploadedByType,
 		CreatedAt:      timeNow(),
 		Fence:          input.Fence,
+		Receipt:        input.Receipt,
 	}
 	// A fenced upload whose lock is already gone is refused before the bucket
 	// is touched; the record is checked again under the row lock.

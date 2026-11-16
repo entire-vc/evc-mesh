@@ -429,6 +429,8 @@ type UploadArtifactInput struct {
 	Size           int64               `json:"size"`
 	// Fence makes the upload conditional on the caller's checkout.
 	Fence *domain.ResultFence `json:"-"`
+	// Receipt binds the request's Idempotency-Key to the artifact row.
+	Receipt *domain.IdempotencyReceipt `json:"-"`
 }
 
 // ArtifactService provides business logic for artifact management.
@@ -1114,22 +1116,26 @@ type UpdateInitiativeInput struct {
 	Description *string                  `json:"description"`
 	Status      *domain.InitiativeStatus `json:"status"`
 	TargetDate  *time.Time               `json:"target_date"`
+	// ClearTargetDate removes the deadline; TargetDate is then ignored.
+	ClearTargetDate bool `json:"clear_target_date"`
 }
 
 // InitiativeService provides business logic for initiative management.
 type InitiativeService interface {
 	Create(ctx context.Context, input CreateInitiativeInput) (*domain.Initiative, error)
-	GetByID(ctx context.Context, id uuid.UUID) (*domain.Initiative, error)
+	GetByID(ctx context.Context, id uuid.UUID, viewer domain.ProjectViewer) (*domain.Initiative, error)
 	Update(ctx context.Context, id uuid.UUID, input UpdateInitiativeInput) (*domain.Initiative, error)
 	Delete(ctx context.Context, id uuid.UUID) error
-	List(ctx context.Context, workspaceID uuid.UUID) ([]domain.Initiative, error)
+	List(ctx context.Context, workspaceID uuid.UUID, viewer domain.ProjectViewer) ([]domain.Initiative, error)
 	LinkProject(ctx context.Context, initiativeID, projectID uuid.UUID) error
 	UnlinkProject(ctx context.Context, initiativeID, projectID uuid.UUID) error
 }
 
-// TriageService provides business logic for the triage inbox.
+// TriageService serves the triage inbox and the dashboard task queries, both
+// cross-project reads limited to the projects the viewer may read.
 type TriageService interface {
-	ListTriageTasks(ctx context.Context, workspaceID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error)
+	ListTriageTasks(ctx context.Context, q repository.TaskQuery, pg pagination.Params) (*pagination.Page[domain.Task], error)
+	QueryTasks(ctx context.Context, q repository.TaskQuery, pg pagination.Params) (*pagination.Page[domain.Task], error)
 }
 
 // WebhookService provides business logic for outbound webhook management.
@@ -1613,11 +1619,34 @@ type AnalyticsMetrics struct {
 
 // TaskMetrics holds task-level aggregated data.
 type TaskMetrics struct {
-	Total               int            `json:"total"`
+	Total int `json:"total"`
+	// Overdue is the tasks in scope past their due date and not done or
+	// cancelled, now (a snapshot, like Total).
+	Overdue             int            `json:"overdue"`
 	ByStatusCategory    map[string]int `json:"by_status_category"`
 	ByPriority          map[string]int `json:"by_priority"`
 	CreatedThisPeriod   int            `json:"created_this_period"`
 	CompletedThisPeriod int            `json:"completed_this_period"`
+	// ByAssignee and ByProject are the same snapshot as ByStatusCategory (all
+	// tasks in scope, not the period), largest first.
+	ByAssignee []AssigneeCountRow `json:"by_assignee"`
+	ByProject  []ProjectCountRow  `json:"by_project"`
+}
+
+// AssigneeCountRow is the number of tasks held by one assignee. AssigneeID is nil
+// and AssigneeType "unassigned" for tasks nobody holds.
+type AssigneeCountRow struct {
+	AssigneeID   *uuid.UUID `json:"assignee_id"`
+	AssigneeType string     `json:"assignee_type"`
+	Name         string     `json:"name"`
+	Count        int        `json:"count"`
+}
+
+// ProjectCountRow is the number of tasks in one project.
+type ProjectCountRow struct {
+	ProjectID   uuid.UUID `json:"project_id"`
+	ProjectName string    `json:"project_name"`
+	Count       int       `json:"count"`
 }
 
 // AgentMetrics holds agent-level aggregated data.
@@ -1722,6 +1751,20 @@ type AnalyticsFilter struct {
 	// TopTasksSort selects the ordering of cost_metrics.top_tasks before LIMIT 10.
 	// Empty means TopTasksSortCost. Only the values below are valid.
 	TopTasksSort string
+	// Viewer is whose project access bounds every aggregate. The zero value sees
+	// no project at all (fail closed).
+	Viewer AnalyticsViewer
+}
+
+// AnalyticsViewer is the caller the aggregates are computed for: the same rule as
+// RequireProjectMember. A user sees the projects they are a member of, owner and
+// admin see every project (AllProjects); an agent sees only its own memberships.
+// Rows that belong to no project (an agent session without a task) are counted
+// only for AllProjects: they cannot be shown not to come from a hidden project.
+type AnalyticsViewer struct {
+	ActorID     uuid.UUID
+	Agent       bool
+	AllProjects bool
 }
 
 // Allowed AnalyticsFilter.TopTasksSort values.
@@ -1760,7 +1803,7 @@ type WSPublisher interface {
 type MentionService interface {
 	List(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, filter repository.MentionFilter) ([]domain.CommentMentionView, error)
 	MarkSeen(ctx context.Context, commentID, mentionedID uuid.UUID) error
-	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, workspaceID uuid.UUID) (int64, error)
+	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, workspaceID uuid.UUID, viewer domain.ProjectViewer) (int64, error)
 }
 
 // DocumentMentionService is MentionService for @-mentions inside document
@@ -2022,6 +2065,8 @@ type AuthorizeParams struct {
 	CodeChallengeMethod string
 	Scope               string
 	State               string
+	// Nonce is the OpenID Connect nonce; only the identity flow reads it.
+	Nonce string
 }
 
 // AuthorizeValidation is ValidateAuthorize's result. The split between
@@ -2035,6 +2080,9 @@ type AuthorizeValidation struct {
 	RedirectURI string
 	ClientErr   *oautherror.Error
 	RequestErr  *oautherror.Error
+	// Identity is true for the OpenID Connect identity flow (scope openid
+	// without mesh, static client, OIDC on): no workspace, grant or agent.
+	Identity bool
 }
 
 // ConsentInfo is what the frontend consent screen (task MCP-OAuth 2/5) needs
@@ -2046,6 +2094,9 @@ type ConsentInfo struct {
 	LoopbackWarning bool               `json:"loopback_warning"`
 	Scope           string             `json:"scope"`
 	Workspaces      []domain.Workspace `json:"workspaces"`
+	// IdentityOnly marks the OpenID Connect identity flow: the screen asks
+	// only "is this you", with no workspace to choose.
+	IdentityOnly bool `json:"identity_only,omitempty"`
 }
 
 // ConsentDecisionInput is POST /api/v1/oauth/consent's body: the same
@@ -2065,6 +2116,8 @@ type TokenResponse struct {
 	ExpiresIn    int    `json:"expires_in"`
 	RefreshToken string `json:"refresh_token,omitempty"`
 	Scope        string `json:"scope"`
+	// IDToken is set only by the OpenID Connect identity flow.
+	IDToken string `json:"id_token,omitempty"`
 }
 
 // OAuthService implements the OAuth 2.0 Authorization Server behavior Mesh
@@ -2132,6 +2185,9 @@ type OAuthService interface {
 	// at registration time never re-syncs on its own). Periodic housekeeping,
 	// like PurgeExpired — not on the request or grant-reuse path.
 	ResyncConnectorMemberships(ctx context.Context) (ResyncConnectorMembershipsResult, error)
+	// OIDCKeys is the OpenID Connect signing key set; nil while OIDC is off
+	// (no MESH_OIDC_SIGNING_KEY_FILE). Discovery and JWKS answer 404 then.
+	OIDCKeys() *OIDCKeySet
 }
 
 // OAuthServiceConfigurable is the optional, test-only capability to replace

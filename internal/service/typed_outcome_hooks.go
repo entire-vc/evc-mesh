@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
-	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
 // TurnHooksFor returns the task service's hooks for the turn commands: hand_off
@@ -42,11 +41,10 @@ func (s *taskService) AfterTurn(ctx context.Context, taskID uuid.UUID, kind doma
 		action = "task.assigned"
 		changes["assignee_id"] = task.AssigneeID
 	}
+	// logActivity writes the audit row and publishes the same action to the
+	// event bus; a second publishTaskEvent here put every wait/next/hand_off
+	// into event_bus_messages twice, 35 ms apart (fde4f82f).
 	s.logActivity(ctx, task.ProjectID, taskID, action, changes)
-	actor, actorType := actorctx.FromContext(ctx)
-	if ws, ok := s.resolveProjectWorkspace(ctx, task.ProjectID); ok {
-		s.publishTaskEvent(ctx, ws, task.ProjectID, taskID, actor, actorType, action, changes)
-	}
 	if kind == domain.TurnOutcomeHandoff {
 		s.notifyAssignedAgent(ctx, task, "task.assigned", changes)
 	}

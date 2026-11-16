@@ -11,6 +11,8 @@ export interface TopbarCrumb {
   kind: "workspace" | "project" | "page";
   /** (+) lucide icon name drawn before the label (workspace pages). */
   icon?: string;
+  /** (+) the entity's own icon value (a project's `icon`: emoji, `icon:<name>`, legacy text); drawn with EntityIcon before the label, nothing when empty. */
+  entityIcon?: string;
   /** (+) drawn in the foreground tone; the last crumb of a project or page. */
   strong?: boolean;
 }

@@ -239,8 +239,10 @@ describe("ThemeSettingsPanel (workspace)", () => {
     render(<ThemeSettingsPanel level="workspace" workspaceId="ws1" />);
     await screen.findByLabelText("Accent");
     fireEvent.click(screen.getByRole("button", { name: "Reset to the instance theme" }));
-    await screen.findByRole("dialog");
-    fireEvent.keyDown(document, { key: "Escape" });
+    const dialog = await screen.findByRole("dialog");
+    // The key lands where focus is, and the shared Dialog has moved focus inside.
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(put).not.toHaveBeenCalled();
   });

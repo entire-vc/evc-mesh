@@ -12,9 +12,12 @@ import {
   isRevocation,
   parseFrameMessage,
   refreshDelayMs,
+  REVOKED_DELIVERY_GRACE_MS,
   revokedMessage,
+  themeMessage,
   type FrameCommand,
 } from "@/lib/extension-frame-protocol";
+import { themeKey, useWidgetTheme } from "@/lib/widget-theme";
 
 /** A screen that has not loaded in this long shows "unavailable"; the host never waits on it. */
 export const FRAME_LOAD_TIMEOUT_MS = 10_000;
@@ -51,18 +54,20 @@ type State =
   | { kind: "loading" }
   | { kind: "ready"; ctx: UiContext; section: string }
   | { kind: "error" }
-  | { kind: "revoked" }
+  /** `draining`: the revoked frame, kept hidden until `mesh.revoked` reaches it (REVOKED_DELIVERY_GRACE_MS). */
+  | { kind: "revoked"; draining: { ctx: UiContext; section: string } | null }
   | { kind: "app-error"; message: string };
 
 /**
- * Iframe screen of an external extension (W3.3). Mesh asks the server for a
+ * Iframe screen of an external extension. Mesh asks the server for a
  * short-lived context token (the extension's own token never reaches the
  * browser), puts it on the screen's address as `?token=` and again in a
  * `mesh.context` message, and obeys only what the frame itself says
  * (see `lib/extension-frame-protocol.ts`). The token is renewed on its own at
  * 80% of its lifetime; a refused renewal is told to the frame
  * (`mesh.context.error`), and one that means access is gone also revokes it
- * (`mesh.revoked`) and closes the screen.
+ * (`mesh.revoked`) and closes the screen. The Mesh theme travels in
+ * `mesh.context` and, when it changes, in `mesh.theme`, as for a widget.
  */
 export function ExternalFrame({ extensionId, name, slot, taskId, projectId, layout, section = "", onSection }: ExternalFrameProps) {
   const { t } = useTranslation("task");
@@ -82,6 +87,13 @@ export function ExternalFrame({ extensionId, name, slot, taskId, projectId, layo
   const sectionRef = useRef(section);
   /** Bumped on every (re)start, so an answer for a screen that was retried meanwhile is dropped. */
   const genRef = useRef(0);
+  const theme = useWidgetTheme();
+  const themeSig = themeKey(theme);
+  // Read by `send` through a ref, so a theme switch does not rebuild it (and every callback built on it).
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
+  /** Key of the theme the frame was last told, in mesh.context or mesh.theme: a context is never followed by the same theme again. */
+  const sentThemeRef = useRef<string | null>(null);
 
   const wsId = ws?.id;
   const wsSlug = ws?.slug ?? "";
@@ -141,9 +153,11 @@ export function ExternalFrame({ extensionId, name, slot, taskId, projectId, layo
           taskId,
           locale: currentLanguage(),
           section: sectionRef.current,
+          theme: themeRef.current,
         }),
         ctx.origin,
       );
+      sentThemeRef.current = themeKey(themeRef.current);
     },
     [wsId, wsSlug, projectId, taskId],
   );
@@ -162,6 +176,13 @@ export function ExternalFrame({ extensionId, name, slot, taskId, projectId, layo
     if (win && origin) win.postMessage(msg, origin);
   }, []);
 
+  // The light/dark switch or a new token stylesheet: tell the loaded frame. After mesh.revoked (no context) it hears nothing.
+  useEffect(() => {
+    if (!loaded || !ctxRef.current || sentThemeRef.current === themeSig) return;
+    sentThemeRef.current = themeSig;
+    tell(themeMessage(themeRef.current));
+  }, [themeSig, loaded, tell]);
+
   /** Renew the token and hand it over; a refusal is told to the frame and may revoke it. */
   const refresh = useCallback(() => {
     const gen = genRef.current;
@@ -177,14 +198,28 @@ export function ExternalFrame({ extensionId, name, slot, taskId, projectId, layo
         const status = err instanceof ApiRequestError ? err.status : 0;
         tell(contextErrorMessage(status));
         if (isRevocation(status)) {
-          tell(revokedMessage(status));
+          // mesh.revoked is the last word: the context goes first, so nothing more (theme, settings, a token) reaches
+          // the kept frame and nothing it sends is handled any longer; the message itself goes to the saved origin.
+          const last = ctxRef.current;
+          ctxRef.current = null;
+          genRef.current += 1;
+          if (last) iframeRef.current?.contentWindow?.postMessage(revokedMessage(status), last.origin);
           setRefreshAt(null);
-          setState({ kind: "revoked" });
+          // The frame keeps the address it was opened with, or it reloads and loses the message.
+          setState((prev) => ({ kind: "revoked", draining: prev.kind === "ready" ? { ctx: prev.ctx, section: prev.section } : null }));
         } else {
           setRefreshAt(Date.now() + REFRESH_RETRY_MS);
         }
       });
   }, [fetchContext, send, tell]);
+
+  // The revoked frame leaves the page only after the message had time to reach it.
+  const draining = state.kind === "revoked" ? state.draining : null;
+  useEffect(() => {
+    if (!draining) return;
+    const id = setTimeout(() => setState({ kind: "revoked", draining: null }), REVOKED_DELIVERY_GRACE_MS);
+    return () => clearTimeout(id);
+  }, [draining]);
 
   useEffect(() => {
     if (state.kind !== "ready" || !loaded || refreshAt === null) return;
@@ -232,6 +267,9 @@ export function ExternalFrame({ extensionId, name, slot, taskId, projectId, layo
   useEffect(() => {
     if (!origin) return;
     const handler = (ev: MessageEvent) => {
+      // Checked on every message, not only by removing the listener: after mesh.revoked the context is gone at once,
+      // while the listener leaves only after the next commit.
+      if (!ctxRef.current) return;
       const cmd = parseFrameMessage(ev, { origin, frameWindow: iframeRef.current?.contentWindow });
       if (cmd) onCommand(cmd);
     };
@@ -239,62 +277,78 @@ export function ExternalFrame({ extensionId, name, slot, taskId, projectId, layo
     return () => window.removeEventListener("message", handler);
   }, [origin, onCommand]);
 
-  if (state.kind === "error" || state.kind === "revoked" || state.kind === "app-error" || (late && !loaded)) {
-    const testId =
-      state.kind === "revoked" ? "external-frame-revoked" : state.kind === "app-error" ? "external-frame-app-error" : "external-frame-unavailable";
-    return (
-      <div className="flex flex-1 flex-col items-start gap-2 p-4 text-sm text-muted-foreground" role="status" data-testid={testId}>
-        <span>
-          {state.kind === "revoked"
-            ? t("slots.revoked", { name })
-            : state.kind === "app-error"
-              ? t("slots.appError", { name })
-              : t("slots.unavailable", { name })}
-        </span>
-        {state.kind === "app-error" && state.message ? (
-          <span className="max-w-prose break-words text-foreground" data-testid="external-frame-app-error-message">
-            {state.message}
-          </span>
-        ) : null}
-        <button
-          type="button"
-          className="rounded border border-border px-2 py-1 text-xs text-foreground hover:bg-muted"
-          onClick={() => setAttempt((n) => n + 1)}
-        >
-          {t("slots.retry")}
-        </button>
-      </div>
-    );
-  }
+  const stubbed = state.kind === "error" || state.kind === "revoked" || state.kind === "app-error" || (late && !loaded);
+  const testId = !stubbed
+    ? "external-frame"
+    : state.kind === "revoked"
+      ? "external-frame-revoked"
+      : state.kind === "app-error"
+        ? "external-frame-app-error"
+        : "external-frame-unavailable";
+  // One root and a fixed place for the iframe: through a revocation it stays the same element (hidden), never remounted.
+  const live = state.kind === "ready" && !stubbed;
+  const frame = live ? { ctx: state.ctx, section: state.section } : draining;
 
   return (
     <div
-      className={layout === "screen" ? "relative min-h-[60vh] flex-1" : "relative flex min-h-0 flex-1 flex-col"}
-      style={layout === "panel" && minHeight ? { minHeight } : undefined}
-      data-testid="external-frame"
-      data-app-ready={appReady ? "true" : undefined}
+      className={
+        stubbed
+          ? "flex flex-1 flex-col items-start gap-2 p-4 text-sm text-muted-foreground"
+          : layout === "screen"
+            ? "relative min-h-[60vh] flex-1"
+            : "relative flex min-h-0 flex-1 flex-col"
+      }
+      style={!stubbed && layout === "panel" && minHeight ? { minHeight } : undefined}
+      role={stubbed ? "status" : undefined}
+      data-testid={testId}
+      data-app-ready={!stubbed && appReady ? "true" : undefined}
     >
-      {state.kind === "loading" || !loaded ? (
+      {stubbed ? (
+        <>
+          <span>
+            {state.kind === "revoked"
+              ? t("slots.revoked", { name })
+              : state.kind === "app-error"
+                ? t("slots.appError", { name })
+                : t("slots.unavailable", { name })}
+          </span>
+          {state.kind === "app-error" && state.message ? (
+            <span className="max-w-prose break-words text-foreground" data-testid="external-frame-app-error-message">
+              {state.message}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            className="rounded border border-border px-2 py-1 text-xs text-foreground hover:bg-muted"
+            onClick={() => setAttempt((n) => n + 1)}
+          >
+            {t("slots.retry")}
+          </button>
+        </>
+      ) : state.kind === "loading" || !loaded ? (
         <div className="absolute inset-0 space-y-2 p-3" aria-busy="true" data-testid="external-frame-pending">
           <div className="h-4 w-32 animate-pulse rounded bg-muted" />
           <div className="h-10 w-full animate-pulse rounded bg-muted" />
         </div>
       ) : null}
-      {state.kind === "ready" && (
+      {frame ? (
         <iframe
           ref={iframeRef}
-          title={state.ctx.title || name}
-          src={frameSrc(state.ctx.frame_url, state.ctx.token, state.section)}
+          title={frame.ctx.title || name}
+          src={frameSrc(frame.ctx.frame_url, frame.ctx.token, frame.section)}
           sandbox="allow-scripts allow-forms allow-same-origin"
           referrerPolicy="no-referrer"
           allow=""
-          className={loaded ? "h-full w-full flex-1 border-0 bg-background" : "h-0 w-0 border-0"}
+          style={{ colorScheme: theme.mode }}
+          className={!live ? "hidden" : loaded ? "h-full w-full flex-1 border-0 bg-background" : "h-0 w-0 border-0"}
+          aria-hidden={live ? undefined : true}
+          tabIndex={live ? undefined : -1}
           onLoad={() => {
             setLoaded(true);
             if (ctxRef.current) send(ctxRef.current);
           }}
         />
-      )}
+      ) : null}
     </div>
   );
 }

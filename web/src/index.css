@@ -194,6 +194,24 @@ pre {
   font-family: var(--font-mono);
 }
 
+/* Dashboard on paper (PRD §11.6 «печать»): the grid is the 12-column desktop layout whatever the window was.
+   Each cell carries its 12-column place in --print-col / --print-row (view-grid.tsx); the screen ignores them.
+   A cell is never cut across two sheets: it moves to the next one whole. */
+@media print {
+  [data-print-grid] {
+    display: grid !important;
+    grid-template-columns: repeat(12, minmax(0, 1fr)) !important;
+    grid-auto-rows: 72px !important;
+    gap: 16px !important;
+  }
+  [data-print-grid] > [data-widget-instance] {
+    grid-column: var(--print-col) !important;
+    grid-row: var(--print-row) !important;
+    min-height: 0 !important;
+    break-inside: avoid;
+  }
+}
+
 /* Fix native date/time picker icon invisible in dark mode */
 .dark input::-webkit-calendar-picker-indicator {
   filter: invert(1);

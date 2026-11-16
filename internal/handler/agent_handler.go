@@ -689,6 +689,7 @@ func (h *AgentHandler) GetAgentsStatus(c echo.Context) error {
 	type agentStatus struct {
 		ID                    uuid.UUID  `json:"id"`
 		Name                  string     `json:"name"`
+		AgentType             string     `json:"agent_type"`
 		Status                string     `json:"status"`
 		HeartbeatStatus       string     `json:"heartbeat_status"`
 		LastHeartbeatAt       *time.Time `json:"last_heartbeat_at"`
@@ -699,16 +700,29 @@ func (h *AgentHandler) GetAgentsStatus(c echo.Context) error {
 		CurrentTaskTitle      string     `json:"current_task_title,omitempty"`
 	}
 
-	// Resolve task titles for agents currently working on a task.
+	// An agent's current task is shown only to a caller who may reach that
+	// task's project: the workspace guard admits every member, but the task
+	// may sit in a project the caller is not in (or no longer in), and its id
+	// and title must not leak through the agent list. The agent itself stays
+	// listed, without the task.
+	taskVisible := map[uuid.UUID]bool{}
+	for _, a := range agents.Items {
+		if a.CurrentTaskID != nil {
+			if _, seen := taskVisible[*a.CurrentTaskID]; !seen {
+				taskVisible[*a.CurrentTaskID] = mw.MayAccessTask(c, *a.CurrentTaskID)
+			}
+		}
+	}
+
+	// Resolve titles of the visible current tasks.
 	taskTitles := map[uuid.UUID]string{}
 	if h.taskService != nil {
-		for _, a := range agents.Items {
-			if a.CurrentTaskID != nil {
-				if _, seen := taskTitles[*a.CurrentTaskID]; !seen {
-					if t, terr := h.taskService.GetByID(c.Request().Context(), *a.CurrentTaskID); terr == nil && t != nil {
-						taskTitles[*a.CurrentTaskID] = t.Title
-					}
-				}
+		for taskID, visible := range taskVisible {
+			if !visible {
+				continue
+			}
+			if t, terr := h.taskService.GetByID(c.Request().Context(), taskID); terr == nil && t != nil {
+				taskTitles[taskID] = t.Title
 			}
 		}
 	}
@@ -726,15 +740,16 @@ func (h *AgentHandler) GetAgentsStatus(c echo.Context) error {
 		entry := agentStatus{
 			ID:                    a.ID,
 			Name:                  a.Name,
+			AgentType:             string(a.AgentType),
 			Status:                string(a.Status),
 			HeartbeatStatus:       a.HeartbeatStatus,
 			LastHeartbeatAt:       a.LastHeartbeat,
 			SecondsSinceHeartbeat: a.SecondsSinceHeartbeat(),
 			IsStale:               isStale,
 			HeartbeatMessage:      a.HeartbeatMessage,
-			CurrentTaskID:         a.CurrentTaskID,
 		}
-		if a.CurrentTaskID != nil {
+		if a.CurrentTaskID != nil && taskVisible[*a.CurrentTaskID] {
+			entry.CurrentTaskID = a.CurrentTaskID
 			entry.CurrentTaskTitle = taskTitles[*a.CurrentTaskID]
 		}
 		statuses = append(statuses, entry)
@@ -1004,6 +1019,25 @@ func (h *AgentHandler) ReportSession(c echo.Context) error {
 		}
 	}
 
+	// A keyed repeat of a report that was added answers with the session it
+	// landed on and adds nothing. The receipt's task is the
+	// report's task_id, or none.
+	receiptTask := uuid.Nil
+	if reqTaskID != nil {
+		receiptTask = *reqTaskID
+	}
+	replay := func(raw json.RawMessage) error {
+		var sess domain.AgentSession
+		if err := json.Unmarshal(raw, &sess); err != nil {
+			return handleError(c, err)
+		}
+		return c.JSON(http.StatusOK, sessionReportAnswer(&sess))
+	}
+	if done, rerr := replayWritten(c, domain.IdemRouteSessionReport, receiptTask, replay); done {
+		return rerr
+	}
+	usage.Receipt = idemReceipt(c, domain.IdemRouteSessionReport, receiptTask)
+
 	agent, gerr := h.agentService.GetByID(ctx, agentID)
 	if gerr != nil {
 		return handleError(c, gerr)
@@ -1018,6 +1052,9 @@ func (h *AgentHandler) ReportSession(c echo.Context) error {
 	// twice (middleware replays the first answer).
 	active, err := h.sessionRepo.ReportUsage(ctx, agentID, agent.WorkspaceID, reqTaskID, usage, req.Model)
 	if err != nil {
+		if done, answer := replayAfterRefusal(c, err, domain.IdemRouteSessionReport, receiptTask, replay); done {
+			return answer
+		}
 		return handleError(c, err)
 	}
 
@@ -1034,7 +1071,13 @@ func (h *AgentHandler) ReportSession(c echo.Context) error {
 		}
 	}
 
-	return c.JSON(http.StatusOK, map[string]any{
+	return c.JSON(http.StatusOK, sessionReportAnswer(active))
+}
+
+// sessionReportAnswer is the answer of POST /agents/me/sessions/report: the
+// session the report landed on and its totals.
+func sessionReportAnswer(active *domain.AgentSession) map[string]any {
+	return map[string]any{
 		"session_id": active.ID,
 		"totals": map[string]any{
 			// A measure with no known figure is null, never 0; *_incomplete is true when any
@@ -1047,7 +1090,7 @@ func (h *AgentHandler) ReportSession(c echo.Context) error {
 			"estimated_cost_incomplete": active.CostUnknown || !active.CostKnown,
 			"model_used":                active.ModelUsed,
 		},
-	})
+	}
 }
 
 func knownOrNil[T any](known bool, v T) any {

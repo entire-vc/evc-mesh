@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from "react";
+import { createContext, useContext, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { InlineEditProps } from "@entire-vc/mesh-theme-sdk";
 import { apiErrorMessage } from "@/lib/api-error";
 import { useMemberStore } from "@/stores/member";
@@ -30,6 +30,15 @@ function currentValue(task: Task | undefined, field: QuickEditField): string {
   }
 }
 
+/**
+ * Tasks a list drew from its own read (a dashboard widget) rather than the task store: the editor opens with their
+ * current value. The store, when it holds the task, wins.
+ */
+const ListedTasksContext = createContext<Readonly<Record<Id, Task>> | null>(null);
+export function ListedTasksProvider({ tasks, children }: { tasks: Readonly<Record<Id, Task>>; children: ReactNode }) {
+  return <ListedTasksContext.Provider value={tasks}>{children}</ListedTasksContext.Provider>;
+}
+
 interface AssigneeOption {
   id: Id;
   type: "user" | "agent";
@@ -52,7 +61,9 @@ function parseValue(field: QuickEditField, raw: string, assignees: AssigneeOptio
  */
 export function InlineEdit({ taskId, field, children }: InlineEditProps) {
   const allowed = useCan("task.edit", { kind: "task", id: taskId });
-  const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId));
+  const stored = useTaskStore((s) => s.tasks.find((t) => t.id === taskId));
+  const listed = useContext(ListedTasksContext)?.[taskId];
+  const task = stored ?? listed;
   const { quickEdit } = useCoreActions();
   const members = useMemberStore((s) => s.projectMembers);
   const assignees = members.flatMap<AssigneeOption>((m) =>

@@ -21,7 +21,7 @@ import (
 // authWsID is the workspace the agent's PRESENTED KEY actually authenticated
 // into (see ContextKeyAgentAuthWorkspaceID) — pass the same value as wsID to
 // model "the caller's own key, own resource"; pass a different one to model a
-// key scoped elsewhere being pointed at wsID (the #7661fc5d cross-workspace case).
+// key scoped elsewhere being pointed at wsID (the an internal ticket cross-workspace case).
 // agentID is the authenticated agent's UUID.
 func setupAgentCtx(e *echo.Echo, wsID, authWsID, agentID uuid.UUID) (echo.Context, *httptest.ResponseRecorder) {
 	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
@@ -178,7 +178,7 @@ func TestRequireWorkspaceMember_Agent_CrossWorkspace_IDOR(t *testing.T) {
 }
 
 // TestRequireWorkspaceMember_Agent_MultiWorkspace_GrantElsewhereDoesNotGrantAccess
-// is the direct regression test for #7661fc5d: an agent that legitimately
+// is the direct regression test for an internal ticket: an agent that legitimately
 // holds an ACTIVE grant in the target workspace must still be refused when
 // the key PRESENTED on this particular request authenticated into a
 // different one. Membership somewhere is necessary but not sufficient — this
@@ -241,4 +241,41 @@ func TestRequireWorkspaceMember_Agent_NoAuthWorkspaceInContext(t *testing.T) {
 	err := mw(nopHandler)(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+// TestRequireWorkspaceMember_User_OwnerFallbackIsMarked: an owner without a
+// workspace_members row is admitted through the owner fallback with no role in
+// context; the guard marks the context so a reader can still grant the owner's
+// reach. A member path and a refused non-owner carry no mark.
+func TestRequireWorkspaceMember_User_OwnerFallbackIsMarked(t *testing.T) {
+	e := echo.New()
+	wsID, owner := uuid.New(), uuid.New()
+
+	rawDB, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = rawDB.Close() }()
+	db := sqlx.NewDb(rawDB, "postgres")
+
+	mock.ExpectQuery("SELECT owner_id FROM workspaces").WithArgs(wsID).
+		WillReturnRows(sqlmock.NewRows([]string{"owner_id"}).AddRow(owner))
+	c, rec := setupWSMemberCtx(e, wsID, AuthTypeUser)
+	c.Set(ContextKeyUserID, owner)
+	require.NoError(t, RequireWorkspaceMember(db)(nopHandler)(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	marked, _ := c.Get(ContextKeyWorkspaceOwnerWithoutMembership).(bool)
+	assert.True(t, marked, "the fallback owner is marked")
+
+	mock.ExpectQuery("SELECT owner_id FROM workspaces").WithArgs(wsID).
+		WillReturnRows(sqlmock.NewRows([]string{"owner_id"}).AddRow(uuid.New()))
+	c, rec = setupWSMemberCtx(e, wsID, AuthTypeUser)
+	c.Set(ContextKeyUserID, uuid.New())
+	require.NoError(t, RequireWorkspaceMember(db)(nopHandler)(c))
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Nil(t, c.Get(ContextKeyWorkspaceOwnerWithoutMembership), "a refused caller is not marked")
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	c, _ = setupWSMemberCtx(e, wsID, AuthTypeUser)
+	c.Set(ContextKeyWorkspaceRole, "member")
+	require.NoError(t, RequireWorkspaceMember(nil)(nopHandler)(c))
+	assert.Nil(t, c.Get(ContextKeyWorkspaceOwnerWithoutMembership), "a member with a role is not marked")
 }

@@ -10,6 +10,12 @@ import { commonmark } from "@milkdown/kit/preset/commonmark";
 import { gfm } from "@milkdown/kit/preset/gfm";
 import { history } from "@milkdown/kit/plugin/history";
 import { listener, listenerCtx } from "@milkdown/kit/plugin/listener";
+import { markdownPaste } from "@/lib/milkdown/markdown-paste";
+import { caretAttribute } from "@/lib/milkdown/caret-attribute";
+import {
+  blockBoundaryKeymap,
+  unbindDowngradeHeading,
+} from "@/lib/milkdown/block-boundary-keymap";
 import {
   attachmentAwareImageSchema,
   safeLinkSchema,
@@ -102,6 +108,9 @@ export function makeDocEditor(config: DocEditorConfig): Editor {
           onMarkdown(markdown);
         });
       }
+      // Backspace/Delete at the start of a heading must not change its level
+      // (block-boundary-keymap.ts).
+      unbindDowngradeHeading(ctx);
       configure?.(ctx);
     })
     .use(commonmark)
@@ -110,8 +119,14 @@ export function makeDocEditor(config: DocEditorConfig): Editor {
     // replace the preset's link and image rather than sitting alongside them.
     .use(safeLinkSchema)
     .use(attachmentAwareImageSchema)
+    .use(blockBoundaryKeymap)
+    // Before `plugins`: ProseMirror asks handlePaste in plugin order, and a
+    // clipboard carrying files is declined here so uploads still get it.
+    .use(markdownPaste)
     .use(listener)
     .use(history);
+  // Only an editor has a caret worth reporting; the viewer stays as it was.
+  if (editable) editor = editor.use(caretAttribute);
 
   for (const plugin of plugins) {
     editor = editor.use(plugin as Parameters<Editor["use"]>[0]);

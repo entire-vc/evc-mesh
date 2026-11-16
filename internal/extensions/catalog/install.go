@@ -84,6 +84,10 @@ type Installer struct {
 	Store     InstallStore
 	Journal   Journal
 	OnChange  func(ctx context.Context)
+	// RunnerVersions, when set, keeps the Agent Runner row from offering an
+	// update or rollback older than what its controllers run. Nil: the row's
+	// version is the only floor.
+	RunnerVersions RunnerVersions
 
 	pingMu   sync.Mutex
 	lastPing time.Time

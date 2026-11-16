@@ -89,6 +89,7 @@ var wsScopedRoutes = []wsRoute{
 	{http.MethodPut, "/theme", map[string]string{}},
 
 	{http.MethodGet, "/extensions", nil},
+	{http.MethodGet, "/widgets/gitlab/failed-pipelines", nil},
 	{http.MethodPost, "/extensions/" + dummyUUID + "/connect", map[string]string{}},
 	{http.MethodPatch, "/extensions/" + dummyUUID + "/settings", map[string]string{}},
 	{http.MethodPost, "/extensions/" + dummyUUID + "/enable", map[string]string{}},
@@ -139,10 +140,13 @@ var wsScopedRoutes = []wsRoute{
 	{http.MethodGet, "/analytics", nil},
 	{http.MethodGet, "/analytics/export", nil},
 
+	{http.MethodGet, "/events", nil},
+
 	{http.MethodPost, "/initiatives", map[string]string{"name": "Intruder Initiative"}},
 	{http.MethodGet, "/initiatives", nil},
 
 	{http.MethodGet, "/triage", nil},
+	{http.MethodGet, "/tasks/query", nil},
 	{http.MethodGet, "/team", nil},
 
 	{http.MethodGet, "/rules/assignment", nil},
@@ -170,6 +174,24 @@ var wsScopedRoutes = []wsRoute{
 	// like everything else — neither is an exception.
 	{http.MethodGet, "/secrets", nil},
 	{http.MethodPost, "/secrets", map[string]string{"name": "INTRUDER_TOKEN", "scope": "workspace", "value": "planted"}},
+
+	// Dashboards extension. "default" stands in for :dashboard_id: it is not a
+	// uuid, so the dashboard_id pair check skips it and the membership guard
+	// alone has to refuse the intruder.
+	{http.MethodGet, "/dashboard-widgets", nil},
+	{http.MethodGet, "/dashboard-templates", nil},
+	{http.MethodGet, "/dashboards", nil},
+	{http.MethodPost, "/dashboards", map[string]string{"name": "intruder"}},
+	{http.MethodPut, "/dashboards/order", map[string]any{"top": []string{}, "bottom": []string{}}},
+	{http.MethodGet, "/dashboards/default", nil},
+	{http.MethodPatch, "/dashboards/default", map[string]string{"name": "PWNED"}},
+	{http.MethodPatch, "/dashboards/default/sharing", map[string]string{"scope": "workspace"}},
+	{http.MethodDelete, "/dashboards/default", nil},
+	{http.MethodPut, "/dashboards/default/layout", map[string]any{"version": 0, "widgets": []any{}}},
+	{http.MethodPut, "/dashboards/default/hidden", map[string]bool{"hidden": true}},
+	{http.MethodPost, "/dashboards/default/duplicate", map[string]string{}},
+	{http.MethodPost, "/dashboards/default/copy", map[string]string{}},
+	{http.MethodPost, "/dashboards/default/reset", nil},
 }
 
 // wsConcealedRoute is a workspace-scoped route that refuses a non-member just
@@ -321,7 +343,7 @@ func TestCrossTenant_WorkspaceStillWorksForItsOwner(t *testing.T) {
 	wsID := firstWorkspaceID(t, owner)
 
 	// Read-only routes only: this asserts access, not side effects.
-	readable := []string{"", "/members", "/members/me", "/projects", "/agents", "/team", "/analytics", "/config/export", "/mentionables"}
+	readable := []string{"", "/members", "/members/me", "/projects", "/agents", "/team", "/analytics", "/events", "/config/export", "/mentionables"}
 	for _, suffix := range readable {
 		t.Run("GET /workspaces/:ws_id"+suffix, func(t *testing.T) {
 			resp := owner.Get(t, fmt.Sprintf("/api/v1/workspaces/%s%s", wsID, suffix))
@@ -369,6 +391,7 @@ func TestCrossTenant_RouteTableIsComplete(t *testing.T) {
 		suffix = strings.ReplaceAll(suffix, "/reservations/"+dummyUUID, "/reservations/:reservation_id")
 		suffix = strings.ReplaceAll(suffix, "/secrets/"+dummyUUID+"/", "/secrets/:secret_id/")
 		suffix = strings.ReplaceAll(suffix, "/runtime/artifacts/"+dummyUUID+"/", "/runtime/artifacts/:provenance_artifact_id/")
+		suffix = strings.ReplaceAll(suffix, "/dashboards/default", "/dashboards/:dashboard_id")
 		return suffix
 	}
 

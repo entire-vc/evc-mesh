@@ -17,6 +17,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
+	"github.com/entire-vc/evc-mesh/internal/extensions/dashboards"
 	"github.com/entire-vc/evc-mesh/internal/extensions/uictx"
 )
 
@@ -90,6 +91,29 @@ func (f fakeBindings) GetBinding(_ context.Context, projectID uuid.UUID, _ strin
 	return nil, errors.New("not found")
 }
 
+// fakeDashboard is one dashboard: its workspace, who reads it, and its saved instances.
+type fakeDashboard struct {
+	ws      uuid.UUID
+	readers map[uuid.UUID]bool
+	inst    map[uuid.UUID]dashboards.WidgetInstance
+}
+
+// fakeDashboards answers like dashboards.Service.WidgetInstance: anything the user may not read is a 404.
+type fakeDashboards map[uuid.UUID]fakeDashboard
+
+func (f fakeDashboards) WidgetInstance(_ context.Context, ws, user, dash, inst uuid.UUID) (*dashboards.WidgetInstance, error) {
+	notFound := &dashboards.Error{Status: http.StatusNotFound, Code: "not_found", Message: "Dashboard not found"}
+	d, ok := f[dash]
+	if !ok || d.ws != ws || !d.readers[user] {
+		return nil, notFound
+	}
+	i, ok := d.inst[inst]
+	if !ok {
+		return nil, notFound
+	}
+	return &i, nil
+}
+
 type uiFixture struct {
 	h              *ExtensionUIHandler
 	signer         *fakeSigner
@@ -99,6 +123,12 @@ type uiFixture struct {
 	// stranger is a plain workspace member who is not.
 	member, stranger uuid.UUID
 	ownProj          uuid.UUID
+	// dash is a shared dashboard of the workspace with a workspace widget (inst), a project
+	// widget set to ownProj (projInst) and one set to another project (otherProjInst);
+	// otherDash, foreignDash and elsewhereDash are another dashboard of the workspace,
+	// a personal dashboard the user does not read, and a dashboard of another workspace.
+	dash, inst, projInst, otherProjInst              uuid.UUID
+	otherDash, otherInst, foreignDash, elsewhereDash uuid.UUID
 }
 
 func newUIFixture(t *testing.T, enabled bool, domains ...string) *uiFixture {
@@ -107,13 +137,17 @@ func newUIFixture(t *testing.T, enabled bool, domains ...string) *uiFixture {
 		member: uuid.New(), stranger: uuid.New()}
 	man := extensions.Manifest{
 		ID: "hello", Runtime: "external",
-		Capabilities: extensions.Capabilities{Network: &extensions.Network{AllowedDomains: domains}},
+		Capabilities: extensions.Capabilities{Network: &extensions.Network{AllowedDomains: domains}, UI: []string{"sidebar.item", "project.view", "dashboard.widget"}},
 		External: &extensions.External{
 			BaseURLSetting: "hello_url",
 			UI: map[string]extensions.ExternalUI{
 				"sidebar.item": {Path: "/mesh/ui/hello", Title: "Hello"},
 				"project.view": {Path: "/mesh/ui/project", Title: "Hello"},
 			},
+		},
+		Widgets: []extensions.Widget{
+			{ID: "status", Title: "Hello widget", Scope: "workspace", Render: extensions.WidgetRender{Frame: &extensions.WidgetFrame{Path: "/mesh/ui/widget"}}},
+			{ID: "proj", Title: "Hello project widget", Scope: "project", Render: extensions.WidgetRender{Frame: &extensions.WidgetFrame{Path: "/mesh/ui/widget"}}},
 		},
 	}
 	reg := extensions.NewRegistry()
@@ -128,6 +162,19 @@ func newUIFixture(t *testing.T, enabled bool, domains ...string) *uiFixture {
 		fakeTasks{f.ownTask: {ID: f.ownTask, ProjectID: ownProj}, f.other: {ID: f.other, ProjectID: otherProj}},
 		fakeProjects{ownProj: {ID: ownProj, WorkspaceID: f.ws}, otherProj: {ID: otherProj, WorkspaceID: uuid.New()}},
 		fakeProjectMembers{ownProj: {f.member}})
+	f.dash, f.inst, f.projInst, f.otherProjInst = uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	f.otherDash, f.otherInst, f.foreignDash, f.elsewhereDash = uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	all := map[uuid.UUID]bool{f.user: true, f.member: true, f.stranger: true}
+	f.h.WithDashboards(fakeDashboards{
+		f.dash: {ws: f.ws, readers: all, inst: map[uuid.UUID]dashboards.WidgetInstance{
+			f.inst:          {Type: "hello.status", Settings: json.RawMessage(`{}`)},
+			f.projInst:      {Type: "hello.proj", Settings: json.RawMessage(`{"project_id":"` + ownProj.String() + `"}`)},
+			f.otherProjInst: {Type: "hello.proj", Settings: json.RawMessage(`{"project_id":"` + otherProj.String() + `"}`)},
+		}},
+		f.otherDash:     {ws: f.ws, readers: all, inst: map[uuid.UUID]dashboards.WidgetInstance{f.otherInst: {Type: "hello.status"}}},
+		f.foreignDash:   {ws: f.ws, readers: map[uuid.UUID]bool{f.stranger: true}, inst: map[uuid.UUID]dashboards.WidgetInstance{f.inst: {Type: "hello.status"}}},
+		f.elsewhereDash: {ws: uuid.New(), readers: all, inst: map[uuid.UUID]dashboards.WidgetInstance{f.inst: {Type: "hello.status"}}},
+	})
 	return f
 }
 
@@ -413,4 +460,108 @@ func TestUIContext_ProjectView(t *testing.T) {
 	rec, _ = f.call(t, f.user, `{`+ws+`,"slot":"sidebar.item","task_id":"`+f.ownTask.String()+`"}`)
 	assert.Equal(t, http.StatusConflict, rec.Code, "red control: task of an unbound project")
 	assert.Nil(t, f.signer.got.ProjectID, "nothing is signed for an unbound project")
+}
+
+func TestUIContext_DashboardWidget(t *testing.T) {
+	f := newUIFixture(t, true, "hello.example.com")
+	ws := `"workspace_id":"` + f.ws.String() + `","slot":"dashboard.widget"`
+	dash, inst := f.dash, f.inst
+	ids := `"dashboard_id":"` + dash.String() + `","instance_id":"` + inst.String() + `","widget_id":"status"`
+
+	// Workspace-scoped widget: the token names the dashboard and the instance, no project.
+	rec, out := f.call(t, f.user, `{`+ws+`,`+ids+`}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, "https://hello.example.com/mesh/ui/widget", out["frame_url"])
+	require.NotNil(t, f.signer.got.DashboardID)
+	require.NotNil(t, f.signer.got.InstanceID)
+	assert.Equal(t, dash, *f.signer.got.DashboardID)
+	assert.Equal(t, inst, *f.signer.got.InstanceID)
+	assert.Nil(t, f.signer.got.ProjectID)
+
+	// Project-scoped widget: membership is checked like for ui-context of any project.
+	projIDs := `"dashboard_id":"` + dash.String() + `","instance_id":"` + f.projInst.String() + `","widget_id":"proj"`
+	byProject := `{` + ws + `,` + projIDs + `,"project_id":"` + f.ownProj.String() + `"}`
+	f.signer.got = uictx.Claims{}
+	rec, _ = f.call(t, f.stranger, byProject)
+	assert.Equal(t, http.StatusNotFound, rec.Code, "a non-member of the project gets no token")
+	assert.Equal(t, uuid.Nil, f.signer.got.UserID, "nothing is signed for a non-member")
+	rec, _ = f.call(t, f.member, byProject)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NotNil(t, f.signer.got.ProjectID)
+	assert.Equal(t, f.ownProj, *f.signer.got.ProjectID)
+
+	// Project context only where the widget declares scope "project", and always there.
+	f.signer.got = uictx.Claims{}
+	rec, _ = f.call(t, f.member, `{`+ws+`,`+ids+`,"project_id":"`+f.ownProj.String()+`"}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "workspace widget with a project_id")
+	rec, _ = f.call(t, f.member, `{`+ws+`,`+projIDs+`}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "project widget without a project_id")
+	assert.Equal(t, uuid.Nil, f.signer.got.UserID, "nothing is signed for a scope mismatch")
+
+	// A widget id the manifest does not declare: 409, nothing signed.
+	f.signer.got = uictx.Claims{}
+	rec, _ = f.call(t, f.user, `{`+ws+`,"dashboard_id":"`+dash.String()+`","instance_id":"`+inst.String()+`","widget_id":"nope"}`)
+	assert.Equal(t, http.StatusConflict, rec.Code, "unknown widget id")
+	assert.Equal(t, uuid.Nil, f.signer.got.UserID, "nothing is signed for an unknown widget")
+
+	// Malformed requests sign nothing.
+	f.signer.got = uictx.Claims{}
+	for name, body := range map[string]string{
+		"no ids":        `{` + ws + `}`,
+		"no instance":   `{` + ws + `,"dashboard_id":"` + dash.String() + `"}`,
+		"no widget id":  `{` + ws + `,"dashboard_id":"` + dash.String() + `","instance_id":"` + inst.String() + `"}`,
+		"carries task":  `{` + ws + `,` + ids + `,"task_id":"` + f.ownTask.String() + `"}`,
+		"ids elsewhere": `{"workspace_id":"` + f.ws.String() + `","slot":"sidebar.item",` + ids + `}`,
+	} {
+		rec, _ = f.call(t, f.user, body)
+		assert.Equal(t, http.StatusBadRequest, rec.Code, name)
+	}
+	assert.Equal(t, uuid.Nil, f.signer.got.UserID, "nothing is signed for a malformed widget request")
+}
+
+// The token names a dashboard and an instance; both are checked before anything is signed:
+// the dashboard is one the user reads in this workspace, the instance is on it and is this
+// extension's widget, and a project widget is set to the project the token names. Every
+// refusal is the same 404, so it confirms nothing about what the user cannot see.
+func TestUIContext_DashboardWidgetInstance(t *testing.T) {
+	f := newUIFixture(t, true, "hello.example.com")
+	ws := `"workspace_id":"` + f.ws.String() + `","slot":"dashboard.widget"`
+	body := func(dash, inst uuid.UUID, widget, project string) string {
+		b := `{` + ws + `,"dashboard_id":"` + dash.String() + `","instance_id":"` + inst.String() + `","widget_id":"` + widget + `"`
+		if project != "" {
+			b += `,"project_id":"` + project + `"`
+		}
+		return b + `}`
+	}
+	own := f.ownProj.String()
+	for name, b := range map[string]string{
+		"missing dashboard":                    body(uuid.New(), f.inst, "status", ""),
+		"dashboard of another workspace":       body(f.elsewhereDash, f.inst, "status", ""),
+		"someone else's personal dashboard":    body(f.foreignDash, f.inst, "status", ""),
+		"instance of another dashboard":        body(f.dash, f.otherInst, "status", ""),
+		"missing instance":                     body(f.dash, uuid.New(), "status", ""),
+		"instance of another widget":           body(f.dash, f.projInst, "status", ""),
+		"workspace instance as project widget": body(f.dash, f.inst, "proj", own),
+		"project instance of another project":  body(f.dash, f.otherProjInst, "proj", own),
+	} {
+		f.signer.got = uictx.Claims{}
+		rec, _ := f.call(t, f.user, b)
+		assert.Equal(t, http.StatusNotFound, rec.Code, name)
+		assert.Equal(t, uuid.Nil, f.signer.got.UserID, "nothing is signed: "+name)
+	}
+
+	// Positive controls on the same fixture: the real instances get their token.
+	rec, _ := f.call(t, f.user, body(f.dash, f.inst, "status", ""))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	rec, _ = f.call(t, f.user, body(f.otherDash, f.otherInst, "status", ""))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	rec, _ = f.call(t, f.member, body(f.dash, f.projInst, "proj", own))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	// Without the dashboards service no widget token is issued (fail closed).
+	f.h.WithDashboards(nil)
+	f.signer.got = uictx.Claims{}
+	rec, _ = f.call(t, f.user, body(f.dash, f.inst, "status", ""))
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Equal(t, uuid.Nil, f.signer.got.UserID, "nothing is signed without the dashboards service")
 }

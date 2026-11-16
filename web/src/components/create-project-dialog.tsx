@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { IconPicker } from "@/components/ui/icon-picker";
 import { useProjectStore } from "@/stores/project";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { apiErrorMessage } from "@/lib/api-error";
@@ -33,6 +34,7 @@ export function CreateProjectDialog({
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [description, setDescription] = useState("");
+  const [icon, setIcon] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,6 +42,7 @@ export function CreateProjectDialog({
     setName("");
     setSlug("");
     setDescription("");
+    setIcon("");
     setError(null);
   };
 
@@ -78,6 +81,7 @@ export function CreateProjectDialog({
         name: name.trim(),
         slug: slug.trim(),
         description: description.trim() || undefined,
+        icon: icon || undefined,
       });
       resetForm();
       onOpenChange(false);
@@ -104,14 +108,19 @@ export function CreateProjectDialog({
             <label htmlFor="cp-name" className="text-sm font-medium">
               {t("createProject.name")} <span className="text-destructive">*</span>
             </label>
-            <Input
-              id="cp-name"
-              placeholder={t("createProject.namePlaceholder")}
-              value={name}
-              onChange={(e) => handleNameChange(e.target.value)}
-              autoFocus
-              required
-            />
+            {/* The icon sits in front of the name, as the project will look in the menu. */}
+            <div className="flex items-center gap-2">
+              <IconPicker value={icon} onChange={setIcon} aria-label={t("createProject.iconLabel")} />
+              <Input
+                id="cp-name"
+                className="min-w-0 flex-1"
+                placeholder={t("createProject.namePlaceholder")}
+                value={name}
+                onChange={(e) => handleNameChange(e.target.value)}
+                autoFocus
+                required
+              />
+            </div>
           </div>
 
           <div className="space-y-1.5">

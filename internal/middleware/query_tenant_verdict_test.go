@@ -115,6 +115,9 @@ var declaredQueryTenantParams = map[string]string{
 	// GET /projects/:proj_id/chat/threads?agent_id= only adds a conjunct to a query already pinned to the caller's own rows.
 	"agent_chat_handler.go:ListThreads.agent_id": "narrows: t.agent_id = $ — pinned by t.user_id = $3",
 
+	// GET /me/idempotency-receipts?task_id= only adds a conjunct to a lookup already pinned to the caller's own receipts.
+	"idempotency_receipt.go:Get.task_id": "narrows: task_id=$4 — pinned by actor_id=$2",
+
 	// --- Authorized in the handler -------------------------------------------
 	//
 	// requireWorkspaceID is the only tenant boundary in front of memories: that
@@ -188,6 +191,8 @@ var declaredQueryTenantParams = map[string]string{
 	"runtime_handler.go:Capacity.agent_id":          "narrows: AND ($2::uuid IS NULL OR a.id=$2) — pinned by a.workspace_id=$1 OR EXISTS",
 	"analytics_handler.go:GetMetrics.project_id":    "narrows: AND t.project_id = $2 — pinned by WHERE p.workspace_id = $1",
 	"analytics_handler.go:ExportMetrics.project_id": "narrows: AND t.project_id = $2 — pinned by WHERE p.workspace_id = $1",
+	// The widget handler also refuses a project_id outside the viewer's GitLab-bound projects.
+	"gitlab_widget_handler.go:FailedPipelines.project_id": "narrows: AND p.id = ANY($2::uuid[]) — pinned by WHERE p.workspace_id = $1",
 
 	// GET /me/comments — the pin is authorship, not tenancy. Both filters below
 	// narrow a set that already contains only rows the caller wrote, so passing a

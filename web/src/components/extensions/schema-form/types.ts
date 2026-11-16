@@ -14,7 +14,9 @@ export type Widget =
   | "field-picker"
   | "widget-picker"
   | "layout-picker"
-  | "order-list";
+  | "order-list"
+  | "period"
+  | "event-type-picker";
 
 /** One condition value: equals, one of, negated, or presence. */
 export type VisibleIfExpected =
@@ -38,6 +40,8 @@ export interface FieldSchema {
   description?: string;
   format?: string;
   enum?: unknown[];
+  /** Labelled choices (JSON Schema): `{ const, title }` each; read as `enum` with `x-options` labels (resolveSchema). */
+  oneOf?: OneOfOption[];
   default?: unknown;
   minLength?: number;
   maxLength?: number;
@@ -59,9 +63,9 @@ export interface FieldSchema {
   "x-widget"?: Widget;
   "x-visible-if"?: VisibleIf;
   "x-help"?: string;
-  /** Labels for `enum` values (layout-picker, font-select, order-list); a value without one shows as itself. */
   /** Theme settings: the design token this field drives; a colour token takes "H S% L%". */
   "x-token"?: string;
+  /** Labels for `enum` values (select, checklist, layout-picker, font-select, order-list); a value without one shows as itself. */
   "x-options"?: Record<string, string>;
   /** Names a set of existing things the value must be one of; the host turns it into `enum` (bindRefs). */
   "x-ref"?: string;
@@ -71,6 +75,14 @@ export interface FieldSchema {
   "x-agent-field"?: string;
   /** grant-picker: sibling field set to the picked grant's workspace (a workspace-picker). */
   "x-workspace-field"?: string;
+}
+
+/** One labelled choice of `oneOf`: the stored value and what the user reads. */
+export interface OneOfOption {
+  const: unknown;
+  title?: string;
+  /** Host-side translation key of `title` (the dashboard settings dialog resolves it); the form itself ignores it. */
+  "x-title-key"?: string;
 }
 
 export type Values = Record<string, unknown>;

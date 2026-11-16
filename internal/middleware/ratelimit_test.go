@@ -425,7 +425,7 @@ func TestRateLimit_Redis_NameRequired(t *testing.T) {
 }
 
 // TestRateLimit_Redis_NamespacesDoNotShareCounter is the regression test for
-// `#603f340a`: /auth/login (5 RPM) and /auth/refresh (60 RPM) both keyed by
+// `an internal ticket`: /auth/login (5 RPM) and /auth/refresh (60 RPM) both keyed by
 // client IP shared one Redis counter because the key carried no per-limiter
 // identity, so refresh traffic alone could exhaust login's budget. With Name
 // set, flooding the high-RPM limiter (simulating the agent fleet hammering
@@ -559,4 +559,50 @@ func TestKeyTypeFromKey_GlobalPrefixIsDistinctFromIP(t *testing.T) {
 	assert.Equal(t, "ip", keyTypeFromKey("203.0.113.7"))
 	assert.Equal(t, "user", keyTypeFromKey("user:abc"))
 	assert.Equal(t, "agent", keyTypeFromKey("agent:abc"))
+}
+
+// An actor listed in Overrides gets its own budget; everyone else keeps RPM.
+// This is how one CI account running parallel e2e jobs is given room without
+// raising the API limit for the whole fleet.
+func TestRateLimit_OverridesGiveOneActorItsOwnBudget(t *testing.T) {
+	const ciKey = "user:11111111-1111-1111-1111-111111111111"
+	const otherKey = "user:22222222-2222-2222-2222-222222222222"
+
+	backends := map[string]func() *redis.Client{
+		"memory": func() *redis.Client { return nil },
+		"redis":  func() *redis.Client { return newTestRedis(t) },
+	}
+	for name, newClient := range backends {
+		t.Run(name, func(t *testing.T) {
+			var current string
+			mw := RateLimit(RateLimitConfig{
+				Enabled:     true,
+				RPM:         2,
+				Overrides:   map[string]int{ciKey: 10},
+				KeyFunc:     func(echo.Context) string { return current },
+				RedisClient: newClient(),
+				Name:        "api",
+			})
+			wrapped := mw(func(c echo.Context) error { return c.NoContent(http.StatusOK) })
+			e := echo.New()
+			do := func(key string) *httptest.ResponseRecorder {
+				current = key
+				rec := httptest.NewRecorder()
+				c := e.NewContext(httptest.NewRequest(http.MethodGet, "/", http.NoBody), rec)
+				require.NoError(t, wrapped(c))
+				return rec
+			}
+
+			for i := 1; i <= 10; i++ {
+				assert.Equal(t, http.StatusOK, do(ciKey).Code, "overridden actor, request %d of its 10", i)
+			}
+			over := do(ciKey)
+			assert.Equal(t, http.StatusTooManyRequests, over.Code, "overridden actor, 11th request")
+			assert.NotEmpty(t, over.Header().Get("Retry-After"), "429 must say when to retry")
+
+			assert.Equal(t, http.StatusOK, do(otherKey).Code, "plain actor, 1st")
+			assert.Equal(t, http.StatusOK, do(otherKey).Code, "plain actor, 2nd")
+			assert.Equal(t, http.StatusTooManyRequests, do(otherKey).Code, "plain actor, 3rd is over RPM=2")
+		})
+	}
 }

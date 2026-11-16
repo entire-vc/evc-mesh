@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 )
 
@@ -135,7 +136,7 @@ func TestCommentMentionRepo_CountUnseen_ExcludesMentionsOnADeletedTask(t *testin
 		WithArgs(mentionedID, "user", workspaceID).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
-	count, err := repo.CountUnseen(context.Background(), mentionedID, "user", workspaceID)
+	count, err := repo.CountUnseen(context.Background(), mentionedID, "user", workspaceID, domain.ProjectViewer{})
 	require.NoError(t, err)
 	assert.Zero(t, count)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -154,7 +155,7 @@ func TestCommentMentionRepo_CountUnseen_SQL(t *testing.T) {
 	repo := NewCommentMentionRepo(sqlx.NewDb(rawDB, "postgres"))
 	mock.ExpectQuery(".*").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
-	_, err = repo.CountUnseen(context.Background(), uuid.New(), "user", uuid.New())
+	_, err = repo.CountUnseen(context.Background(), uuid.New(), "user", uuid.New(), domain.ProjectViewer{})
 	require.NoError(t, err)
 
 	assert.Contains(t, captured, "JOIN tasks t ON t.id = c.task_id")

@@ -1,7 +1,7 @@
-import { DashboardContainer } from "@/core/dashboard";
+import { useParams } from "react-router";
+import { DashboardEntry, DashboardPage as DashboardView } from "@/core/dashboard/page/dashboard-page";
 
-// The page is only a container: the layout and every widget's view come from
-// the active theme's dashboard.* slots (mesh-default unless a theme says otherwise).
+// One lazy page for w/:ws, w/:ws/dashboard (→ the home dashboard) and w/:ws/d/:docId (the dashboard itself).
 export function DashboardPage() {
-  return <DashboardContainer />;
+  return useParams().docId ? <DashboardView /> : <DashboardEntry />;
 }

@@ -40,6 +40,7 @@ var Catalog = []Entry{
 	{"cas_conflict", "The task was changed by someone else. Reload it and try again.", "Задачу уже изменил кто-то другой. Обновите её и повторите."},
 	{"document_version_conflict", "The document was changed since you opened it. Reload it and re-apply your edit.", "Документ изменился с момента открытия. Обновите его и повторите правку."},
 	{CodeDocumentSlugTaken, "A document with this slug already exists in this folder. Rename one of them or choose another slug.", "Документ с таким slug уже есть в этой папке. Переименуйте один из них или выберите другой slug."},
+	{CodeDocumentShrinkRefused, "This edit would remove most of the document. Nothing was saved.", "Правка удалила бы большую часть документа. Ничего не сохранено."},
 	{"external_source_conflict", "The original document changed since you opened it. Nothing was saved. Reopen it and re-apply your edit.", "Оригинал документа изменился с момента открытия. Ничего не сохранено. Откройте его заново и повторите правку."},
 	{"external_source_write_landed", "Your edit reached the original document and will appear here at the next sync.", "Правка сохранена в оригинале документа и появится здесь при следующей синхронизации."},
 	{"list_revision_stale", "The list changed while you were paging. Start again from the first page.", "Список изменился, пока вы его листали. Начните с первой страницы."},
@@ -82,6 +83,13 @@ var Catalog = []Entry{
 	{"chat_seq_gap", "An event is missing: resend from the expected sequence number.", "Пропущено событие: повторите отправку с ожидаемого номера."},
 	{"chat_batch_too_large", "The event batch is too large.", "Пачка событий слишком большая."},
 	{"chat_rate_limited", "Too many event batches for this turn. Try again shortly.", "Слишком много пачек событий для этого хода. Повторите чуть позже."},
+	{"stale_layout", "The dashboard changed elsewhere. Re-apply your change.", "Дашборд изменили в другом месте. Повторите изменение."},
+	{"last_dashboard", "The last dashboard cannot be deleted.", "Последний дашборд удалить нельзя."},
+	{"dashboard_limit", "Dashboard limit reached.", "Достигнут предел числа дашбордов."},
+	{"dashboard_order_mismatch", "The menu changed. Reload and try again.", "Меню изменилось. Обновите страницу и повторите."},
+	{"dashboard_not_hideable", "Only a shared dashboard can be hidden.", "Скрыть можно только общий дашборд."},
+	{"layout_invalid", "The dashboard layout is not valid.", "Раскладка дашборда некорректна."},
+	{"not_default_dashboard", "Only the default dashboard can be reset.", "Сбросить можно только дашборд по умолчанию."},
 }
 
 // Lookup returns the text of code in locale ("ru" or anything else for

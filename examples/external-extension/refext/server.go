@@ -25,6 +25,8 @@ const (
 	PathUITask  = "/mesh/ui/task"
 	// PathUIProject is the project.view screen; sections live under it.
 	PathUIProject = "/mesh/ui/project"
+	// PathUIWidget is the dashboard.widget screen (protocol v2).
+	PathUIWidget = "/mesh/ui/widget"
 )
 
 // maxBody bounds every request body Mesh sends; real ones are a few KB.
@@ -49,6 +51,10 @@ type InstallRequest struct {
 	Events        []string `json:"events"`
 	EventsPath    string   `json:"events_path"`
 	InstallCode   string   `json:"install_code,omitempty"`
+	// Settings are the workspace's current non-secret settings. Mesh sends
+	// them on every install, including the one it repeats after the settings
+	// change; absent when the manifest declares none.
+	Settings map[string]any `json:"settings,omitempty"`
 }
 
 // TokenRequest is the body of POST {token_path}.
@@ -158,6 +164,7 @@ type workspaceState struct {
 	// inflight holds deliveries being processed right now, so a concurrent
 	// copy of one (a retry racing a slow handler) is not run twice.
 	inflight map[string]bool
+	settings map[string]any
 }
 
 func (s *Server) clock() time.Time {
@@ -176,6 +183,16 @@ func (s *Server) Token(workspaceID string) string {
 		return w.token
 	}
 	return ""
+}
+
+// Settings returns the workspace settings the last accepted install carried.
+func (s *Server) Settings(workspaceID string) map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ws := s.workspaces[workspaceID]; ws != nil {
+		return ws.settings
+	}
+	return nil
 }
 
 // Installed reports whether a workspace has completed the install handshake.
@@ -205,7 +222,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // isUIPath reports whether path is a screen; every section path under the
 // project.view screen answers the same page.
 func isUIPath(path string) bool {
-	return path == PathUIHello || path == PathUITask ||
+	return path == PathUIHello || path == PathUITask || path == PathUIWidget ||
 		path == PathUIProject || strings.HasPrefix(path, PathUIProject+"/")
 }
 
@@ -246,6 +263,8 @@ func (s *Server) install(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 	cur := s.workspaces[in.WorkspaceID]
 	if cur != nil && cur.secret == in.SigningSecret {
+		// The same secret signed it, so a repeat may carry changed settings.
+		cur.settings = in.Settings
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -269,6 +288,7 @@ func (s *Server) install(w http.ResponseWriter, r *http.Request) {
 	}
 	// A re-key keeps the token: Mesh delivers a new one only when it rotates it.
 	cur.secret = in.SigningSecret
+	cur.settings = in.Settings
 	w.WriteHeader(http.StatusOK)
 }
 

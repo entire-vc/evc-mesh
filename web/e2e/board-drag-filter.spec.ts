@@ -6,6 +6,7 @@ import {
   type Page,
 } from "@playwright/test";
 import { loginWithRetry, pinUiLocale } from "./auth-helper";
+import { rateLimitAware } from "./api-retry";
 
 /**
  * E2E scenario: board-drag-filter
@@ -89,7 +90,7 @@ test.beforeAll(async ({ browser }) => {
     process.env.E2E_USER_PASSWORD!
   );
   accessToken = token;
-  api = context.request;
+  api = rateLimitAware(context.request);
 
   const wsRes = await api.get("/api/v1/workspaces", { headers: authHeaders() });
   expect(wsRes.status(), "/api/v1/workspaces must accept the session").toBe(200);

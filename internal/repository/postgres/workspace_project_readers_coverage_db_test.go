@@ -319,7 +319,7 @@ func TestInitiativeRepoListLinkedProjects_ReturnsFullyPopulatedProjects(t *testi
 	seeded := seedInitiative(t, fx, repo, "initiative with projects")
 	require.NoError(t, repo.LinkProject(context.Background(), seeded.ID, fx.projectID))
 
-	projects, err := repo.ListLinkedProjects(context.Background(), seeded.ID)
+	projects, err := repo.ListLinkedProjects(context.Background(), seeded.ID, domain.AllProjectsViewer())
 	require.NoError(t, err)
 	require.Len(t, projects, 1)
 
@@ -343,7 +343,7 @@ func TestInitiativeRepoListLinkedProjects_SkipsSoftDeletedProjects(t *testing.T)
 	require.NoError(t, repo.LinkProject(context.Background(), seeded.ID, fx.projectID))
 	require.NoError(t, NewProjectRepo(db).Delete(context.Background(), fx.projectID))
 
-	projects, err := repo.ListLinkedProjects(context.Background(), seeded.ID)
+	projects, err := repo.ListLinkedProjects(context.Background(), seeded.ID, domain.AllProjectsViewer())
 	require.NoError(t, err)
 	assert.Empty(t, projects, "the link survives a soft delete; the reader must still filter it out")
 }

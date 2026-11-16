@@ -226,6 +226,18 @@ func (s *RuntimeState) Marshal() ([]byte, error) {
 // raw is the tasks.runtime_state column (nil/empty = NULL). An unreadable stored
 // value is treated as absent rather than failing the whole task read.
 func ResolveRuntimeState(raw []byte, t *Task, now time.Time) *RuntimeState {
+	return ResolveRuntimeStateWithWait(raw, t, now, false)
+}
+
+// ResolveRuntimeStateWithWait is ResolveRuntimeState for a read that knows whether
+// the card's assignee has an active task_waits row (activeWait). The Runner rewrites
+// the wait's own "wait:" ref on every pass, so the ref alone does not survive a lane
+// tick that is late by more than RuntimeStateStaleAfter. A `waiting`
+// state of a card with an active wait is therefore never stale: the wait row is the
+// authority, and the caller computes activeWait with the same predicate the unleased
+// sweep uses (postgres activeTaskWaitSQL), deadline grace included, so the read
+// reports exactly the cards the sweep leaves alone.
+func ResolveRuntimeStateWithWait(raw []byte, t *Task, now time.Time, activeWait bool) *RuntimeState {
 	if len(raw) > 0 && string(raw) != "null" {
 		var s RuntimeState
 		if err := json.Unmarshal(raw, &s); err == nil && ValidRuntimeKind(s.Kind) {
@@ -233,7 +245,9 @@ func ResolveRuntimeState(raw []byte, t *Task, now time.Time) *RuntimeState {
 			// A state written from a declared wait is refreshed by nobody: only
 			// its until can make it stale.
 			fromWait := s.Ref != nil && strings.HasPrefix(*s.Ref, WaitRuntimeRefPrefix)
-			s.Stale = (!fromWait && now.Sub(s.UpdatedAt) > RuntimeStateStaleAfter) || (s.Until != nil && now.After(*s.Until))
+			heldByWait := activeWait && s.Kind == RuntimeKindWaiting
+			s.Stale = !heldByWait &&
+				((!fromWait && now.Sub(s.UpdatedAt) > RuntimeStateStaleAfter) || (s.Until != nil && now.After(*s.Until)))
 			MarkConstraintsStale(s.Constraints, now)
 			return &s
 		}

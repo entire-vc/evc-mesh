@@ -96,3 +96,22 @@ func (r *ExtensionProjectScopeRepo) SetProjectScope(ctx context.Context, workspa
 	}
 	return nil
 }
+
+// WidgetProjects lists the projects of the workspace bound to the extension (an
+// enabled project_integrations row) that the user may open: a project member,
+// or a workspace owner or admin, the same rule the project routes apply to a
+// person. Ordered by project name. It backs scope "project" dashboard widgets.
+func (r *ExtensionProjectScopeRepo) WidgetProjects(ctx context.Context, workspaceID uuid.UUID, extensionID string, userID uuid.UUID) ([]uuid.UUID, error) {
+	ids := []uuid.UUID{}
+	err := r.db.SelectContext(ctx, &ids, `
+		SELECT p.id FROM projects p
+		 WHERE p.workspace_id = $1
+		   AND p.deleted_at IS NULL
+		   AND EXISTS (SELECT 1 FROM project_integrations pi
+		                WHERE pi.project_id = p.id AND pi.extension_id = $2 AND pi.enabled)
+		   AND (EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = $3)
+		        OR EXISTS (SELECT 1 FROM workspace_members wm
+		                    WHERE wm.workspace_id = $1 AND wm.user_id = $3 AND wm.role IN ('owner', 'admin')))
+		 ORDER BY p.name, p.id`, workspaceID, extensionID, userID)
+	return ids, err
+}

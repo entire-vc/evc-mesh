@@ -24,7 +24,12 @@ const AUTHORIZE_PARAMS = [
   "state",
 ] as const;
 
-type AuthorizeQuery = Record<(typeof AUTHORIZE_PARAMS)[number], string>;
+// OpenID Connect nonce: optional, so it rides along only when the client sent
+// one. The server echoes it into the id_token; an empty one would be a value.
+const OPTIONAL_AUTHORIZE_PARAMS = ["nonce"] as const;
+
+type AuthorizeQuery = Record<(typeof AUTHORIZE_PARAMS)[number], string> &
+  Partial<Record<(typeof OPTIONAL_AUTHORIZE_PARAMS)[number], string>>;
 
 // Sent instead of a workspace on "Deny": the server binds workspace_id to a
 // UUID and rejects "" outright, but never reads it when allow is false.
@@ -104,7 +109,13 @@ export function OAuthConsentPage() {
 
   const query = {} as AuthorizeQuery;
   for (const key of AUTHORIZE_PARAMS) query[key] = searchParams.get(key) ?? "";
-  const queryKey = AUTHORIZE_PARAMS.map((k) => query[k]).join("\n");
+  for (const key of OPTIONAL_AUTHORIZE_PARAMS) {
+    const value = searchParams.get(key);
+    if (value !== null) query[key] = value;
+  }
+  const queryKey = [...AUTHORIZE_PARAMS, ...OPTIONAL_AUTHORIZE_PARAMS]
+    .map((k) => query[k] ?? "")
+    .join("\n");
 
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
   const [workspaceId, setWorkspaceId] = useState("");
@@ -183,14 +194,14 @@ export function OAuthConsentPage() {
   const decide = async (allow: boolean) => {
     setSubmitting(allow ? "allow" : "deny");
     setActionError(null);
+    // An identity-only sign-in binds to no workspace, so it sends none.
+    const identityOnly = phase.kind === "ready" && phase.info.identity_only === true;
     try {
       const res = await api<{ redirect_uri: string }>("/api/v1/oauth/consent", {
         method: "POST",
-        body: {
-          ...query,
-          workspace_id: workspaceId || NIL_UUID,
-          allow,
-        },
+        body: identityOnly
+          ? { ...query, allow }
+          : { ...query, workspace_id: workspaceId || NIL_UUID, allow },
       });
       if (!isSafeRedirect(res.redirect_uri)) {
         setActionError(t("oauthConsent.errorBadRedirect"));
@@ -206,7 +217,8 @@ export function OAuthConsentPage() {
       const status = (err as { status?: number } | null)?.status;
       if (isSessionExpired(err)) return toLogin();
       setActionError(
-        status === 403
+        // The 403 copy is about a workspace role; a sign-in has no workspace.
+        status === 403 && !identityOnly
           ? t("oauthConsent.errorForbidden")
           : t("oauthConsent.errorSave"),
       );
@@ -258,6 +270,90 @@ export function OAuthConsentPage() {
   const host = redirectHost(info.redirect_uri, info.redirect_host);
   const loopback = info.loopback_warning || isLoopbackRedirect(info.redirect_uri);
 
+  // Where the browser goes next, and the loopback warning: the trust facts both
+  // flows show the same way.
+  const trustInfo = (
+    <>
+      <div className="rounded-lg border border-border bg-muted/40 p-4">
+        <p className="text-xs uppercase tracking-wide text-muted-foreground">
+          {t("oauthConsent.sentTo")}
+        </p>
+        <p
+          className="mt-1 break-all font-mono text-lg font-semibold"
+          data-testid="redirect-host"
+        >
+          {host}
+        </p>
+      </div>
+
+      {loopback && (
+        <div
+          role="alert"
+          className="flex gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+          <p>
+            <strong>{t("oauthConsent.loopbackTitle")}</strong>{" "}
+            {t("oauthConsent.loopbackBody")}
+          </p>
+        </div>
+      )}
+    </>
+  );
+
+  const signedInAs = (
+    <p className="text-xs text-muted-foreground">
+      {t("oauthConsent.signedInAs", { email: user?.email })}
+    </p>
+  );
+
+  if (info.identity_only) {
+    // OpenID Connect sign-in for a client the operator configured: it learns
+    // who you are and nothing else. No workspace, no connector agent, and no
+    // "Mesh has not checked who made it" line, which is about DCR clients.
+    return (
+      <Shell>
+        <div className="space-y-6">
+          <h1 className="break-words text-2xl font-bold">
+            {t("oauthConsent.identityTitle", { name: clientName })}
+          </h1>
+
+          {trustInfo}
+
+          <p className="flex gap-1.5 text-sm text-muted-foreground">
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+            {t("oauthConsent.identityNote")}
+          </p>
+
+          {actionError && (
+            <p className="text-sm text-destructive" role="alert">
+              {actionError}
+            </p>
+          )}
+
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button
+              variant="outline"
+              onClick={() => decide(false)}
+              disabled={submitting !== null}
+            >
+              {submitting === "deny"
+                ? t("oauthConsent.identityDenying")
+                : t("oauthConsent.identityDeny")}
+            </Button>
+            <Button onClick={() => decide(true)} disabled={submitting !== null}>
+              {submitting === "allow"
+                ? t("oauthConsent.identityAllowing")
+                : t("oauthConsent.identityAllow")}
+            </Button>
+          </div>
+
+          {signedInAs}
+        </div>
+      </Shell>
+    );
+  }
+
   return (
     <Shell>
       <div className="space-y-6">
@@ -268,30 +364,7 @@ export function OAuthConsentPage() {
           <h1 className="break-words text-2xl font-bold">{clientName}</h1>
         </div>
 
-        <div className="rounded-lg border border-border bg-muted/40 p-4">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">
-            {t("oauthConsent.sentTo")}
-          </p>
-          <p
-            className="mt-1 break-all font-mono text-lg font-semibold"
-            data-testid="redirect-host"
-          >
-            {host}
-          </p>
-        </div>
-
-        {loopback && (
-          <div
-            role="alert"
-            className="flex gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm"
-          >
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-            <p>
-              <strong>{t("oauthConsent.loopbackTitle")}</strong>{" "}
-              {t("oauthConsent.loopbackBody")}
-            </p>
-          </div>
-        )}
+        {trustInfo}
 
         <div className="space-y-1.5">
           <label htmlFor="consent-workspace" className="text-sm font-medium">
@@ -355,9 +428,7 @@ export function OAuthConsentPage() {
           </Button>
         </div>
 
-        <p className="text-xs text-muted-foreground">
-          {t("oauthConsent.signedInAs", { email: user?.email })}
-        </p>
+        {signedInAs}
       </div>
     </Shell>
   );

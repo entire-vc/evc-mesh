@@ -55,6 +55,8 @@ export interface RepoUpdate {
   pending: boolean;
   can_rollback: boolean;
   previous_version?: string;
+  /** Agent Runner only: the versions its controllers report running, oldest first. */
+  reported_versions?: string[];
   error?: string;
 }
 

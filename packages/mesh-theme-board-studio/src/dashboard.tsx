@@ -1,5 +1,5 @@
 import { useTasks } from "@entire-vc/mesh-theme-sdk";
-import type { DashboardLayoutView, DashboardWidgetView, WidgetDescriptor } from "@entire-vc/mesh-theme-sdk";
+import type { DashboardLayoutViewV1 as DashboardLayoutView, DashboardWidgetView, WidgetDescriptorV1 as WidgetDescriptor } from "@entire-vc/mesh-theme-sdk";
 import { focus as pickFocus, horizon, say } from "./logic";
 import { TaskLink } from "@entire-vc/mesh-theme-sdk";
 import { useSlotContext } from "@entire-vc/mesh-theme-sdk";

@@ -15,6 +15,8 @@ export interface ContractTest {
   title: string;
   /** Slots whose suite contains the test. A test that does not apply to a slot is not in its suite. */
   slots: readonly string[];
+  /** Contract majors the test is written for; absent = every major the slot has a suite for. */
+  majors?: readonly number[];
   run(t: TestCtx): void | Promise<void>;
 }
 
@@ -32,7 +34,10 @@ export function allTests(): readonly ContractTest[] {
 const appliesTo = (t: ContractTest, slot: string) =>
   t.slots.includes(slot) || (slot.startsWith("dashboard.widget.") && t.slots.includes("dashboard.widget.*"));
 
-/** The suite of one slot: common tests plus the group's, in id order. */
-export function suiteFor(slot: string): ContractTest[] {
-  return all.filter((t) => appliesTo(t, slot)).sort((a, b) => a.id.localeCompare(b.id, "en", { numeric: true }));
+/** Contract majors that have a suite for the slot: 1 everywhere; dashboard.layout 2 too (ADR D6: the previous major stays for one release). */
+export const suiteMajors = (slot: string): readonly number[] => (slot === "dashboard.layout" ? [1, 2] : [1]);
+
+/** The suite of one slot at one contract major: common tests plus the group's, in id order. */
+export function suiteFor(slot: string, major = 1): ContractTest[] {
+  return all.filter((t) => appliesTo(t, slot) && (t.majors ?? suiteMajors(slot)).includes(major)).sort((a, b) => a.id.localeCompare(b.id, "en", { numeric: true }));
 }

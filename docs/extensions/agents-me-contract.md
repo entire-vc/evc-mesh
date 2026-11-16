@@ -198,11 +198,20 @@ Together with `Idempotency-Key` the stored answer wins: a retry of a write that
 happened is replayed even after the lock is gone, a write that did not happen is
 not performed under a lost lock (`docs/idempotency.md`).
 
-**Reassignment does not touch the lock (yet).** Assigning the task to someone else
+**Reassignment and the lock: an instance setting.** By default
+(`MESH_REASSIGN_RELEASES_CHECKOUT=false`) assigning the task to someone else
 (`POST /tasks/{id}/assign` or a move that changes the assignee) leaves the current
 checkout as it is: the holder's extend and fenced writes still pass, and the new
-assignee's checkout answers `409` until that lock ends. Ending the previous holder's
-lock on reassignment is a later, separate change of this contract.
+assignee's checkout answers `409` until that lock ends. With
+`MESH_REASSIGN_RELEASES_CHECKOUT=true` a change of assignee (to another principal or
+to none) ends the lock of a holder other than the new assignee in the same write
+(audit `task.checkout_released_auto`, reason `reassignment`): the old holder's extend
+then answers `403` ("you lost the task", as above), its fenced writes answer
+`409 checkout_precondition_failed`, and the new assignee can take the task at once.
+Handing the task to the agent that already holds its lock keeps the lock. A lock taken
+after the assignment read the task refuses the assignment (version conflict) instead
+of being cleared. Turn the setting on only where every worker that takes locks sends
+the result-write precondition and stops a turn whose lock is gone.
 
 **Handing a task to a new process.** A lock belongs to one `session_id`; the same agent
 cannot take over its own live lock from a new session (the checkout answers `409`,

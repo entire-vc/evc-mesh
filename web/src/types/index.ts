@@ -435,6 +435,10 @@ export interface UpdateDocumentRequest {
   // unconditionally; sent and stale, it 409s with document_version_conflict
   // instead of silently overwriting a change that landed in between.
   base_version?: number;
+  // Lifts the server's shrink guard for this one write (a body under half the
+  // stored size that drops its headings answers 409 document_shrink_refused
+  // without it). Sent only after the reader confirms the cut.
+  allow_shrink?: boolean;
 }
 
 // A comment anchored to a run of a document's text — the W3C Web Annotation
@@ -1385,10 +1389,24 @@ export interface MemoryFilter {
 export interface AnalyticsMetrics {
   task_metrics: {
     total: number;
+    /** Past due and not done or cancelled, now (a snapshot like total). Absent from servers before it was added. */
+    overdue?: number;
     by_status_category: Record<string, number>;
     by_priority: Record<string, number>;
     created_this_period: number;
     completed_this_period: number;
+    /** Same snapshot as by_status_category, largest first, at most 50 rows. */
+    by_assignee?: Array<{
+      assignee_id: string | null;
+      assignee_type: "agent" | "user" | "unassigned";
+      name: string;
+      count: number;
+    }>;
+    by_project?: Array<{
+      project_id: string;
+      project_name: string;
+      count: number;
+    }>;
   };
   agent_metrics: {
     total_agents: number;
@@ -1463,6 +1481,10 @@ export interface OAuthConsentInfo {
   loopback_warning: boolean;
   scope: string;
   workspaces: Pick<Workspace, "id" | "name" | "slug">[];
+  /** OpenID Connect sign-in (scope `openid` only): the app learns who you are
+   *  and nothing else, so there is no workspace to pick and no connector
+   *  agent. Absent or false for the MCP connector flow. */
+  identity_only?: boolean;
 }
 
 export interface OAuthGrant {

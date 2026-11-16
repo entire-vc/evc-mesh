@@ -92,6 +92,7 @@ func wireDomainServices(deps *apiDeps) {
 		service.WithCommentWSPublisher(wsPublisher),
 		service.WithCommentStatusRepo(taskStatusRepo),
 		service.WithCommentProjectRepo(projectRepo),
+		service.WithCommentWorkspaceRepo(workspaceRepo),
 		service.WithCommentWebhookService(webhookService),
 		service.WithCommentContextCacheInvalidator(ctxCacheSvc),
 		service.WithCommentNotificationService(notificationService),
@@ -212,7 +213,7 @@ func wireDomainServices(deps *apiDeps) {
 		service.WithProviderGuard(runnerGuard, domain.IntegrationProviderRunner, domain.IntegrationProviderAgentRuntime))
 	analyticsService := service.NewAnalyticsService(db)
 	projectUpdateService := service.NewProjectUpdateService(projectUpdateRepo, projectRepo, taskRepo, taskStatusRepo)
-	initiativeService := service.NewInitiativeService(initiativeRepo, projectRepo, db)
+	initiativeService := service.NewInitiativeService(initiativeRepo, projectRepo)
 	triageService := service.NewTriageService(taskRepo)
 
 	recurringService := service.NewRecurringService(recurringRepo, taskService,

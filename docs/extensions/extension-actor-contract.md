@@ -20,10 +20,36 @@ a bodyless `GET`.
 
 | Call | Body | Answer Mesh expects | Pinned by |
 |---|---|---|---|
-| install (`install_path`) | `extension_id`, `version`, `workspace_id`, `signing_secret`, `events`, `events_path`, `install_code`? — signed with the secret it carries | 2xx | `internal/extensions/external/refext_contract_test.go` |
+| install (`install_path`) | `extension_id`, `version`, `workspace_id`, `signing_secret`, `events`, `events_path`, `install_code`?, `signature_version`?, `settings`? — signed with the secret it carries; see [Workspace settings](#workspace-settings) | 2xx | `internal/extensions/external/refext_contract_test.go` |
 | token (`token_path`) | `extension_id`, `workspace_id`, `extension_token`; each delivery has a strictly newer timestamp | 200 `{"ok":true}`; anything else keeps the previous token | same |
 | event (`events_path`) | the event body plus `workspace_id`; headers `X-Mesh-Event` (public name) and `X-Mesh-Delivery` (same on every retry of one delivery) | 2xx; otherwise retried after 1, 5, 25 s | `internal/service/refext_delivery_contract_test.go` |
 | health (`health_path`) | `GET`, no body | 200 | `refext_contract_test.go` |
+
+### Workspace settings
+
+`settings` is an object with the workspace's current values of the fields the
+manifest declares under `settings.workspace` (inline or a `#/schemas/<name>`
+ref), for example `{"service_url": "https://…", "approvals_via_mesh": false}`.
+
+- **When.** On every install call: at connect, after
+  `PATCH /workspaces/{ws}/extensions/{id}/settings` (and enable), on a re-key and
+  when a health check repeats an install that did not get through. A changed
+  setting is therefore always followed by an install carrying it; treat the
+  latest accepted install as the current settings and replace the stored ones
+  with it (a field that is not in `settings` is not set).
+- **Never secrets.** A field marked `x-secret` is never sent, neither its key
+  nor its value; keys the manifest does not declare are not sent either.
+- **Absent** when the manifest declares no workspace settings or none of them
+  is set: such a body is exactly the one earlier Mesh versions sent.
+- **Unknown keys.** A service must ignore keys it does not know in `settings`
+  and in the body itself, as for every call on this page.
+- **Repeat with the same secret.** The install that carries changed settings is
+  signed with the workspace secret the service already holds; accept it
+  without an install code (the reference service does).
+
+Pinned by `internal/extensions/external/settings_test.go`,
+`internal/service/extension_external_settings_test.go` and
+`refext_contract_test.go`.
 
 A status move is delivered as `task.moved` (internally `task.status_changed`).
 Screens get the context token described in [ui-iframe.md](./ui-iframe.md),

@@ -1238,8 +1238,9 @@ func (s *vcsLinkService) HandleGitLabPipelineEvent(ctx context.Context, ev GitLa
 // Matching is by the normalised URL, not by external_id: an MR iid is only
 // unique within its project, so !19 of one repository must not settle a
 // review of !19 in another. Merged → the review card goes to done from any
-// open status (its subject no longer exists to be reviewed); closed without
-// merge → comment only. Failures are logged and never fail the delivery: the
+// open status (its subject no longer exists to be reviewed), unless the card
+// owns its own MR/PR: then it is the implementation and keeps its status;
+// closed without merge → comment only. Failures are logged and never fail the delivery: the
 // primary transition has already been applied and a redelivery would redo it.
 func (s *vcsLinkService) closeReviewSubjects(ctx context.Context, workspaceID uuid.UUID, provider domain.VCSProvider, externalID, rawURL string, primary uuid.UUID, merged bool, refLabel, mergeRefLabel, source string) {
 	if s.taskRepo == nil || s.statusRepo == nil || s.taskSvc == nil || s.commentSvc == nil || rawURL == "" {
@@ -1281,6 +1282,22 @@ func (s *vcsLinkService) closeReviewSubjects(ctx context.Context, workspaceID uu
 		if err != nil || cur == nil || cur.Category == domain.StatusCategoryDone || cur.Category == domain.StatusCategoryCancelled {
 			continue
 		}
+		// role=review names what the card signs off, not that the card is a
+		// review card. A card that owns its own MR/PR is the implementation;
+		// its own links drive its status (applyPRTransitionPolicy), the merge of
+		// the reference does not. Unknown own links → fail closed.
+		own, err := s.ownDeliveryLink(ctx, l.TaskID)
+		if err != nil {
+			log.Printf("[vcs-webhook] review-subject list own links task=%s: %v", l.TaskID, err)
+			continue
+		}
+		if own != nil {
+			body := fmt.Sprintf("🤖 Auto: reference %s merged (commit %#q); this card owns its own MR/PR %s — status unchanged.", refLabel, mergeRefLabel, own.URL)
+			if cerr := s.postSystemComment(ctx, l.TaskID, body, source); cerr != nil {
+				log.Printf("[vcs-webhook] post comment failed task=%s: %v", l.TaskID, cerr)
+			}
+			continue
+		}
 		// Same rule as the primary transition: a card a person has to accept
 		// or close is not closed by the merge of the thing it reviews.
 		if _, why := autoDoneBlockedReason(task); why != "" {
@@ -1304,6 +1321,21 @@ func (s *vcsLinkService) closeReviewSubjects(ctx context.Context, workspaceID uu
 			log.Printf("[vcs-webhook] post comment failed task=%s: %v", l.TaskID, cerr)
 		}
 	}
+}
+
+// ownDeliveryLink returns the first PR/MR link that is the task's own work —
+// neither a review subject nor a mere mention — or nil when it has none.
+func (s *vcsLinkService) ownDeliveryLink(ctx context.Context, taskID uuid.UUID) (*domain.VCSLink, error) {
+	links, err := s.repo.ListByTask(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range links {
+		if links[i].LinkType == domain.VCSLinkTypePR && !links[i].IsReviewSubject() && !links[i].IsRelatesTo() {
+			return &links[i], nil
+		}
+	}
+	return nil, nil
 }
 
 // applyPRTransitionPolicy runs the merge/close transition policy shared by

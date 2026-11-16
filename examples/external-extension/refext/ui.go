@@ -34,6 +34,8 @@ type Context struct {
 	WorkspaceID string
 	ProjectID   string // task.panel only
 	TaskID      string // task.panel only
+	DashboardID string // dashboard.widget only
+	InstanceID  string // dashboard.widget only
 	Roles       []string
 }
 
@@ -79,6 +81,7 @@ func (v *ContextVerifier) Verify(ctx context.Context, token string) (*Context, e
 	c := &Context{
 		UserID: str("sub"), Email: str("email"), WorkspaceID: str("workspace_id"),
 		ProjectID: str("project_id"), TaskID: str("task_id"),
+		DashboardID: str("dashboard_id"), InstanceID: str("instance_id"),
 	}
 	if roles, ok := claims["roles"].([]any); ok {
 		for _, r := range roles {
@@ -161,7 +164,8 @@ func (v *ContextVerifier) fetchLocked(ctx context.Context) error {
 }
 
 // screen serves the two iframe screens. The page is framed only by Mesh
-// (frame-ancestors) and renews its token through mesh.ready before it expires.
+// (frame-ancestors), renews its token through mesh.ready before it expires and
+// paints itself with the Mesh theme (mesh.context, mesh.theme).
 func (s *Server) screen(w http.ResponseWriter, r *http.Request) {
 	ctx, err := s.UI.Verify(r.Context(), r.URL.Query().Get("token"))
 	if err != nil {
@@ -177,9 +181,17 @@ func (s *Server) screen(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "project screen needs a project", http.StatusBadRequest)
 		return
 	}
+	isWidget := r.URL.Path == PathUIWidget
+	if isWidget && (ctx.DashboardID == "" || ctx.InstanceID == "") {
+		http.Error(w, "widget screen needs a dashboard and an instance", http.StatusBadRequest)
+		return
+	}
 	page := screenPage
-	if isProject {
+	switch {
+	case isProject:
 		page = projectPage
+	case isWidget:
+		page = widgetPage
 	}
 	w.Header().Set("Content-Security-Policy", "frame-ancestors "+s.UI.MeshOrigin)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -190,16 +202,37 @@ func (s *Server) screen(w http.ResponseWriter, r *http.Request) {
 }
 
 var screenPage = template.Must(template.New("screen").Parse(`<!doctype html>
-<html><head><meta charset="utf-8"><title>Reference extension</title></head>
+<html><head><meta charset="utf-8"><title>Reference extension</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.4 var(--font-sans, system-ui, sans-serif); margin: 0; padding: 16px;
+         background: hsl(var(--background, 0 0% 100%)); color: hsl(var(--foreground, 0 0% 10%)); }
+  .muted { color: hsl(var(--muted-foreground, 0 0% 45%)); }
+</style></head>
 <body>
 <h1>Hello{{if .Ctx.Email}}, {{.Ctx.Email}}{{end}}</h1>
 <p>Workspace {{.Ctx.WorkspaceID}}{{if .Roles}} ({{.Roles}}){{end}}</p>
 {{if .Ctx.TaskID}}<p>Task {{.Ctx.TaskID}} in project {{.Ctx.ProjectID}}</p>{{end}}
+<p class="muted">Mesh theme <code data-testid="mode"></code></p>
 <script>
   const mesh = {{.MeshOrigin}};
   let renew;
+  // The Mesh theme arrives in mesh.context and, on a switch, in mesh.theme: the same helper as the widget's.
+  function applyMeshTheme(theme) {
+    const root = document.documentElement;
+    for (const [name, value] of Object.entries((theme && theme.tokens) || {})) {
+      if (/^--[a-z0-9-]+$/i.test(name) && typeof value === "string") root.style.setProperty(name, value);
+    }
+    const mode = theme && theme.mode === "dark" ? "dark" : "light";
+    root.dataset.meshMode = mode;
+    root.style.colorScheme = mode;
+    document.querySelector('[data-testid="mode"]').textContent = mode;
+  }
   window.addEventListener("message", (e) => {
-    if (e.origin !== mesh || e.source !== window.parent || !e.data || e.data.type !== "mesh.context") return;
+    if (e.origin !== mesh || e.source !== window.parent || !e.data) return;
+    if (e.data.type === "mesh.theme") applyMeshTheme(e.data);
+    if (e.data.type !== "mesh.context") return;
+    if (e.data.theme) applyMeshTheme(e.data.theme);
     // Send e.data.token with every call to this service; ask for a new one before it expires.
     clearTimeout(renew);
     const left = Date.parse(e.data.expires_at) - Date.now();
@@ -285,6 +318,111 @@ var projectPage = template.Must(template.New("project").Parse(`<!doctype html>
   });
   window.parent.postMessage({ type: "mesh.ready" }, mesh);
   window.parent.postMessage({ type: "mesh.app-ready" }, mesh);
+</script>
+</body></html>
+`))
+
+// widgetPage is the dashboard.widget screen (protocol v2): it paints itself with
+// the Mesh theme (applyMeshTheme), follows mesh.theme, shows the instance
+// settings, redraws on mesh.widget.settings, reloads on mesh.widget.refresh,
+// pauses on mesh.widget.visibility, turns into a stub on mesh.revoked, and asks
+// Mesh to open a task or a document (mesh.open). It also posts a mesh.resize,
+// which Mesh ignores in this slot: the dashboard cell sets the size.
+var widgetPage = template.Must(template.New("widget").Parse(`<!doctype html>
+<html><head><meta charset="utf-8"><title>Reference widget</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.4 var(--font-sans, system-ui, sans-serif); margin: 0; padding: 12px;
+         background: hsl(var(--background, 0 0% 100%)); color: hsl(var(--foreground, 0 0% 10%)); }
+  h1 { font-size: 15px; margin: 0 0 8px; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 8px 0; }
+  dt { color: hsl(var(--muted-foreground, 0 0% 45%)); }
+  dd { margin: 0; overflow-wrap: anywhere; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  button { font: inherit; min-height: 40px; padding: 6px 12px; cursor: pointer; border-radius: var(--radius, 6px);
+           border: 1px solid hsl(var(--border, 0 0% 85%)); background: hsl(var(--card, 0 0% 100%)); color: hsl(var(--card-foreground, 0 0% 10%)); }
+  .stub { color: hsl(var(--muted-foreground, 0 0% 45%)); }
+</style></head>
+<body>
+<main id="app">
+<h1 data-testid="title">Reference widget</h1>
+<dl>
+  <dt>Mode</dt><dd data-testid="mode"></dd>
+  <dt>Background</dt><dd data-testid="bg"></dd>
+  <dt>Settings</dt><dd data-testid="settings"></dd>
+  <dt>Visible</dt><dd data-testid="visible"></dd>
+  <dt>Loads</dt><dd data-testid="loads">0</dd>
+  <dt>Instance</dt><dd data-testid="instance">{{.Ctx.InstanceID}}</dd>
+</dl>
+<div class="row">
+  <button data-testid="open-own" data-kind="task" data-id="">Open my task</button>
+  <button data-testid="open-foreign" data-kind="task" data-id="">Open another task</button>
+  <button data-testid="configure">Settings</button>
+</div>
+</main>
+<script>
+  const mesh = {{.MeshOrigin}};
+  const $ = (t) => document.querySelector('[data-testid="' + t + '"]');
+  let renew, loads = 0, revoked = false;
+
+  // applyMeshTheme(tokens): the one helper a widget needs to look like Mesh.
+  // tokens are the CSS variables of the Mesh theme (name -> value); they land on :root,
+  // and the colour scheme follows mode so form controls and scrollbars match.
+  function applyMeshTheme(theme) {
+    const root = document.documentElement;
+    for (const [name, value] of Object.entries((theme && theme.tokens) || {})) {
+      if (/^--[a-z0-9-]+$/i.test(name) && typeof value === "string") root.style.setProperty(name, value);
+    }
+    const mode = theme && theme.mode === "dark" ? "dark" : "light";
+    root.dataset.meshMode = mode;
+    root.style.colorScheme = mode;
+    $("mode").textContent = mode;
+    $("bg").textContent = getComputedStyle(document.body).backgroundColor || "";
+  }
+  function showSettings(s) { $("settings").textContent = JSON.stringify(s || {}); }
+  function load() { loads += 1; $("loads").textContent = String(loads); }
+  function revokedStub() {
+    revoked = true;
+    clearTimeout(renew);
+    document.getElementById("app").innerHTML = "";
+    const p = document.createElement("p"); p.className = "stub"; p.dataset.testid = "revoked";
+    p.textContent = "Access to this widget was removed.";
+    document.getElementById("app").append(p);
+  }
+  function send(m) { window.parent.postMessage(m, mesh); }
+
+  window.addEventListener("message", (e) => {
+    if (e.origin !== mesh || e.source !== window.parent || !e.data || revoked) return;
+    const m = e.data;
+    switch (m.type) {
+      case "mesh.context": {
+        if (m.theme) applyMeshTheme(m.theme);
+        if (m.widget) {
+          showSettings(m.widget.settings);
+          const own = m.task_id || (m.widget.settings && m.widget.settings.task_id) || "";
+          $("open-own").dataset.id = own;
+          $("open-foreign").dataset.id = (m.widget.settings && m.widget.settings.foreign_task_id) || "";
+        }
+        clearTimeout(renew);
+        const left = Date.parse(m.expires_at) - Date.now();
+        renew = setTimeout(() => send({ type: "mesh.ready" }), Math.max(left - 10000, 1000));
+        break;
+      }
+      case "mesh.theme": applyMeshTheme(m); break;
+      case "mesh.widget.settings": showSettings(m.settings); break;
+      case "mesh.widget.refresh": load(); break;
+      case "mesh.widget.visibility": $("visible").textContent = String(m.visible === true); break;
+      case "mesh.revoked": revokedStub(); break;
+    }
+  });
+  document.querySelectorAll("button[data-kind]").forEach((b) => b.addEventListener("click", () => {
+    if (b.dataset.id) send({ type: "mesh.open", kind: b.dataset.kind, id: b.dataset.id });
+  }));
+  $("configure").addEventListener("click", () => send({ type: "mesh.widget.configure" }));
+  load();
+  send({ type: "mesh.ready" });
+  send({ type: "mesh.resize", height: document.body.scrollHeight });
+  send({ type: "mesh.app-ready" });
 </script>
 </body></html>
 `))

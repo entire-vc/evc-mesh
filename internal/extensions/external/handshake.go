@@ -71,6 +71,10 @@ type installRequest struct {
 	// install body is byte-for-byte what earlier Mesh versions sent. The
 	// service pins to it and refuses any other version afterwards.
 	SignatureVersion int `json:"signature_version,omitempty"`
+	// Settings are the workspace settings the manifest declares
+	// (settings.workspace), without the x-secret fields. Omitted when there
+	// are none, so an extension without workspace settings gets the old body.
+	Settings map[string]any `json:"settings,omitempty"`
 }
 
 // Handshaker performs the install handshake for one workspace connection and
@@ -123,10 +127,30 @@ func Sign(secret, timestamp string, body []byte) string {
 
 func (h *Handshaker) key(ws uuid.UUID, ext string) string { return ws.String() + "/" + ext }
 
+// installSettings picks what install tells the service about its workspace
+// settings: the fields the manifest's settings.workspace declares and does not
+// mark x-secret, with their current values. It is an allow-list over the
+// schema, so a key that is not declared never leaves Mesh. nil when none.
+func installSettings(m extensions.Manifest, settings map[string]any) map[string]any {
+	var out map[string]any
+	for k, f := range m.SettingFields(string(extensions.LevelWorkspace)) {
+		v, ok := settings[k]
+		if f.Secret || !ok {
+			continue
+		}
+		if out == nil {
+			out = map[string]any{}
+		}
+		out[k] = v
+	}
+	return out
+}
+
 // fingerprint covers what the service was told, including the full SHA-256
 // digests of the signing secret and the install code, so a rotated secret or a
-// new code forces a new handshake.
-func fingerprint(m extensions.Manifest, events []string, base, secret, code string) string {
+// new code forces a new handshake, and of the sent settings, so a changed
+// setting is delivered by the next Ensure even when its save-time POST failed.
+func fingerprint(m extensions.Manifest, events []string, base, secret, code string, settings map[string]any) string {
 	ev := slices.Clone(events)
 	slices.Sort(ev)
 	sum := sha256.Sum256([]byte(secret))
@@ -137,6 +161,14 @@ func fingerprint(m extensions.Manifest, events []string, base, secret, code stri
 	}
 	if m.External != nil && m.External.SignatureVersion >= extsig.Version {
 		fp += "|sig2"
+	}
+	if len(settings) > 0 {
+		// encoding/json sorts map keys, so equal settings give equal bytes.
+		// A map that does not encode fails the install POST too, so it is
+		// never memoised under this fingerprint.
+		raw, _ := json.Marshal(settings)
+		ss := sha256.Sum256(raw)
+		fp += "|settings:" + hex.EncodeToString(ss[:])
 	}
 	return fp
 }
@@ -167,7 +199,7 @@ func (h *Handshaker) Ensure(ctx context.Context, p *Provider, ws uuid.UUID, sett
 	if err != nil {
 		return h.Run(ctx, p, ws, settings)
 	}
-	fp := fingerprint(p.Man, events, base, secret, code)
+	fp := fingerprint(p.Man, events, base, secret, code, h.sentSettings(p, settings))
 	h.mu.Lock()
 	same := h.done[h.key(ws, p.Man.ID)] == fp
 	h.mu.Unlock()
@@ -219,11 +251,12 @@ func (h *Handshaker) run(ctx context.Context, p *Provider, ws uuid.UUID, setting
 	if err != nil {
 		return err
 	}
+	sent := h.sentSettings(p, settings)
 	if p.ext.InstallPath != "" {
 		if err := h.install(ctx, p, base, installRequest{
 			ExtensionID: m.ID, Version: m.Version, WorkspaceID: ws, SigningSecret: secret,
 			Events: events, EventsPath: p.ext.EventsPath, InstallCode: code,
-			SignatureVersion: installSignatureVersion(p.ext),
+			SignatureVersion: installSignatureVersion(p.ext), Settings: sent,
 		}, secret); err != nil {
 			return err
 		}
@@ -243,9 +276,18 @@ func (h *Handshaker) run(ctx context.Context, p *Provider, ws uuid.UUID, setting
 	if h.done == nil {
 		h.done = map[string]string{}
 	}
-	h.done[h.key(ws, m.ID)] = fingerprint(m, events, base, secret, code)
+	h.done[h.key(ws, m.ID)] = fingerprint(m, events, base, secret, code, sent)
 	h.mu.Unlock()
 	return nil
+}
+
+// sentSettings is what install carries in "settings": nothing for an extension
+// without an install endpoint.
+func (h *Handshaker) sentSettings(p *Provider, settings map[string]any) map[string]any {
+	if p.ext.InstallPath == "" {
+		return nil
+	}
+	return installSettings(p.Man, settings)
 }
 
 // installSignatureVersion is the version to announce at install: 2 when the

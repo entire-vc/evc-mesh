@@ -142,10 +142,6 @@ type TaskRepository interface {
 	CountByStatus(ctx context.Context, projectID uuid.UUID) (map[uuid.UUID]int, error)
 	CountByStatusCategory(ctx context.Context, projectID uuid.UUID) (map[domain.StatusCategory]int, error)
 	ListByStatusCategory(ctx context.Context, workspaceID uuid.UUID, category domain.StatusCategory, pg pagination.Params) (*pagination.Page[domain.Task], error)
-	// ListTriageQueue returns the human-attention queue for a workspace: tasks in a
-	// triage-category status UNION tasks with a live human_gate (armed, not done/cancelled),
-	// de-duplicated, hard gates first then by human_gate_armed_at.
-	ListTriageQueue(ctx context.Context, workspaceID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error)
 	// ListAllBacklogTasks returns every non-deleted task currently in a backlog-category
 	// status, across ALL workspaces — global by design, mirroring FindDueBacklogTasks
 	// rather than the workspace-scoped ListByStatusCategory. Used by
@@ -456,6 +452,12 @@ type CommentViewFilter struct {
 	// corpus this exists for). Defaults to false: excluded, same as before
 	// this field existed.
 	IncludeInternal bool
+	// Viewer is who the list is served to. Only comments on projects the
+	// viewer may open are returned; the zero viewer gets none. On
+	// ListRecentByWorkspace it is the project viewer of the request's
+	// workspace; on ListByAuthor (no workspace in the request) a UserID viewer
+	// also passes on rows of a workspace where that user is owner/admin.
+	Viewer domain.ProjectViewer
 }
 
 // CommentRepository manages persistence for comments.
@@ -1091,6 +1093,10 @@ type MentionFilter struct {
 	// query-layer change unnoticed.
 	WorkspaceID *uuid.UUID
 	Limit       int
+	// Viewer is who the inbox is served to: only mentions on projects the
+	// viewer may still open are listed (the same per-row rule as
+	// CommentViewFilter.Viewer on ListByAuthor). The zero viewer gets none.
+	Viewer domain.ProjectViewer
 }
 
 // CommentMentionRepository manages persistence for comment_mentions rows.
@@ -1102,7 +1108,7 @@ type CommentMentionRepository interface {
 	// WorkspaceID — the badge and the list must agree on which workspace they
 	// are counting, or a caller viewing an empty workspace sees a nonzero
 	// badge for mentions the list on the same page never shows.
-	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, workspaceID uuid.UUID) (int64, error)
+	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, workspaceID uuid.UUID, viewer domain.ProjectViewer) (int64, error)
 }
 
 // CommentDeliveryOutcomeRepository manages persistence for
@@ -1298,7 +1304,11 @@ type InitiativeRepository interface {
 	List(ctx context.Context, workspaceID uuid.UUID) ([]domain.Initiative, error)
 	LinkProject(ctx context.Context, initiativeID, projectID uuid.UUID) error
 	UnlinkProject(ctx context.Context, initiativeID, projectID uuid.UUID) error
-	ListLinkedProjects(ctx context.Context, initiativeID uuid.UUID) ([]domain.Project, error)
+	// ListLinkedProjects returns the linked projects the viewer may open.
+	ListLinkedProjects(ctx context.Context, initiativeID uuid.UUID, viewer domain.ProjectViewer) ([]domain.Project, error)
+	// Progress counts the tasks of the linked projects the viewer may open:
+	// total excludes cancelled, completed is the done category.
+	Progress(ctx context.Context, initiativeID uuid.UUID, viewer domain.ProjectViewer) (total, completed int, err error)
 	// GetByProjectID returns all initiatives that have the given project linked.
 	GetByProjectID(ctx context.Context, projectID uuid.UUID) ([]domain.Initiative, error)
 }
@@ -2302,6 +2312,24 @@ type OAuthRepository interface {
 	// /api/v1/oauth/grants/:id/revoke) so live tokens die immediately rather
 	// than merely failing their next refresh.
 	RevokeTokensByGrant(ctx context.Context, grantID uuid.UUID, now time.Time) error
+
+	// --- OpenID Connect identity flow ---
+
+	// UpsertStaticClient creates or refreshes an operator-configured client
+	// (registration_type 'static') by client_id. It never takes over a row
+	// registered another way: a DCR or CIMD client with the same client_id
+	// leaves the row untouched and returns ok=false.
+	UpsertStaticClient(ctx context.Context, c *domain.OAuthClient) (ok bool, err error)
+	// CreateIdentityCode inserts a one-time identity-flow code.
+	CreateIdentityCode(ctx context.Context, code *domain.OAuthIdentityCode) error
+	// GetIdentityCodeByHash returns (nil, nil) when no such code exists.
+	GetIdentityCodeByHash(ctx context.Context, codeHash string) (*domain.OAuthIdentityCode, error)
+	// MarkIdentityCodeUsed sets used_at guarded by `used_at IS NULL`;
+	// ok=false means the code was already used (a replay or a lost race).
+	MarkIdentityCodeUsed(ctx context.Context, id uuid.UUID, now time.Time) (ok bool, err error)
+	// DeleteExpiredIdentityCodes deletes identity codes that expired before
+	// the cutoff, returning how many.
+	DeleteExpiredIdentityCodes(ctx context.Context, before time.Time) (int64, error)
 }
 
 // TaskExternalRefRepository manages task_external_refs.

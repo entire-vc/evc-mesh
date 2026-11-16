@@ -3,6 +3,15 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 
 const mockedApi = vi.fn();
+
+/** A promise the test resolves when it is ready for the response to land. */
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
 vi.mock("@/lib/api", () => ({
   api: (...args: unknown[]) => mockedApi(...args),
   getAccessToken: vi.fn(() => null),
@@ -145,6 +154,11 @@ describe("CommentList — focusCommentId scroll/highlight", () => {
   });
 
   it("auto-paginates to an older page to find the target, then highlights it", async () => {
+    // Page 2 is held until the "not yet" assertion has run. With both pages
+    // resolving at once, whether React shows page 1 alone first is a
+    // scheduling accident — any synchronous re-render elsewhere on the page
+    // (the comment composer's toolbar, say) flushes both together.
+    const page2 = deferred();
     mockedApi.mockImplementation(
       (path: string, opts?: { params?: { page?: number } }) => {
         if (path !== "/api/v1/tasks/task-x/comments") {
@@ -165,7 +179,7 @@ describe("CommentList — focusCommentId scroll/highlight", () => {
           });
         }
         if (page === 2) {
-          return Promise.resolve({
+          return page2.promise.then(() => ({
             items: [
               makeComment("c-3", "task-x", "Third — the target"),
               makeComment("c-4", "task-x", "Oldest"),
@@ -175,7 +189,7 @@ describe("CommentList — focusCommentId scroll/highlight", () => {
             page_size: 2,
             total_pages: 2,
             has_more: false,
-          });
+          }));
         }
         throw new Error(`unexpected page ${page}`);
       },
@@ -191,6 +205,8 @@ describe("CommentList — focusCommentId scroll/highlight", () => {
     // anything) until the second page has actually loaded.
     await waitFor(() => expect(screen.getByText("Newest")).toBeInTheDocument());
     expect(screen.queryByText("Third — the target")).not.toBeInTheDocument();
+    expect(highlightedIds()).toEqual([]);
+    page2.resolve();
 
     await waitFor(() =>
       expect(screen.getByText("Third — the target")).toBeInTheDocument(),
@@ -207,6 +223,9 @@ describe("CommentList — focusCommentId scroll/highlight", () => {
   // "found"; it has to confirm the root it nests under is loaded too, or the
   // reply is fetched but permanently unrendered: no scroll, no highlight.
   it("keeps paginating for a reply whose root comment is on a later page", async () => {
+    // Held for the same reason as above: the "not yet" state must exist for as
+    // long as the assertion needs it, not for as long as React happens to wait.
+    const page2 = deferred();
     mockedApi.mockImplementation(
       (path: string, opts?: { params?: { page?: number } }) => {
         if (path !== "/api/v1/tasks/task-x/comments") {
@@ -225,14 +244,14 @@ describe("CommentList — focusCommentId scroll/highlight", () => {
           });
         }
         if (page === 2) {
-          return Promise.resolve({
+          return page2.promise.then(() => ({
             items: [makeComment("root-old", "task-x", "The old root")],
             total_count: 2,
             page: 2,
             page_size: 1,
             total_pages: 2,
             has_more: false,
-          });
+          }));
         }
         throw new Error(`unexpected page ${page}`);
       },
@@ -246,8 +265,12 @@ describe("CommentList — focusCommentId scroll/highlight", () => {
 
     // Before the root arrives, the reply must not be silently "found" —
     // it has nothing to nest under, so it can't be on screen yet either.
-    await waitFor(() => expect(mockedApi).toHaveBeenCalledTimes(1));
+    // The pager has asked for page 2, i.e. it did not treat the bare reply as
+    // found; and while that page is in flight the reply is not on screen.
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledTimes(2));
     expect(screen.queryByText("The reply — target")).not.toBeInTheDocument();
+    expect(highlightedIds()).toEqual([]);
+    page2.resolve();
 
     await waitFor(() =>
       expect(screen.getByText("The reply — target")).toBeInTheDocument(),

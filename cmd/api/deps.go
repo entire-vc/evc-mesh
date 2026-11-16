@@ -195,6 +195,7 @@ type apiDeps struct {
 	httpShutdownCh                   chan struct{}
 	agentRepositoryAccessHandler     *handler.AgentRepositoryAccessHandler
 	eventHandler                     *handler.EventHandler
+	workspaceEventHandler            *handler.WorkspaceEventHandler
 	activityHandler                  *handler.ActivityHandler
 	secretHandler                    *handler.SecretHandler
 	customFieldHandler               *handler.CustomFieldHandler

@@ -54,11 +54,16 @@ export const meshHost: HarnessHost = {
   },
   extensionSelector: (p) => SELECTOR[p],
   handleRequest(url, _init, scenario) {
-    // The endpoints behind useTasks (mine, triage): ready = two tasks, error = 500, loading = never settles.
-    if (url.includes("/api/v1/me/tasks") || url.includes(`/workspaces/${WS_ID}/triage`)) {
+    // The endpoints behind the task hooks (useTasks: tasks/query; mine; triage): ready = two tasks, error = 500,
+    // loading = never settles.
+    if (
+      url.includes(`/workspaces/${WS_ID}/tasks/query`) ||
+      url.includes("/api/v1/me/tasks") ||
+      url.includes(`/workspaces/${WS_ID}/triage`)
+    ) {
       if (scenario?.state === "loading") return new Promise(() => {});
       if (scenario?.state === "error") return new Response("{}", { status: 500, headers: { "content-type": "application/json" } });
-      return { items: [fixtures.dashboard.apiTask("t1", { title: "First", priority: "high" }), fixtures.dashboard.apiTask("t2")], total: 2 };
+      return { items: [fixtures.dashboard.apiTask("t1", { title: "First", priority: "high" }), fixtures.dashboard.apiTask("t2")], total_count: 2 };
     }
     if (!url.includes(`/workspaces/${WS_ID}/extensions`)) return undefined;
     return { extensions: [{ ...EXT, status: { enabled: true }, manifest: { capabilities: { ui: installed } } }] };

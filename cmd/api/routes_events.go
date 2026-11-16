@@ -20,6 +20,9 @@ func registerEventRoutes(deps *apiDeps) {
 	api.GET("/projects/:proj_id/events", eventHandler.List, projAccess)
 	api.POST("/projects/:proj_id/events", eventHandler.Create, projAccess, rbac(mw.PermPublishEvent))
 	api.GET("/events/:event_id", eventHandler.GetByID)
+	// Workspace-wide feed (dashboard event-feed widget): every project the
+	// viewer may see, filtered on the server. Project scope is in the handler.
+	api.GET("/workspaces/:ws_id/events", deps.workspaceEventHandler.List, deps.wsAccess)
 
 	// Webhook routes.
 	api.POST("/workspaces/:ws_id/webhooks", webhookHandler.Create, rbac(mw.PermManageWebhooks))

@@ -32,7 +32,7 @@ func TestFactoriesUseCatalogedCodes(t *testing.T) {
 	for _, err := range []*Error{
 		BadRequest("x"), BadRequestWithDetails("x", "y"), ValidationError(nil), Unauthorized(""),
 		Forbidden(""), ForbiddenWithDetails("x", "y"), NotFound("T"), NotFoundWithDetails("T", "y"),
-		Conflict("x"), TooManyRequests(""), ServiceUnavailable(""), InternalError(""), Wrap(assert.AnError),
+		Conflict("x"), DocumentShrinkRefused("x", nil), TooManyRequests(""), ServiceUnavailable(""), InternalError(""), Wrap(assert.AnError),
 	} {
 		_, ok := Lookup(err.ErrorCode, "en")
 		assert.True(t, ok, "%d %q: error_code %q is not in the catalog", err.Code, err.Message, err.ErrorCode)

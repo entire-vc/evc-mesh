@@ -21,6 +21,12 @@ type RateLimitConfig struct {
 	Enabled bool
 	// RPM is the maximum number of requests allowed per minute for each key.
 	RPM int
+	// Overrides gives individual keys (exact KeyFunc values, e.g.
+	// "user:<uuid>") their own per-minute budget instead of RPM. Keys not
+	// listed keep RPM. Empty or nil changes nothing. Meant for a known heavy
+	// caller such as the CI account that runs several e2e jobs at once,
+	// without raising the limit for every actor.
+	Overrides map[string]int
 	// KeyFunc extracts the rate-limit key from the request context.
 	// A unique key (e.g. IP address or user ID) gets its own independent bucket.
 	KeyFunc func(c echo.Context) string
@@ -36,7 +42,7 @@ type RateLimitConfig struct {
 	// KeyFunc value (e.g. both keyed by the same client IP) silently share ONE
 	// Redis counter even though each was configured with its own RPM — every
 	// INCR from either route counts against both limits. Found live 2026-08-20
-	// (`#603f340a`): /auth/login (5 RPM) and /auth/refresh (60 RPM) both used
+	// (`an internal ticket`): /auth/login (5 RPM) and /auth/refresh (60 RPM) both used
 	// RateLimitKeyByIP, so routine refresh traffic from the agent fleet alone
 	// exhausted the shared counter and login got 429'd for a reason that had
 	// nothing to do with login attempts. Proven live: one POST /auth/refresh
@@ -55,33 +61,35 @@ type limiterEntry struct {
 
 // rateLimitStore manages per-key token-bucket limiters.
 type rateLimitStore struct {
-	mu      sync.Mutex
-	entries map[string]*limiterEntry
-	rps     rate.Limit // tokens per second derived from RPM
-	burst   int        // burst size (== RPM, i.e. 1 full minute of quota)
+	mu        sync.Mutex
+	entries   map[string]*limiterEntry
+	rpm       int
+	overrides map[string]int
 }
 
-func newRateLimitStore(rpm int) *rateLimitStore {
-	// Convert RPM → requests-per-second for the token-bucket algorithm.
-	// Burst is set to RPM so a client that was idle for a full minute can
-	// immediately make RPM requests without being throttled.
-	rps := rate.Limit(float64(rpm) / 60.0)
+func newRateLimitStore(rpm int, overrides map[string]int) *rateLimitStore {
 	return &rateLimitStore{
-		entries: make(map[string]*limiterEntry),
-		rps:     rps,
-		burst:   rpm,
+		entries:   make(map[string]*limiterEntry),
+		rpm:       rpm,
+		overrides: overrides,
 	}
 }
 
 // getLimiter returns the existing limiter for key, or creates a new one.
+//
+// RPM is converted to requests-per-second for the token bucket and the burst
+// is set to RPM, so a client that was idle for a full minute can immediately
+// make RPM requests without being throttled. A key listed in overrides gets
+// its own RPM (and therefore its own rate and burst).
 func (s *rateLimitStore) getLimiter(key string) *rate.Limiter {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	entry, ok := s.entries[key]
 	if !ok {
+		rpm := rpmFor(key, s.rpm, s.overrides)
 		entry = &limiterEntry{
-			limiter: rate.NewLimiter(s.rps, s.burst),
+			limiter: rate.NewLimiter(rate.Limit(float64(rpm)/60.0), rpm),
 		}
 		s.entries[key] = entry
 	}
@@ -152,7 +160,7 @@ func RateLimit(cfg RateLimitConfig) echo.MiddlewareFunc {
 	}
 
 	// Fall back to the in-memory token-bucket limiter.
-	store := newRateLimitStore(cfg.RPM)
+	store := newRateLimitStore(cfg.RPM, cfg.Overrides)
 	// Evict limiters not used for 10 minutes; run cleanup every 5 minutes.
 	store.startCleanup(5*time.Minute, 10*time.Minute)
 
@@ -226,6 +234,15 @@ func RateLimitKeyByActor(c echo.Context) string {
 }
 
 // --- internal helpers ---
+
+// rpmFor returns the per-minute budget for key: its entry in overrides when
+// there is one, otherwise the limiter's default rpm.
+func rpmFor(key string, rpm int, overrides map[string]int) int {
+	if v, ok := overrides[key]; ok {
+		return v
+	}
+	return rpm
+}
 
 // keyTypeFromKey extracts the rate-limit key type (user, agent, ip) from a
 // rate-limit key string. Used to label Prometheus rate-limit hit counters.

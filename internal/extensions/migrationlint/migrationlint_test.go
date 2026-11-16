@@ -149,3 +149,11 @@ func TestExtensionMigrationsStayInNamespace(t *testing.T) {
 		}
 	}
 }
+
+// A per-person row may follow the membership: a composite foreign key to
+// workspace_members is allowed, writing to workspace_members is not.
+func TestLint_MembershipReference(t *testing.T) {
+	require.Empty(t, Lint("hello", `CREATE TABLE ext_hello_mine (ws uuid, u uuid, FOREIGN KEY (ws, u) REFERENCES workspace_members (workspace_id, user_id) ON DELETE CASCADE);`))
+	require.NotEmpty(t, Lint("hello", `DELETE FROM workspace_members WHERE true;`))
+	require.NotEmpty(t, Lint("hello", `CREATE TABLE ext_hello_mine (ws uuid REFERENCES workspace_invites (id));`), "other core tables stay out of reach")
+}

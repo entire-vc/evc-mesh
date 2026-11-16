@@ -87,6 +87,11 @@ func (h *ArtifactHandler) Upload(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+	// A keyed repeat of an upload that was recorded answers with it and
+	// stores nothing.
+	if done, rerr := replayWritten(c, domain.IdemRouteArtifactCreate, taskID, renderWritten[domain.Artifact](c, http.StatusCreated, nil)); done {
+		return rerr
+	}
 
 	// Cap the body at the file limit plus its envelope (base64 for JSON), so an
 	// oversized upload is refused without spooling all of it to a temp file.
@@ -248,8 +253,12 @@ func (h *ArtifactHandler) uploadMultipart(c echo.Context, taskID uuid.UUID) erro
 		return handleError(c, err)
 	}
 
+	input.Receipt = idemReceipt(c, domain.IdemRouteArtifactCreate, taskID)
 	artifact, err := h.artifactService.Upload(c.Request().Context(), input)
 	if err != nil {
+		if done, answer := replayAfterRefusal(c, err, domain.IdemRouteArtifactCreate, taskID, renderWritten[domain.Artifact](c, http.StatusCreated, nil)); done {
+			return answer
+		}
 		return handleError(c, err)
 	}
 
@@ -333,8 +342,12 @@ func (h *ArtifactHandler) uploadJSON(c echo.Context, taskID uuid.UUID) error {
 	}
 	input.Fence = fence
 
+	input.Receipt = idemReceipt(c, domain.IdemRouteArtifactCreate, taskID)
 	artifact, err := h.artifactService.Upload(c.Request().Context(), input)
 	if err != nil {
+		if done, answer := replayAfterRefusal(c, err, domain.IdemRouteArtifactCreate, taskID, renderWritten[domain.Artifact](c, http.StatusCreated, nil)); done {
+			return answer
+		}
 		return handleError(c, err)
 	}
 

@@ -108,3 +108,71 @@ func TestProjectSectionClicks(t *testing.T) {
 		}
 	}
 }
+
+// The sidebar/task screen paints itself with the Mesh theme from mesh.context and
+// follows mesh.theme; a message from another origin or window changes nothing.
+const screenThemeHarness = `
+const props = {};
+const mode = { textContent: "" };
+global.document = {
+  documentElement: { dataset: {}, style: { setProperty: (k, v) => { props[k] = v; }, colorScheme: "" } },
+  querySelector: () => mode,
+  body: { scrollHeight: 100 },
+};
+const parent = { postMessage: () => {} };
+let onMessage;
+global.window = { parent, addEventListener: (ev, fn) => { if (ev === "message") onMessage = fn; } };
+global.setTimeout = () => 0; global.clearTimeout = () => {};
+eval(process.env.SCRIPT);
+const O = "https://mesh.example";
+const msg = (data, origin = O, source = parent) => onMessage({ origin, source, data });
+const root = document.documentElement;
+const snap = () => ({ mode: mode.textContent, bg: props["--background"] || "", scheme: root.style.colorScheme });
+const out = {};
+msg({ type: "mesh.context", expires_at: "2099-01-01T00:00:00Z", theme: { mode: "dark", tokens: { "--background": "222 14% 9%" } } });
+out.ctx = snap();
+msg({ type: "mesh.theme", version: 2, mode: "light", tokens: { "--background": "0 0% 100%" } });
+out.light = snap();
+msg({ type: "mesh.theme", mode: "dark", tokens: { "--background": "1 1% 1%" } }, "https://evil.example");
+msg({ type: "mesh.theme", mode: "dark", tokens: { "--background": "1 1% 1%" } }, O, {});
+out.foreign = snap();
+console.log(JSON.stringify(out));
+`
+
+func TestScreenPageTheme(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal("node is required in CI: the screen theme is only exercised here")
+		}
+		t.Skip("node not installed")
+	}
+	var page bytes.Buffer
+	if err = screenPage.Execute(&page, map[string]any{"Ctx": Context{WorkspaceID: "w1"}, "MeshOrigin": "https://mesh.example"}); err != nil {
+		t.Fatal(err)
+	}
+	script := regexp.MustCompile(`(?s)<script>(.*)</script>`).FindSubmatch(page.Bytes())
+	if script == nil {
+		t.Fatal("no script in screen page")
+	}
+	cmd := exec.Command(node, "-e", screenThemeHarness)
+	cmd.Env = []string{"SCRIPT=" + string(script[1])}
+	raw, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("node: %v\n%s", err, raw)
+	}
+	type snap struct{ Mode, Bg, Scheme string }
+	var got struct{ Ctx, Light, Foreign snap }
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("harness output %q: %v", raw, err)
+	}
+	if want := (snap{"dark", "222 14% 9%", "dark"}); got.Ctx != want {
+		t.Fatalf("theme from mesh.context: %+v, want %+v", got.Ctx, want)
+	}
+	if want := (snap{"light", "0 0% 100%", "light"}); got.Light != want {
+		t.Fatalf("mesh.theme: %+v, want %+v", got.Light, want)
+	}
+	if got.Foreign != got.Light {
+		t.Fatalf("a message from another origin or window changed the theme: %+v", got.Foreign)
+	}
+}

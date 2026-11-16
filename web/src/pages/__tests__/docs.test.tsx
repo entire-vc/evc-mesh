@@ -1,4 +1,13 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import {
@@ -110,6 +119,7 @@ import { DOC_TREE_DEFAULT_WIDTH } from "@/lib/docs-layout-storage";
 import { MATCH_END, MATCH_START } from "@/lib/docs/document-search";
 import { DocsPage } from "@/pages/docs";
 import { useDocumentStore } from "@/stores/document";
+import { useDocumentCommentStore } from "@/stores/document-comment";
 import { useProjectStore } from "@/stores/project";
 import { registerSlotViewOverride } from "@/core/slots/registry";
 import type { DocViewView } from "@/core/slots/types";
@@ -462,6 +472,84 @@ describe("DocsPage — open, view and edit", () => {
       { body: "my own edit, retried", base_version: 2 },
     ]);
     expect(await screen.findByText("Saved")).toBeInTheDocument();
+  });
+
+  // Replacing a large page with a short one is refused by the
+  // server's shrink guard. That refusal used to read "This conflicts with the
+  // current state" with a Retry that could only be refused again.
+  for (const [label, refusal] of [
+    [
+      "document_shrink_refused",
+      () =>
+        new ApiRequestError(
+          "body shrinks from 2656 to 36 bytes and drops 3 section(s)",
+          "409",
+          409,
+          undefined,
+          "document_shrink_refused",
+        ),
+    ],
+    [
+      "an API that still answers it as a generic conflict",
+      () =>
+        new ApiRequestError(
+          "body shrinks from 2656 to 36 bytes and drops 3 section(s): A | B | C. body replaces the WHOLE document; " +
+            'to change one section send section="<heading>" with body, or pass allow_shrink=true if the cut is intended',
+          "409",
+          409,
+          undefined,
+          "conflict",
+        ),
+    ],
+  ] as const) {
+    it(`a refused cut (${label}) asks to save anyway, and only that click sends allow_shrink`, async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const patched: Record<string, unknown>[] = [];
+      mockWithBody("# Big\n\nlong text", (body) => {
+        const b = body as Record<string, unknown>;
+        patched.push(b);
+        if (!b.allow_shrink) return Promise.reject(refusal());
+        return Promise.resolve({ ...doc, body: b.body, version: 2 });
+      });
+      renderDocs("doc-1");
+
+      fireEvent.click(await screen.findByRole("button", { name: /edit/i }));
+      fireEvent.change(screen.getByRole("textbox"), { target: { value: "# Positive save" } });
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(await screen.findByText("Not saved: this cuts most of the page")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+      expect(screen.getByRole("textbox")).toHaveValue("# Positive save");
+
+      // Waiting does not resend it, and nothing but the click lifts the guard.
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(patched).toEqual([{ body: "# Positive save", base_version: 1 }]);
+
+      fireEvent.click(screen.getByRole("button", { name: "Save anyway" }));
+      expect(await screen.findByText("Saved")).toBeInTheDocument();
+      // The version check still travels with the confirmed cut.
+      expect(patched[1]).toEqual({ body: "# Positive save", base_version: 1, allow_shrink: true });
+    });
+  }
+
+  it("a 409 that is neither a shrink nor a version conflict keeps Retry and never sends allow_shrink", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const patched: Record<string, unknown>[] = [];
+    mockWithBody("hello", (body) => {
+      patched.push(body as Record<string, unknown>);
+      return Promise.reject(new ApiRequestError("something else", "409", 409, undefined, "conflict"));
+    });
+    renderDocs("doc-1");
+
+    fireEvent.click(await screen.findByRole("button", { name: /edit/i }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "hi" } });
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(await screen.findByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save anyway" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(patched.every((b) => !("allow_shrink" in b))).toBe(true);
   });
 
   it("saves pending keystrokes when the document is left before the debounce fires", async () => {
@@ -1588,6 +1676,20 @@ describe("DocsPage — the discussion under the page", () => {
         return createdPageComment(body);
       });
       localStorage.setItem("mesh_docs_comments_rail", "1");
+      // The ordering a loaded CI runner produced (job 682683), made
+      // deterministic: the store paints the new thread as soon as the POST
+      // resolves, while `submitDraft` closes the draft only after
+      // `await createComment()` returns. Holding that return back keeps the
+      // draft card's own "page" notice on screen next to the new thread's.
+      const createComment = useDocumentCommentStore.getState().createComment;
+      useDocumentCommentStore.setState({
+        createComment: async (...args) => {
+          const created = await createComment(...args);
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          return created;
+        },
+      });
+      onTestFinished(() => useDocumentCommentStore.setState({ createComment }));
       renderDocs("doc-1");
 
       const rail = await screen.findByTestId("doc-comment-rail");
@@ -1616,7 +1718,16 @@ describe("DocsPage — the discussion under the page", () => {
       // rendered with the exact wording an existing live page-thread already
       // carries (PlacementNotice), not a new string this task would have had
       // to introduce under its own gate.
-      expect(within(rail).getByText("On the page as a whole")).toBeInTheDocument();
+      //
+      // Until `setDraft(null)` lands, the draft card carries that same notice
+      // (see the race set up above), so a one-shot `getByText` right after the
+      // body appears can see two. Wait for exactly one, then check it is the
+      // new thread's own notice and not the draft's.
+      await waitFor(() => {
+        expect(within(rail).getAllByText("On the page as a whole")).toHaveLength(1);
+      });
+      const thread = within(rail).getByTestId("doc-comment-thread");
+      expect(within(thread).getByText("On the page as a whole")).toBeInTheDocument();
     });
 
     it("AC4: the new thread appears once per surface, not twice within either one", async () => {

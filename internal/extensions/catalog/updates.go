@@ -95,7 +95,12 @@ func (in *Installer) Updates(ctx context.Context) ([]repoinstall.UpdateInfo, err
 			out = append(out, info)
 			continue
 		}
-		if e := in.updateTarget(cat, row); e != nil {
+		reported, running, rerr := in.runnerFloor(ctx, row)
+		if rerr != nil {
+			log.Printf("[extensions] reported runner versions: %v", rerr)
+		}
+		info.ReportedVersions = reported
+		if e := in.updateTarget(cat, row); e != nil && (running == "" || semverNewer(e.Latest.Version, running)) {
 			info.UpdateAvailable = true
 			info.LatestVersion, info.LatestCommit = e.Latest.Version, e.Latest.CommitSHA
 			if added := repoinstall.NewCapabilities(repoinstall.Capabilities(cur), e.Latest.Flatten()); len(added) > 0 {
@@ -252,6 +257,20 @@ func (in *Installer) update(ctx context.Context, actor *uuid.UUID, id, consentSH
 	if e == nil {
 		res.Outcome = repoinstall.OutcomeUpToDate
 		return res, nil
+	}
+	// A release no newer than the Runner its controllers already run is no
+	// update: the bulk pass skips it, an explicit request is refused so the
+	// hidden button cannot be bypassed through the API.
+	_, running, rerr := in.runnerFloor(ctx, row)
+	if rerr != nil {
+		return nil, rerr
+	}
+	if running != "" && !semverNewer(e.Latest.Version, running) {
+		if auto {
+			res.Outcome = repoinstall.OutcomeUpToDate
+			return res, nil
+		}
+		return nil, runnerAhead("updating", e.Latest.Version, running)
 	}
 	// The Runner is installed separately from the catalog row; moving the row
 	// moves the desired controller version out from under a pinned runtime.

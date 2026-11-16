@@ -62,6 +62,10 @@ func (a *handshakeAuthorizer) ProjectWorkspaceID(_ context.Context, _ uuid.UUID)
 	return uuid.Nil, ErrWorkspaceNotFound
 }
 
+func (a *handshakeAuthorizer) MayAccessProject(_ context.Context, _ Principal, _ uuid.UUID) bool {
+	return false
+}
+
 // callHandler runs the /ws handler against a plain recorder. Every case here is
 // refused before the upgrade, so the recorder never has to be hijackable.
 func callHandler(t *testing.T, query string, authz Authorizer) *httptest.ResponseRecorder {

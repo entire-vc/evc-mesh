@@ -178,6 +178,7 @@ See [Seeding the first admin](#seeding-the-first-admin) below.
 | `MESH_RATE_LIMIT_AUTH_RPM` | `5` | Maximum requests per minute for auth endpoints (per IP). Deliberately tight — raise it if a whole office shares one NAT'd egress IP. |
 | `MESH_RATE_LIMIT_REFRESH_RPM` | `60` | Maximum requests per minute for token refresh (per IP) |
 | `MESH_RATE_LIMIT_API_RPM` | `600` | Maximum requests per minute for API endpoints (per authenticated actor) |
+| `MESH_RATE_LIMIT_API_RPM_OVERRIDES` | empty | Per-actor exceptions to `MESH_RATE_LIMIT_API_RPM`, comma-separated `user:<uuid>=<rpm>` or `agent:<uuid>=<rpm>` (for example a CI account that runs several test jobs at once). Actors not listed keep the default. A malformed entry stops the API at startup instead of being ignored. |
 | `MESH_RATE_LIMIT_OAUTH_TOKEN_RPM` | same as `MESH_RATE_LIMIT_API_RPM` | Maximum requests per minute (per IP) for `POST /oauth/token` and `POST /oauth/revoke`, each counted separately. A hosted MCP client refreshes for all its users from a few egress IPs, so size this for that traffic rather than for one person. |
 
 ### Client IP (`MESH_TRUSTED_PROXIES`)
@@ -266,6 +267,20 @@ directly: see hardening item 10 below.
 Verify the behaviour on your own build with
 `deploy/docker/mesh/test-nginx-real-ip.sh` (needs Docker; it runs the real nginx
 config against an echo backend).
+
+### OpenID Connect provider
+
+Mesh can sign people in to your other applications with their Mesh account (OpenID Connect, authorization code + PKCE). The application gets an `id_token` (RS256) whose `sub` is the user's Mesh ID; it carries no email and grants no access to the Mesh API. It is off until a signing key is configured; with no key, `/.well-known/openid-configuration` and `/oauth/jwks` answer 404 and `scope=openid` is refused with `invalid_scope`.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESH_OIDC_SIGNING_KEY_FILE` | empty (off) | Path to a PEM RSA private key (PKCS#1 or PKCS#8, at least 2048 bits). `id_token`s are signed with it; its `kid` is the RFC 7638 thumbprint. A set but unreadable or unusable key stops the API at startup. |
+| `MESH_OIDC_PUBLISHED_KEY_FILES` | empty | Comma-separated paths to earlier keys (PEM, public or private). They are published in the JWKS but never sign. |
+| `MESH_OIDC_CLIENTS` | empty | JSON array of `{"client_id","client_name","redirect_uris"}`: the applications allowed to request `openid`. Upserted into the client registry at startup; public clients (no secret, PKCE S256), `redirect_uri` must match exactly. Clients that register themselves (DCR, metadata documents) can never request `openid`. A malformed list stops the API at startup. |
+
+Generate a key: `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out oidc_signing_key.pem`. With the production compose file, put it in `volumes/secrets/` and set `MESH_OIDC_SIGNING_KEY_FILE=/run/mesh-secrets/oidc_signing_key.pem`. To rotate: generate a new key, point `MESH_OIDC_SIGNING_KEY_FILE` at it, add the old file to `MESH_OIDC_PUBLISHED_KEY_FILES`, restart; drop the old file after a few minutes (an `id_token` lives 5 minutes).
+
+The issuer is `MESH_BASE_URL`. Clients discover the rest at `<MESH_BASE_URL>/.well-known/openid-configuration`.
 
 ### Spark Catalog
 

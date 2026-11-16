@@ -102,6 +102,47 @@ export default { views: { "board.card": { contract: "^1", view: MinimalCard } } 
 You can replace any subset of slots; every slot you do not declare keeps the built-in view. Declare the
 contract major your view was written for (`"^1"`).
 
+### The dashboard
+
+`dashboard.layout` is at **2.0.0**; `dashboard.widget.<id>` stays at 1.0.0.
+
+- **Grid.** The dashboard is a 12-column grid. A widget is a `WidgetInstance`
+  (`{ id, type, x, y, w, h, settings }`, `x` counted from 0, `x + w <= 12`). `data.widgets` carries
+  `{ descriptor, instance }` pairs; the descriptor's `size{default,min,max}` is in the same cells, and the
+  host clamps a drawn size to it. Draw widgets only through `data.components.Widget`.
+- **Editing.** `data.canEdit` says whether this user may edit, `data.editing` whether the page is in edit mode.
+  The edit actions `moveWidget`, `resizeWidget`, `addWidget`, `removeWidget` and `updateWidgetSettings` exist
+  only when `canEdit` is true; a layout that offers no editing may ignore them.
+- **Descriptors.** `WidgetDescriptor` has `id`, `title`, `description`, `category`, `origin`
+  (`core | extension | theme | external`), `size`, `settings` (a JSON Schema whose properties pick their control
+  with `x-widget`, including the new `period` and `event-type-picker`), `scope`
+  (`workspace | project | user`), `requires` and `actions`.
+
+```tsx
+import type { DashboardLayoutView } from "@entire-vc/mesh-theme-sdk";
+
+export const Grid: DashboardLayoutView = ({ data }) => {
+  const { Widget } = data.components;
+  const ordered = [...data.widgets].sort((a, b) => a.instance.y - b.instance.y || a.instance.x - b.instance.x);
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: 16 }}>
+      {ordered.map((w) => (
+        <div key={w.instance.id} style={{ gridColumn: `${w.instance.x + 1} / span ${w.instance.w}` }}>
+          <Widget instance={w.instance} />
+        </div>
+      ))}
+    </div>
+  );
+};
+```
+
+**A theme written for 1.x keeps working for one more release.** Declare `"dashboard.layout": "^1"` and the
+core serves your view the 1.x data through an adapter: widgets in `(y, x)` order, sizes cut to 1..4 columns and
+1..3 rows, `editing` always `false`, no edit actions, `components.Widget` taking `{ id, size }`. Moving to `^2` is
+the way to get coordinates and editing. The 1.x types are exported as `DashboardLayoutViewV1`,
+`DashboardLayoutDataV1` and `WidgetDescriptorV1`. The contract suites run both majors: pass
+`major` for the slot in `registerContractSuites`.
+
 ## 5. Primitives, and why a view cannot replace them
 
 Moving, permissions, editing and live updates are behaviour, not looks. The core owns them and a view uses
@@ -209,7 +250,7 @@ An installed theme can be the instance default and can be picked per workspace.
 ## 10. Versioning the contract
 
 - The SDK version is the version of the slot contracts it describes (`CONTRACT_VERSION`).
-- A view declares the major it was written for (`"^1"`). The core serves the current major and the one
+- A view declares the major it was written for (`"^1"`; `dashboard.layout` is at 2, and `^1` is still served through the adapter for one more release). The core serves the current major and the one
   before it, so a theme has one major version of notice before it must move.
 - `theme.tokens_contract` is versioned separately; an instance that serves another version refuses the theme.
 - Adding a field to a slot's data or a new token is a minor change and breaks nothing. Removing or changing
@@ -234,3 +275,45 @@ runtime row ("Being worked on…", Waiting, Queued, Stopped); labels and custom 
 reviewer, priority, delegation, due date, estimate) with the VCS marks and the attachment count at its right end.
 There is no description mark, no edit pencil and no `checkout` field; a stored selection that still names `checkout`
 is skipped. A theme draws `data.fields` in the order it is given, so it follows this order without extra code.
+
+## 12. Theme icons
+
+An entity (a project, a dashboard) keeps its icon as a string: an emoji (`🚀`), a named icon (`icon:rocket`),
+or nothing. The icon picker has two tabs, Emoji and Icons; the Icons tab lists the icons of the live
+workspace theme first and the core set after them.
+
+A theme supplies icons next to `views` in its bundle:
+
+```tsx
+import type { ThemeBundleIcons } from "@entire-vc/mesh-theme-sdk";
+
+const Rocket = ({ className }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2">…</svg>
+);
+
+const MyGlyph = ({ className }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2">…</svg>
+);
+
+const icons: ThemeBundleIcons = {
+  icons: { rocket: Rocket, "my-glyph": MyGlyph },
+  icons_meta: { "my-glyph": { en: "glyph mark", ru: ["глиф", "знак"] } },
+};
+
+export default { views: { /* … */ }, ...icons };
+```
+
+Rules:
+
+- Names are kebab-case, `[a-z0-9-]{1,40}`. Any other name is skipped and logged as `bundle-invalid`.
+- `icons_meta` gives the picker its search keywords, per language. Without it an icon is found by its name.
+- Draw with `currentColor` and take `className`: the icon then follows the theme and the size set by the screen.
+- A theme icon with the name of a core icon (`rocket`, `folder`, …) redraws that core icon in this theme.
+- Resolution of `icon:<name>` at draw time: 1) the live theme's icon, 2) the core icon, 3) the entity's default icon.
+  The stored value does not change with the theme, so switching the theme redraws every icon without a reload.
+- An icon that throws while rendering is replaced by the core icon of that name, or the entity's default.
+- A legacy text icon (any value that is not an emoji or `icon:<name>`) is shown as it is.
+
+The core set is about 230 lucide icons with ru and en keywords (`web/src/core/icons/`). It loads on demand, the
+first time a value `icon:<name>` that the theme does not supply is drawn, or when the picker opens.
+

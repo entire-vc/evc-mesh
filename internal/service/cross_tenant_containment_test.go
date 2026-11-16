@@ -160,7 +160,7 @@ func TestInitiativeService_LinkProject_RefusesAnotherWorkspacesProject(t *testin
 			initID: {ID: initID, WorkspaceID: ownWS, Name: "Mine"},
 		}}
 		projRepo := NewMockProjectRepository()
-		return NewInitiativeService(initRepo, projRepo, nil), initRepo, projRepo
+		return NewInitiativeService(initRepo, projRepo), initRepo, projRepo
 	}
 
 	t.Run("a project from another workspace is refused and nothing is linked", func(t *testing.T) {

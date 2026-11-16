@@ -1,6 +1,7 @@
 {
-  "login.initial_js_kb_gz": 173.7,
-  "total_js_kb_gz": 746.9,
+  "login.initial_js_kb_gz": 183.7,
+  "total_js_kb_gz": 885.7,
+  "dashboard.landing_js_kb_gz": 261.3,
   "board.open.react_commits": 13,
   "board.open.board_card_commits": 300,
   "board.open.layout_count": 3,

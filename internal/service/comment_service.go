@@ -861,6 +861,7 @@ type commentService struct {
 	notifySvc      NotificationService
 	statusRepo     repository.TaskStatusRepository
 	projectRepo    repository.ProjectRepository
+	workspaceRepo  repository.WorkspaceRepository
 	extRefRepo     repository.TaskExternalRefRepository
 	ctxCacheInv    ContextCacheInvalidator
 	userRepo       repository.UserRepository
@@ -946,6 +947,12 @@ func WithCommentStatusRepo(r repository.TaskStatusRepository) CommentServiceOpti
 // WithCommentProjectRepo sets the project repo for resolving workspace_id.
 func WithCommentProjectRepo(r repository.ProjectRepository) CommentServiceOption {
 	return func(s *commentService) { s.projectRepo = r }
+}
+
+// WithCommentWorkspaceRepo resolves the workspace slug that names the live WS
+// channel (ws:<slug>) a created comment is announced on.
+func WithCommentWorkspaceRepo(r repository.WorkspaceRepository) CommentServiceOption {
+	return func(s *commentService) { s.workspaceRepo = r }
 }
 
 // WithCommentContextCacheInvalidator sets an optional cache invalidator that is
@@ -1206,6 +1213,7 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 			"author_id":  comment.AuthorID,
 		})
 	}
+	s.publishCommentCreatedLive(ctx, comment, task, wsID)
 
 	// Notify assigned agent about the new comment, but suppress for terminal tasks
 	// (done/cancelled). A task.commented event on a closed task causes the
@@ -3583,4 +3591,32 @@ func (s *commentService) movedByGateRelease(ctx context.Context, taskID, prevSta
 	}
 	st, err := s.statusRepo.GetByID(ctx, after.StatusID)
 	return err == nil && st != nil && st.Category == domain.StatusCategoryTodo
+}
+
+// publishCommentCreatedLive announces a new task comment on the workspace's
+// live WS channel so open views (the recent-comments dashboard widget) reload
+// without a page refresh. The hub takes the frame's type from event_type and
+// hands it to every ws:<slug> subscriber plus the project:<id> subscribers.
+//
+// The frame carries ids only — no body, no author: a client re-reads the list
+// through an endpoint that checks access. Internal notes are not announced,
+// because ws:<slug> reaches members without access to the project too. Live
+// delivery is best effort and never fails the comment.
+func (s *commentService) publishCommentCreatedLive(ctx context.Context, comment *domain.Comment, task *domain.Task, wsID uuid.UUID) {
+	if s.wsPublisher == nil || s.workspaceRepo == nil || wsID == uuid.Nil || comment.IsInternal {
+		return
+	}
+	ws, err := s.workspaceRepo.GetByID(ctx, wsID)
+	if err != nil || ws == nil || ws.Slug == "" {
+		return
+	}
+	if err := s.wsPublisher.Publish(ctx, "ws:"+ws.Slug, map[string]any{
+		"event_type":   "comment.created",
+		"workspace_id": wsID.String(),
+		"project_id":   task.ProjectID.String(),
+		"task_id":      comment.TaskID.String(),
+		"comment_id":   comment.ID.String(),
+	}); err != nil {
+		log.Printf("[comment] live comment.created for %s not published: %v", comment.ID, err)
+	}
 }

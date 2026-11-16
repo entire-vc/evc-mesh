@@ -482,3 +482,75 @@ func (r *OAuthRepo) RotateRefreshToken(ctx context.Context, oldTokenID uuid.UUID
 	}
 	return true, nil
 }
+
+// --- OpenID Connect identity flow ---
+
+func (r *OAuthRepo) UpsertStaticClient(ctx context.Context, c *domain.OAuthClient) (bool, error) {
+	// The WHERE on the conflict branch keeps a DCR/CIMD row with the same
+	// client_id out of reach: the operator's config cannot rebind a client
+	// someone else registered.
+	const q = `
+		INSERT INTO oauth_clients (id, client_id, registration_type, client_name, redirect_uris, token_endpoint_auth_method, grant_types, metadata, metadata_fetched_at, created_at, updated_at)
+		VALUES (:id, :client_id, :registration_type, :client_name, :redirect_uris, :token_endpoint_auth_method, :grant_types, :metadata, :metadata_fetched_at, :created_at, :updated_at)
+		ON CONFLICT (client_id) DO UPDATE
+		SET client_name = EXCLUDED.client_name, redirect_uris = EXCLUDED.redirect_uris,
+		    token_endpoint_auth_method = EXCLUDED.token_endpoint_auth_method,
+		    grant_types = EXCLUDED.grant_types, metadata = EXCLUDED.metadata,
+		    updated_at = EXCLUDED.updated_at
+		WHERE oauth_clients.registration_type = 'static'
+	`
+	res, err := r.db.NamedExecContext(ctx, q, c)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+const oauthIdentityCodeCols = `id, code_hash, client_id, redirect_uri, code_challenge, user_id, nonce, scope, expires_at, used_at, created_at`
+
+func (r *OAuthRepo) CreateIdentityCode(ctx context.Context, code *domain.OAuthIdentityCode) error {
+	const q = `
+		INSERT INTO oauth_identity_codes (` + oauthIdentityCodeCols + `)
+		VALUES (:id, :code_hash, :client_id, :redirect_uri, :code_challenge, :user_id, :nonce, :scope, :expires_at, :used_at, :created_at)
+	`
+	_, err := r.db.NamedExecContext(ctx, q, code)
+	return err
+}
+
+func (r *OAuthRepo) GetIdentityCodeByHash(ctx context.Context, codeHash string) (*domain.OAuthIdentityCode, error) {
+	q := `SELECT ` + oauthIdentityCodeCols + ` FROM oauth_identity_codes WHERE code_hash = $1`
+	var c domain.OAuthIdentityCode
+	if err := r.db.GetContext(ctx, &c, q, codeHash); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (r *OAuthRepo) MarkIdentityCodeUsed(ctx context.Context, id uuid.UUID, now time.Time) (bool, error) {
+	const q = `UPDATE oauth_identity_codes SET used_at = $2 WHERE id = $1 AND used_at IS NULL`
+	res, err := r.db.ExecContext(ctx, q, id, now)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+func (r *OAuthRepo) DeleteExpiredIdentityCodes(ctx context.Context, before time.Time) (int64, error) {
+	const q = `DELETE FROM oauth_identity_codes WHERE expires_at < $1`
+	res, err := r.db.ExecContext(ctx, q, before)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}

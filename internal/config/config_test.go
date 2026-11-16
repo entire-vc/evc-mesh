@@ -262,3 +262,54 @@ func TestLoad_CommentTextGateParsing(t *testing.T) {
 		})
 	}
 }
+
+// MESH_RATE_LIMIT_API_RPM_OVERRIDES: unset must leave prod as it
+// was, a valid list must parse into RateLimitKeyByActor keys, and anything
+// malformed must stop the API from starting rather than be skipped.
+func TestLoad_APIRPMOverridesUnsetIsEmpty(t *testing.T) {
+	t.Setenv("MESH_RATE_LIMIT_API_RPM_OVERRIDES", "")
+	cfg := Load()
+	assert.Empty(t, cfg.RateLimit.APIRPMOverrides)
+	assert.NoError(t, cfg.Validate())
+	assert.Equal(t, 600, cfg.RateLimit.APIRPM)
+}
+
+func TestLoad_APIRPMOverridesParsed(t *testing.T) {
+	t.Setenv("MESH_RATE_LIMIT_API_RPM_OVERRIDES",
+		"user:0D7B5A7E-1C2B-4E7A-9F00-3A1B2C3D4E5F=3000, agent:6f1e2d3c-4b5a-4987-8a6b-5c4d3e2f1a0b=1200")
+	cfg := Load()
+	require.NoError(t, cfg.Validate())
+	assert.Equal(t, map[string]int{
+		"user:0d7b5a7e-1c2b-4e7a-9f00-3a1b2c3d4e5f":  3000,
+		"agent:6f1e2d3c-4b5a-4987-8a6b-5c4d3e2f1a0b": 1200,
+	}, cfg.RateLimit.APIRPMOverrides)
+}
+
+func TestLoad_APIRPMOverridesGarbageRefusesToStart(t *testing.T) {
+	t.Setenv("MESH_RATE_LIMIT_API_RPM_OVERRIDES", "garbage")
+	err := Load().Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MESH_RATE_LIMIT_API_RPM_OVERRIDES")
+}
+
+func TestParseRPMOverrides_RejectsMalformedEntries(t *testing.T) {
+	const id = "0d7b5a7e-1c2b-4e7a-9f00-3a1b2c3d4e5f"
+	for _, raw := range []string{
+		"user:" + id,                            // no rpm
+		"ip:" + id + "=10",                      // unknown kind
+		"user:not-a-uuid=10",                    // bad uuid
+		"user:" + id + "=0",                     // non-positive
+		"user:" + id + "=ten",                   // not a number
+		"user:" + id + "=10,user:" + id + "=20", // duplicate
+	} {
+		_, err := ParseRPMOverrides(raw)
+		assert.Error(t, err, raw)
+	}
+}
+
+func TestLoad_ReassignReleasesCheckout(t *testing.T) {
+	assert.False(t, Load().Checkout.ReassignReleases, "off unless the instance turns it on")
+
+	t.Setenv("MESH_REASSIGN_RELEASES_CHECKOUT", "true")
+	assert.True(t, Load().Checkout.ReassignReleases)
+}

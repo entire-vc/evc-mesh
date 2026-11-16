@@ -6,6 +6,7 @@ package builtin
 import (
 	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/extensions/agentchat"
+	"github.com/entire-vc/evc-mesh/internal/extensions/dashboards"
 	"github.com/entire-vc/evc-mesh/internal/extensions/github"
 	"github.com/entire-vc/evc-mesh/internal/extensions/gitlab"
 	"github.com/entire-vc/evc-mesh/internal/extensions/runner"
@@ -19,6 +20,7 @@ import (
 func Providers(d extensions.Deps) []extensions.Provider {
 	return []extensions.Provider{
 		agentchat.New(d),
+		dashboards.New(d),
 		github.New(d),
 		gitlab.New(d),
 		runner.New(d),

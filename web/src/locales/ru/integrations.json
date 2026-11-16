@@ -136,6 +136,7 @@
     }
   },
   "eventFeed": {
+    "title": "Лента событий",
     "system": "Система",
     "live": "В эфире",
     "offline": "Не в сети",
@@ -143,12 +144,14 @@
     "autoScrollOff": "Автопрокрутка: выкл",
     "refresh": "Обновить",
     "filters": "Фильтры",
+    "filtersActive": "Активных фильтров: {{count}}",
     "reset": "Сбросить",
     "allProjects": "Все проекты",
     "actors": {
       "all": "Все исполнители",
       "agent": "🤖 Агенты",
-      "system": "Система"
+      "system": "Система",
+      "user": "👤 Люди"
     },
     "realtime": "В реальном времени",
     "history": "История",
@@ -180,78 +183,12 @@
       "reportedErrorOn": "сообщил(а) об ошибке в",
       "resolvedDependencyOn": "снял(а) зависимость у",
       "published": "опубликовал(а)"
-    }
-  },
-  "analytics": {
-    "allProjects": "Все проекты",
-    "exportFailed": "Не удалось выполнить экспорт: {{statusText}}",
-    "range": {
-      "d7": "Последние 7 дней",
-      "d30": "Последние 30 дней",
-      "d90": "Последние 90 дней"
     },
-    "export": {
-      "title": "Экспортировать данные в CSV",
-      "busy": "Экспорт...",
-      "label": "Экспорт CSV"
-    },
-    "print": {
-      "title": "Распечатать или сохранить в PDF",
-      "label": "Печать / PDF"
-    },
-    "kpi": {
-      "totalTasks": "Всего задач",
-      "created": "Создано (за период)",
-      "completed": "Завершено (за период)",
-      "totalEvents": "Всего событий",
-      "retainedSince": "Журнал хранит данные только с {{date}}",
-      "noRetained": "За этот период данные о событиях не сохранены"
-    },
-    "cards": {
-      "byStatus": "Задачи по статусам",
-      "byPriority": "Задачи по приоритетам",
-      "timeline": "Динамика активности",
-      "leaderboard": "Рейтинг агентов",
-      "agents": "Агенты",
-      "eventsByType": "События по типам"
-    },
-    "timeline": {
-      "empty": "Нет данных за выбранный период.",
-      "created": "Создано",
-      "completed": "Завершено"
-    },
-    "leaderboard": {
-      "agent": "Агент",
-      "completed": "Завершено",
-      "empty": "Данных о задачах агентов пока нет."
-    },
-    "agents": {
-      "total": "Всего",
-      "active": "Активные"
-    },
-    "events": {
-      "notRetained": "Журнал событий не хранит данные за такой период — разбивка недоступна.",
-      "empty": "Событий пока нет."
-    },
-    "labels": {
-      "backlog": "бэклог",
-      "todo": "к выполнению",
-      "in_progress": "в работе",
-      "review": "на проверке",
-      "done": "готово",
-      "cancelled": "отменено",
-      "urgent": "срочный",
-      "high": "высокий",
-      "medium": "средний",
-      "low": "низкий",
-      "none": "нет",
-      "summary": "итог",
-      "status_change": "смена статуса",
-      "context_update": "обновление контекста",
-      "error": "ошибка",
-      "dependency_resolved": "зависимость снята",
-      "custom": "прочее"
-    }
+    "dateFrom": "Дата с",
+    "dateTo": "Дата по",
+    "error": "Не удалось загрузить события.",
+    "retry": "Повторить",
+    "more": "Показать ещё"
   },
   "artifactView": {
     "loadFailed": "не удалось загрузить артефакт",
@@ -304,6 +241,12 @@
     "denying": "Отклоняем…",
     "allow": "Разрешить",
     "allowing": "Разрешаем…",
+    "identityTitle": "{{name}} хочет подтвердить, что это вы (ваш ID в Mesh)",
+    "identityNote": "Подтверждается только вход. Доступа к вашим рабочим пространствам, задачам и документам приложение не получит.",
+    "identityAllow": "Войти",
+    "identityAllowing": "Входим…",
+    "identityDeny": "Отмена",
+    "identityDenying": "Отменяем…",
     "signedInAs": "Вы вошли как {{email}}"
   },
   "orgChart": {
@@ -326,7 +269,7 @@
   "spark": {
     "allTypes": "Все типы",
     "notEnabledTitle": "Каталог Spark не включён",
-    "notEnabledBody": "Включите интеграцию с каталогом агентов Spark, чтобы просматривать и устанавливать ИИ-агентов в ваше рабочее пространство.",
+    "notEnabledBody": "Включите интеграцию с каталогом агентов Spark, чтобы просматривать ИИ-агентов в каталоге.",
     "goToIntegrations": "Перейти к интеграциям",
     "searchResults": "Результаты поиска",
     "popularAgents": "Популярные агенты",
@@ -341,20 +284,7 @@
     "unavailableBody": "Не удалось связаться с каталогом Spark. Проверьте, что MESH_SPARK_ENABLED=true и сервис запущен.",
     "by": "автор: {{author}}",
     "noDescription": "Описание не указано.",
-    "open": "Открыть",
-    "install": "Установить",
-    "installing": "Установка...",
-    "installFailed": "Не удалось установить",
-    "installedTitle": "Агент установлен",
-    "installTitle": "Установить «{{name}}»",
-    "installedDesc": "Сохраните ключ API — он будет показан только один раз.",
-    "installDesc": "«{{name}}» будет зарегистрирован как агент в вашем рабочем пространстве.",
-    "apiKeyLabel": "Ключ API (скопируйте сейчас — показывается один раз)",
-    "copied": "Скопировано!",
-    "copyKey": "Скопировать ключ API",
-    "createInfo": "Агент будет создан с типом <strong>{{type}}</strong> и возможностями из манифеста Spark.",
-    "done": "Готово",
-    "cancel": "Отмена"
+    "open": "Открыть"
   },
   "sessions": {
     "status": {
@@ -376,22 +306,20 @@
       "offlineError": "не в сети / ошибка"
     },
     "noAgents": "В этом рабочем пространстве нет зарегистрированных агентов.",
-    "goToTeam": "Перейти на страницу команды, чтобы зарегистрировать агентов",
-    "cost": {
-      "title": "Учёт расходов",
-      "lastDays": "Последние {{days}} дн.",
-      "noData": "За этот период данных о расходах пока нет. Данные о расходах появляются, когда агенты вызывают инструмент MCP <code>session_report</code> в конце каждой сессии.",
-      "exampleCall": "Пример вызова MCP:",
-      "reportedCost": "Заявленные расходы",
-      "tokensInOut": "Токены вход / выход",
-      "sessions": "Сессии",
-      "avgPerSession": "Среднее на сессию с отчётом",
-      "reportedOf": "{{reported}} из {{total}} сессий с отчётом ({{percent}}%)",
-      "spendByAgent": "Расходы по агентам",
-      "noAgentData": "Нет данных по агентам.",
-      "expensiveTasks": "Самые дорогие задачи",
-      "noTaskSessions": "Нет сессий, связанных с задачами.",
-      "viewAnalytics": "Вся аналитика →"
+    "widgets": {
+      "activeTitle": "Активные агенты",
+      "activeEmpty": "Нет агентов в сети",
+      "activeMore_one": "ещё {{count}} активный",
+      "activeMore_few": "ещё {{count}} активных",
+      "activeMore_many": "ещё {{count}} активных",
+      "activeMore_other": "ещё {{count}} активных",
+      "statusTitle": "Агенты",
+      "statusFilteredOut_one": "{{count}} агент, под фильтр не подходит ни один",
+      "statusFilteredOut_few": "{{count}} агента, под фильтр не подходит ни один",
+      "statusFilteredOut_many": "{{count}} агентов, под фильтр не подходит ни один",
+      "statusFilteredOut_other": "{{count}} агента, под фильтр не подходит ни один",
+      "summaryTitle": "Агенты сейчас",
+      "loadFailed": "Не удалось загрузить агентов"
     }
   },
   "registerAgent": {
@@ -714,6 +642,13 @@
       "addNamed": "Добавить в «{{name}}»"
     },
     "missingOption": "{{value}} (не найдено)",
+    "period": {
+      "days": "Последние {{count}} дн.",
+      "range": "Диапазон дат",
+      "from": "С",
+      "to": "По",
+      "invalid": "Дата начала позже даты конца"
+    },
     "checklist": {
       "empty": "Пока не из чего выбрать"
     },
@@ -974,7 +909,8 @@
       "sidebar_item": "Добавлять пункт в сайдбар",
       "command": "Добавлять команду в палитру команд",
       "doc_panel": "Показывать панель в документах",
-      "project_view": "Показывать вкладку в проекте"
+      "project_view": "Показывать вкладку в проекте",
+      "dashboard_widget": "Предлагать виджеты для дашбордов"
     },
     "secrets": {
       "store": "Хранить секрет {{name}}"
@@ -1341,8 +1277,11 @@
   },
   "updatesTab": {
     "awaitingConsent": "Ожидает согласия",
-    "current": "Установлено: {{version}} ({{ref}}, {{sha}})",
-    "latest": "Доступно: {{version}} ({{ref}}, {{sha}})",
+    "current": "Установлено: {{version}} ({{detail}})",
+    "currentBare": "Установлено: {{version}}",
+    "running": "Работает: {{versions}}",
+    "latest": "Доступно: {{version}} ({{detail}})",
+    "latestBare": "Доступно: {{version}}",
     "newPermissions": "Новые права",
     "checkFailed": "Не удалось проверить: {{reason}}",
     "upToDate": "Версия актуальна.",
@@ -1467,6 +1406,20 @@
         "stale": "устарело",
         "offline": "не в сети"
       }
+    }
+  },
+  "widgets": {
+    "remove": "Убрать виджет",
+    "stub": {
+      "disabled": "Расширение {{name}} выключено",
+      "consent": "Расширение {{name}} ждёт согласия администратора на виджеты",
+      "removed": "Расширение {{name}} больше не даёт этот виджет",
+      "unavailable": "{{name}}: виджет сейчас недоступен"
+    },
+    "gitlabFailedPipelines": {
+      "empty": "Упавших пайплайнов за 24 часа нет",
+      "error": "Не удалось загрузить пайплайны",
+      "failed": "Пайплайн упал"
     }
   }
 }

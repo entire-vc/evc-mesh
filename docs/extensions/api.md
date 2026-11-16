@@ -359,7 +359,7 @@ and `settings_managed_elsewhere` (generic connect/settings/remove refuse; Runner
 |---|---|---|
 | `GET /workspaces/{ws}/extensions` | – | `200 { "extensions": [WorkspaceExtension] }` — every registered extension, with `status` |
 | `POST /workspaces/{ws}/extensions/{id}/connect` | `{ "settings": {…}, "consent": { "capabilities": ["…"] } }` | `201 WorkspaceExtension`. `consent.capabilities` must cover everything the manifest declares, else `400 validation_failed` with `details.consent`. Written to `consented_capabilities/at/by`. A second connect on an existing connection: `409 already_connected` |
-| `PATCH /workspaces/{ws}/extensions/{id}/settings` | `{ "settings": {…} }` (merged over the current ones) | `200 WorkspaceExtension` |
+| `PATCH /workspaces/{ws}/extensions/{id}/settings` | `{ "settings": {…} }` (merged over the current ones) | `200 WorkspaceExtension`. An external extension then gets a new install call with the non-secret settings in `settings` ([contract](./extension-actor-contract.md#workspace-settings)) |
 | `POST /workspaces/{ws}/extensions/{id}/enable` | – | `200 WorkspaceExtension` |
 | `POST /workspaces/{ws}/extensions/{id}/disable` | `{ "confirm": true }` | `200 WorkspaceExtension`. When `status.source` is `instance` the extension is on for the whole instance and `confirm` must be `true`; without it `409 confirmation_required` and nothing changes |
 | `POST /workspaces/{ws}/extensions/{id}/test` | – | `200 { "ok": true, "message": "", "status": ExtensionStatus }` — fresh health check |

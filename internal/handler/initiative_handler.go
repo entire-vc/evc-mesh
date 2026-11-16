@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -36,7 +37,23 @@ type updateInitiativeRequest struct {
 	Name        *string                  `json:"name"`
 	Description *string                  `json:"description"`
 	Status      *domain.InitiativeStatus `json:"status"`
-	TargetDate  *string                  `json:"target_date"` // ISO date or null to clear
+	TargetDate  targetDateField          `json:"target_date"` // ISO date; null or "" clears it
+}
+
+// targetDateField tells an absent target_date (leave the deadline alone) from
+// an explicit null or "" (clear it): a plain *string reads both as nil, and
+// the edit form's cleared date was silently kept.
+type targetDateField struct {
+	value  *string
+	wasSet bool
+}
+
+func (f *targetDateField) UnmarshalJSON(b []byte) error {
+	f.wasSet = true
+	if string(b) == "null" {
+		return nil
+	}
+	return json.Unmarshal(b, &f.value)
 }
 
 // linkProjectRequest holds the project ID to link.
@@ -87,7 +104,7 @@ func (h *InitiativeHandler) List(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid workspace_id"))
 	}
 
-	initiatives, err := h.initiativeService.List(c.Request().Context(), wsID)
+	initiatives, err := h.initiativeService.List(c.Request().Context(), wsID, projectViewerFromContext(c))
 	if err != nil {
 		return handleError(c, err)
 	}
@@ -102,7 +119,7 @@ func (h *InitiativeHandler) GetByID(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid initiative_id"))
 	}
 
-	initiative, err := h.initiativeService.GetByID(c.Request().Context(), initID)
+	initiative, err := h.initiativeService.GetByID(c.Request().Context(), initID, projectViewerFromContext(c))
 	if err != nil {
 		return handleError(c, err)
 	}
@@ -122,7 +139,7 @@ func (h *InitiativeHandler) Update(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
-	targetDate, err := parseOptionalDate(req.TargetDate)
+	targetDate, err := parseOptionalDate(req.TargetDate.value)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
 			"target_date": "must be a valid date in YYYY-MM-DD format",
@@ -130,10 +147,11 @@ func (h *InitiativeHandler) Update(c echo.Context) error {
 	}
 
 	input := service.UpdateInitiativeInput{
-		Name:        req.Name,
-		Description: req.Description,
-		Status:      req.Status,
-		TargetDate:  targetDate,
+		Name:            req.Name,
+		Description:     req.Description,
+		Status:          req.Status,
+		TargetDate:      targetDate,
+		ClearTargetDate: req.TargetDate.wasSet && targetDate == nil,
 	}
 
 	initiative, err := h.initiativeService.Update(c.Request().Context(), initID, input)
@@ -217,4 +235,34 @@ func parseOptionalDate(s *string) (*time.Time, error) {
 		return nil, err
 	}
 	return &t, nil
+}
+
+// projectViewerFromContext says who a workspace-wide read is for, so project
+// figures reach only someone who could open those projects. It mirrors the
+// project access middleware: a human owner/admin sees every project, any other
+// human only their memberships; an agent only its explicit memberships (its
+// workspace grant role never widens this); an extension the projects its
+// connection may reach. No identity yields the zero viewer, which sees nothing.
+func projectViewerFromContext(c echo.Context) domain.ProjectViewer {
+	if ep := mw.GetExtensionPrincipal(c); ep != nil {
+		if ep.ProjectBound {
+			id := ep.ConnectionID
+			return domain.ProjectViewer{ExtensionConnectionID: &id}
+		}
+		return domain.AllProjectsViewer()
+	}
+	if mw.IsAgent(c) {
+		if id, err := mw.GetAgentID(c); err == nil {
+			return domain.ProjectViewer{AgentID: &id}
+		}
+		return domain.ProjectViewer{}
+	}
+	id, err := mw.GetUserID(c)
+	if err != nil {
+		return domain.ProjectViewer{}
+	}
+	if role, _ := c.Get(mw.ContextKeyWorkspaceRole).(string); role == domain.RoleOwner || role == domain.RoleAdmin {
+		return domain.AllProjectsViewer()
+	}
+	return domain.ProjectViewer{UserID: &id}
 }

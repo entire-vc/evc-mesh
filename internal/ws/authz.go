@@ -26,6 +26,11 @@ type Authorizer interface {
 	UserIsWorkspaceMember(ctx context.Context, wsID, userID uuid.UUID) bool
 	// ProjectWorkspaceID returns the workspace a project belongs to.
 	ProjectWorkspaceID(ctx context.Context, projectID uuid.UUID) (uuid.UUID, error)
+	// MayAccessProject applies the REST project access rule to the principal: the
+	// project must lie in the principal's workspace, and then a human passes as
+	// owner/admin of that workspace or with a project_members row, an agent only
+	// with a project_members row. Any lookup error is a refusal.
+	MayAccessProject(ctx context.Context, p Principal, projectID uuid.UUID) bool
 }
 
 // dbAuthorizer is the production Authorizer, reading the same tables and applying
@@ -35,12 +40,13 @@ type Authorizer interface {
 // a WebSocket that disagrees with the REST API about who is a member is a hole
 // with extra steps.
 type dbAuthorizer struct {
-	db *sqlx.DB
+	db      *sqlx.DB
+	members middleware.ProjectMembership
 }
 
 // NewDBAuthorizer returns an Authorizer backed by the application database.
 func NewDBAuthorizer(db *sqlx.DB) Authorizer {
-	return &dbAuthorizer{db: db}
+	return &dbAuthorizer{db: db, members: middleware.NewDBProjectMembership(db)}
 }
 
 func (a *dbAuthorizer) WorkspaceIDBySlug(ctx context.Context, slug string) (uuid.UUID, error) {
@@ -73,4 +79,55 @@ func (a *dbAuthorizer) ProjectWorkspaceID(ctx context.Context, projectID uuid.UU
 		return uuid.Nil, ErrWorkspaceNotFound
 	}
 	return wsID, nil
+}
+
+// accessFacts are the lookups the project access rule reads. dbAuthorizer
+// answers them from the database; tests answer them from memory and still run
+// the production rule (mayAccessProject) on top.
+type accessFacts interface {
+	ProjectWorkspaceID(ctx context.Context, projectID uuid.UUID) (uuid.UUID, error)
+	// UserWorkspaceRole is the user's workspace role, "" for a non-member.
+	UserWorkspaceRole(ctx context.Context, wsID, userID uuid.UUID) string
+	middleware.ProjectMembership
+}
+
+// mayAccessProject is the rule of middleware.RequireProjectMember, asked without
+// an Echo context: the same helper decides the human half, so the socket never
+// hands out a project the REST API would refuse. Agents never get the
+// owner/admin bypass, whatever role their workspace grant carries.
+func mayAccessProject(ctx context.Context, f accessFacts, p Principal, projectID uuid.UUID) bool {
+	if p.WorkspaceID == uuid.Nil || projectID == uuid.Nil {
+		return false
+	}
+	wsID, err := f.ProjectWorkspaceID(ctx, projectID)
+	if err != nil || wsID != p.WorkspaceID {
+		return false
+	}
+	switch {
+	case p.AgentID != uuid.Nil:
+		ok, err := f.ExistsMember(ctx, projectID, nil, &p.AgentID)
+		return err == nil && ok
+	case p.UserID != uuid.Nil:
+		role := f.UserWorkspaceRole(ctx, p.WorkspaceID, p.UserID)
+		if role == "" {
+			return false
+		}
+		return middleware.UserMayAccessProject(ctx, f, projectID, p.UserID, role)
+	}
+	return false
+}
+
+func (a *dbAuthorizer) UserWorkspaceRole(ctx context.Context, wsID, userID uuid.UUID) string {
+	return middleware.UserWorkspaceRole(ctx, a.db, wsID, userID)
+}
+
+func (a *dbAuthorizer) ExistsMember(ctx context.Context, projectID uuid.UUID, userID, agentID *uuid.UUID) (bool, error) {
+	return a.members.ExistsMember(ctx, projectID, userID, agentID)
+}
+
+func (a *dbAuthorizer) MayAccessProject(ctx context.Context, p Principal, projectID uuid.UUID) bool {
+	if a.db == nil {
+		return false
+	}
+	return mayAccessProject(ctx, a, p, projectID)
 }

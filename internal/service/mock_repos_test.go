@@ -288,8 +288,10 @@ type MockTaskRepository struct {
 	// payload without needing a real Postgres transaction (see TaskRepo.Create's
 	// atomicity contract).
 	LastCreateActivity *domain.ActivityLog
-	mu                 sync.RWMutex
-	items              map[uuid.UUID]*domain.Task
+	// lastTaskQuery records the query of the most recent QueryTasks call.
+	lastTaskQuery *repository.TaskQuery
+	mu            sync.RWMutex
+	items         map[uuid.UUID]*domain.Task
 	// gateSource is tasks.human_gate_source: written by ArmHumanGate, dropped by
 	// SetHumanGate. Absent = not recorded.
 	gateSource map[uuid.UUID]domain.ArmHumanGateSource
@@ -523,7 +525,8 @@ func (m *MockTaskRepository) CountByStatusCategory(_ context.Context, _ uuid.UUI
 	return map[domain.StatusCategory]int{}, nil
 }
 
-func (m *MockTaskRepository) ListTriageQueue(_ context.Context, _ uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+func (m *MockTaskRepository) QueryTasks(_ context.Context, q repository.TaskQuery, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+	m.lastTaskQuery = &q
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
 	}

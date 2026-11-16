@@ -116,8 +116,10 @@ type TelegramClient interface {
 	// SendMessage delivers a plain-text message to a chat. No parse_mode is
 	// set: the body may carry a task title, comment, or workspace name a
 	// workspace member wrote, and plain text means none of Telegram's
-	// Markdown/HTML entity syntax needs escaping before it is sent.
-	SendMessage(ctx context.Context, token string, chatID int64, text string) error
+	// Markdown/HTML entity syntax needs escaping before it is sent. On
+	// success it returns the message_id Telegram assigned, so a caller can
+	// log a delivery receipt that names the message without naming the chat.
+	SendMessage(ctx context.Context, token string, chatID int64, text string) (messageID int64, err error)
 	// GetUpdates long-polls for new updates starting at offset (0 for "from
 	// the beginning"), waiting up to timeoutSeconds for one to arrive. The
 	// caller's context should allow at least that long.
@@ -206,13 +208,19 @@ func (c *httpTelegramClient) GetMe(ctx context.Context, token string) (string, e
 	return result.Username, nil
 }
 
-func (c *httpTelegramClient) SendMessage(ctx context.Context, token string, chatID int64, text string) error {
+func (c *httpTelegramClient) SendMessage(ctx context.Context, token string, chatID int64, text string) (int64, error) {
 	body := map[string]any{
 		"chat_id":                  chatID,
 		"text":                     text,
 		"disable_web_page_preview": true,
 	}
-	return c.call(ctx, token, "sendMessage", body, nil)
+	var result struct {
+		MessageID int64 `json:"message_id"`
+	}
+	if err := c.call(ctx, token, "sendMessage", body, &result); err != nil {
+		return 0, err
+	}
+	return result.MessageID, nil
 }
 
 func (c *httpTelegramClient) GetUpdates(ctx context.Context, token string, offset int64, timeoutSeconds int) ([]TelegramUpdate, error) {

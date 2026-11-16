@@ -44,7 +44,7 @@ func NewOAuthHandler(oauthService service.OAuthService, issuer string) *OAuthHan
 // --- RFC 8414 authorization server metadata ---
 
 func (h *OAuthHandler) ServerMetadata(c echo.Context) error {
-	return c.JSON(http.StatusOK, map[string]interface{}{
+	md := map[string]interface{}{
 		"issuer":                                h.issuer,
 		"authorization_endpoint":                h.issuer + "/oauth/authorize",
 		"token_endpoint":                        h.issuer + "/oauth/token",
@@ -56,7 +56,53 @@ func (h *OAuthHandler) ServerMetadata(c echo.Context) error {
 		"scopes_supported":                      []string{"mesh", "offline_access"},
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 		"response_types_supported":              []string{"code"},
+	}
+	if h.oauthService.OIDCKeys() != nil {
+		md["scopes_supported"] = []string{"mesh", "offline_access", "openid"}
+		md["jwks_uri"] = h.issuer + "/oauth/jwks"
+	}
+	return c.JSON(http.StatusOK, md)
+}
+
+// --- OpenID Connect: on only with a signing key ---
+
+// oidcDisabled is the JSON 404 discovery and JWKS answer while no
+// MESH_OIDC_SIGNING_KEY_FILE is configured.
+func oidcDisabled(c echo.Context) error {
+	return c.JSON(http.StatusNotFound, apierror.NotFound("OpenID Connect configuration"))
+}
+
+// OIDCDiscovery is GET /.well-known/openid-configuration (OpenID Connect
+// Discovery 1.0). Issuer and endpoints are the RFC 8414 metadata's.
+func (h *OAuthHandler) OIDCDiscovery(c echo.Context) error {
+	if h.oauthService.OIDCKeys() == nil {
+		return oidcDisabled(c)
+	}
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"issuer":                                h.issuer,
+		"authorization_endpoint":                h.issuer + "/oauth/authorize",
+		"token_endpoint":                        h.issuer + "/oauth/token",
+		"jwks_uri":                              h.issuer + "/oauth/jwks",
+		"response_types_supported":              []string{"code"},
+		"subject_types_supported":               []string{"public"},
+		"id_token_signing_alg_values_supported": []string{"RS256"},
+		"scopes_supported":                      []string{"openid"},
+		"token_endpoint_auth_methods_supported": []string{"none"},
+		"code_challenge_methods_supported":      []string{"S256"},
+		"grant_types_supported":                 []string{"authorization_code"},
+		"claims_supported":                      []string{"iss", "sub", "aud", "exp", "iat", "nonce"},
 	})
+}
+
+// JWKS is GET /oauth/jwks: the active signing key and earlier ones still
+// published for rotation.
+func (h *OAuthHandler) JWKS(c echo.Context) error {
+	keys := h.oauthService.OIDCKeys()
+	if keys == nil {
+		return oidcDisabled(c)
+	}
+	c.Response().Header().Set("Cache-Control", "public, max-age=300")
+	return c.JSON(http.StatusOK, keys.JWKS())
 }
 
 // writeOAuthError writes an RFC 6749 error response. A server_error's own
@@ -124,6 +170,7 @@ func authorizeParamsFromQuery(c echo.Context) service.AuthorizeParams {
 		CodeChallengeMethod: c.QueryParam("code_challenge_method"),
 		Scope:               c.QueryParam("scope"),
 		State:               c.QueryParam("state"),
+		Nonce:               c.QueryParam("nonce"),
 	}
 }
 
@@ -192,6 +239,7 @@ type consentDecisionBody struct {
 	CodeChallengeMethod string    `json:"code_challenge_method"`
 	Scope               string    `json:"scope"`
 	State               string    `json:"state"`
+	Nonce               string    `json:"nonce"`
 	WorkspaceID         uuid.UUID `json:"workspace_id"`
 	Allow               bool      `json:"allow"`
 }
@@ -215,6 +263,7 @@ func (h *OAuthHandler) Decide(c echo.Context) error {
 			CodeChallengeMethod: body.CodeChallengeMethod,
 			Scope:               body.Scope,
 			State:               body.State,
+			Nonce:               body.Nonce,
 		},
 		UserID:      userID,
 		WorkspaceID: body.WorkspaceID,

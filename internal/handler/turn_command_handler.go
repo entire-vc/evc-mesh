@@ -44,6 +44,7 @@ type waitForBody struct {
 	On              string      `json:"on"`
 	TargetTaskID    *uuid.UUID  `json:"target_task_id"`
 	TargetCondition *string     `json:"target_condition"`
+	Criterion       *string     `json:"criterion"`
 	VCSLinkID       *uuid.UUID  `json:"vcs_link_id"`
 	Provider        *string     `json:"provider"`
 	ProjectPath     *string     `json:"project_path"`
@@ -170,7 +171,7 @@ func (h *TurnCommandHandler) WaitFor(c echo.Context) error {
 	res, err := h.svc.WaitFor(c.Request().Context(), id, service.WaitForInput{
 		DenySameWorkspaceTarget: targetDenied,
 		TurnCommon:              b.common(), On: b.On, TargetTaskID: b.TargetTaskID, TargetCondition: b.TargetCondition,
-		VCSLinkID: b.VCSLinkID, Provider: b.Provider, ProjectPath: b.ProjectPath, MRIID: b.MRIID,
+		Criterion: b.Criterion, VCSLinkID: b.VCSLinkID, Provider: b.Provider, ProjectPath: b.ProjectPath, MRIID: b.MRIID,
 		PipelineID: b.PipelineID, RequiredJobs: b.RequiredJobs, Until: b.Until, UntilAt: b.UntilAt.Time,
 		EventRef: b.EventRef, Source: b.Source, Why: b.Why, Note: b.Note,
 		AfterSHA: b.AfterSHA, AfterPipelineID: b.AfterPipelineID, AfterStatus: b.AfterStatus,

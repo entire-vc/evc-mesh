@@ -45,8 +45,12 @@ export const useWebSocketStore = create<WSState>((set, get) => ({
       return;
     }
 
-    // Disconnect any existing connection.
+    // Disconnect any existing connection. The personal channels (ws:user:<id>) do
+    // not belong to a workspace and their subscribers stay mounted over a switch:
+    // they move to the new socket instead of being dropped with the rest.
+    const personal = [...pendingSubscriptions].filter((c) => c.startsWith("ws:user:"));
     get().disconnect();
+    personal.forEach((c) => pendingSubscriptions.add(c));
 
     currentWorkspaceSlug = workspaceSlug;
     intentionalClose = false;
@@ -118,24 +122,29 @@ function doConnect(
 
   const url = `${wsBase}/ws?token=${encodeURIComponent(token)}&workspace=${encodeURIComponent(workspaceSlug)}`;
 
+  let ws: WebSocket;
   try {
-    socket = new WebSocket(url);
+    ws = socket = new WebSocket(url);
   } catch {
     scheduleReconnect(workspaceSlug, set, get);
     return;
   }
 
-  socket.onopen = () => {
+  // A replaced socket still delivers its late close (and maybe frames) after
+  // connect() has opened the next one: its handlers must not touch shared state.
+  ws.onopen = () => {
+    if (socket !== ws) return;
     reconnectDelay = INITIAL_RECONNECT_DELAY;
     set({ isConnected: true });
 
     // Re-subscribe to all pending channels.
     for (const channel of pendingSubscriptions) {
-      socket?.send(JSON.stringify({ action: "subscribe", channel }));
+      ws.send(JSON.stringify({ action: "subscribe", channel }));
     }
   };
 
-  socket.onmessage = (event: MessageEvent) => {
+  ws.onmessage = (event: MessageEvent) => {
+    if (socket !== ws) return;
     try {
       const msg = JSON.parse(event.data as string) as WSMessage;
       set((state) => ({
@@ -147,7 +156,8 @@ function doConnect(
     }
   };
 
-  socket.onclose = () => {
+  ws.onclose = () => {
+    if (socket !== ws) return;
     socket = null;
     set({ isConnected: false });
 
@@ -156,7 +166,7 @@ function doConnect(
     }
   };
 
-  socket.onerror = () => {
+  ws.onerror = () => {
     // onerror is always followed by onclose, so reconnection is handled there.
   };
 }

@@ -26,7 +26,8 @@ const taskWaitCols = `id, task_id, agent_id, session_id, kind, target_task_id, t
 	until_at, decision_request_id, human_gate_ref, note, event_ref, evidence_source, evidence_why,
 	until_at_offset, evidence_status, after_sha, after_pipeline_id, after_status, registration,
 	registration_ref, addressee, question, created_at, resolved_at, resolution, resolved_by, resolve_cause, server_observed,
-	dependency_id, dependency_generation, dependency_owned`
+	dependency_id, dependency_generation, dependency_owned,
+	criterion, released_by, target_status, target_closed_by, target_closed_at`
 
 // TaskWaitRepo implements repository.TaskWaitRepository.
 type TaskWaitRepo struct {
@@ -119,8 +120,22 @@ func (r *TaskWaitRepo) ResolveWithCause(ctx context.Context, taskID, waitID uuid
 	if w.ResolvedAt != nil {
 		return &w, false, nil
 	}
-	err = tx.GetContext(ctx, &w, `UPDATE task_waits SET resolved_at = now(), resolution = $2, resolve_cause = $3, resolved_by = $4
+	// A met card wait records what released its edge, read off the edge at
+	// this moment: evidence, the target's closure without it, or its state.
+	err = tx.GetContext(ctx, &w, `UPDATE task_waits SET resolved_at = now(), resolution = $2, resolve_cause = $3, resolved_by = $4,
+		released_by = CASE WHEN $2 = 'met' AND kind = 'card' THEN (
+			SELECT NULLIF(`+domain.DependencyReleasedBySQL("d", "bt", "bts.category")+`, '')
+			  FROM task_dependencies d `+taskDependencyJoins+`
+			 WHERE d.task_id = task_waits.task_id AND d.depends_on_task_id = task_waits.target_task_id)
+			ELSE released_by END
 		 WHERE id = $1 RETURNING `+taskWaitCols, waitID, resolution, cause, by)
+	if err == nil && resolution == domain.WaitResolutionMet && w.Kind == domain.TaskWaitCard && w.TargetTaskID != nil {
+		// The closure snapshot: what the target was and who moved it there.
+		// A target that is gone leaves the snapshot empty.
+		err = tx.GetContext(ctx, &w, `UPDATE task_waits SET (target_status, target_closed_by, target_closed_at) =
+			(SELECT c.status, c.closed_by, c.closed_at FROM card_wait_target_closure(task_waits.target_task_id) c)
+			 WHERE id = $1 RETURNING `+taskWaitCols, waitID)
+	}
 	if err != nil {
 		return nil, false, err
 	}

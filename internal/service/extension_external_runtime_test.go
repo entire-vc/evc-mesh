@@ -47,6 +47,7 @@ type helloService struct {
 	rejected  int
 	srv       *httptest.Server
 	installed map[string]any
+	lastBody  []byte
 }
 
 func newHelloService(t *testing.T, preset string) *helloService {
@@ -90,6 +91,7 @@ func (h *helloService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		h.installs++
 		h.installed = in
+		h.lastBody = body
 		w.WriteHeader(http.StatusOK)
 	case "/mesh/events":
 		if !h.verify(r, body, h.secret) {

@@ -263,9 +263,9 @@ export function AppLayout() {
     return <AuthLoadingSkeleton />;
   }
 
-  // Redirect to first workspace root → activity. Skip deep-link routes.
+  // Redirect to the first workspace's home dashboard. Skip deep-link routes.
   if (!wsSlug && workspaces.length > 0 && !isDeepLinkRoute) {
-    return <Navigate to={`/w/${workspaces[0]!.slug}/activity`} replace />;
+    return <Navigate to={`/w/${workspaces[0]!.slug}/dashboard`} replace />;
   }
 
   // The project resolver must show its access/not-found state even when this
@@ -282,11 +282,13 @@ export function AppLayout() {
   }
 
   return (
-    <div className="flex h-screen bg-background">
+    // Print (§11.6 «печать»): the shell stops being a one-screen box with its own scroller, so the page flows
+    // onto as many sheets as it needs; the sidebar, header and install banner are screen chrome and stay off paper.
+    <div className="flex h-screen bg-background print:block print:h-auto">
       {/* Mobile backdrop */}
       {!sidebarCollapsed && (
         <div
-          className="fixed inset-0 z-30 bg-black/40 md:hidden"
+          className="fixed inset-0 z-30 bg-black/40 md:hidden print:hidden"
           onClick={toggleSidebar}
           aria-hidden="true"
         />
@@ -296,7 +298,7 @@ export function AppLayout() {
       <div
         data-testid="app-sidebar"
         className={cn(
-          "shrink-0 transition-all duration-200",
+          "shrink-0 transition-all duration-200 print:hidden",
           // Mobile: fixed overlay
           "fixed inset-y-0 left-0 z-40 md:relative md:z-auto",
           sidebarCollapsed
@@ -307,13 +309,15 @@ export function AppLayout() {
         <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
       </div>
 
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <Header
-          onToggleSidebar={toggleSidebar}
-          installable={installPrompt.showDesktopButton}
-          onInstall={installPrompt.promptInstall}
-        />
-        <main className="flex-1 overflow-y-auto p-3 md:p-6">
+      <div className="flex flex-1 flex-col overflow-hidden print:block print:overflow-visible">
+        <div className="contents print:hidden">
+          <Header
+            onToggleSidebar={toggleSidebar}
+            installable={installPrompt.showDesktopButton}
+            onInstall={installPrompt.promptInstall}
+          />
+        </div>
+        <main className="flex-1 overflow-y-auto p-3 md:p-6 print:overflow-visible print:p-0">
           {projectPending ? (
             <div data-testid="project-switching" className="space-y-3" aria-busy="true">
               <Skeleton className="h-8 w-48" />
@@ -324,10 +328,12 @@ export function AppLayout() {
           )}
         </main>
         {installPrompt.showBanner && (
-          <InstallPromptBanner
-            onInstall={installPrompt.promptInstall}
-            onDismiss={installPrompt.dismiss}
-          />
+          <div className="contents print:hidden">
+            <InstallPromptBanner
+              onInstall={installPrompt.promptInstall}
+              onDismiss={installPrompt.dismiss}
+            />
+          </div>
         )}
       </div>
     </div>
@@ -358,7 +364,7 @@ function WorkspaceNotFoundScreen({
         <CardFooter>
           <Button
             className="w-full"
-            onClick={() => navigate(`/w/${fallbackSlug}/activity`, { replace: true })}
+            onClick={() => navigate(`/w/${fallbackSlug}/dashboard`, { replace: true })}
           >
             {t("workspaceNotFound.goToWorkspace")}
           </Button>

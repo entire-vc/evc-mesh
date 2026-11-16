@@ -79,6 +79,7 @@ func newIdemFixture(t *testing.T) *idemFixture {
 	}, nil))
 	t.Cleanup(func() {
 		_, _ = db.ExecContext(ctx, `DELETE FROM idempotency_keys WHERE path LIKE '%'||$1||'%'`, task.String())
+		_, _ = db.ExecContext(ctx, `DELETE FROM idempotency_receipts WHERE task_id=$1`, task)
 		_, _ = db.ExecContext(ctx, `DELETE FROM comments WHERE task_id=$1`, task)
 		_, _ = db.ExecContext(ctx, `DELETE FROM tasks WHERE id=$1`, task)
 		_, _ = db.ExecContext(ctx, `DELETE FROM task_statuses WHERE project_id=$1`, proj)
@@ -206,16 +207,21 @@ func TestIdempotency_InFlightAndStaleClaim_DB(t *testing.T) {
 	assert.Equal(t, "1", rec.Header().Get("Retry-After"))
 	assert.Equal(t, 1, f.comments(t))
 
+	// The claim goes stale and the retry takes the key over. The comment the
+	// first request wrote carries its receipt, so the retry answers with that
+	// comment instead of writing a second one.
 	_, err = f.db.Exec(`UPDATE idempotency_keys SET claimed_at = now() - interval '10 minutes' WHERE idem_key='k-flight' AND actor_id=$1`, user)
 	require.NoError(t, err)
 	rec = f.post(t, user, "k-flight", body)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
-	assert.Empty(t, rec.Header().Get(mw.HeaderIdempotentReplayed))
-	assert.Equal(t, 2, f.comments(t))
+	assert.Equal(t, "true", rec.Header().Get(mw.HeaderIdempotentReplayed))
+	assert.Equal(t, 1, f.comments(t))
 }
 
-// After the TTL the key is forgotten and may be used again.
-func TestIdempotency_ExpiredKeyRunsAgain_DB(t *testing.T) {
+// After the TTL the answer store forgets the key, but the receipt bound to the
+// written comment does not expire: the same request answers with that comment
+// and writes nothing.
+func TestIdempotency_ExpiredKeyReplaysReceipt_DB(t *testing.T) {
 	f := newIdemFixture(t)
 	user := uuid.New()
 	require.Equal(t, http.StatusCreated, f.post(t, user, "k-ttl", `{"body":"x"}`).Code)
@@ -228,8 +234,8 @@ func TestIdempotency_ExpiredKeyRunsAgain_DB(t *testing.T) {
 	require.NoError(t, err)
 	rec := f.post(t, user, "k-ttl", `{"body":"x"}`)
 	require.Equal(t, http.StatusCreated, rec.Code)
-	assert.Empty(t, rec.Header().Get(mw.HeaderIdempotentReplayed))
-	assert.Equal(t, 2, f.comments(t))
+	assert.Equal(t, "true", rec.Header().Get(mw.HeaderIdempotentReplayed))
+	assert.Equal(t, 1, f.comments(t))
 }
 
 // A server error is not an answer to keep: the key is released and the retry
@@ -313,10 +319,11 @@ func TestIdempotency_PanicReleasesKey_DB(t *testing.T) {
 	assert.Equal(t, 2, calls)
 }
 
-// A handler that returns an error instead of writing one: a 4xx is the answer
-// to this request and is replayed, the handler does not run again; a 5xx
-// error frees the key.
-func TestIdempotency_ReturnedErrorsReplayOrRelease_DB(t *testing.T) {
+// A handler that returns an error instead of writing one wrote nothing: a 4xx
+// refusal and a 5xx both free the key, so the retry runs the handler again
+// against the current state (an internal ticket: a stored 422 was replayed after the
+// caller had met the gate).
+func TestIdempotency_ReturnedErrorsRelease_DB(t *testing.T) {
 	db := idemTestDB(t)
 	repo := postgres.NewIdempotencyRepo(db)
 	user := uuid.New()
@@ -351,9 +358,8 @@ func TestIdempotency_ReturnedErrorsReplayOrRelease_DB(t *testing.T) {
 	require.Equal(t, http.StatusUnprocessableEntity, first.Code)
 	again := do("/4xx")
 	assert.Equal(t, http.StatusUnprocessableEntity, again.Code)
-	assert.Equal(t, "true", again.Header().Get(mw.HeaderIdempotentReplayed))
-	assert.JSONEq(t, first.Body.String(), again.Body.String())
-	assert.Equal(t, 1, calls["4xx"], "a returned 4xx is replayed, not re-run")
+	assert.Empty(t, again.Header().Get(mw.HeaderIdempotentReplayed))
+	assert.Equal(t, 2, calls["4xx"], "a returned 4xx frees the key")
 
 	assert.Equal(t, http.StatusInternalServerError, do("/5xx").Code)
 	retry := do("/5xx")

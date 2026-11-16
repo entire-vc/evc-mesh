@@ -71,6 +71,9 @@ func (r *CommentMentionRepo) List(ctx context.Context, mentionedID uuid.UUID, me
 		args = append(args, *filter.WorkspaceID)
 		where += ` AND p.workspace_id = $` + fmt.Sprintf("%d", len(args))
 	}
+	var viewer string
+	viewer, args = authorFeedViewerCond(filter.Viewer, args)
+	where += ` AND ` + viewer
 
 	args = append(args, limit)
 	q := `
@@ -110,12 +113,16 @@ func (r *CommentMentionRepo) MarkSeen(ctx context.Context, commentID, mentionedI
 	return err
 }
 
-func (r *CommentMentionRepo) CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, workspaceID uuid.UUID) (int64, error) {
+func (r *CommentMentionRepo) CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, workspaceID uuid.UUID, viewer domain.ProjectViewer) (int64, error) {
 	// Joined to comments/tasks/projects (same chain List uses) so a mention on
 	// a deleted or workspace-cascaded task doesn't inflate the unseen badge
 	// for something the user can no longer open, and so the badge counts the
-	// same workspace the caller's list view is scoped to.
-	const q = `
+	// same workspace the caller's list view is scoped to. The viewer rule is
+	// List's too: a mention on a project the caller cannot open is not counted.
+	args := []any{mentionedID, mentionedKind, workspaceID}
+	var cond string
+	cond, args = authorFeedViewerCond(viewer, args)
+	q := `
 		SELECT COUNT(*)
 		FROM comment_mentions cm
 		JOIN comments c ON c.id = cm.comment_id
@@ -123,9 +130,9 @@ func (r *CommentMentionRepo) CountUnseen(ctx context.Context, mentionedID uuid.U
 		JOIN projects p ON p.id = t.project_id
 		WHERE cm.mentioned_id = $1 AND cm.mentioned_kind = $2 AND cm.seen_at IS NULL
 		  AND t.deleted_at IS NULL AND p.workspace_id = $3
-	`
+		  AND ` + cond
 	var count int64
-	if err := r.db.GetContext(ctx, &count, q, mentionedID, mentionedKind, workspaceID); err != nil {
+	if err := r.db.GetContext(ctx, &count, q, args...); err != nil {
 		return 0, err
 	}
 	return count, nil

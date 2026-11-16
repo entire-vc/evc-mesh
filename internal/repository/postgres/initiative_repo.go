@@ -147,18 +147,18 @@ func (r *InitiativeRepo) GetByProjectID(ctx context.Context, projectID uuid.UUID
 	return items, nil
 }
 
-func (r *InitiativeRepo) ListLinkedProjects(ctx context.Context, initiativeID uuid.UUID) ([]domain.Project, error) {
-	const q = `
+func (r *InitiativeRepo) ListLinkedProjects(ctx context.Context, initiativeID uuid.UUID, viewer domain.ProjectViewer) ([]domain.Project, error) {
+	cond, args := projectViewerCond(viewer, []interface{}{initiativeID})
+	q := `
 		SELECT ` + projectSelectColsQualified + ` FROM projects p
 		INNER JOIN initiative_projects ip ON ip.project_id = p.id
-		WHERE ip.initiative_id = $1 AND p.deleted_at IS NULL
+		WHERE ip.initiative_id = $1 AND p.deleted_at IS NULL AND ` + cond + `
 		ORDER BY p.name ASC
 	`
 	var rows []projectRow
-	if err := r.db.SelectContext(ctx, &rows, q, initiativeID); err != nil {
+	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
 		return nil, fmt.Errorf("listing linked projects: %w", err)
 	}
-
 	projects := make([]domain.Project, len(rows))
 	for i := range rows {
 		projects[i] = rows[i].toDomain()
@@ -172,4 +172,25 @@ func (r *InitiativeRepo) ListLinkedProjects(ctx context.Context, initiativeID uu
 	}
 
 	return projects, nil
+}
+
+// Progress counts the tasks of the initiative's linked projects that the
+// viewer may open. A project the viewer cannot open contributes nothing, so
+// the bar never reflects work they are not allowed to see.
+func (r *InitiativeRepo) Progress(ctx context.Context, initiativeID uuid.UUID, viewer domain.ProjectViewer) (total, completed int, err error) {
+	cond, args := projectViewerCond(viewer, []interface{}{initiativeID})
+	q := // nosemgrep: go.lang.security.audit.database.string-formatted-query.string-formatted-query -- cond comes from projectViewerCond: fixed SQL fragments and literal "$N" placeholders only; every value travels as a bound arg, none are interpolated
+		`
+		SELECT
+			COUNT(*) FILTER (WHERE ts.category NOT IN ('cancelled')) AS total,
+			COUNT(*) FILTER (WHERE ts.category = 'done') AS completed
+		FROM tasks t
+		JOIN task_statuses ts ON ts.id = t.status_id
+		JOIN initiative_projects ip ON ip.project_id = t.project_id
+		JOIN projects p ON p.id = t.project_id AND p.deleted_at IS NULL
+		WHERE ip.initiative_id = $1 AND t.deleted_at IS NULL AND ` + cond
+	if err = r.db.QueryRowContext(ctx, q, args...).Scan(&total, &completed); err != nil {
+		return 0, 0, fmt.Errorf("initiative progress: %w", err)
+	}
+	return total, completed, nil
 }

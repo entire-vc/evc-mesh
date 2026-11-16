@@ -36,13 +36,14 @@ import (
 // transaction is used to guarantee the TTL is set on the same round-trip
 // as the INCR.
 type redisRateLimiter struct {
-	client *redis.Client
-	name   string
-	rpm    int
+	client    *redis.Client
+	name      string
+	rpm       int
+	overrides map[string]int
 }
 
-func newRedisRateLimiter(client *redis.Client, name string, rpm int) *redisRateLimiter {
-	return &redisRateLimiter{client: client, name: name, rpm: rpm}
+func newRedisRateLimiter(client *redis.Client, name string, rpm int, overrides map[string]int) *redisRateLimiter {
+	return &redisRateLimiter{client: client, name: name, rpm: rpm, overrides: overrides}
 }
 
 // windowKey returns the Redis key for the given rate-limit identity and the
@@ -74,7 +75,7 @@ func (r *redisRateLimiter) allow(ctx context.Context, key string) (bool, error) 
 	}
 
 	count := incrCmd.Val()
-	return count <= int64(r.rpm), nil
+	return count <= int64(rpmFor(key, r.rpm, r.overrides)), nil
 }
 
 // rateLimitRedis returns an Echo middleware that enforces the configured
@@ -82,7 +83,7 @@ func (r *redisRateLimiter) allow(ctx context.Context, key string) (bool, error) 
 // unavailable the request is allowed through (fail-open) and the error is
 // logged to the Echo logger.
 func rateLimitRedis(cfg RateLimitConfig) echo.MiddlewareFunc {
-	rl := newRedisRateLimiter(cfg.RedisClient, cfg.Name, cfg.RPM)
+	rl := newRedisRateLimiter(cfg.RedisClient, cfg.Name, cfg.RPM, cfg.Overrides)
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {

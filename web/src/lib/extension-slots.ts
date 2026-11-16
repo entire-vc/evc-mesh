@@ -4,7 +4,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import type { ManifestCapabilities } from "@/lib/extension-capabilities";
 
 /**
- * UI slot registry (W2.7). A slot is a named place in the task view that an
+ * UI slot registry. A slot is a named place in the task view that an
  * extension may fill. The set of extensions that fill it comes from
  * `GET /workspaces/{ws}/extensions`: a connected, enabled extension whose
  * manifest `capabilities.ui` names the slot. Which component fills it is
@@ -153,8 +153,16 @@ function ensureLoaded(wsId: string) {
   if (!e || (!e.inflight && Date.now() - e.fetchedAt > TTL_MS)) load(wsId);
 }
 
+/** Also told about every invalidation; the dashboard widget store registers here once it loads,
+ *  so its stubs follow an enable/disable without this module importing it. */
+const invalidationListeners = new Set<(wsId?: string) => void>();
+export function onSlotRegistryInvalidated(fn: (wsId?: string) => void) {
+  invalidationListeners.add(fn);
+}
+
 /** Drop the cached registry so the next mount refetches (after enable/disable/connect). */
 export function invalidateSlotRegistry(wsId?: string) {
+  invalidationListeners.forEach((fn) => fn(wsId));
   if (wsId) {
     const e = entries.get(wsId);
     if (e) e.fetchedAt = 0;

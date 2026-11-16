@@ -24,7 +24,25 @@ const (
 
 	// sendBufferSize is the size of the client send channel buffer.
 	sendBufferSize = 256
+
+	// projectAccessTTL is how long a project access verdict is reused for
+	// fan-out. It is the revocation window: a user removed from a project (or
+	// demoted from workspace admin) keeps receiving that project's frames on an
+	// open socket for at most this long. A grant is likewise seen within it.
+	projectAccessTTL = 30 * time.Second
+
+	// projectAccessTimeout bounds one access lookup on the fan-out path, which
+	// runs on the hub's single goroutine. A lookup that times out is a refusal,
+	// and the refusal is cached like any verdict, so a slow database costs one
+	// stall per client and project per window rather than one per frame.
+	projectAccessTimeout = 2 * time.Second
 )
+
+// accessVerdict is one cached answer of Authorizer.MayAccessProject.
+type accessVerdict struct {
+	ok      bool
+	checked time.Time
+}
 
 // IncomingMessage represents a message sent from the client to the server.
 type IncomingMessage struct {
@@ -75,6 +93,10 @@ type Client struct {
 	Send          chan []byte
 	authz         Authorizer
 	mu            sync.RWMutex
+
+	accessMu sync.Mutex
+	access   map[uuid.UUID]accessVerdict
+	now      func() time.Time
 }
 
 // NewClient creates a new WebSocket client for an already-authenticated principal.
@@ -94,7 +116,42 @@ func NewClient(conn *websocket.Conn, hub *Hub, p Principal, authz Authorizer) *C
 		Subscriptions: make(map[string]bool),
 		Send:          make(chan []byte, sendBufferSize),
 		authz:         authz,
+		access:        make(map[uuid.UUID]accessVerdict),
+		now:           time.Now,
 	}
+}
+
+func (c *Client) principal() Principal {
+	return Principal{
+		UserID:        c.UserID,
+		AgentID:       c.AgentID,
+		WorkspaceID:   c.WorkspaceID,
+		WorkspaceSlug: c.WorkspaceSlug,
+	}
+}
+
+// MayReceiveProject reports whether this connection may see a frame of the
+// project, by the REST project access rule (Authorizer.MayAccessProject). The
+// verdict is cached per project for projectAccessTTL, because the hub asks for
+// every project frame and every subscribed client.
+func (c *Client) MayReceiveProject(projectID uuid.UUID) bool {
+	if c.authz == nil || projectID == uuid.Nil {
+		return false
+	}
+	now := c.now()
+	c.accessMu.Lock()
+	v, ok := c.access[projectID]
+	c.accessMu.Unlock()
+	if ok && now.Sub(v.checked) < projectAccessTTL {
+		return v.ok
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), projectAccessTimeout)
+	allowed := c.authz.MayAccessProject(ctx, c.principal(), projectID)
+	cancel()
+	c.accessMu.Lock()
+	c.access[projectID] = accessVerdict{ok: allowed, checked: now}
+	c.accessMu.Unlock()
+	return allowed
 }
 
 // CanSubscribe reports whether this connection may receive a channel's traffic.
@@ -105,7 +162,9 @@ func NewClient(conn *websocket.Conn, hub *Hub, p Principal, authz Authorizer) *C
 //   - "ws:<slug>" — workspace event feed: only the workspace the handshake
 //     authorised. Slugs are ws-<8 hex> and appear in every /w/<slug>/... URL, so
 //     accepting whichever one the client asked for was the whole hole.
-//   - "project:<uuid>" — project event feed: only projects inside that workspace.
+//   - "project:<uuid>" — project event feed: only projects inside that workspace
+//     that the principal may open by the REST rule (Authorizer.MayAccessProject):
+//     a workspace owner/admin or a project member; an agent only as a member.
 //
 // Anything else is refused. The hub fans out on exact channel names, so a name
 // that matches none of these can only be a guess at someone else's.
@@ -130,7 +189,12 @@ func (c *Client) CanSubscribe(ctx context.Context, channel string) bool {
 			return false
 		}
 		wsID, err := c.authz.ProjectWorkspaceID(ctx, projectID)
-		return err == nil && wsID == c.WorkspaceID
+		if err != nil || wsID != c.WorkspaceID {
+			return false
+		}
+		// Same workspace is not enough: a workspace member outside the project
+		// would hear its task titles and changed fields.
+		return c.authz.MayAccessProject(ctx, c.principal(), projectID)
 
 	default:
 		return false

@@ -47,6 +47,7 @@ import { useRulesStore } from "@/stores/rules";
 import { useTemplateStore } from "@/stores/template";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { EntityIcon } from "@/components/ui/entity-icon";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
@@ -1032,7 +1033,7 @@ export function TaskPanel({
       <div className="grid grid-cols-1 items-start gap-y-2.5 sm:grid-cols-[auto_1fr] sm:gap-x-4">
         {/* Project — fixed by the route/prop, not editable here */}
         <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
-          <FolderKanban className="h-3 w-3" />
+          <EntityIcon value={createProject?.icon} fallback={FolderKanban} className="h-3 w-3" />
           {t("panel.props.project")}
         </label>
         <Select
@@ -1347,9 +1348,9 @@ export function TaskPanel({
       </div>
 
       <div className="grid grid-cols-1 items-start gap-y-2.5 sm:grid-cols-[auto_1fr] sm:gap-x-4">
-        {/* Project */}
+        {/* Project: the label carries the selected project's icon (a native <option> cannot draw one) */}
         <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
-          <FolderKanban className="h-3 w-3" />
+          <EntityIcon value={projects.find((p) => p.id === currentTask.project_id)?.icon} fallback={FolderKanban} className="h-3 w-3" />
           {t("panel.props.project")}
         </label>
         <Select

@@ -463,6 +463,9 @@ func (r *SessionRepo) ReportUsage(ctx context.Context, agentID, workspaceID uuid
 			sess.TokensInUnknown, sess.TokensOutUnknown, sess.CostUnknown); err != nil {
 			return nil, err
 		}
+		if rerr := recordReceiptTx(ctx, tx, u.Receipt, sess.ID, sess); rerr != nil {
+			return nil, rerr
+		}
 		if cerr := tx.Commit(); cerr != nil {
 			return nil, cerr
 		}
@@ -471,10 +474,15 @@ func (r *SessionRepo) ReportUsage(ctx context.Context, agentID, workspaceID uuid
 	if err != nil {
 		return nil, err
 	}
+	sess := row.toDomain()
+	// A keyed report records its receipt in the addition's transaction: a
+	// concurrent repeat that committed first rolls this addition back.
+	if err := recordReceiptTx(ctx, tx, u.Receipt, sess.ID, &sess); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	sess := row.toDomain()
 	return &sess, nil
 }
 

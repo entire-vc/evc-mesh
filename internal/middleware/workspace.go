@@ -11,12 +11,20 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 
+	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 // ContextKeyWorkspaceRole stores the workspace-level role of the current actor.
 const ContextKeyWorkspaceRole = "workspace_role"
+
+// ContextKeyWorkspaceOwnerWithoutMembership is set (true) by RequireWorkspaceMember
+// when it admits a user through the owner fallback: the user owns the workspace
+// (workspaces.owner_id) but has no workspace_members row, so ContextKeyWorkspaceRole
+// stays empty. Readers that grant the owner's reach (the dashboard task query)
+// check it next to the role; RBAC does not, so permissions keep their behaviour.
+const ContextKeyWorkspaceOwnerWithoutMembership = "workspace_owner_without_membership"
 
 // ContextKeyWorkspaceSource records how WorkspaceRLS arrived at the workspace it
 // put in ContextKeyWorkspaceID. The distinction is what makes the group-level
@@ -393,6 +401,10 @@ var workspaceScopedPairParams = []struct{ param, query string }{
 	// the tenant of its agent. "primary" (the original key) is not a uuid and is
 	// skipped here; the service resolves it from :agent_id alone.
 	{"key_id", `SELECT 1 FROM agent_api_keys WHERE workspace_id = $1 AND id = $2 LIMIT 1`},
+	// /workspaces/:ws_id/dashboards/:dashboard_id/... — a dashboard belongs to
+	// one workspace. "default" (the caller's default dashboard, possibly still
+	// virtual) is not a uuid and is skipped; the handler resolves it per caller.
+	{"dashboard_id", `SELECT 1 FROM ext_dashboards_dashboards WHERE workspace_id = $1 AND id = $2 LIMIT 1`},
 }
 
 // uuidResolver turns a "give me this object's workspace_id" query into a resolver.
@@ -811,6 +823,7 @@ func RequireWorkspaceMember(db *sqlx.DB) echo.MiddlewareFunc {
 			if idErr != nil || !UserOwnsWorkspace(c.Request().Context(), db, wsID, userID) {
 				return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
 			}
+			c.Set(ContextKeyWorkspaceOwnerWithoutMembership, true)
 			return next(c)
 		}
 	}
@@ -885,8 +898,17 @@ func UserOwnsWorkspace(ctx context.Context, db *sqlx.DB, wsID, userID uuid.UUID)
 // Echo context; this is the same rule for callers that have no Echo context —
 // today, the WebSocket handshake.
 func UserIsWorkspaceMember(ctx context.Context, db *sqlx.DB, wsID, userID uuid.UUID) bool {
+	return UserWorkspaceRole(ctx, db, wsID, userID) != ""
+}
+
+// UserWorkspaceRole returns the user's role in wsID: the workspace_members role,
+// domain.RoleOwner for the owner whose membership row was never written (the
+// fallback of UserIsWorkspaceMember), or "" when the user is not a member or the
+// lookup failed. It is the role half of the project access rule for callers
+// outside the Echo chain (the WebSocket hub), feeding UserMayAccessProject.
+func UserWorkspaceRole(ctx context.Context, db *sqlx.DB, wsID, userID uuid.UUID) string {
 	if db == nil {
-		return false
+		return ""
 	}
 	var role string
 	if err := db.QueryRowContext(ctx,
@@ -895,9 +917,12 @@ func UserIsWorkspaceMember(ctx context.Context, db *sqlx.DB, wsID, userID uuid.U
 		 WHERE wm.workspace_id = $1 AND wm.user_id = $2 AND w.deleted_at IS NULL`,
 		wsID, userID,
 	).Scan(&role); err == nil && role != "" {
-		return true
+		return role
 	}
-	return UserOwnsWorkspace(ctx, db, wsID, userID)
+	if UserOwnsWorkspace(ctx, db, wsID, userID) {
+		return domain.RoleOwner
+	}
+	return ""
 }
 
 // AgentIsInWorkspace reports whether the agent belongs to wsID — either as its

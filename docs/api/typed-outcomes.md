@@ -51,6 +51,9 @@ returns the reason in the same turn.
 | `session_id` | string ≤ 200, nullable | runner session that declared it |
 | `kind` | `card` \| `mr` \| `pipeline` \| `time` \| `decision` \| `human` \| `merge` \| `registered` \| `manual` | |
 | `target_task_id`, `target_condition` | uuid, dependency condition | `card`; condition defaults to `task_done` |
+| `criterion` | string ≤ 500 | `card` with `target_condition: artifact_published`: the result the target must publish; the edge stores the same text and the producer's evidence must name it |
+| `released_by` | `evidence` \| `closure_without_evidence` \| `target_state` | a met `card` wait: what released its edge. `closure_without_evidence` — an evidence-only condition (`access_ready`, `contract_ready`, `artifact_published`) released only because the target reached done/cancelled, the named result was never recorded |
+| `target_status`, `target_closed_by`, `target_closed_at` | string, string, timestamp | a met `card` wait: the target's status name and its latest status change (actor name, time) at the moment the wait was met — the receipt the runner words the wake from |
 | `vcs_link_id`, `provider`, `project_path`, `mr_iid` | | `mr`; coordinates are stored even when a link is given. `merge`: `provider` is always `gitlab`, no link |
 | `provider`, `project_path`, `pipeline_id`, `required_jobs[]` | | `pipeline`; `provider` is `gitlab` (or absent, read as gitlab) \| `github` (an Actions run: `owner/repo`, run id). `required_jobs` also on `mr` with `until` `green` \| `changed` |
 | `until` | string | `mr`: `merged` \| `green` \| `changed`; `pipeline`: `finished` \| `green` \| `changed` |
@@ -214,7 +217,8 @@ Common to all commands:
   |---|---|
   | `invalid_target` | the target does not exist, is not reachable from this card, or its fields are incomplete for the kind |
   | `self_wait` | a card waits on itself |
-  | `already_met` | the target is already in the awaited (or another terminal) state: an MR merged or closed, a pipeline finished, a card closed |
+  | `already_met` | the target is already in the awaited (or another terminal) state: an MR merged or closed, a pipeline finished, a card closed. For a card the message names its final status and category, who moved it there and when, and for an evidence-only condition whether the named result was recorded |
+  | `already_answered` | `ask_agent` repeats a question the same addressee already answered on this card; the message names the request, the answer comment and when it was answered |
   | `time_out_of_bounds` | `until_at` is less than 5 minutes or more than 30 days away |
   | `naive_time` | a `time` wait with a naive or relative `until_at`, or a relative `until` |
   | `not_an_agent` | the addressee of `ask_agent` or `hand_off` is not an agent of the directory |
@@ -232,7 +236,8 @@ Common to all commands:
 ```json
 {
   "on": "card | mr | pipeline | time | merge | registered | manual",
-  "target_task_id": "uuid",            "target_condition": "task_done | shipped | deployed | accepted | ...",
+  "target_task_id": "uuid",            "target_condition": "task_done | shipped | deployed | accepted | artifact_published | ...",
+  "criterion": "≤ 500 chars, card + artifact_published only",
   "vcs_link_id": "uuid",               "provider": "gitlab | github", "project_path": "group/project", "mr_iid": 12,
   "pipeline_id": 7001,                 "required_jobs": ["test"],
   "until": "merged | green | changed | finished",
@@ -253,7 +258,11 @@ added with `merge` and `registered` (`after_sha`, `after_pipeline_id`,
 `on: decision` and `on: human` are refused: they have their own commands. For `mr`, either `vcs_link_id` (a
 link of this card) or `provider` + `project_path` + `mr_iid` (a link of this card
 or an MR of the project) names the target. For `card` a `blocks` dependency with
-`target_condition` is created or reused. Writes the wait (superseding the
+`target_condition` is created or reused; `criterion` (only with
+`artifact_published`, else `invalid_target`) is stored on the edge and the wait,
+and a wait without one keeps the criterion an existing edge of the same
+condition names. A changed condition or criterion revokes the edge's evidence.
+Writes the wait (superseding the
 caller's previous one), an outcome `wait`, the comment, and releases the checkout.
 
 `201` — envelope with `outcome`, `wait`, `released: true`.
@@ -268,7 +277,13 @@ How the target is confirmed:
   ordinary `POST /tasks/:id/dependencies` retains its tenancy boundary.
   No membership and a missing target both return exactly
   `invalid_target: target card not found`. A released condition returns
-  `already_met`; a cycle anywhere in the completion graph is `invalid_target`.
+  `already_met` naming the closure (status, category, the actor of the latest
+  `task.moved` status change and its time) and the next step: read its closing
+  comment, ask its owner or wait on the card that will produce the result. An
+  evidence-only edge (`artifact_published` and the like) is still released when
+  the target closes without evidence, so nobody waits forever; the edge's
+  `released_by` (dependency reads) and the met wait's `released_by` say
+  `closure_without_evidence` instead of `evidence`. A cycle anywhere in the completion graph is `invalid_target`.
   The edge and wait are written in the same transaction. Cross-workspace
   waits carry `server_observed: true`; their outcome exposes
   `wait_server_observed: true`, including after resolution. The server resolves
@@ -376,11 +391,19 @@ workspace; no match, more than one match, or the caller is `not_an_agent`.
 { "to": "agent name or uuid from the team directory", "question": "≤ 4000 chars" }
 ```
 
+A question this card already asked the same addressee and got answered
+(compared case-insensitively with whitespace runs collapsed) is refused with
+`already_answered` and writes nothing: no request, wait, outcome or comment,
+the checkout is kept, also when an identical request is open. A new question
+must say what changed. Without an answered one, an open request with the same
+normalized question is reused.
+
 Opens a decision request (or returns the open identical one), declares a
 `decision` wait on it, writes an outcome `wait` and the comment, and releases the
 checkout. `201` — envelope with `outcome`, `wait`, `released: true`, plus
 `decision_request` and `reused: true|false`.
-Errors: `not_an_agent` (unknown name, a person, or the caller itself).
+Errors: `not_an_agent` (unknown name, a person, or the caller itself),
+`already_answered`.
 
 ### 4. `answer_decision` — `POST /api/v1/decision-requests/:request_id/answer`
 
@@ -520,7 +543,8 @@ A person, an OAuth connector or any other agent gets `403`. Route guards:
 workspace membership and `update_task`, like `runtime-state`.
 
 In one transaction: `resolved_at`, `resolution`, `resolve_cause`, `resolved_by`
-(the caller) are written, and the card's `runtime_state` is cleared if its
+(the caller) are written, a `met` card wait gets `released_by` read off its edge
+and the target's closure snapshot (`target_status`, `target_closed_by`, `target_closed_at`), and the card's `runtime_state` is cleared if its
 `ref` is `wait:<this id>`. No comment is written.
 
 `200` — `{"wait": <task_waits row>, "resolved": true}`. A repeat on an ended

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useProjectExtensionTabs } from "@/lib/project-extension-tabs";
+import { useSidebarItems } from "@/lib/extension-slots";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useParams } from "react-router";
 import {
@@ -17,8 +18,10 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import { useTaskStore } from "@/stores/task";
 import { useNotificationStore } from "@/stores/notification";
+import { useDashboardsStore } from "@/stores/dashboards";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "@/components/ui/avatar";
+import { EntityIcon } from "@/components/ui/entity-icon";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,6 +47,7 @@ import type { PaginatedResponse, ProjectViewTab, Task } from "@/types";
 interface TaskSearchResult {
   task: Task;
   projectName: string;
+  projectIcon: string;
   projectSlug: string;
   statusColor: string;
 }
@@ -124,6 +128,7 @@ function useTaskSearch() {
               return {
                 task,
                 projectName: proj?.name ?? "—",
+                projectIcon: proj?.icon ?? "",
                 projectSlug: proj?.slug ?? "",
                 statusColor: colorMap.get(task.status_id) ?? "var(--fallback-gray-500)",
               };
@@ -172,6 +177,7 @@ function useTaskSearch() {
             enriched.push({
               task,
               projectName: proj.name,
+              projectIcon: proj.icon ?? "",
               projectSlug: proj.slug,
               // Use cached status color when available; fall back to neutral gray.
               statusColor: colorMap.get(task.status_id) ?? "var(--fallback-gray-500)",
@@ -388,8 +394,9 @@ function TaskSearchBox({ wsSlug }: { wsSlug: string | undefined }) {
                     <p className="truncate font-medium leading-tight">
                       {result.task.title}
                     </p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {result.projectName}
+                    <p className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+                      <EntityIcon value={result.projectIcon} className="h-3 w-3 shrink-0" />
+                      <span className="truncate">{result.projectName}</span>
                     </p>
                   </div>
                 </li>
@@ -473,6 +480,8 @@ interface WorkspacePage {
   titleKey: string;
   /** Icon name from the nav slots' icon set. */
   icon: string;
+  /** `/d/:id`: the open dashboard, named in the crumb once the menu's list knows it. */
+  dashboardId?: string;
 }
 
 const WORKSPACE_PAGES: Array<{
@@ -480,17 +489,12 @@ const WORKSPACE_PAGES: Array<{
   titleKey: string;
   icon: string;
 }> = [
-  { pattern: /\/w\/[^/]+\/?$/, titleKey: "nav.dashboard", icon: "LayoutDashboard" },
+  { pattern: /\/w\/[^/]+(\/d\/[^/]+|\/dashboard)?\/?$/, titleKey: "nav.dashboard", icon: "LayoutDashboard" },
   { pattern: /\/w\/[^/]+\/org-chart(\/grid)?\/?$/, titleKey: "nav.team", icon: "Bot" },
   { pattern: /\/w\/[^/]+\/memories\/?$/, titleKey: "nav.memory", icon: "Brain" },
-  { pattern: /\/w\/[^/]+\/sessions\/?$/, titleKey: "nav.sessions", icon: "MonitorDot" },
   { pattern: /\/w\/[^/]+\/spark\/?$/, titleKey: "nav.spark", icon: "Sparkles" },
-  { pattern: /\/w\/[^/]+\/events\/?$/, titleKey: "nav.events", icon: "Activity" },
-  { pattern: /\/w\/[^/]+\/analytics\/?$/, titleKey: "nav.analytics", icon: "BarChart2" },
   { pattern: /\/w\/[^/]+\/extensions\/?$/, titleKey: "nav.extensions", icon: "Settings" },
   { pattern: /\/w\/[^/]+\/runner\/?$/, titleKey: "nav.myRunner", icon: "Server" },
-  { pattern: /\/w\/[^/]+\/initiatives\/?$/, titleKey: "nav.initiatives", icon: "Target" },
-  { pattern: /\/w\/[^/]+\/triage\/?$/, titleKey: "nav.triage", icon: "Inbox" },
   { pattern: /\/w\/[^/]+\/me\/?$/, titleKey: "nav.profile", icon: "UserRound" },
 ];
 
@@ -501,10 +505,33 @@ function useWorkspacePage(): WorkspacePage | null {
   if (/\/w\/[^/]+\/p\//.test(path)) return null;
   for (const entry of WORKSPACE_PAGES) {
     if (entry.pattern.test(path)) {
-      return { titleKey: entry.titleKey, icon: entry.icon };
+      const dashboardId = /\/w\/[^/]+\/d\/([^/]+)\/?$/.exec(path)?.[1];
+      return { titleKey: entry.titleKey, icon: entry.icon, dashboardId };
     }
   }
   return null;
+}
+
+// `/x/<ext>(/<section>)`: an extension's workspace screen, named as its left-menu item (`sidebar.item` title).
+// Until the registry answers there is no second crumb rather than a made-up name; project-level `/p/…/x/` goes
+// through the project view tabs.
+function useExtensionScreenTitle(): string | null {
+  const location = useLocation();
+  const extensionId = /^\/w\/[^/]+\/x\/([^/]+)(\/.*)?$/.exec(location.pathname)?.[1];
+  const items = useSidebarItems();
+  if (!extensionId) return null;
+  return items.find((i) => i.extensionId === extensionId)?.title ?? null;
+}
+
+// The open dashboard as the left menu shows it: the menu's list (the sidebar loads it and re-reads it on every
+// `dashboard.*` event), so a rename follows without a reload and a deleted one drops back to «Dashboard».
+// Only the list of the workspace on screen counts: a switch must not name the old workspace's dashboard.
+function useOpenDashboard(dashboardId: string | undefined, workspaceId: string | undefined) {
+  return useDashboardsStore((s) =>
+    dashboardId && workspaceId && s.workspaceId === workspaceId
+      ? s.items.find((d) => d.id === dashboardId) ?? null
+      : null,
+  );
 }
 
 const TEAM_TABS = [
@@ -673,14 +700,32 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
   const { currentWorkspace } = useWorkspaceStore();
   const { currentProject } = useProjectStore();
   const workspacePage = useWorkspacePage();
+  const openDashboard = useOpenDashboard(workspacePage?.dashboardId, currentWorkspace?.id);
+  const extensionScreenTitle = useExtensionScreenTitle();
 
   const breadcrumbs: TopbarCrumb[] = [];
   if (currentWorkspace) {
     breadcrumbs.push({ kind: "workspace", label: currentWorkspace.name, href: `/w/${wsSlug}` });
     if (currentProject) {
-      breadcrumbs.push({ kind: "project", label: currentProject.name, href: `/w/${wsSlug}/p/${projectSlug}`, strong: true });
+      breadcrumbs.push({
+        kind: "project",
+        label: currentProject.name,
+        href: `/w/${wsSlug}/p/${projectSlug}`,
+        entityIcon: currentProject.icon || undefined,
+        strong: true,
+      });
+    } else if (openDashboard) {
+      breadcrumbs.push({
+        kind: "page",
+        label: openDashboard.name,
+        icon: workspacePage!.icon,
+        entityIcon: openDashboard.icon || undefined,
+        strong: true,
+      });
     } else if (workspacePage) {
       breadcrumbs.push({ kind: "page", label: t(workspacePage.titleKey), icon: workspacePage.icon, strong: true });
+    } else if (extensionScreenTitle) {
+      breadcrumbs.push({ kind: "page", label: extensionScreenTitle, icon: "Puzzle", strong: true });
     }
   }
 

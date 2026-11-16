@@ -1,0 +1,934 @@
+{
+ "rocket": {
+  "en": "launch startup ship",
+  "ru": "ракета запуск старт"
+ },
+ "folder": {
+  "en": "directory",
+  "ru": "папка"
+ },
+ "folder-kanban": {
+  "en": "board kanban project",
+  "ru": "доска канбан проект"
+ },
+ "folder-open": {
+  "en": "open directory",
+  "ru": "открытая папка"
+ },
+ "file-text": {
+  "en": "document doc",
+  "ru": "документ файл"
+ },
+ "files": {
+  "en": "documents copy",
+  "ru": "файлы документы"
+ },
+ "book-open": {
+  "en": "read docs",
+  "ru": "книга чтение"
+ },
+ "book": {
+  "en": "library",
+  "ru": "книга"
+ },
+ "notebook": {
+  "en": "notes",
+  "ru": "блокнот заметки"
+ },
+ "clipboard-list": {
+  "en": "list tasks checklist",
+  "ru": "список задачи чеклист"
+ },
+ "clipboard-check": {
+  "en": "done checked",
+  "ru": "проверено готово"
+ },
+ "list-checks": {
+  "en": "todo checklist",
+  "ru": "чеклист задачи"
+ },
+ "list-todo": {
+  "en": "todo",
+  "ru": "список дел"
+ },
+ "square-check": {
+  "en": "check done",
+  "ru": "галочка готово"
+ },
+ "circle-check": {
+  "en": "ok success",
+  "ru": "успех готово"
+ },
+ "target": {
+  "en": "goal aim",
+  "ru": "цель мишень"
+ },
+ "flag": {
+  "en": "milestone",
+  "ru": "флаг веха"
+ },
+ "bookmark": {
+  "en": "save",
+  "ru": "закладка"
+ },
+ "tag": {
+  "en": "label",
+  "ru": "метка тег"
+ },
+ "tags": {
+  "en": "labels",
+  "ru": "метки теги"
+ },
+ "star": {
+  "en": "favorite",
+  "ru": "звезда избранное"
+ },
+ "heart": {
+  "en": "love like",
+  "ru": "сердце любовь"
+ },
+ "sparkles": {
+  "en": "magic ai new",
+  "ru": "искры магия новое"
+ },
+ "zap": {
+  "en": "lightning fast",
+  "ru": "молния быстро"
+ },
+ "flame": {
+  "en": "fire hot",
+  "ru": "огонь горячее"
+ },
+ "sun": {
+  "en": "light day",
+  "ru": "солнце день"
+ },
+ "moon": {
+  "en": "dark night",
+  "ru": "луна ночь"
+ },
+ "cloud": {
+  "en": "storage",
+  "ru": "облако"
+ },
+ "umbrella": {
+  "en": "protect",
+  "ru": "зонт защита"
+ },
+ "leaf": {
+  "en": "nature eco",
+  "ru": "лист природа"
+ },
+ "tree-pine": {
+  "en": "forest",
+  "ru": "ёлка лес"
+ },
+ "flower": {
+  "en": "bloom",
+  "ru": "цветок"
+ },
+ "mountain": {
+  "en": "peak",
+  "ru": "гора"
+ },
+ "waves": {
+  "en": "sea water",
+  "ru": "волны море"
+ },
+ "droplet": {
+  "en": "water drop",
+  "ru": "капля вода"
+ },
+ "snowflake": {
+  "en": "cold winter",
+  "ru": "снежинка зима"
+ },
+ "rainbow": {
+  "en": "colors",
+  "ru": "радуга"
+ },
+ "globe": {
+  "en": "world web internet",
+  "ru": "глобус мир интернет"
+ },
+ "map": {
+  "en": "navigation",
+  "ru": "карта"
+ },
+ "map-pin": {
+  "en": "location place",
+  "ru": "метка место"
+ },
+ "compass": {
+  "en": "direction",
+  "ru": "компас"
+ },
+ "navigation": {
+  "en": "gps",
+  "ru": "навигация"
+ },
+ "house": {
+  "en": "home",
+  "ru": "дом"
+ },
+ "building": {
+  "en": "office company",
+  "ru": "здание офис компания"
+ },
+ "building-2": {
+  "en": "city company",
+  "ru": "город компания"
+ },
+ "factory": {
+  "en": "production",
+  "ru": "завод производство"
+ },
+ "store": {
+  "en": "shop",
+  "ru": "магазин"
+ },
+ "warehouse": {
+  "en": "storage stock",
+  "ru": "склад"
+ },
+ "school": {
+  "en": "education",
+  "ru": "школа образование"
+ },
+ "graduation-cap": {
+  "en": "learning study",
+  "ru": "обучение выпускник"
+ },
+ "landmark": {
+  "en": "bank institution",
+  "ru": "банк учреждение"
+ },
+ "hospital": {
+  "en": "medical health",
+  "ru": "больница медицина"
+ },
+ "car": {
+  "en": "auto",
+  "ru": "машина авто"
+ },
+ "truck": {
+  "en": "delivery shipping",
+  "ru": "грузовик доставка"
+ },
+ "bus": {
+  "en": "transport",
+  "ru": "автобус транспорт"
+ },
+ "train-front": {
+  "en": "railway",
+  "ru": "поезд"
+ },
+ "plane": {
+  "en": "flight travel",
+  "ru": "самолёт путешествие"
+ },
+ "ship": {
+  "en": "boat sea",
+  "ru": "корабль лодка"
+ },
+ "bike": {
+  "en": "bicycle",
+  "ru": "велосипед"
+ },
+ "anchor": {
+  "en": "port",
+  "ru": "якорь порт"
+ },
+ "fuel": {
+  "en": "gas",
+  "ru": "топливо"
+ },
+ "package": {
+  "en": "box delivery",
+  "ru": "посылка коробка"
+ },
+ "package-check": {
+  "en": "delivered",
+  "ru": "доставлено"
+ },
+ "gift": {
+  "en": "present",
+  "ru": "подарок"
+ },
+ "shopping-cart": {
+  "en": "buy",
+  "ru": "корзина покупки"
+ },
+ "shopping-bag": {
+  "en": "purchase",
+  "ru": "сумка покупки"
+ },
+ "credit-card": {
+  "en": "payment",
+  "ru": "банковская карта оплата"
+ },
+ "wallet": {
+  "en": "money",
+  "ru": "кошелёк деньги"
+ },
+ "coins": {
+  "en": "money cash",
+  "ru": "монеты деньги"
+ },
+ "banknote": {
+  "en": "cash",
+  "ru": "купюра наличные"
+ },
+ "receipt": {
+  "en": "invoice check",
+  "ru": "чек счёт"
+ },
+ "piggy-bank": {
+  "en": "savings",
+  "ru": "копилка сбережения"
+ },
+ "badge-dollar-sign": {
+  "en": "price",
+  "ru": "цена доллар"
+ },
+ "percent": {
+  "en": "discount",
+  "ru": "процент скидка"
+ },
+ "calculator": {
+  "en": "math count",
+  "ru": "калькулятор"
+ },
+ "chart-bar": {
+  "en": "stats analytics",
+  "ru": "график статистика аналитика"
+ },
+ "chart-line": {
+  "en": "trend growth",
+  "ru": "тренд рост"
+ },
+ "chart-pie": {
+  "en": "share",
+  "ru": "круговая диаграмма"
+ },
+ "trending-up": {
+  "en": "growth increase",
+  "ru": "рост подъём"
+ },
+ "trending-down": {
+  "en": "decline",
+  "ru": "падение спад"
+ },
+ "activity": {
+  "en": "pulse",
+  "ru": "активность пульс"
+ },
+ "gauge": {
+  "en": "speed meter",
+  "ru": "спидометр показатель"
+ },
+ "layout-dashboard": {
+  "en": "dashboard panel",
+  "ru": "дашборд панель"
+ },
+ "layout-grid": {
+  "en": "grid",
+  "ru": "сетка"
+ },
+ "layout-list": {
+  "en": "list view",
+  "ru": "список"
+ },
+ "table": {
+  "en": "spreadsheet",
+  "ru": "таблица"
+ },
+ "kanban": {
+  "en": "board columns",
+  "ru": "канбан доска"
+ },
+ "columns-3": {
+  "en": "columns",
+  "ru": "колонки"
+ },
+ "panel-left": {
+  "en": "sidebar",
+  "ru": "боковая панель"
+ },
+ "inbox": {
+  "en": "mail incoming",
+  "ru": "входящие"
+ },
+ "mail": {
+  "en": "email",
+  "ru": "почта письмо"
+ },
+ "send": {
+  "en": "submit",
+  "ru": "отправить"
+ },
+ "message-square": {
+  "en": "chat comment",
+  "ru": "чат комментарий"
+ },
+ "messages-square": {
+  "en": "conversation",
+  "ru": "переписка"
+ },
+ "message-circle": {
+  "en": "talk",
+  "ru": "сообщение"
+ },
+ "phone": {
+  "en": "call",
+  "ru": "телефон звонок"
+ },
+ "video": {
+  "en": "meeting",
+  "ru": "видео встреча"
+ },
+ "mic": {
+  "en": "voice",
+  "ru": "микрофон голос"
+ },
+ "headphones": {
+  "en": "support listen",
+  "ru": "наушники поддержка"
+ },
+ "radio": {
+  "en": "broadcast",
+  "ru": "радио трансляция"
+ },
+ "megaphone": {
+  "en": "announce marketing",
+  "ru": "рупор объявление маркетинг"
+ },
+ "bell": {
+  "en": "notification",
+  "ru": "колокольчик уведомление"
+ },
+ "rss": {
+  "en": "feed",
+  "ru": "лента"
+ },
+ "at-sign": {
+  "en": "mention",
+  "ru": "собака упоминание"
+ },
+ "hash": {
+  "en": "channel number",
+  "ru": "решётка канал"
+ },
+ "link": {
+  "en": "url chain",
+  "ru": "ссылка"
+ },
+ "paperclip": {
+  "en": "attachment",
+  "ru": "скрепка вложение"
+ },
+ "share-2": {
+  "en": "share",
+  "ru": "поделиться"
+ },
+ "download": {
+  "en": "get",
+  "ru": "скачать"
+ },
+ "upload": {
+  "en": "put",
+  "ru": "загрузить"
+ },
+ "cloud-upload": {
+  "en": "sync",
+  "ru": "облако загрузка"
+ },
+ "database": {
+  "en": "data storage",
+  "ru": "база данных"
+ },
+ "server": {
+  "en": "host",
+  "ru": "сервер"
+ },
+ "hard-drive": {
+  "en": "disk",
+  "ru": "диск"
+ },
+ "cpu": {
+  "en": "processor chip",
+  "ru": "процессор чип"
+ },
+ "microchip": {
+  "en": "chip",
+  "ru": "чип"
+ },
+ "monitor": {
+  "en": "screen display",
+  "ru": "монитор экран"
+ },
+ "laptop": {
+  "en": "computer",
+  "ru": "ноутбук компьютер"
+ },
+ "smartphone": {
+  "en": "mobile",
+  "ru": "смартфон"
+ },
+ "tablet": {
+  "en": "ipad",
+  "ru": "планшет"
+ },
+ "keyboard": {
+  "en": "type",
+  "ru": "клавиатура"
+ },
+ "mouse-pointer": {
+  "en": "cursor click",
+  "ru": "курсор клик"
+ },
+ "terminal": {
+  "en": "console shell",
+  "ru": "терминал консоль"
+ },
+ "code": {
+  "en": "programming",
+  "ru": "код программирование"
+ },
+ "code-xml": {
+  "en": "html",
+  "ru": "разметка"
+ },
+ "braces": {
+  "en": "json",
+  "ru": "скобки"
+ },
+ "git-branch": {
+  "en": "branch vcs",
+  "ru": "ветка гит"
+ },
+ "git-merge": {
+  "en": "merge",
+  "ru": "слияние"
+ },
+ "git-pull-request": {
+  "en": "pr review",
+  "ru": "пулреквест ревью"
+ },
+ "git-commit-horizontal": {
+  "en": "commit",
+  "ru": "коммит"
+ },
+ "bug": {
+  "en": "defect error",
+  "ru": "баг дефект ошибка"
+ },
+ "shield": {
+  "en": "security protect",
+  "ru": "щит безопасность"
+ },
+ "shield-check": {
+  "en": "secure verified",
+  "ru": "защита проверено"
+ },
+ "lock": {
+  "en": "private",
+  "ru": "замок приватно"
+ },
+ "lock-open": {
+  "en": "unlock public",
+  "ru": "открытый замок"
+ },
+ "key-round": {
+  "en": "key password",
+  "ru": "ключ пароль"
+ },
+ "fingerprint": {
+  "en": "identity biometric",
+  "ru": "отпечаток идентификация"
+ },
+ "scan": {
+  "en": "scanner",
+  "ru": "сканер"
+ },
+ "eye": {
+  "en": "view watch",
+  "ru": "глаз просмотр"
+ },
+ "eye-off": {
+  "en": "hidden",
+  "ru": "скрыто"
+ },
+ "search": {
+  "en": "find",
+  "ru": "поиск"
+ },
+ "filter": {
+  "en": "sort",
+  "ru": "фильтр"
+ },
+ "settings": {
+  "en": "gear config",
+  "ru": "настройки шестерёнка"
+ },
+ "wrench": {
+  "en": "fix tool",
+  "ru": "ключ инструмент починить"
+ },
+ "hammer": {
+  "en": "build",
+  "ru": "молоток сборка"
+ },
+ "cog": {
+  "en": "gear",
+  "ru": "шестерня"
+ },
+ "sliders-horizontal": {
+  "en": "adjust controls",
+  "ru": "ползунки настройки"
+ },
+ "toggle-left": {
+  "en": "switch",
+  "ru": "переключатель"
+ },
+ "plug": {
+  "en": "connect integration",
+  "ru": "вилка интеграция"
+ },
+ "puzzle": {
+  "en": "plugin extension",
+  "ru": "пазл плагин расширение"
+ },
+ "blocks": {
+  "en": "modules",
+  "ru": "блоки модули"
+ },
+ "box": {
+  "en": "cube",
+  "ru": "куб"
+ },
+ "boxes": {
+  "en": "stack",
+  "ru": "коробки стек"
+ },
+ "layers": {
+  "en": "stack levels",
+  "ru": "слои"
+ },
+ "workflow": {
+  "en": "process flow",
+  "ru": "процесс поток"
+ },
+ "network": {
+  "en": "graph",
+  "ru": "сеть граф"
+ },
+ "route": {
+  "en": "path",
+  "ru": "маршрут путь"
+ },
+ "split": {
+  "en": "fork",
+  "ru": "разветвление"
+ },
+ "repeat": {
+  "en": "loop",
+  "ru": "повтор цикл"
+ },
+ "refresh-cw": {
+  "en": "reload",
+  "ru": "обновить"
+ },
+ "history": {
+  "en": "past",
+  "ru": "история"
+ },
+ "clock": {
+  "en": "time",
+  "ru": "часы время"
+ },
+ "timer": {
+  "en": "stopwatch",
+  "ru": "таймер секундомер"
+ },
+ "alarm-clock": {
+  "en": "reminder",
+  "ru": "будильник напоминание"
+ },
+ "calendar": {
+  "en": "date schedule",
+  "ru": "календарь дата"
+ },
+ "calendar-check": {
+  "en": "scheduled",
+  "ru": "запланировано"
+ },
+ "hourglass": {
+  "en": "wait",
+  "ru": "песочные часы ожидание"
+ },
+ "user": {
+  "en": "person profile",
+  "ru": "пользователь человек профиль"
+ },
+ "user-round": {
+  "en": "person",
+  "ru": "человек"
+ },
+ "users": {
+  "en": "team group",
+  "ru": "команда группа"
+ },
+ "users-round": {
+  "en": "people",
+  "ru": "люди"
+ },
+ "user-plus": {
+  "en": "invite add",
+  "ru": "пригласить добавить"
+ },
+ "user-check": {
+  "en": "approved",
+  "ru": "подтверждённый пользователь"
+ },
+ "contact": {
+  "en": "address book",
+  "ru": "контакты"
+ },
+ "handshake": {
+  "en": "deal partnership",
+  "ru": "рукопожатие сделка партнёрство"
+ },
+ "bot": {
+  "en": "robot agent",
+  "ru": "бот робот агент"
+ },
+ "brain": {
+  "en": "mind ai",
+  "ru": "мозг разум"
+ },
+ "lightbulb": {
+  "en": "idea",
+  "ru": "лампочка идея"
+ },
+ "sparkle": {
+  "en": "shine",
+  "ru": "блеск"
+ },
+ "wand-sparkles": {
+  "en": "magic wand",
+  "ru": "волшебная палочка"
+ },
+ "palette": {
+  "en": "design colors",
+  "ru": "палитра дизайн"
+ },
+ "paintbrush": {
+  "en": "paint art",
+  "ru": "кисть искусство"
+ },
+ "pen-tool": {
+  "en": "vector draw",
+  "ru": "перо векторный"
+ },
+ "pencil": {
+  "en": "edit write",
+  "ru": "карандаш правка"
+ },
+ "eraser": {
+  "en": "remove",
+  "ru": "ластик"
+ },
+ "image": {
+  "en": "picture photo",
+  "ru": "картинка фото"
+ },
+ "camera": {
+  "en": "photo",
+  "ru": "камера"
+ },
+ "film": {
+  "en": "movie video",
+  "ru": "кино плёнка"
+ },
+ "music": {
+  "en": "audio song",
+  "ru": "музыка аудио"
+ },
+ "gamepad-2": {
+  "en": "game",
+  "ru": "игры геймпад"
+ },
+ "dice-5": {
+  "en": "random game",
+  "ru": "кубик игра"
+ },
+ "trophy": {
+  "en": "win award",
+  "ru": "кубок награда"
+ },
+ "medal": {
+  "en": "prize",
+  "ru": "медаль приз"
+ },
+ "award": {
+  "en": "badge",
+  "ru": "награда значок"
+ },
+ "crown": {
+  "en": "premium king",
+  "ru": "корона премиум"
+ },
+ "gem": {
+  "en": "diamond",
+  "ru": "алмаз драгоценность"
+ },
+ "swords": {
+  "en": "battle",
+  "ru": "мечи битва"
+ },
+ "flask-conical": {
+  "en": "lab experiment",
+  "ru": "колба лаборатория эксперимент"
+ },
+ "microscope": {
+  "en": "research science",
+  "ru": "микроскоп исследование наука"
+ },
+ "dna": {
+  "en": "biology",
+  "ru": "днк биология"
+ },
+ "atom": {
+  "en": "physics",
+  "ru": "атом физика"
+ },
+ "telescope": {
+  "en": "space observe",
+  "ru": "телескоп космос"
+ },
+ "satellite": {
+  "en": "orbit",
+  "ru": "спутник орбита"
+ },
+ "orbit": {
+  "en": "planet",
+  "ru": "орбита планета"
+ },
+ "coffee": {
+  "en": "break",
+  "ru": "кофе перерыв"
+ },
+ "utensils": {
+  "en": "food restaurant",
+  "ru": "приборы еда ресторан"
+ },
+ "pizza": {
+  "en": "food",
+  "ru": "пицца"
+ },
+ "cake": {
+  "en": "birthday",
+  "ru": "торт день рождения"
+ },
+ "wine": {
+  "en": "drink",
+  "ru": "вино напиток"
+ },
+ "shirt": {
+  "en": "clothes",
+  "ru": "рубашка одежда"
+ },
+ "glasses": {
+  "en": "vision",
+  "ru": "очки"
+ },
+ "scale": {
+  "en": "balance law",
+  "ru": "весы закон"
+ },
+ "gavel": {
+  "en": "court legal",
+  "ru": "молоток судьи право"
+ },
+ "scroll-text": {
+  "en": "contract",
+  "ru": "свиток договор"
+ },
+ "stamp": {
+  "en": "approve",
+  "ru": "печать утверждение"
+ },
+ "archive": {
+  "en": "storage old",
+  "ru": "архив"
+ },
+ "trash-2": {
+  "en": "delete",
+  "ru": "корзина удалить"
+ },
+ "circle-alert": {
+  "en": "warning attention",
+  "ru": "внимание предупреждение"
+ },
+ "triangle-alert": {
+  "en": "danger",
+  "ru": "опасность"
+ },
+ "info": {
+  "en": "help",
+  "ru": "информация"
+ },
+ "circle-help": {
+  "en": "question",
+  "ru": "вопрос помощь"
+ },
+ "life-buoy": {
+  "en": "support help",
+  "ru": "спасательный круг поддержка"
+ },
+ "siren": {
+  "en": "alert emergency",
+  "ru": "сирена авария"
+ },
+ "construction": {
+  "en": "work in progress",
+  "ru": "стройка"
+ },
+ "hand-helping": {
+  "en": "help",
+  "ru": "помощь рука"
+ },
+ "thumbs-up": {
+  "en": "like approve",
+  "ru": "палец вверх лайк"
+ },
+ "smile": {
+  "en": "happy",
+  "ru": "улыбка"
+ },
+ "paw-print": {
+  "en": "animal",
+  "ru": "лапа животное"
+ },
+ "bird": {
+  "en": "animal",
+  "ru": "птица"
+ },
+ "fish": {
+  "en": "animal",
+  "ru": "рыба"
+ },
+ "bug-play": {
+  "en": "test run",
+  "ru": "тест запуск"
+ },
+ "test-tube": {
+  "en": "testing",
+  "ru": "пробирка тест"
+ },
+ "infinity": {
+  "en": "endless",
+  "ru": "бесконечность"
+ }
+}

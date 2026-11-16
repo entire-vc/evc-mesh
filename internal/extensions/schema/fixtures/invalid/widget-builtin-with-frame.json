@@ -1,0 +1,144 @@
+{
+  "schema": 1,
+  "id": "gitlab",
+  "name": "GitLab",
+  "version": "1.1.0",
+  "kind": "integration",
+  "runtime": "builtin",
+  "mesh_api": ">=1 <2",
+  "publisher": "entire-vc",
+  "description": "MR и пайплайны GitLab в карточках задач; гейты на пайплайн",
+  "category": "development",
+  "tags": [
+    "vcs",
+    "ci"
+  ],
+  "icon": "icon.svg",
+  "license": "Apache-2.0",
+  "repository": "https://gitlab.example.invalid/entire-vc/evc-mesh",
+  "homepage": "https://mesh.example.invalid/docs/extensions/gitlab",
+  "levels": {
+    "instance": true,
+    "workspace": true,
+    "project": true
+  },
+  "settings": {
+    "instance": {
+      "$ref": "#/schemas/connection"
+    },
+    "workspace": {
+      "$ref": "#/schemas/connection"
+    },
+    "project": {
+      "type": "object",
+      "properties": {
+        "repo_path": {
+          "type": "string",
+          "title": "Репозиторий (group/project)"
+        }
+      },
+      "required": [
+        "repo_path"
+      ]
+    }
+  },
+  "schemas": {
+    "connection": {
+      "type": "object",
+      "properties": {
+        "base_url": {
+          "type": "string",
+          "format": "uri",
+          "title": "Адрес GitLab"
+        },
+        "token": {
+          "type": "string",
+          "title": "Токен",
+          "x-secret": true
+        },
+        "webhook_secret": {
+          "type": "string",
+          "title": "Секрет вебхука",
+          "x-secret": true
+        }
+      },
+      "required": [
+        "base_url",
+        "token"
+      ]
+    }
+  },
+  "capabilities": {
+    "api": [
+      "tasks:read",
+      "tasks:write",
+      "comments:write",
+      "vcs_links:write"
+    ],
+    "events": [
+      "task.updated",
+      "comment.created"
+    ],
+    "webhooks_in": [
+      "gitlab"
+    ],
+    "network": {
+      "allowed_domains": [
+        "{settings.base_url}"
+      ],
+      "reasoning": "вызовы API GitLab по адресу из настроек"
+    },
+    "ui": [
+      "task.panel",
+      "task.badge",
+      "project.settings",
+      "workspace.settings",
+      "dashboard.widget"
+    ],
+    "secrets": [
+      "token",
+      "webhook_secret"
+    ]
+  },
+  "external": null,
+  "widgets": [
+    {
+      "id": "failed-pipelines",
+      "title": "Failed pipelines",
+      "title_i18n": {
+        "ru": "Упавшие пайплайны"
+      },
+      "description": "Pipelines of my merge requests that failed in the last 24 h",
+      "category": "development",
+      "size": {
+        "default": {
+          "w": 6,
+          "h": 4
+        },
+        "min": {
+          "w": 3,
+          "h": 2
+        },
+        "max": {
+          "w": 12,
+          "h": 8
+        }
+      },
+      "settings": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "x-widget": "project-picker"
+          }
+        }
+      },
+      "scope": "project",
+      "render": {
+        "frame": {
+          "path": "/x"
+        }
+      }
+    }
+  ]
+}

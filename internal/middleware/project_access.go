@@ -86,6 +86,11 @@ type ProjectMembership interface {
 // that are built before any repository exists.
 type dbProjectMembership struct{ db *sqlx.DB }
 
+// NewDBProjectMembership returns ProjectMembership over a bare *sqlx.DB, for
+// callers outside the middleware chain that apply the same project access rule
+// (the WebSocket hub).
+func NewDBProjectMembership(db *sqlx.DB) ProjectMembership { return dbProjectMembership{db} }
+
 func (m dbProjectMembership) ExistsMember(ctx context.Context, projectID uuid.UUID, userID, agentID *uuid.UUID) (bool, error) {
 	var exists bool
 	switch {

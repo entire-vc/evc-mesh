@@ -136,6 +136,62 @@ describe("UpdatesTab", () => {
     await waitFor(() => expect(repo.rollbackRepoExtension).toHaveBeenCalledWith("hello"));
   });
 
+  it("shows the Runner versions its controllers report next to Installed", () => {
+    const st = state([
+      upd({ extension_id: "agent-runner", name: "Agent Runner", current_version: "0.2.40", update_available: false, reported_versions: ["0.2.54", "0.2.55"] }),
+      upd({ update_available: false }),
+    ]);
+    render(<UpdatesTab state={st} autoUpdate={false} onAutoUpdateChange={() => undefined} />);
+    expect(screen.getByTestId("update-running-agent-runner").textContent).toBe("Running: 0.2.54, 0.2.55");
+    expect(screen.queryByTestId("update-running-hello")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Roll back/ })).toBeNull();
+  });
+
+  it("a catalog row without a git ref drops the empty ref instead of rendering '(, sha)'", () => {
+    const st = state([
+      upd({ extension_id: "agent-runner", name: "Agent Runner", current_version: "0.2.40", current_ref: "", current_commit: "45aa84f1c0ffee", update_available: false }),
+      upd({ extension_id: "keep", name: "Keep", current_version: "0.6.5", current_ref: "main", current_commit: "ab2d26e3ffff", update_available: false }),
+      upd({ extension_id: "bare", name: "Bare", current_version: "1.0.0", current_ref: "", current_commit: "", latest_ref: "", latest_commit: "9e4510ba77", latest_version: "1.0.1" }),
+      upd({ extension_id: "none", name: "None", current_version: "2.0.0", current_ref: "", current_commit: "", latest_ref: undefined, latest_commit: "", latest_version: "2.0.1" }),
+    ]);
+    render(<UpdatesTab state={st} autoUpdate={false} onAutoUpdateChange={() => undefined} />);
+    const runner = screen.getByTestId("update-row-agent-runner").textContent ?? "";
+    expect(runner).toContain("Installed: 0.2.40 (45aa84f1)");
+    expect(runner).not.toContain("(,");
+    expect(screen.getByTestId("update-row-keep").textContent).toContain("Installed: 0.6.5 (main, ab2d26e3)");
+    const bare = screen.getByTestId("update-row-bare").textContent ?? "";
+    expect(bare).toContain("Installed: 1.0.0");
+    expect(bare).not.toContain("Installed: 1.0.0 (");
+    expect(bare).toContain("Available: 1.0.1 (9e4510ba)");
+    const none = screen.getByTestId("update-row-none").textContent ?? "";
+    expect(none).toContain("Available: 2.0.1");
+    expect(none).not.toMatch(/\(\s*,|\(\s*\)/);
+  });
+
+  it("a commit-pinned row shows its sha once instead of repeating it as the ref", () => {
+    const pinned = "201ad655a0c78952315e0a3c4801cf892e18166a";
+    const next = "7f3e9c21d4b5a6978812ab34cd56ef7890ab12cd";
+    const st = state([
+      upd({ extension_id: "reference", name: "Reference extension", current_ref: pinned, current_commit: pinned, latest_ref: next, latest_commit: next, latest_version: "0.1.1" }),
+      upd({ extension_id: "short-ref", name: "Short ref", current_ref: "201AD655", current_commit: pinned, latest_ref: next, latest_commit: "7f3e9c21", latest_version: "0.1.1" }),
+      upd({ extension_id: "keep", name: "Keep", current_version: "0.6.5", current_ref: "main", current_commit: "ab2d26e3ffff", update_available: false }),
+      upd({ extension_id: "qa", name: "QA pilot", current_ref: "qa-pilot-c7aed647", current_commit: "c7aed6471234", update_available: false }),
+      upd({ extension_id: "hexref", name: "Hex branch", current_ref: "deadbeef", current_commit: "ab2d26e3ffff", update_available: false }),
+    ]);
+    render(<UpdatesTab state={st} autoUpdate={false} onAutoUpdateChange={() => undefined} />);
+    const reference = screen.getByTestId("update-row-reference").textContent ?? "";
+    expect(reference).toContain("Installed: 0.1.0 (201ad655)");
+    expect(reference).toContain("Available: 0.1.1 (7f3e9c21)");
+    expect(reference).not.toContain(pinned);
+    expect(reference).not.toContain(next);
+    const shortRef = screen.getByTestId("update-row-short-ref").textContent ?? "";
+    expect(shortRef).toContain("Installed: 0.1.0 (201ad655)");
+    expect(shortRef).toContain("Available: 0.1.1 (7f3e9c21)");
+    expect(screen.getByTestId("update-row-keep").textContent).toContain("Installed: 0.6.5 (main, ab2d26e3)");
+    expect(screen.getByTestId("update-row-qa").textContent).toContain("Installed: 0.1.0 (qa-pilot-c7aed647, c7aed647)");
+    expect(screen.getByTestId("update-row-hexref").textContent).toContain("Installed: 0.1.0 (deadbeef, ab2d26e3)");
+  });
+
   it("empty state points at the install button", () => {
     render(<UpdatesTab state={state([])} autoUpdate={false} onAutoUpdateChange={() => undefined} />);
     expect(screen.getByText("Everything is up to date")).toBeTruthy();

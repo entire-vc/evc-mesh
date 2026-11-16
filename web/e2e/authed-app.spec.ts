@@ -6,6 +6,7 @@ import {
   type Page,
 } from "@playwright/test";
 import { pinUiLocale } from "./auth-helper";
+import { rateLimitAware } from "./api-retry";
 
 /**
  * E2E scenarios: authed-app-load + docs-write-path
@@ -59,6 +60,8 @@ const FIXTURE_TASK_TITLE = "E2E read fixture — do not delete";
 const SCRATCH_PREFIX = "[e2e]";
 
 let context: BrowserContext;
+// Every API call of this file goes through here: 429 waits for Retry-After and is sent again (see api-retry.ts).
+const api = () => rateLimitAware(context.request);
 let page: Page;
 let accessToken: string;
 let consoleErrors: string[] = [];
@@ -99,7 +102,7 @@ test.beforeAll(async ({ browser }) => {
 
   // Log in through the real endpoint the app uses. The response carries the
   // access token; the httpOnly refresh cookie lands in this context's jar.
-  const res = await context.request.post("/api/v1/auth/login", {
+  const res = await api().post("/api/v1/auth/login", {
     data: { email: email(), password: process.env.E2E_USER_PASSWORD },
   });
   expect(
@@ -160,20 +163,20 @@ test.afterAll(async () => {
   // an id is on these lists, not "whatever the plan said should exist".
   if (accessToken && projectId) {
     for (const id of createdCommentIds) {
-      const res = await context.request.delete(`/api/v1/document-comments/${id}`, {
+      const res = await api().delete(`/api/v1/document-comments/${id}`, {
         headers: auth(),
       });
       console.log(`[cleanup] DELETE document-comment ${id} -> ${res.status()}`);
     }
     for (const id of createdDocumentIds) {
-      const res = await context.request.delete(`/api/v1/documents/${id}`, {
+      const res = await api().delete(`/api/v1/documents/${id}`, {
         headers: auth(),
       });
       console.log(`[cleanup] DELETE document ${id} -> ${res.status()}`);
     }
 
     // Evidence, printed into the job log: what the sandbox holds afterwards.
-    const left = await listDocuments(context.request);
+    const left = await listDocuments(api());
     console.log(
       `[cleanup] documents left in ${SANDBOX_PROJECT_SLUG}: ${left.length} ` +
         `[${left.map((d) => d.title).join(", ")}]`
@@ -192,14 +195,14 @@ test.afterAll(async () => {
 test("the API honours the session and reports our user", async () => {
   // Unconditional. The previous version wrapped its only assertion in
   // `if (resp.status() === 200)`, so a 401 asserted nothing at all.
-  const me = await context.request.get("/api/v1/auth/me", { headers: auth() });
+  const me = await api().get("/api/v1/auth/me", { headers: auth() });
   expect(me.status(), "/api/v1/auth/me must accept the session").toBe(200);
 
   const who = (await me.json()) as { email?: string; is_active?: boolean };
   expect(who.email?.toLowerCase()).toBe(email().toLowerCase());
   expect(who.is_active, "the E2E user must be active").toBe(true);
 
-  const wss = await context.request.get("/api/v1/workspaces", { headers: auth() });
+  const wss = await api().get("/api/v1/workspaces", { headers: auth() });
   expect(wss.status(), "/api/v1/workspaces must accept the session").toBe(200);
   const workspaces = (await wss.json()) as Array<{ id?: string; slug?: string }>;
   expect(Array.isArray(workspaces), "workspaces payload must be an array").toBe(true);
@@ -214,7 +217,7 @@ test("the API honours the session and reports our user", async () => {
   ).toEqual([SANDBOX_WS_SLUG]);
   workspaceId = workspaces[0]!.id!;
 
-  const projects = await context.request.get(
+  const projects = await api().get(
     `/api/v1/workspaces/${workspaceId}/projects`,
     { headers: auth() }
   );
@@ -231,7 +234,7 @@ test("the API honours the session and reports our user", async () => {
 
   // Workspace task search is the user-facing read path (it requires `search`;
   // omitting it is a 400, not an auth failure — worth knowing when this goes red).
-  const tasks = await context.request.get(
+  const tasks = await api().get(
     `/api/v1/workspaces/${workspaceId}/tasks?search=fixture&limit=10`,
     { headers: auth() }
   );
@@ -297,7 +300,7 @@ test("the authenticated shell loads into the workspace, cleanly", async () => {
 test("a user creates a document through the UI and the server has it", async () => {
   const title = `${SCRATCH_PREFIX} document ${runTag}`;
 
-  const before = await listDocuments(context.request);
+  const before = await listDocuments(api());
   console.log(
     `[write] documents before: ${before.length} [${before.map((d) => d.title).join(", ")}]`
   );
@@ -308,7 +311,7 @@ test("a user creates a document through the UI and the server has it", async () 
   for (const doc of before) {
     if (!doc.title.startsWith(SCRATCH_PREFIX)) continue;
     if (!doc.created_at || Date.parse(doc.created_at) > staleBefore) continue;
-    const res = await context.request.delete(`/api/v1/documents/${doc.id}`, {
+    const res = await api().delete(`/api/v1/documents/${doc.id}`, {
       headers: auth(),
     });
     console.log(`[write] swept stale "${doc.title}" -> ${res.status()}`);
@@ -353,7 +356,7 @@ test("a user creates a document through the UI and the server has it", async () 
   });
 
   // GROUND TRUTH: the server, asked independently, has exactly one such row.
-  const after = await listDocuments(context.request);
+  const after = await listDocuments(api());
   const mine = after.filter((d) => d.title === title);
   // Register for cleanup BEFORE asserting. The negative control caught this the
   // hard way: with the id recorded after the assert, the failing run left its
@@ -382,13 +385,13 @@ test("a comment is written to that document, resolved and unresolved", async () 
   // Give the document something to anchor to. PATCH exercises the update side
   // of the write path (PermUploadArtifact), which create alone does not.
   const quote = "the write path is exercised";
-  const patch = await context.request.patch(`/api/v1/documents/${docId}`, {
+  const patch = await api().patch(`/api/v1/documents/${docId}`, {
     headers: auth(),
     data: { body: `Run ${runTag}: ${quote} against the deployed host.\n` },
   });
   expect(patch.status(), "the document body must be writable").toBe(200);
 
-  const created = await context.request.post(`/api/v1/documents/${docId}/comments`, {
+  const created = await api().post(`/api/v1/documents/${docId}/comments`, {
     headers: auth(),
     data: { body: `E2E write-path check ${runTag}`, quote },
   });
@@ -409,7 +412,7 @@ test("a comment is written to that document, resolved and unresolved", async () 
   expect(comment.anchor?.exact, "the stored anchor must quote the document").toBe(quote);
   expect(comment.anchor?.orphaned, "a freshly anchored comment is not orphaned").toBe(false);
 
-  const resolve = await context.request.post(
+  const resolve = await api().post(
     `/api/v1/document-comments/${comment.id}/resolve`,
     { headers: auth() }
   );
@@ -419,7 +422,7 @@ test("a comment is written to that document, resolved and unresolved", async () 
     "a resolved comment carries resolved_at"
   ).toBeTruthy();
 
-  const unresolve = await context.request.post(
+  const unresolve = await api().post(
     `/api/v1/document-comments/${comment.id}/unresolve`,
     { headers: auth() }
   );
@@ -431,7 +434,7 @@ test("a comment is written to that document, resolved and unresolved", async () 
 
   // Read it back through the list endpoint the reading view uses, so the
   // assert is about what a user would see and not only about the write reply.
-  const list = await context.request.get(`/api/v1/documents/${docId}/comments`, {
+  const list = await api().get(`/api/v1/documents/${docId}/comments`, {
     headers: auth(),
   });
   expect(list.status(), "the comment list must be readable").toBe(200);

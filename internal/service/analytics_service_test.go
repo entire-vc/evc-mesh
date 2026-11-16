@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"testing"
 	"time"
@@ -13,6 +15,8 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 // testDB connects to a real Postgres instance for analytics query tests — these run raw
@@ -136,6 +140,7 @@ func TestAnalyticsService_GetMetrics_CostMetrics(t *testing.T) {
 
 	metrics, err := svc.GetMetrics(context.Background(), AnalyticsFilter{
 		WorkspaceID: workspaceID,
+		Viewer:      AnalyticsViewer{AllProjects: true},
 		From:        from,
 		To:          to,
 	})
@@ -182,6 +187,7 @@ func TestAnalyticsService_GetMetrics_CostMetrics_ProjectFilter(t *testing.T) {
 
 	metrics, err := svc.GetMetrics(context.Background(), AnalyticsFilter{
 		WorkspaceID: workspaceID,
+		Viewer:      AnalyticsViewer{AllProjects: true},
 		ProjectID:   &projectID,
 		From:        from,
 		To:          to,
@@ -199,7 +205,7 @@ func TestAnalyticsService_GetMetrics_CostMetrics_ProjectFilter(t *testing.T) {
 }
 
 // TestAnalyticsService_GetMetrics_CostMetrics_ReportedCoverage is the regression test for
-// #7fe93754: session_count (every agent_sessions row touched, including unreported
+// session_count (every agent_sessions row touched, including unreported
 // tool-breakdown-tracker stubs) must stay distinct from reported_session_count (rows that
 // actually carry a model_used from a real session_report) — the two must NOT be conflated
 // into a single "Total spend" / "Avg per session" figure.
@@ -240,6 +246,7 @@ func TestAnalyticsService_GetMetrics_CostMetrics_ReportedCoverage(t *testing.T) 
 	svc := NewAnalyticsService(db)
 	metrics, err := svc.GetMetrics(context.Background(), AnalyticsFilter{
 		WorkspaceID: workspaceID,
+		Viewer:      AnalyticsViewer{AllProjects: true},
 		From:        time.Now().Add(-time.Hour),
 		To:          time.Now().Add(time.Hour),
 	})
@@ -258,6 +265,7 @@ func TestAnalyticsService_GetMetrics_CostMetrics_EmptyWorkspace(t *testing.T) {
 	svc := NewAnalyticsService(db)
 	metrics, err := svc.GetMetrics(context.Background(), AnalyticsFilter{
 		WorkspaceID: uuid.New(),
+		Viewer:      AnalyticsViewer{AllProjects: true},
 		From:        time.Now().Add(-time.Hour),
 		To:          time.Now().Add(time.Hour),
 	})
@@ -315,7 +323,7 @@ func insertEventBusMessage(t *testing.T, db *sqlx.DB, workspaceID, projectID uui
 }
 
 // TestAnalyticsService_GetMetrics_EventMetrics_PeriodFilter is the regression test for the
-// audit finding (#9b803a9b): queryEventMetrics used to ignore filter.From/To entirely and
+// audit finding: queryEventMetrics used to ignore filter.From/To entirely and
 // return the whole live queue for the scope regardless of the requested period. Rows outside
 // the requested window must not be counted.
 func TestAnalyticsService_GetMetrics_EventMetrics_PeriodFilter(t *testing.T) {
@@ -332,6 +340,7 @@ func TestAnalyticsService_GetMetrics_EventMetrics_PeriodFilter(t *testing.T) {
 	svc := NewAnalyticsService(db)
 	metrics, err := svc.GetMetrics(context.Background(), AnalyticsFilter{
 		WorkspaceID: workspaceID,
+		Viewer:      AnalyticsViewer{AllProjects: true},
 		ProjectID:   &projectID,
 		From:        now.Add(-time.Hour),
 		To:          now.Add(time.Hour),
@@ -363,6 +372,7 @@ func TestAnalyticsService_GetMetrics_EventMetrics_QueueVsClosedPeriod(t *testing
 	svc := NewAnalyticsService(db)
 	metrics, err := svc.GetMetrics(context.Background(), AnalyticsFilter{
 		WorkspaceID: workspaceID,
+		Viewer:      AnalyticsViewer{AllProjects: true},
 		ProjectID:   &projectID,
 		// A closed period well over a month in the past — the queue's TTL could
 		// never have retained anything from here even if it existed.
@@ -393,6 +403,7 @@ func TestAnalyticsService_GetMetrics_EventMetrics_FullyCovered(t *testing.T) {
 	svc := NewAnalyticsService(db)
 	metrics, err := svc.GetMetrics(context.Background(), AnalyticsFilter{
 		WorkspaceID: workspaceID,
+		Viewer:      AnalyticsViewer{AllProjects: true},
 		ProjectID:   &projectID,
 		From:        now.Add(-time.Hour), // after retained_since (-3h) → within the covered window
 		To:          now,
@@ -416,6 +427,7 @@ func TestAnalyticsService_GetMetrics_EventMetrics_EmptyWorkspace(t *testing.T) {
 	svc := NewAnalyticsService(db)
 	metrics, err := svc.GetMetrics(context.Background(), AnalyticsFilter{
 		WorkspaceID: uuid.New(),
+		Viewer:      AnalyticsViewer{AllProjects: true},
 		From:        time.Now().Add(-time.Hour),
 		To:          time.Now().Add(time.Hour),
 	})
@@ -479,6 +491,7 @@ func TestAnalyticsService_TopTasksSort_TokensWithZeroCost(t *testing.T) {
 	window := func(sort string) []TaskCostRow {
 		m, err := svc.GetMetrics(context.Background(), AnalyticsFilter{
 			WorkspaceID: workspaceID, From: time.Now().Add(-time.Hour), To: time.Now().Add(time.Hour), TopTasksSort: sort,
+			Viewer: AnalyticsViewer{AllProjects: true},
 		})
 		require.NoError(t, err)
 		return m.CostMetrics.TopTasks
@@ -502,7 +515,6 @@ func TestAnalyticsService_TopTasksSort_MixedCostAndTokens(t *testing.T) {
 	db := testDB(t)
 	workspaceID, projectID, fixtureTask, agentID, _ := seedCostFixture(t, db)
 	otherWS, otherProject, otherTask, otherAgent, _ := seedCostFixture(t, db)
-	_ = otherProject
 	insertSession(t, db, otherWS, otherAgent, &otherTask, 50, 5_000_000, 5_000_000, "") // other workspace: must never leak
 	svc := NewAnalyticsService(db)
 
@@ -534,7 +546,8 @@ func TestAnalyticsService_TopTasksSort_MixedCostAndTokens(t *testing.T) {
 	get := func(sort string, project *uuid.UUID) []TaskCostRow {
 		m, getErr := svc.GetMetrics(context.Background(), AnalyticsFilter{
 			WorkspaceID: workspaceID, ProjectID: project,
-			From: time.Now().Add(-time.Hour), To: time.Now().Add(time.Hour), TopTasksSort: sort,
+			Viewer: AnalyticsViewer{AllProjects: true},
+			From:   time.Now().Add(-time.Hour), To: time.Now().Add(time.Hour), TopTasksSort: sort,
 		})
 		require.NoError(t, getErr)
 		return m.CostMetrics.TopTasks
@@ -554,14 +567,23 @@ func TestAnalyticsService_TopTasksSort_MixedCostAndTokens(t *testing.T) {
 	assert.NotContains(t, ids, old, "outside the date window")
 	assert.NotContains(t, ids, otherTask, "other workspace")
 
-	// Project filter: positive control for the real project, empty for an unrelated one.
+	// Project filter: positive control for the real project; an unknown id or a
+	// project of another workspace is refused even for owner/admin.
 	assert.Equal(t, whale, get(TopTasksSortTokens, &projectID)[0].TaskID)
-	unrelated := uuid.New()
-	assert.Empty(t, get(TopTasksSortTokens, &unrelated))
+	for _, p := range []uuid.UUID{uuid.New(), otherProject} {
+		_, refusal := svc.GetMetrics(context.Background(), AnalyticsFilter{
+			WorkspaceID: workspaceID, ProjectID: &p, Viewer: AnalyticsViewer{AllProjects: true},
+			From: time.Now().Add(-time.Hour), To: time.Now().Add(time.Hour), TopTasksSort: TopTasksSortTokens,
+		})
+		var apiErr *apierror.Error
+		require.True(t, errors.As(refusal, &apiErr), "project %s: got %v", p, refusal)
+		require.Equal(t, http.StatusForbidden, apiErr.Code)
+	}
 
 	// Unknown sort is rejected, not interpolated.
 	_, err = svc.GetMetrics(context.Background(), AnalyticsFilter{
 		WorkspaceID: workspaceID, From: time.Now().Add(-time.Hour), To: time.Now().Add(time.Hour),
+		Viewer:       AnalyticsViewer{AllProjects: true},
 		TopTasksSort: "cost; DROP TABLE tasks",
 	})
 	require.Error(t, err)

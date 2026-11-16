@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Dialog,
@@ -21,7 +21,7 @@ interface ConfirmDialogProps {
   variant?: "default" | "destructive";
   requireText?: string;
   isLoading?: boolean;
-  /** Also cancel on Esc and a click on the backdrop. Off by default: other confirms keep their behaviour. */
+  /** Also cancel on a click on the backdrop. Off by default. Escape always cancels (like Cancel) unless processing. */
   dismissible?: boolean;
 }
 
@@ -49,23 +49,13 @@ export function ConfirmDialog({
     }
   };
 
-  // The shared Dialog has no keyboard handling; Esc must cancel like the Cancel button.
-  useEffect(() => {
-    if (!open || !dismissible) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") handleOpenChange(false);
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  });
-
   const handleConfirm = () => {
     if (!canConfirm) return;
     onConfirm();
   };
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange} closeOnBackdrop={dismissible}>
+    <Dialog open={open} onOpenChange={handleOpenChange} closeOnBackdrop={dismissible} closeOnEscape={!isLoading}>
       <DialogContent role="dialog" aria-modal="true" onClose={onClose}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>

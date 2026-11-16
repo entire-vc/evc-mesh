@@ -47,7 +47,8 @@
     "ui": [
       "sidebar.item",
       "task.panel",
-      "project.view"
+      "project.view",
+      "dashboard.widget"
     ]
   },
   "external": {
@@ -74,5 +75,47 @@
   "project_view": {
     "icon": "Puzzle",
     "title": "Reference"
-  }
+  },
+  "widgets": [
+    {
+      "id": "status",
+      "title": "Reference widget",
+      "title_i18n": {
+        "ru": "Эталонный виджет"
+      },
+      "description": "Protocol v2 reference: theme, settings, visibility, refresh and mesh.open.",
+      "category": "integrations",
+      "size": {
+        "default": {
+          "w": 4,
+          "h": 3
+        },
+        "min": {
+          "w": 3,
+          "h": 2
+        },
+        "max": {
+          "w": 12,
+          "h": 6
+        }
+      },
+      "settings": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "maxLength": 40
+          }
+        }
+      },
+      "scope": "workspace",
+      "render": {
+        "frame": {
+          "path": "/mesh/ui/widget",
+          "min_refresh_s": 30
+        }
+      }
+    }
+  ]
 }

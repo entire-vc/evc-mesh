@@ -236,6 +236,7 @@ var declaredBodyTenantFields = map[string]string{
 	"extension_ui_handler.go:uiContextRequest.workspace_id":            "guarded: bodyWS on POST /ext/:ext_id/ui-context",
 	"extension_ui_handler.go:uiContextRequest.project_id":              "checked: ExtensionUIHandler.UIContext requires the project to belong to workspace_id (404 otherwise)",
 	"extension_ui_handler.go:uiContextRequest.task_id":                 "checked: ExtensionUIHandler.UIContext requires the task to belong to workspace_id (404 otherwise)",
+	"extension_ui_handler.go:checkWidgetInstance.project_id":           "checked: read from the saved instance settings, not the body; it must equal uiContextRequest.project_id, already checked against workspace_id (404 otherwise)",
 	"extension_authorize_handler.go:extAuthorizeRequest.workspace_id":  "checked: ExtensionAuthorizeHandler.Authorize answers 404 unless it is the extension actor's own workspace",
 	"extension_authorize_handler.go:extAuthorizeRequest.project_id":    "checked: ExtensionAuthorizeHandler.resolveProject requires the project to belong to the actor's workspace (404 otherwise)",
 	"extension_authorize_handler.go:extAuthorizeRequest.task_id":       "checked: ExtensionAuthorizeHandler.resolveProject requires the task's project to belong to the actor's workspace (404 otherwise)",

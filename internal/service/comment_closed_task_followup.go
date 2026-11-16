@@ -485,15 +485,21 @@ func (s *commentService) createClosedTaskFollowUp(
 	// agent feed has no such channel, and manufacturing a card for someone who
 	// was already told is noise, not delivery. Same scoping, and the same
 	// reason, as the mention-handoff gate's agents-only rule.
-	if task.AssigneeType != domain.AssigneeTypeAgent || task.AssigneeID == nil {
-		log.Printf("[closed-followup] skip task=%s comment=%s — closed card has no agent assignee to route to",
+	//
+	// "Assignee" here is the card's OWNER (closedTaskOwner): a card closed out
+	// of review still carries the reviewer in assignee_id, while the agent who
+	// did the work sits in pre_review_assignee_id. A human owner is
+	// skipped — never re-routed to the agent reviewer.
+	ownerID, ownerType := closedTaskOwner(task)
+	if ownerType != domain.AssigneeTypeAgent || ownerID == nil {
+		log.Printf("[closed-followup] skip task=%s comment=%s — closed card has no agent owner to route to",
 			task.ID, comment.ID)
 		return
 	}
-	// Branch: the assignee's own comment on their own closed card. A
+	// Branch: the owner's own comment on their own closed card. A
 	// post-mortem, a link, a correction to their own report — routing that back
 	// to the person who just wrote it is a loop, not a delivery.
-	if comment.AuthorID == *task.AssigneeID && comment.AuthorType == domain.ActorTypeAgent {
+	if comment.AuthorID == *ownerID && comment.AuthorType == domain.ActorTypeAgent {
 		return
 	}
 	// Branch: this comment IS the closing note of whoever just closed the card.
@@ -1107,7 +1113,14 @@ func (s *commentService) claimAndCreateRoot(
 		return nil
 	}
 
-	assignee := *task.AssigneeID
+	// The caller's gate guarantees an agent owner; re-derived here rather than
+	// threaded through, so the claim path cannot disagree with the gate.
+	ownerID, _ := closedTaskOwner(task)
+	if ownerID == nil {
+		s.releaseClaim(ctx, task.ID, findingKey)
+		return nil
+	}
+	assignee := *ownerID
 	followUp := &domain.Task{
 		// The claimed identity: this ID is already the root_task_id row the
 		// repeat branch will read, so the created card must be exactly this
@@ -1589,3 +1602,16 @@ func (s *commentService) releaseClaim(ctx context.Context, sourceID uuid.UUID, f
 // hasLabel moved to task_service.go as hasDupCandidateLabel: its
 // last generic caller here died with the label-scan dedup, and every remaining
 // call site passes dupCandidateLabel.
+
+// closedTaskOwner returns whoever owns the work on a closed card: the assignee
+// stashed when the card entered review (a close from review leaves the
+// reviewer in assignee_id), else the current assignee. Same rule as
+// taskAuthorID in workflow_transition_gate.go, with the type. A stash without
+// its type (never written that way, see task_service) falls back to the
+// current assignee rather than guessing the type.
+func closedTaskOwner(task *domain.Task) (*uuid.UUID, domain.AssigneeType) {
+	if task.PreReviewAssigneeID != nil && task.PreReviewAssigneeType != nil {
+		return task.PreReviewAssigneeID, *task.PreReviewAssigneeType
+	}
+	return task.AssigneeID, task.AssigneeType
+}

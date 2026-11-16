@@ -93,7 +93,11 @@ type SaveState =
   | { status: "error"; message: string }
   // The write was refused because base_version no longer matched — nothing was
   // written, not the row and not the draft still sitting in the editor.
-  | { status: "conflict" };
+  | { status: "conflict" }
+  // The write was refused by the shrink guard: it would cut the page to less
+  // than half and drop headings. Nothing was written. Not a failure (Retry is
+  // refused again) and not someone else's edit: the reader confirms the cut.
+  | { status: "shrink" };
 
 function errorMessage(err: unknown, fallback: string): string {
   return apiErrorMessage(err, fallback);
@@ -105,6 +109,18 @@ function errorMessage(err: unknown, fallback: string): string {
 // plain "error" so it keeps the Retry affordance that a conflict does not get.
 function isVersionConflict(err: unknown): boolean {
   return err instanceof ApiRequestError && err.code === "document_version_conflict";
+}
+
+// The other 409 that is a refusal, not a failure: the server's shrink guard,
+// which stops a whole-body write that halves the page and drops its headings
+// (an agent writing one section back as the whole document). From the editor
+// such a cut is the reader's own, so it is confirmed, never retried blindly.
+function isShrinkRefusal(err: unknown): boolean {
+  if (!(err instanceof ApiRequestError)) return false;
+  if (err.errorCode === "document_shrink_refused") return true;
+  // An API from before document_shrink_refused answers the same refusal as a
+  // generic "conflict"; its message is the only part that names allow_shrink.
+  return err.status === 409 && err.errorCode === "conflict" && err.message.includes("allow_shrink");
 }
 
 // ---------------------------------------------------------------------------
@@ -619,7 +635,11 @@ export function DocsPage() {
   }, [draft, openDoc, trAttachments]);
 
   // ---- Save ----------------------------------------------------------------
-  const flushBody = useCallback(async () => {
+  // allowShrink is sent only from the reader's explicit "Save anyway" after a
+  // shrink refusal — never by the autosave, Done or leaving the page, so a cut
+  // nobody confirmed stays refused. base_version still travels with it: the
+  // confirmed cut cannot overwrite an edit that landed in between.
+  const flushBody = useCallback(async (opts?: { allowShrink?: boolean }) => {
     const doc = openDoc;
     if (!doc) return;
     const body = draft;
@@ -629,6 +649,7 @@ export function DocsPage() {
       const updated = await updateDocument(doc.id, {
         body,
         base_version: docVersionRef.current ?? undefined,
+        ...(opts?.allowShrink ? { allow_shrink: true } : {}),
       });
       savedBodyRef.current = body;
       docVersionRef.current = updated.version;
@@ -647,6 +668,12 @@ export function DocsPage() {
           // Best-effort re-read; the conflict notice below stands regardless.
         }
         setSaveState({ status: "conflict" });
+        return;
+      }
+      if (isShrinkRefusal(err)) {
+        // `draft` stays as typed and stays dirty; only a new edit or the
+        // reader's confirmation sends it again.
+        setSaveState({ status: "shrink" });
         return;
       }
       setSaveState({
@@ -1006,10 +1033,15 @@ export function DocsPage() {
 
   const viewData: DocViewData = {
     doc: viewDoc,
-    save: {
-      state: saveState.status === "idle" ? "idle" : saveState.status,
-      message: saveState.status === "error" ? saveState.message : undefined,
-    },
+    save:
+      saveState.status === "shrink"
+        ? // A theme that predates shrinkRefused still reads an honest
+          // "Not saved: this cuts most of the page" from the plain error.
+          { state: "error", message: t("save.shrinkRefused"), shrinkRefused: true }
+        : {
+            state: saveState.status === "idle" ? "idle" : saveState.status,
+            message: saveState.status === "error" ? saveState.message : undefined,
+          },
     components: DOC_VIEW_BLOCKS,
     layout: { commentsOpen: railOpen && !isMobile },
     rootHref: docsPath,
@@ -1023,6 +1055,7 @@ export function DocsPage() {
   const viewActions: DocViewActions = {
     toggleComments: toggleRail,
     retry: () => void flushBody(),
+    confirmShrink: () => void flushBody({ allowShrink: true }),
     exportDoc: (format) => handleExportClick(format ?? "pdf"),
     startEditing: () => setEditing(true),
     finishEditing: handleDone,

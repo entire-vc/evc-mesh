@@ -79,6 +79,24 @@ func TestTaskDependencyReleased(t *testing.T) {
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, tc.dep.Released(tc.b), tc.name)
 	}
+
+	by := []struct {
+		dep  TaskDependency
+		b    BlockerState
+		want string
+	}{
+		{edge(DependencyConditionArtifactPublished), open, ""},
+		{edge(DependencyConditionArtifactPublished), done, ReleasedByClosureWithoutEvidence},
+		{edge(DependencyConditionContractReady), cancelled, ReleasedByClosureWithoutEvidence},
+		{evidenced(DependencyConditionArtifactPublished), open, ReleasedByEvidence},
+		{evidenced(DependencyConditionArtifactPublished), done, ReleasedByEvidence},
+		{edge(DependencyConditionTaskDone), done, ReleasedByTargetState},
+		{edge(DependencyConditionShipped), shippedOpen, ReleasedByTargetState},
+		{TaskDependency{DependencyType: DependencyTypeRelatesTo}, open, ""},
+	}
+	for _, tc := range by {
+		assert.Equal(t, tc.want, tc.dep.ReleasedByOf(tc.b), "%s/%v", tc.dep.Condition, tc.b)
+	}
 }
 
 func TestDependencyConditionShippedIsValid(t *testing.T) {
