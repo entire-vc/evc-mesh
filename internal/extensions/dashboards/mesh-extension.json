@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "id": "dashboards",
+  "name": "Dashboards",
+  "version": "1.0.0",
+  "kind": "plugin",
+  "runtime": "builtin",
+  "mesh_api": ">=1 <2",
+  "publisher": "entire-vc",
+  "description": "Dashboards: personal and shared widget grids in the workspace menu, widget catalog and templates",
+  "category": "analytics",
+  "tags": [
+    "dashboards",
+    "widgets"
+  ],
+  "license": "Apache-2.0",
+  "repository": "https://github.com/entire-vc/evc-mesh",
+  "levels": {
+    "instance": false,
+    "workspace": false,
+    "project": false
+  },
+  "capabilities": {
+    "api": [],
+    "events": [],
+    "webhooks_in": [],
+    "ui": [],
+    "secrets": []
+  }
+}

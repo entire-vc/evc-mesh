@@ -177,3 +177,42 @@ describe("lifecycle messages", () => {
     expect(refreshDelayMs("not a date", now)).toBe(MIN_REFRESH_DELAY_MS);
   });
 });
+
+describe("protocol v2 (dashboard.widget)", () => {
+  it("mesh.context carries slot, widget and theme only for a widget; other slots stay v1", () => {
+    const base = { token: "t", expiresAt: "2099-01-01T00:00:00Z", workspaceId: "w", workspaceSlug: "acme", locale: "en" };
+    const v1 = contextMessage(base) as Record<string, unknown>;
+    expect(v1.version).toBe(1);
+    expect(v1).not.toHaveProperty("widget");
+    const v2 = contextMessage({
+      ...base,
+      widget: { type: "ref", instanceId: "i", dashboardId: "d", settings: { a: 1 }, size: { w: 2, h: 1 }, theme: { mode: "dark", tokens: { "--background": "0 0% 0%" } } },
+    }) as Record<string, any>;
+    expect(v2.version).toBe(2);
+    expect(v2.slot).toBe("dashboard.widget");
+    expect(v2.widget).toEqual({ type: "ref", instance_id: "i", dashboard_id: "d", settings: { a: 1 }, size: { w: 2, h: 1 } });
+    expect(v2.theme).toEqual({ mode: "dark", tokens: { "--background": "0 0% 0%" } });
+  });
+
+  it("parses mesh.open for a task, doc or project and nothing else", () => {
+    expect(parseFrameMessage(msg({ type: "mesh.open", kind: "task", id: "3f2a-01" }), expected)).toEqual({ type: "open", target: { kind: "task", id: "3f2a-01" } });
+    expect(parseFrameMessage(msg({ type: "mesh.open", kind: "doc", id: "d1" }), expected)).toEqual({ type: "open", target: { kind: "doc", id: "d1" } });
+    expect(parseFrameMessage(msg({ type: "mesh.open", kind: "project", id: "p1" }), expected)).toEqual({ type: "open", target: { kind: "project", id: "p1" } });
+    for (const bad of [
+      { kind: "url", id: "x" },
+      { kind: "task", id: "../x" },
+      { kind: "task", id: "a/b" },
+      { kind: "task", id: "" },
+      { kind: "task", id: 5 },
+      { kind: "task", id: "x".repeat(65) },
+      { id: "x" },
+    ]) {
+      expect(parseFrameMessage(msg({ type: "mesh.open", ...bad }), expected)).toBeNull();
+    }
+    expect(parseFrameMessage(msg({ type: "mesh.open", kind: "task", id: "x" }, { origin: "https://evil.example" }), expected)).toBeNull();
+  });
+
+  it("parses mesh.widget.configure", () => {
+    expect(parseFrameMessage(msg({ type: "mesh.widget.configure" }), expected)).toEqual({ type: "configure" });
+  });
+});

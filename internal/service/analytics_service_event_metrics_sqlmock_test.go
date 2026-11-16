@@ -37,6 +37,7 @@ func newAnalyticsServiceSQLMock(t *testing.T) (*analyticsService, sqlmock.Sqlmoc
 func sampleEventMetricsFilter() AnalyticsFilter {
 	return AnalyticsFilter{
 		WorkspaceID: uuid.New(),
+		Viewer:      AnalyticsViewer{AllProjects: true},
 		From:        time.Now().AddDate(0, 0, -7),
 		To:          time.Now(),
 	}

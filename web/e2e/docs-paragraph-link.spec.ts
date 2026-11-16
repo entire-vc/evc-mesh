@@ -5,6 +5,7 @@ import {
   type Page,
 } from "@playwright/test";
 import { loginWithRetry, pinUiLocale } from "./auth-helper";
+import { rateLimitAware } from "./api-retry";
 
 /**
  * E2E scenario: docs-paragraph-link
@@ -230,7 +231,7 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
     // The page authenticates itself from the httpOnly refresh cookie the
     // login left in this context's jar, the same trade web/src/lib/api.ts
     // performs on load.
-    api = context.request;
+    api = rateLimitAware(context.request);
 
     const wsRes = await api.get("/api/v1/workspaces", { headers: authHeaders() });
     expect(wsRes.ok(), `GET /api/v1/workspaces failed: ${wsRes.status()}`).toBeTruthy();

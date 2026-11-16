@@ -86,7 +86,10 @@ var (
 )
 
 // coreReferenceTables are the core tables an extension table may point a foreign key at.
-var coreReferenceTables = map[string]bool{"workspaces": true, "projects": true, "tasks": true, "agents": true, "users": true}
+// workspace_members is the membership row: a per-person extension row that
+// references (workspace_id, user_id) there goes away when the person leaves the
+// workspace, not only when the user is deleted.
+var coreReferenceTables = map[string]bool{"workspaces": true, "projects": true, "tasks": true, "agents": true, "users": true, "workspace_members": true}
 
 // splitStatements cuts sql at ';' outside single quotes, double quotes and dollar quotes.
 func splitStatements(sql string) []string {

@@ -50,6 +50,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { IconPicker } from "@/components/ui/icon-picker";
 import { Separator } from "@/components/ui/separator";
 import { Avatar } from "@/components/ui/avatar";
 import { Select } from "@/components/ui/select";
@@ -1291,7 +1292,8 @@ export function ProjectSettingsPage() {
         name: name.trim(),
         slug: slug.trim(),
         description: description.trim() || undefined,
-        icon: icon.trim() || undefined,
+        // "" clears the icon («Без иконки»); a legacy text icon goes back unchanged and stays valid.
+        icon,
       });
       setGeneralFeedback({
         type: "success",
@@ -1659,13 +1661,10 @@ export function ProjectSettingsPage() {
               <label htmlFor="ps-icon" className="text-sm font-medium">
                 {t("project.general.icon")}
               </label>
-              <Input
-                id="ps-icon"
-                value={icon}
-                onChange={(e) => setIcon(e.target.value)}
-                placeholder={t("project.general.iconPlaceholder")}
-                maxLength={8}
-              />
+              <div className="flex items-center gap-3">
+                <IconPicker id="ps-icon" value={icon} onChange={setIcon} />
+                <p className="text-xs text-muted-foreground">{t("project.general.iconHint")}</p>
+              </div>
             </div>
 
             {generalFeedback && (

@@ -61,6 +61,8 @@ type FinishTaskInput struct {
 	// Fence is the caller's checkout/input_revision precondition,
 	// set by the handler from request headers.
 	Fence *domain.ResultFence `json:"-"`
+	// Receipt binds the request's Idempotency-Key to the outcome.
+	Receipt *domain.IdempotencyReceipt `json:"-"`
 }
 
 type typedOutcomeCommandRepository interface {
@@ -244,6 +246,7 @@ func (s *taskService) FinishTask(ctx context.Context, taskID uuid.UUID, in Finis
 		Comment: &domain.Comment{AuthorID: caller, AuthorType: domain.ActorTypeAgent, Body: body, Metadata: []byte(meta)},
 		Outcome: &domain.TurnOutcome{AgentID: caller, SessionID: in.SessionID, TurnID: in.TurnID,
 			Kind: outcomeKind, ResultKind: &kind, Note: evidence},
+		Receipt: in.Receipt,
 	}
 	heldByCaller := task.CheckedOutBy != nil && *task.CheckedOutBy == caller
 	if err := s.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &status.ID, Source: "finish_task", Finish: finish, Fence: in.Fence}); err != nil {

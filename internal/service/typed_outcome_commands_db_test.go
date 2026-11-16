@@ -238,3 +238,60 @@ func TestAskAgent_RepeatReusesRequestAndAnswerMeetsWait_DB(t *testing.T) {
 	require.ErrorAs(t, err, &api)
 	assert.Equal(t, 409, api.Code, "an answered request is not answered twice")
 }
+
+// finish_task into the status the card already has, with no checkout on it,
+// changes no status, position, assignment or lease: the result itself must be
+// the audited action. Before the fix the empty audit was a 500
+// ("transition audit requires an action") and nothing was written.
+func TestFinishTask_SameStatusWithoutCheckout_DB(t *testing.T) {
+	x := newTypedCommandFixture(t)
+	var review uuid.UUID
+	require.NoError(t, x.f.db.Get(&review, `SELECT id FROM task_statuses WHERE project_id=$1 AND slug='review'`, x.f.projectID))
+	_, err := x.f.db.Exec(`UPDATE tasks SET status_id=$2 WHERE id=$1`, x.task, review)
+	require.NoError(t, err)
+	before := x.state(t)
+	require.Nil(t, before.CheckedOutBy, "the failing call had no checkout")
+
+	res, err := x.cmds().FinishTask(agentContext(x.owner), x.task, FinishTaskInput{
+		ResultKind: "change", Evidence: "go test ./internal/service -run SameStatus: ok", To: "review",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res.Task)
+	assert.Equal(t, "review", res.Task.Status)
+
+	after := x.state(t)
+	assert.Equal(t, review, after.StatusID)
+	require.NotNil(t, after.ResultKind)
+	assert.Equal(t, "change", *after.ResultKind)
+	assert.Equal(t, 1, after.Comments, "exactly one Result comment")
+	assert.Equal(t, 1, after.Outcomes, "exactly one outcome")
+	assert.Equal(t, 1, x.activityCount(t, "task.finished"))
+	assert.Zero(t, x.activityCount(t, "task.moved"))
+}
+
+// Positive control: an ordinary finish to review from the working status still
+// audits the move, writes one Result and adds no task.finished event.
+func TestFinishTask_ToReviewFromWorkingStatus_DB(t *testing.T) {
+	x := newTypedCommandFixture(t)
+	require.Nil(t, x.state(t).CheckedOutBy)
+
+	res, err := x.cmds().FinishTask(agentContext(x.owner), x.task, FinishTaskInput{
+		ResultKind: "change", Evidence: "go test ./internal/service -run WorkingStatus: ok", To: "review",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res.Task)
+	assert.Equal(t, "review", res.Task.Status)
+
+	after := x.state(t)
+	assert.Equal(t, 1, after.Comments, "exactly one Result comment")
+	assert.Equal(t, 1, after.Outcomes)
+	assert.Equal(t, 1, x.activityCount(t, "task.moved"))
+	assert.Zero(t, x.activityCount(t, "task.finished"))
+}
+
+func (x *typedCommandFixture) activityCount(t *testing.T, action string) int {
+	t.Helper()
+	var n int
+	require.NoError(t, x.f.db.Get(&n, `SELECT count(*) FROM activity_log WHERE entity_id=$1 AND action=$2`, x.task, action))
+	return n
+}

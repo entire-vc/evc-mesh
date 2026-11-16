@@ -8,6 +8,7 @@ import {
   useParams,
 } from "react-router";
 import { AppLayout } from "@/components/layout/app-layout";
+import { LegacyPageRedirect } from "@/components/layout/legacy-page-redirect";
 import { LoginPage } from "@/pages/login";
 import { RegisterPage } from "@/pages/register";
 import { PageSkeleton } from "@/components/page-skeleton";
@@ -45,19 +46,8 @@ const TeamMemberPage = lazy(() =>
 const MemoryBrowserPage = lazy(() =>
   import("@/pages/memory-browser").then((m) => ({ default: m.MemoryBrowserPage })),
 );
-const SessionDashboardPage = lazy(() =>
-  import("@/pages/session-dashboard").then((m) => ({
-    default: m.SessionDashboardPage,
-  })),
-);
 const SparkPage = lazy(() =>
   import("@/pages/spark").then((m) => ({ default: m.SparkPage })),
-);
-const EventFeedPage = lazy(() =>
-  import("@/pages/event-feed").then((m) => ({ default: m.EventFeedPage })),
-);
-const AnalyticsPage = lazy(() =>
-  import("@/pages/analytics").then((m) => ({ default: m.AnalyticsPage })),
 );
 const ExtensionConnectPage = lazy(() =>
   import("@/pages/extension-connect").then((m) => ({ default: m.ExtensionConnectPage })),
@@ -80,14 +70,11 @@ const InstanceAdminRedirect = lazy(() =>
 const IntegrationsRedirect = lazy(() =>
   import("@/pages/extensions").then((m) => ({ default: m.IntegrationsRedirect })),
 );
+const DashboardsAllPage = lazy(() =>
+  import("@/pages/dashboards-all").then((m) => ({ default: m.DashboardsAllPage })),
+);
 const InitiativesPage = lazy(() =>
   import("@/pages/initiatives").then((m) => ({ default: m.InitiativesPage })),
-);
-const TriagePage = lazy(() =>
-  import("@/pages/triage").then((m) => ({ default: m.TriagePage })),
-);
-const ActivityPage = lazy(() =>
-  import("@/pages/activity-page").then((m) => ({ default: m.ActivityPage })),
 );
 // BoardPage is the one route perf/*.spec.ts and the post-login prefetch
 // (main.tsx) both name directly — keep this import path if renaming the
@@ -247,6 +234,14 @@ const router = createBrowserRouter(
         <Route index element={null} />
         <Route path="w/:wsSlug" element={<Navigate to="dashboard" replace />} />
         <Route
+          path="w/:wsSlug/d/:docId"
+          element={
+            <LazyPage>
+              <DashboardPage />
+            </LazyPage>
+          }
+        />
+        <Route
           path="w/:wsSlug/dashboard"
           element={
             <LazyPage>
@@ -289,9 +284,7 @@ const router = createBrowserRouter(
         <Route
           path="w/:wsSlug/sessions"
           element={
-            <LazyPage>
-              <SessionDashboardPage />
-            </LazyPage>
+            <LegacyPageRedirect page="sessions" />
           }
         />
         <Route
@@ -305,17 +298,13 @@ const router = createBrowserRouter(
         <Route
           path="w/:wsSlug/events"
           element={
-            <LazyPage>
-              <EventFeedPage />
-            </LazyPage>
+            <LegacyPageRedirect page="events" />
           }
         />
         <Route
           path="w/:wsSlug/analytics"
           element={
-            <LazyPage>
-              <AnalyticsPage />
-            </LazyPage>
+            <LegacyPageRedirect page="analytics" />
           }
         />
         <Route
@@ -383,7 +372,15 @@ const router = createBrowserRouter(
           }
         />
         <Route
-          path="w/:wsSlug/initiatives"
+          path="w/:wsSlug/dashboards"
+          element={
+            <LazyPage>
+              <DashboardsAllPage />
+            </LazyPage>
+          }
+        />
+        <Route
+          path="w/:wsSlug/initiatives/*"
           element={
             <LazyPage>
               <InitiativesPage />
@@ -393,17 +390,13 @@ const router = createBrowserRouter(
         <Route
           path="w/:wsSlug/triage"
           element={
-            <LazyPage>
-              <TriagePage />
-            </LazyPage>
+            <LegacyPageRedirect page="triage" />
           }
         />
         <Route
           path="w/:wsSlug/activity"
           element={
-            <LazyPage>
-              <ActivityPage />
-            </LazyPage>
+            <LegacyPageRedirect page="activity" />
           }
         />
         <Route

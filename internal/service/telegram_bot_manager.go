@@ -438,7 +438,7 @@ func (m *TelegramBotManager) replyNeutral(ctx context.Context, botToken string, 
 	text := i18n.T(locale, "bot.start.unlinked", nil)
 	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if err := m.client.SendMessage(sendCtx, botToken, chatID, text); err != nil {
+	if _, err := m.client.SendMessage(sendCtx, botToken, chatID, text); err != nil {
 		log.Printf("[telegram] failed to send neutral reply to chat %d: %v", chatID, err)
 	}
 }
@@ -474,7 +474,7 @@ func (m *TelegramBotManager) sendWelcome(ctx context.Context, botToken string, c
 	text := i18n.T(locale, "bot.welcome", map[string]any{"name": displayName, "projects": projectList})
 	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if err := m.client.SendMessage(sendCtx, botToken, chatID, text); err != nil {
+	if _, err := m.client.SendMessage(sendCtx, botToken, chatID, text); err != nil {
 		log.Printf("[telegram] failed to send welcome message to chat %d: %v", chatID, err)
 	}
 }

@@ -39,14 +39,14 @@ func (f *fakeTelegramClient) GetMe(context.Context, string) (string, error) {
 	return f.username, nil
 }
 
-func (f *fakeTelegramClient) SendMessage(_ context.Context, token string, chatID int64, text string) error {
+func (f *fakeTelegramClient) SendMessage(_ context.Context, token string, chatID int64, text string) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.sendErr != nil {
-		return f.sendErr
+		return 0, f.sendErr
 	}
 	f.sent = append(f.sent, sentTelegramMessage{token: token, chatID: chatID, text: text})
-	return nil
+	return int64(len(f.sent)), nil
 }
 
 func (f *fakeTelegramClient) GetUpdates(context.Context, string, int64, int) ([]TelegramUpdate, error) {

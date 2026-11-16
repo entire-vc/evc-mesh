@@ -65,7 +65,11 @@ export function AgentRepositoryAccess({ agent, canEdit }: Props) {
   const serverRevision = access?.revision ?? 0;
 
   const [draft, setDraft] = useState<RepositoryRef[]>(serverRepos);
-  const [dirty, setDirty] = useState(false);
+  const [dirty, setDirtyState] = useState(false);
+  // Mirror of `dirty` that is current synchronously: a passive effect queued by an earlier commit
+  // still sees the pre-edit `dirty` closure and must not overwrite input typed right after load.
+  const dirtyRef = useRef(false);
+  const setDirty = (v: boolean) => setDirtyState((dirtyRef.current = v));
   // Revision the draft was edited against. It follows the server only while the draft is clean;
   // a dirty draft keeps it until an explicit reread, so a stale list can never skip the CAS.
   const [baseRevision, setBaseRevision] = useState(serverRevision);
@@ -107,7 +111,7 @@ export function AgentRepositoryAccess({ agent, canEdit }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent.id, attempt]);
   useEffect(() => {
-    if (!dirty) {
+    if (!dirty && !dirtyRef.current) {
       setDraft(serverRepos);
       setBaseRevision(serverRevision);
     }
@@ -159,8 +163,14 @@ export function AgentRepositoryAccess({ agent, canEdit }: Props) {
       setConflict(false);
     } catch (err) {
       if (agentId.current !== id) return;
-      if ((err as { status?: number })?.status === 409) setConflict(true);
-      else setError(apiErrorMessage(err, t("agentDetail.repositoryAccess.error.save")));
+      if ((err as { status?: number })?.status === 409) {
+        setConflict(true);
+        // Show the server's actual state, not the copy from before the parallel write. Only the
+        // display value moves: baseRevision (CAS) and the unsaved draft stay until an explicit reread.
+        await fetchAgent(id)
+          .then((f) => agentId.current === id && setAccess(f.repository_access ?? null))
+          .catch(() => {}); // keep the last known value in the banner; Reload still works
+      } else setError(apiErrorMessage(err, t("agentDetail.repositoryAccess.error.save")));
     } finally {
       setSaving(false);
     }
@@ -253,12 +263,12 @@ export function AgentRepositoryAccess({ agent, canEdit }: Props) {
 
       <div className="space-y-1.5">
         {draft.map((r, i) => (
-          <div key={i} className="flex items-center gap-1.5" data-testid="repository-access-row">
+          <div key={i} className="flex flex-wrap items-center gap-1.5" data-testid="repository-access-row">
             {canEdit ? (
               <>
                 <Input disabled={saving} aria-label={t("agentDetail.repositoryAccess.provider")} className="h-8 w-20 shrink-0 text-xs" value={r.provider} onChange={(e) => update(i, { provider: e.target.value })} />
                 <Input disabled={saving} aria-label={t("agentDetail.repositoryAccess.host")} className="h-8 min-w-0 flex-1 text-xs" value={r.host} onChange={(e) => update(i, { host: e.target.value })} />
-                <Input disabled={saving} aria-label={t("agentDetail.repositoryAccess.path")} className="h-8 min-w-0 flex-[2] text-xs" value={r.project_path} onChange={(e) => update(i, { project_path: e.target.value })} />
+                <Input disabled={saving} aria-label={t("agentDetail.repositoryAccess.path")} className="order-last h-8 w-full min-w-0 basis-full text-xs sm:order-none sm:w-auto sm:flex-[2] sm:basis-0" value={r.project_path} onChange={(e) => update(i, { project_path: e.target.value })} />
                 <Button
                   size="icon"
                   variant="ghost"

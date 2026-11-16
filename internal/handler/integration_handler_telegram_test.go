@@ -99,8 +99,8 @@ type fakeIntegrationTelegramClient struct {
 func (f *fakeIntegrationTelegramClient) GetMe(context.Context, string) (string, error) {
 	return f.username, f.err
 }
-func (f *fakeIntegrationTelegramClient) SendMessage(context.Context, string, int64, string) error {
-	return nil
+func (f *fakeIntegrationTelegramClient) SendMessage(context.Context, string, int64, string) (int64, error) {
+	return 1, nil
 }
 func (f *fakeIntegrationTelegramClient) GetUpdates(context.Context, string, int64, int) ([]service.TelegramUpdate, error) {
 	return nil, nil

@@ -107,6 +107,14 @@ func (h *CommentHandler) Create(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+	// A keyed repeat of a comment that was written answers with it, before
+	// the fence or any other check could refuse it.
+	replay := renderWritten(c, http.StatusCreated, func(cm *domain.Comment) {
+		cm.URL = computeCommentURL(c.Request(), taskID, cm.ID)
+	})
+	if done, rerr := replayWritten(c, domain.IdemRouteCommentCreate, taskID, replay); done {
+		return rerr
+	}
 
 	var req createCommentRequest
 	if bindErr := c.Bind(&req); bindErr != nil {
@@ -153,9 +161,13 @@ func (h *CommentHandler) Create(c echo.Context) error {
 		IsInternal:      req.IsInternal,
 		Metadata:        req.Metadata,
 		Fence:           fence,
+		Receipt:         idemReceipt(c, domain.IdemRouteCommentCreate, taskID),
 	}
 
 	if err := h.commentService.Create(c.Request().Context(), comment); err != nil {
+		if done, answer := replayAfterRefusal(c, err, domain.IdemRouteCommentCreate, taskID, replay); done {
+			return answer
+		}
 		return handleError(c, err)
 	}
 
@@ -213,12 +225,12 @@ func (h *CommentHandler) Delete(c echo.Context) error {
 
 // GetMyComments handles GET /me/comments — returns the caller's own comments, newest first.
 func (h *CommentHandler) GetMyComments(c echo.Context) error {
-	actorID, _ := actorctx.FromContext(c.Request().Context())
+	actorID, actorType := actorctx.FromContext(c.Request().Context())
 	if actorID == uuid.Nil {
 		return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("authentication required"))
 	}
 
-	filter := repository.CommentViewFilter{Limit: 50}
+	filter := repository.CommentViewFilter{Limit: 50, Viewer: authorFeedViewer(c, actorID, actorType)}
 
 	if v := c.QueryParam("limit"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -279,7 +291,7 @@ func (h *CommentHandler) GetRecentByWorkspace(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid workspace_id"))
 	}
 
-	filter := repository.CommentViewFilter{Limit: 50}
+	filter := repository.CommentViewFilter{Limit: 50, Viewer: projectViewerFromContext(c)}
 
 	if v := c.QueryParam("limit"); v != "" {
 		n, parseErr := strconv.Atoi(v)
@@ -318,6 +330,9 @@ func (h *CommentHandler) GetRecentByWorkspace(c echo.Context) error {
 		page.Items[i].URL = computeCommentURL(c.Request(), page.Items[i].TaskID, page.Items[i].CommentID)
 	}
 
-	c.Response().Header().Set("Cache-Control", "private, max-age=30")
+	// no-cache, not max-age: the recent-comments widget re-reads this list on
+	// each live comment.created frame, and a cached answer would hide the new
+	// comment until the cache expired.
+	c.Response().Header().Set("Cache-Control", "private, no-cache")
 	return c.JSON(http.StatusOK, page)
 }

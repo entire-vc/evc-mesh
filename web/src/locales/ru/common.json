@@ -10,5 +10,9 @@
     "minutesAgo": "{{count}} мин назад",
     "hoursAgo": "{{count}} ч назад",
     "daysAgo": "{{count}} дн назад"
+  },
+  "iconPicker": {
+    "trigger": "Выбрать иконку",
+    "loadFailed": "Не удалось загрузить список эмодзи"
   }
 }

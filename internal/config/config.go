@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Config holds all application configuration, loaded from environment variables.
@@ -29,6 +31,8 @@ type Config struct {
 	HumanGate          HumanGateConfig
 	Telegram           TelegramConfig
 	Runtime            RuntimeConfig
+	Checkout           CheckoutConfig
+	OIDC               OIDCConfig
 
 	// DocBodySoftLimit / DocBodyHardLimit are Mesh Doc body size limits in bytes:
 	// over soft a write succeeds with a warning, over hard it is refused.
@@ -102,6 +106,23 @@ type TeamRelayConfig struct {
 	RelayURL string
 }
 
+// OIDCConfig switches on Mesh as an OpenID Connect provider for people signing
+// in to other company products. Off unless SigningKeyFile is
+// set; the API refuses to start when it is set but unusable.
+type OIDCConfig struct {
+	// SigningKeyFile (MESH_OIDC_SIGNING_KEY_FILE): PEM RSA private key of at
+	// least 2048 bits; id_tokens are signed with it.
+	SigningKeyFile string
+	// PublishedKeyFiles (MESH_OIDC_PUBLISHED_KEY_FILES, comma-separated): PEM
+	// RSA keys of earlier signing keys, published in the JWKS only, so a key
+	// rotates without breaking id_tokens already issued.
+	PublishedKeyFiles []string
+	// ClientsJSON (MESH_OIDC_CLIENTS): JSON array of
+	// {"client_id","client_name","redirect_uris"}, the static clients allowed
+	// to use the identity flow, upserted into oauth_clients at start.
+	ClientsJSON string
+}
+
 // EmailConfig holds SMTP settings for outbound email (workspace invites, notifications).
 // When Host is empty, email sending is disabled and invite links are logged to stdout instead.
 type EmailConfig struct {
@@ -157,6 +178,17 @@ type RuntimeConfig struct {
 	StrictWorkspaceIsolation bool
 }
 
+// CheckoutConfig holds instance switches of task checkout (the lock a worker
+// takes on a card).
+type CheckoutConfig struct {
+	// ReassignReleases ends the previous holder's lock when a card is
+	// reassigned or unassigned (MESH_REASSIGN_RELEASES_CHECKOUT, default false).
+	// Turn it on only where every Runner that takes locks on this instance sends
+	// the result-write fence and stops a turn whose lock is gone; rollback = set
+	// it back to false.
+	ReassignReleases bool
+}
+
 // SparkConfig holds configuration for the Spark agent catalog integration.
 type SparkConfig struct {
 	// URL is the base URL of the Spark catalog API.
@@ -197,6 +229,18 @@ type RateLimitConfig struct {
 	RefreshRPM int
 	// APIRPM is the maximum requests per minute for API endpoints (per actor).
 	APIRPM int
+	// APIRPMOverrides gives individual actors their own API budget instead of
+	// APIRPM, keyed exactly as middleware.RateLimitKeyByActor keys them
+	// ("user:<uuid>", "agent:<uuid>", "ext:<uuid>"). Read from
+	// MESH_RATE_LIMIT_API_RPM_OVERRIDES as "user:<uuid>=<rpm>,agent:<uuid>=<rpm>".
+	// Unset or empty → empty map, every actor stays on APIRPM. A malformed
+	// value is not skipped: it is kept in APIRPMOverridesErr and Validate
+	// refuses to start, so a typo cannot silently leave the CI account on the
+	// default limit.
+	APIRPMOverrides map[string]int
+	// APIRPMOverridesErr is the parse error of MESH_RATE_LIMIT_API_RPM_OVERRIDES,
+	// reported by Config.Validate.
+	APIRPMOverridesErr error
 	// OAuthTokenRPM is the per-IP budget for POST /oauth/token and
 	// POST /oauth/revoke. A hosted MCP client exchanges and refreshes for all
 	// of its users from a handful of egress IPs, so this is tuned on its own
@@ -396,7 +440,63 @@ type VAPIDConfig struct {
 }
 
 // Load reads configuration from environment variables with sensible defaults.
+// Values that cannot be parsed are reported by Validate, which the API calls
+// before opening anything.
 func Load() *Config {
+	cfg := load()
+	cfg.RateLimit.APIRPMOverrides, cfg.RateLimit.APIRPMOverridesErr =
+		ParseRPMOverrides(os.Getenv("MESH_RATE_LIMIT_API_RPM_OVERRIDES"))
+	return cfg
+}
+
+// Validate reports configuration that Load read but could not accept.
+func (c *Config) Validate() error {
+	if c.RateLimit.APIRPMOverridesErr != nil {
+		return fmt.Errorf("MESH_RATE_LIMIT_API_RPM_OVERRIDES: %w", c.RateLimit.APIRPMOverridesErr)
+	}
+	return nil
+}
+
+// ParseRPMOverrides parses "user:<uuid>=<rpm>,agent:<uuid>=<rpm>" into a map
+// keyed like middleware.RateLimitKeyByActor ("user:", "agent:" or "ext:" plus
+// the canonical lower-case UUID). Blank input yields an empty map. Any entry
+// that is not kind:uuid=positive-int, or a key listed twice, is an error.
+func ParseRPMOverrides(raw string) (map[string]int, error) {
+	out := map[string]int{}
+	if strings.TrimSpace(raw) == "" {
+		return out, nil
+	}
+	for _, part := range strings.Split(raw, ",") {
+		entry := strings.TrimSpace(part)
+		if entry == "" {
+			continue
+		}
+		key, val, ok := strings.Cut(entry, "=")
+		if !ok {
+			return nil, fmt.Errorf("entry %q: want <kind>:<uuid>=<rpm>", entry)
+		}
+		kind, id, ok := strings.Cut(strings.TrimSpace(key), ":")
+		if !ok || (kind != "user" && kind != "agent" && kind != "ext") {
+			return nil, fmt.Errorf("entry %q: key must be user:<uuid>, agent:<uuid> or ext:<uuid>", entry)
+		}
+		parsed, err := uuid.Parse(strings.TrimSpace(id))
+		if err != nil {
+			return nil, fmt.Errorf("entry %q: invalid uuid: %w", entry, err)
+		}
+		rpm, err := strconv.Atoi(strings.TrimSpace(val))
+		if err != nil || rpm <= 0 {
+			return nil, fmt.Errorf("entry %q: rpm must be a positive integer", entry)
+		}
+		k := kind + ":" + parsed.String()
+		if _, dup := out[k]; dup {
+			return nil, fmt.Errorf("entry %q: %s is listed twice", entry, k)
+		}
+		out[k] = rpm
+	}
+	return out, nil
+}
+
+func load() *Config {
 	return &Config{
 		Server: ServerConfig{
 			Host:              getEnv("SERVER_HOST", "0.0.0.0"),
@@ -478,6 +578,9 @@ func Load() *Config {
 		Runtime: RuntimeConfig{
 			StrictWorkspaceIsolation: getEnvBool("RUNTIME_STRICT_WORKSPACE_ISOLATION", false),
 		},
+		Checkout: CheckoutConfig{
+			ReassignReleases: getEnvBool("MESH_REASSIGN_RELEASES_CHECKOUT", false),
+		},
 		Webhook: WebhookConfig{
 			GitHubSecret: getEnv("MESH_GITHUB_WEBHOOK_SECRET", ""),
 			GitHubToken:  getEnvOrFile("MESH_GITHUB_TOKEN", "MESH_GITHUB_TOKEN_FILE"),
@@ -516,7 +619,23 @@ func Load() *Config {
 			From:    getEnv("SMTP_FROM", ""),
 			BaseURL: getEnv("MESH_BASE_URL", DefaultBaseURL),
 		},
+		OIDC: OIDCConfig{
+			SigningKeyFile:    getEnv("MESH_OIDC_SIGNING_KEY_FILE", ""),
+			PublishedKeyFiles: splitCommaList(getEnv("MESH_OIDC_PUBLISHED_KEY_FILES", "")),
+			ClientsJSON:       getEnv("MESH_OIDC_CLIENTS", ""),
+		},
 	}
+}
+
+// splitCommaList splits a comma-separated env value, dropping empty items.
+func splitCommaList(v string) []string {
+	var out []string
+	for _, item := range strings.Split(v, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // DefaultBaseURL is where MESH_BASE_URL lands when nobody sets it: the Vite dev

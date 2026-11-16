@@ -264,6 +264,9 @@ var notTaskOwnedParams = map[string]bool{
 	// a row of the calling extension's own event log; the route is extension-actor
 	// only and the service scopes the delivery to that extension's connection
 	"delivery_id": true,
+	// a workspace's dashboard (Dashboards extension): contained in :ws_id by
+	// workspaceScopedPairParams, read and write rules are the service's
+	"dashboard_id": true,
 }
 
 func TestEveryRouteParamIsClassified(t *testing.T) {

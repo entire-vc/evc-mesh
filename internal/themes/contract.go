@@ -105,7 +105,7 @@ var slotContracts = map[string]string{
 	"board.card":       "1.0.0",
 	"task.row":         "1.0.0",
 	"task.view":        "1.0.0",
-	"dashboard.layout": "1.0.0",
+	"dashboard.layout": "2.0.0",
 	"dashboard.widget": "1.0.0",
 	"nav.sidebar":      "1.0.0",
 	"nav.topbar":       "1.0.0",

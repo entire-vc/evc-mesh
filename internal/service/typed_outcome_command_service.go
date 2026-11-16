@@ -65,14 +65,16 @@ type WaitForInput struct {
 	On              string
 	TargetTaskID    *uuid.UUID
 	TargetCondition *string
-	VCSLinkID       *uuid.UUID
-	Provider        *string
-	ProjectPath     *string
-	MRIID           *int
-	PipelineID      *int64
-	RequiredJobs    []string
-	Until           *string
-	UntilAt         *time.Time
+	// Criterion names the result an on=card artifact_published wait waits for.
+	Criterion    *string
+	VCSLinkID    *uuid.UUID
+	Provider     *string
+	ProjectPath  *string
+	MRIID        *int
+	PipelineID   *int64
+	RequiredJobs []string
+	Until        *string
+	UntilAt      *time.Time
 	// EventRef, Source and Why are a time wait's evidence (see domain.TaskWait).
 	EventRef *string
 	Source   *string
@@ -108,6 +110,8 @@ func (in WaitForInput) strayField() string {
 		return "registration"
 	case in.On != string(domain.TaskWaitRegistered) && in.RegistrationRef != nil:
 		return "registration_ref"
+	case in.On != string(domain.TaskWaitCard) && in.Criterion != nil:
+		return "criterion"
 	}
 	return ""
 }
@@ -191,7 +195,7 @@ func (s *TurnCommandService) WaitFor(ctx context.Context, taskID uuid.UUID, in W
 	}
 	switch w.Kind {
 	case domain.TaskWaitCard:
-		w.TargetTaskID, w.TargetCondition = in.TargetTaskID, in.TargetCondition
+		w.TargetTaskID, w.TargetCondition, w.Criterion = in.TargetTaskID, in.TargetCondition, trimmed(in.Criterion)
 	case domain.TaskWaitMR:
 		w.VCSLinkID, w.Provider, w.ProjectPath, w.MRIID, w.Until = in.VCSLinkID, in.Provider, in.ProjectPath, in.MRIID, in.Until
 		baseline()
@@ -579,11 +583,7 @@ func (s *TurnCommandService) checkPipeline(ctx context.Context, workspaceID uuid
 func describeWait(w *domain.TaskWait) string {
 	switch w.Kind {
 	case domain.TaskWaitCard:
-		cond := string(domain.DependencyConditionTaskDone)
-		if w.TargetCondition != nil {
-			cond = *w.TargetCondition
-		}
-		return fmt.Sprintf("card %s (%s)", w.TargetTaskID.String()[:8], cond)
+		return describeCardWait(w)
 	case domain.TaskWaitMR:
 		s := fmt.Sprintf("MR %s!%d until %s", *w.ProjectPath, *w.MRIID, *w.Until)
 		if len(w.RequiredJobs) > 0 {
@@ -612,6 +612,38 @@ func describeWait(w *domain.TaskWait) string {
 		return "a comment or a lead's action (" + domain.LabelWakeManual + ")"
 	}
 	return string(w.Kind)
+}
+
+// describeCardWait reads a card wait as the rest of the sentence "Waiting on
+// …": the card as #<8hex> and its condition in words. TaskWait.Validate still
+// refuses a target_condition this server does not know; a condition without
+// a phrase here (one added after this text, or a stored wait from a newer
+// build) keeps its slug in parentheses instead of breaking the comment.
+func describeCardWait(w *domain.TaskWait) string {
+	ref := "#" + w.TargetTaskID.String()[:8]
+	cond := domain.DependencyConditionTaskDone
+	if w.TargetCondition != nil {
+		cond = domain.DependencyCondition(*w.TargetCondition)
+	}
+	switch cond {
+	case domain.DependencyConditionTaskDone:
+		return ref + " to be done"
+	case domain.DependencyConditionShipped:
+		return ref + " to ship"
+	case domain.DependencyConditionDeployed:
+		return ref + " to be deployed"
+	case domain.DependencyConditionAccepted:
+		return ref + " to be accepted"
+	case domain.DependencyConditionArtifactPublished:
+		if w.Criterion != nil {
+			return ref + " to publish: " + *w.Criterion
+		}
+		return ref + " to publish its result"
+	}
+	if w.Criterion != nil {
+		return fmt.Sprintf("%s (%s: %s)", ref, cond, *w.Criterion)
+	}
+	return fmt.Sprintf("%s (%s)", ref, cond)
 }
 
 // describeBaseline is the `after` part of an mr or pipeline wait, "" without one.

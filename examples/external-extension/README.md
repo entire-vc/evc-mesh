@@ -5,7 +5,7 @@ every call Mesh makes to an external service and how to answer it:
 
 | Mesh calls | Path (manifest `external`) | What the service does |
 |---|---|---|
-| install handshake | `install_path` `/mesh/install` | stores the workspace signing secret; checks the install code |
+| install handshake | `install_path` `/mesh/install` | stores the workspace signing secret; checks the install code; keeps the workspace `settings` the install carries |
 | token delivery | `token_path` `/mesh/token` | stores the extension token, answers `{"ok":true}` |
 | events | `events_path` `/mesh/events` | verifies the signature and the timestamp, skips a repeat of a body already processed in this process within one hour (see "Deduplicate deliveries") |
 | health | `health_path` `/healthz` | answers 200 |

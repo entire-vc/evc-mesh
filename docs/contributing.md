@@ -38,10 +38,29 @@ The API runs on `:8005`, the frontend on `:3000`.
 
 ### Running Tests
 
-```bash
-# Backend tests (requires running PostgreSQL, Redis, NATS)
-go test ./...
+Before every push, lint and test the Go packages your branch changes:
 
+```bash
+git fetch origin
+make lint-affected test-affected
+```
+
+- `test-affected` picks the packages your commits reach (relative to
+  `origin/main`) with the same selection as the CI `test` job, starts a
+  throwaway PostgreSQL + Redis + NATS stack for this checkout (Docker), runs
+  the migrations, runs `go test -race` on those packages and removes the stack
+  again on every exit, including Ctrl+C. Commit first: it reads committed
+  history, not the working tree.
+- When the change cannot be narrowed (`go.mod`, a migration, a CI file), it
+  prints `ALL — the full suite runs in CI` and runs nothing locally.
+- `lint-affected` runs the pinned `golangci-lint` on the same packages.
+- `make test-pkg PKG="./internal/foo/... ./internal/bar"` runs the same
+  throwaway-stack test for packages you name.
+
+The full `go test ./...`, the e2e suites and the sharded jobs run in CI on your
+merge request.
+
+```bash
 # Frontend lint and type check
 cd web && pnpm lint && pnpm tsc --noEmit
 ```
@@ -59,7 +78,7 @@ cd web && pnpm lint && pnpm tsc --noEmit
 1. **Fork** the repository and create a feature branch from `main`
 2. **Make your changes** — keep PRs focused on a single concern
 3. **Add tests** for new functionality
-4. **Run tests** — ensure `go test ./...` passes
+4. **Run tests** — ensure `make lint-affected test-affected` passes (the full `go test ./...` runs in CI)
 5. **Run lint** — ensure `cd web && pnpm lint` passes (for frontend changes)
 6. **Submit a PR** against `main` with a clear description
 

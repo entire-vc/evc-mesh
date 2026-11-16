@@ -78,6 +78,12 @@ func (h *TypedOutcomeCommandHandler) FinishTask(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+	// A keyed repeat of a finish that happened answers with its outcome, even
+	// though the card has moved and the checkout is gone since.
+	replay := renderWritten[domain.CommandResult](c, http.StatusOK, nil)
+	if done, rerr := replayWritten(c, domain.IdemRouteTaskFinish, taskID, replay); done {
+		return rerr
+	}
 	var in service.FinishTaskInput
 	if bindErr := c.Bind(&in); bindErr != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
@@ -85,8 +91,12 @@ func (h *TypedOutcomeCommandHandler) FinishTask(c echo.Context) error {
 	if in.Fence, err = resultFenceFromRequest(c, taskID); err != nil {
 		return handleError(c, err)
 	}
+	in.Receipt = idemReceipt(c, domain.IdemRouteTaskFinish, taskID)
 	res, err := h.cmds.FinishTask(c.Request().Context(), taskID, in)
 	if err != nil {
+		if done, answer := replayAfterRefusal(c, err, domain.IdemRouteTaskFinish, taskID, replay); done {
+			return answer
+		}
 		return commandError(c, err)
 	}
 	return c.JSON(http.StatusOK, res)

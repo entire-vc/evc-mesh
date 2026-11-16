@@ -1,5 +1,5 @@
 /**
- * Iframe screens of external extensions (W3.3): the frame gets a context token
+ * Iframe screens of external extensions: the frame gets a context token
  * from the server, is sandboxed, and obeys messages only from its own origin.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,6 +20,7 @@ import { resetSlotRegistryForTests } from "@/lib/extension-slots";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { ApiRequestError } from "@/lib/api";
 import { ExternalFrame, FRAME_LOAD_TIMEOUT_MS, REFRESH_RETRY_MS } from "../external-frame";
+import { REVOKED_DELIVERY_GRACE_MS } from "@/lib/extension-frame-protocol";
 
 const ORIGIN = "https://hello.example.com";
 const CTX = { token: "jwt.value.here", expires_at: "2026-10-17T12:01:00Z", frame_url: `${ORIGIN}/mesh/ui/hello`, origin: ORIGIN, title: "Hello" };
@@ -62,6 +63,8 @@ beforeEach(() => {
   resetSlotRegistryForTests();
   useWorkspaceStore.setState({ currentWorkspace: { id: "ws-1", slug: "acme" } as never });
   apiMock.mockResolvedValue(CTX);
+  document.documentElement.classList.remove("dark");
+  document.documentElement.style.removeProperty("--background");
 });
 afterEach(() => vi.useRealTimers());
 
@@ -117,6 +120,44 @@ describe("ExternalFrame", () => {
     const [payload, target] = spy.mock.calls[0] as [Record<string, unknown>, string];
     expect(target).toBe(ORIGIN);
     expect(payload).toMatchObject({ type: "mesh.context", token: "fresh.token.value", workspace_id: "ws-1", workspace_slug: "acme" });
+  });
+
+  it("sends the Mesh theme in mesh.context of a screen slot, keeping protocol v1", async () => {
+    document.documentElement.classList.add("dark");
+    document.documentElement.style.setProperty("--background", "222 14% 9%");
+    renderFrame();
+    const iframe = (await screen.findByTitle("Hello", {}, { timeout: 8000 })) as HTMLIFrameElement;
+    const spy = vi.spyOn(iframe.contentWindow as Window, "postMessage").mockImplementation(() => {});
+    fireEvent.load(iframe);
+    const ctx = spy.mock.calls.map((c) => c[0] as Record<string, any>).find((m) => m.type === "mesh.context");
+    expect(ctx).toBeDefined();
+    expect(ctx!.version).toBe(1);
+    expect(ctx!.slot).toBeUndefined();
+    expect(ctx!.theme.mode).toBe("dark");
+    expect(ctx!.theme.tokens["--background"]).toBe("222 14% 9%");
+    expect(iframe.style.colorScheme).toBe("dark");
+  });
+
+  it("sends mesh.theme to a loaded screen when the colour mode is switched, once per change", async () => {
+    renderFrame();
+    const iframe = (await screen.findByTitle("Hello", {}, { timeout: 8000 })) as HTMLIFrameElement;
+    const spy = vi.spyOn(iframe.contentWindow as Window, "postMessage").mockImplementation(() => {});
+    const sent = () => spy.mock.calls.map((c) => c as [Record<string, any>, string]);
+    fireEvent.load(iframe);
+    // Right after mesh.context the same theme is not repeated.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(sent().some(([m]) => m.type === "mesh.theme")).toBe(false);
+    expect(sent().find(([m]) => m.type === "mesh.context")?.[0].theme.mode).toBe("light");
+    await act(async () => {
+      document.documentElement.classList.add("dark");
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(sent().some(([m]) => m.type === "mesh.theme" && m.mode === "dark")).toBe(true));
+    const themes = sent().filter(([m]) => m.type === "mesh.theme");
+    expect(themes).toHaveLength(1);
+    expect(themes[0]![1]).toBe(ORIGIN);
+    expect(themes[0]![0]).toMatchObject({ type: "mesh.theme", version: 2, mode: "dark" });
+    expect(iframe.style.colorScheme).toBe("dark");
   });
 
   it("shows unavailable with retry when the server refuses a token", async () => {
@@ -196,7 +237,15 @@ describe("ExternalFrame", () => {
     renderFrame();
     const iframe = (await screen.findByTitle("Hello", {}, { timeout: 8000 })) as HTMLIFrameElement;
     fireEvent.load(iframe);
-    const spy = vi.spyOn(iframe.contentWindow as Window, "postMessage");
+    // postMessage is delivered later, in the frame's own task: model that, and note whether the frame was still in the page then.
+    const delivered: { type: unknown; inPage: boolean }[] = [];
+    const spy = vi.spyOn(iframe.contentWindow as Window, "postMessage").mockImplementation((m: unknown) => {
+      // Race: the frame's own message lands right after mesh.revoked, before React commits the revoked state.
+      if ((m as { type?: unknown }).type === "mesh.revoked") {
+        window.dispatchEvent(new MessageEvent("message", { origin: ORIGIN, data: { type: "mesh.navigate", path: "/w/acme/race" }, source: iframe.contentWindow }));
+      }
+      setTimeout(() => delivered.push({ type: (m as { type?: unknown }).type, inPage: iframe.isConnected }), 50);
+    });
     apiMock.mockRejectedValue(new ApiRequestError("not enabled", "CONFLICT", 409));
     await waitFor(
       () => {
@@ -213,7 +262,18 @@ describe("ExternalFrame", () => {
         expect.objectContaining({ type: "mesh.revoked", reason: "conflict" }),
       ]),
     );
-    expect(screen.queryByTitle("Hello")).toBeNull();
+    // The same frame stays, hidden, until the message reaches it; then it leaves the page.
+    expect(screen.getByTitle("Hello")).toBe(iframe);
+    expect(iframe.className).toBe("hidden");
+    await waitFor(() => expect(delivered.find((d) => d.type === "mesh.revoked")).toEqual({ type: "mesh.revoked", inPage: true }));
+    // mesh.revoked is the last word: a theme switch while the frame drains is not told to it.
+    act(() => document.documentElement.classList.add("dark"));
+    await new Promise((r) => setTimeout(r, 200));
+    const types = spy.mock.calls.map((c) => (c[0] as { type: unknown }).type);
+    expect(types.slice(types.indexOf("mesh.revoked") + 1)).toEqual([]);
+    await waitFor(() => expect(screen.queryByTitle("Hello")).toBeNull(), { timeout: REVOKED_DELIVERY_GRACE_MS + 1_000 });
+    expect(screen.getByTestId("external-frame-revoked")).toBeTruthy();
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 
   it("red control: a transient refusal (503) is told to the frame but does not revoke it", async () => {

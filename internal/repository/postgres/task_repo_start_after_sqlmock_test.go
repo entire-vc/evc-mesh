@@ -102,19 +102,16 @@ func TestTaskRepo_ListByStatusCategory_SelectsStartAfterColumn(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestTaskRepo_ListTriageQueue_SelectsStartAfterColumn(t *testing.T) {
+func TestTaskRepo_QueryTasks_SelectsStartAfterColumn(t *testing.T) {
 	repo, mock := newTaskRepoMock(t)
 	workspaceID := uuid.New()
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(t.id)")).
-		WithArgs(workspaceID, domain.StatusCategoryTriage, domain.StatusCategoryDone, domain.StatusCategoryCancelled).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	mock.ExpectQuery(regexp.QuoteMeta("t.due_date, t.start_after, t.start_after_origin, t.start_after_receipt_id, t.estimated_hours")).
-		WithArgs(workspaceID, domain.StatusCategoryTriage, domain.StatusCategoryDone, domain.StatusCategoryCancelled,
-			sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 
-	page, err := repo.ListTriageQueue(context.Background(), workspaceID, pagination.Params{})
+	page, err := repo.QueryTasks(context.Background(), repository.TaskQuery{WorkspaceID: workspaceID, Gated: true}, pagination.Params{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, page.TotalCount)
 	require.NoError(t, mock.ExpectationsWereMet())

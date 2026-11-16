@@ -289,7 +289,9 @@ export function Draggable({
   style,
   ...rest
 }: DraggableProps) {
-  const permitted = useCan(item.kind === "task" ? "task.move" : "doc.move", item);
+  const canMove = useCan(item.kind === "task" ? "task.move" : "doc.move", item.kind === "dashboard" ? undefined : item);
+  // A dashboard entry is the user's own menu order: no role may be denied it.
+  const permitted = item.kind === "dashboard" ? true : canMove;
   const dndOn = useContext(DndEnabledContext);
   const live = permitted && enabled && dndOn;
   const zone = useContext(ZoneContext);

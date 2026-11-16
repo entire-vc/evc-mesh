@@ -48,6 +48,8 @@ import {
   uploadArtifact,
 } from "@/lib/task-artifacts";
 import { makeDocEditor } from "@/lib/milkdown/editor";
+import { blockStatePlugin, createBlockStateStore } from "@/lib/milkdown/block-state";
+import { BlockTypeSelect, TableMenu } from "@/components/editor-block-controls";
 import { type AttachmentSpan, findAttachmentSpans } from "@/lib/milkdown/attachment-spans";
 import {
   clearAttachmentControls,
@@ -274,6 +276,11 @@ function RichTextEditorInner({
   const buildNodesRef = useRef(buildNodes);
   buildNodesRef.current = buildNodes;
 
+  // Where the cursor is, for the block-type picker and the table menu. A
+  // store rather than state here, so moving the cursor re-renders those two
+  // controls and not the whole editor.
+  const [blockStore] = useState(createBlockStateStore);
+
   useEditor(
     (root) =>
       makeDocEditor({
@@ -281,7 +288,7 @@ function RichTextEditorInner({
         defaultValue: valueRef.current,
         editable: true,
         editorClassName: PROSE_CLASS,
-        plugins: uploadsEnabled ? upload : [],
+        plugins: [...(uploadsEnabled ? upload : []), blockStatePlugin(blockStore)],
         configure: uploadsEnabled
           ? (ctx) => {
               ctx.update(uploadConfig.key, (prev) => ({
@@ -639,6 +646,10 @@ function RichTextEditorInner({
       )}
     >
       <div className="flex flex-wrap items-center gap-0.5 border-b border-border px-2 py-1">
+        <BlockTypeSelect ns="misc" store={blockStore} runCommand={runCommand} withView={withView} />
+
+        <div className="mx-1 h-3.5 w-px bg-border" />
+
         <ToolbarButton title={t("editor.bold")} onClick={() => runCommand(toggleStrongCommand.key)}>
           <Bold className="h-3.5 w-3.5" />
         </ToolbarButton>
@@ -672,6 +683,7 @@ function RichTextEditorInner({
         <ToolbarButton title={t("editor.table")} onClick={() => runCommand(insertTableCommand.key)}>
           <TableIcon className="h-3.5 w-3.5" />
         </ToolbarButton>
+        <TableMenu ns="misc" store={blockStore} runCommand={runCommand} withView={withView} />
 
         <div className="mx-1 h-3.5 w-px bg-border" />
 

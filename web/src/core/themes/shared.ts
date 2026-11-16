@@ -8,9 +8,9 @@ import * as ReactDOM from "react-dom";
 import * as JsxRuntime from "react/jsx-runtime";
 import * as I18Next from "react-i18next";
 import type * as SdkPackage from "@entire-vc/mesh-theme-sdk";
-import { BOARD_CONTRACT_VERSION, CONTRACT_VERSION, DOC_CONTRACT_VERSION } from "@entire-vc/mesh-theme-sdk";
+import { BOARD_CONTRACT_VERSION, CONTRACT_VERSION, DASHBOARD_LAYOUT_VERSION, DOC_CONTRACT_VERSION, descriptorFromV1, descriptorToV1, sizeToV1, toActionsV1, toLayoutV1 } from "@entire-vc/mesh-theme-sdk";
 import { Can, DndProvider, Draggable, DropZone, InlineEdit, TaskBadges, TaskLink, useCan, useRealtime } from "@/core/primitives";
-import { useActiveSessions, useMentions, useMyTasks, useTasks, useTriageTasks, useWidgetData } from "@/core/dashboard/hooks";
+import { useActiveSessions, useMentions, useMyComments, useMyTasks, useRecentComments, useUnseenMentionCount, useTasks, useTriageTasks, useWidgetData } from "@/core/dashboard/hooks";
 import { useSlotContext } from "@/core/slots/slot-context";
 
 // Typed against the SDK's own export list: a name the SDK declares and the core does not provide, or
@@ -18,7 +18,13 @@ import { useSlotContext } from "@/core/slots/slot-context";
 const sdk: typeof SdkPackage = {
   BOARD_CONTRACT_VERSION,
   CONTRACT_VERSION,
+  DASHBOARD_LAYOUT_VERSION,
   DOC_CONTRACT_VERSION,
+  descriptorFromV1,
+  descriptorToV1,
+  sizeToV1,
+  toActionsV1,
+  toLayoutV1,
   Can,
   DndProvider,
   Draggable,
@@ -31,6 +37,9 @@ const sdk: typeof SdkPackage = {
   useTasks,
   useWidgetData,
   useMentions,
+  useMyComments,
+  useRecentComments,
+  useUnseenMentionCount,
   useMyTasks,
   useTriageTasks,
   useActiveSessions,

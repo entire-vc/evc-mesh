@@ -419,3 +419,128 @@ describe("OAuthConsentPage", () => {
     );
   });
 });
+
+describe("OAuthConsentPage, identity-only sign-in (OpenID Connect)", () => {
+  const OIDC_QUERY =
+    "client_id=keep&redirect_uri=https%3A%2F%2Fkeep.example.com%2Fauth%2Fcallback" +
+    "&response_type=code&code_challenge=abc&code_challenge_method=S256&scope=openid&state=st1&nonce=n0nce";
+
+  const IDENTITY_INFO: OAuthConsentInfo = {
+    client_name: "Keep",
+    redirect_uri: "https://keep.example.com/auth/callback",
+    redirect_host: "keep.example.com",
+    loopback_warning: false,
+    scope: "openid",
+    workspaces: [],
+    identity_only: true,
+  };
+
+  function renderIdentity() {
+    return render(
+      <MemoryRouter initialEntries={[`/connect/consent?${OIDC_QUERY}`]}>
+        <Routes>
+          <Route path="/connect/consent" element={<OAuthConsentPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  it("asks only to confirm who you are: no workspace picker, no connector wording", async () => {
+    mockApi.mockResolvedValueOnce(IDENTITY_INFO);
+    renderIdentity();
+
+    expect(
+      await screen.findByRole("heading", { name: "Keep wants to confirm it's you (your Mesh ID)" }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("redirect-host")).toHaveTextContent("keep.example.com");
+    expect(screen.queryByLabelText("Workspace")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByText(/not a member of any workspace/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/connector agent/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/will be able to/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/has not checked who made it/)).not.toBeInTheDocument();
+    expect(screen.getByText(/no access to your workspaces/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+    // The GET carries the nonce so the server validates the same request.
+    expect(mockApi.mock.calls[0]![1].params).toMatchObject({ nonce: "n0nce", scope: "openid" });
+  });
+
+  it("Sign in posts allow=true with the nonce and without workspace_id, then follows the redirect", async () => {
+    mockApi.mockResolvedValueOnce(IDENTITY_INFO);
+    mockApi.mockResolvedValueOnce({ redirect_uri: "https://keep.example.com/auth/callback?code=C&state=st1" });
+    renderIdentity();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+
+    await waitFor(() =>
+      expect(assign).toHaveBeenCalledWith("https://keep.example.com/auth/callback?code=C&state=st1"),
+    );
+    const [path, opts] = mockApi.mock.calls[1]!;
+    expect(path).toBe("/api/v1/oauth/consent");
+    expect(opts.method).toBe("POST");
+    expect(opts.body).toEqual({
+      client_id: "keep",
+      redirect_uri: "https://keep.example.com/auth/callback",
+      response_type: "code",
+      code_challenge: "abc",
+      code_challenge_method: "S256",
+      scope: "openid",
+      state: "st1",
+      nonce: "n0nce",
+      allow: true,
+    });
+    expect(opts.body).not.toHaveProperty("workspace_id");
+  });
+
+  it("Cancel posts allow=false and follows the access_denied redirect", async () => {
+    mockApi.mockResolvedValueOnce(IDENTITY_INFO);
+    mockApi.mockResolvedValueOnce({
+      redirect_uri: "https://keep.example.com/auth/callback?error=access_denied&state=st1",
+    });
+    renderIdentity();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    await waitFor(() =>
+      expect(assign).toHaveBeenCalledWith(
+        "https://keep.example.com/auth/callback?error=access_denied&state=st1",
+      ),
+    );
+    const body = mockApi.mock.calls[1]![1].body;
+    expect(body).toMatchObject({ allow: false, nonce: "n0nce", state: "st1" });
+    expect(body).not.toHaveProperty("workspace_id");
+  });
+
+  it("a 403 on Sign in shows the generic copy, not the workspace-role sentence", async () => {
+    mockApi.mockResolvedValueOnce(IDENTITY_INFO);
+    mockApi.mockRejectedValueOnce(Object.assign(new Error("nope"), { code: "X", status: 403 }));
+    renderIdentity();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+
+    expect(await screen.findByText("Could not save your choice. Try again.")).toBeInTheDocument();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("the MCP flow round-trips a nonce too when the query carries one", async () => {
+    mockApi.mockResolvedValueOnce(INFO);
+    mockApi.mockResolvedValueOnce({ redirect_uri: "https://claude.ai/api/mcp/auth_callback?code=C" });
+    render(
+      <MemoryRouter initialEntries={[`/connect/consent?${QUERY}&nonce=mcpn`]}>
+        <Routes>
+          <Route path="/connect/consent" element={<OAuthConsentPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Allow" }));
+
+    await waitFor(() => expect(assign).toHaveBeenCalled());
+    expect(mockApi.mock.calls[1]![1].body).toMatchObject({
+      nonce: "mcpn",
+      workspace_id: INFO.workspaces[0]!.id,
+      allow: true,
+    });
+  });
+});

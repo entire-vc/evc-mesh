@@ -119,6 +119,11 @@ if (!DEFAULT_BG || Object.values(BG).includes(DEFAULT_BG)) fail(`could not read 
 console.log(`\n1+2. Switching workspaces A -> B -> A (default is "${DEFAULT_BG}")`);
 {
   const { ctx, page } = await newPage();
+  // Workspace A's bundle is missing on purpose. Its failed import fires
+  // vite:preloadError, and index.html then reloads the page once. That reload
+  // can land after `mounted` and wipe the SPA navigation below. This step
+  // checks tokens, not the reload, so mark the reload as already spent.
+  await ctx.addInitScript(() => sessionStorage.setItem("mesh-chunk-reload", String(Date.now())));
   await page.goto(BASE + "/w/a/dashboard");
   await page.waitForFunction(mounted, null, { timeout: 15_000 });
   await page.waitForFunction((v) => getComputedStyle(document.documentElement).getPropertyValue("--background").trim() === v, BG.a, { timeout: 10_000 });

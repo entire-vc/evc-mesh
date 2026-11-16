@@ -16,7 +16,11 @@
 
 .mesh-doc-prose {
   line-height: 1.65;
-  word-break: break-word;
+  /* A long unbroken string (a URL, an identifier) breaks where it would
+     overflow the column; ordinary words stay whole. This is what the old
+     `word-break: break-word` meant, written in the property that is not
+     deprecated. Table cells narrow it down below. */
+  overflow-wrap: anywhere;
 }
 
 /*
@@ -76,6 +80,23 @@
 .mesh-doc-prose h5,
 .mesh-doc-prose h6 { font-size: 1rem; margin-top: 1em; }
 
+/*
+ * Vertical rhythm. Every gap is ONE margin-top on the lower block:
+ * nothing here sets a margin-bottom (hr aside, whose margins collapse), so a
+ * heading's space above cannot add up with a paragraph's or an image's space
+ * below. A heading opens space above itself and sits close to what it heads;
+ * nothing gets space above it at the top of the document or of a container.
+ * The image line is the other half of this: see `img` below.
+ */
+.mesh-doc-prose > :is(h1, h2, h3, h4, h5, h6) + * {
+  margin-top: 0.4em;
+}
+
+.mesh-doc-prose > :first-child,
+.mesh-doc-prose :is(li, blockquote, th, td, dd) > :first-child {
+  margin-top: 0;
+}
+
 .mesh-doc-prose a {
   color: hsl(var(--primary));
   text-decoration: underline;
@@ -103,7 +124,19 @@
   font-size: 0.85em;
 }
 
+/*
+ * A long code line wraps at the column edge instead of hiding behind a
+ * sideways scroll inside the block. Inside the editor and the document viewer
+ * ProseMirror's own stylesheet already says this (`.ProseMirror pre`), but
+ * MarkdownView — task descriptions, comments — renders the same nodes OUTSIDE
+ * a .ProseMirror root, where <pre> falls back to the browser's `white-space:
+ * pre` and a 600-character line was cut off at 393px. Saying it
+ * here makes every surface that wears .mesh-doc-prose agree. Combined with
+ * the `overflow-wrap: anywhere` above, an unbroken token breaks too.
+ * overflow-x stays as the last resort for content that still cannot break.
+ */
 .mesh-doc-prose pre {
+  white-space: pre-wrap;
   overflow-x: auto;
   border-radius: 0.5rem;
   background: hsl(var(--muted));
@@ -119,8 +152,24 @@
   font-size: inherit;
 }
 
+/*
+ * An image is inline content, in the document model and in markdown alike:
+ * `text ![](x) text` is ONE paragraph. Tailwind's preflight makes every <img>
+ * `display: block`, which pushed an image in a line of text onto a line of its
+ * own and split the text around it — the "image moves to the next line"
+ * report. Inline-block keeps it in the line.
+ *
+ * It also removes the phantom line under an image on its own line: ProseMirror
+ * ends such a paragraph with a hidden separator and a <br>, and with a block
+ * image that <br> got a line to itself, a text line's worth of space nobody
+ * could see or delete. `vertical-align: bottom` keeps the image from sitting
+ * on the text baseline with a descender's gap under it.
+ */
 .mesh-doc-prose img {
+  display: inline-block;
+  vertical-align: bottom;
   max-width: 100%;
+  height: auto;
   border-radius: 4px;
 }
 
@@ -196,11 +245,24 @@
 
 /* ---- tables ---- */
 
+/*
+ * A table wider than the column scrolls inside its own box, so the page does
+ * not scroll sideways and the text around it keeps its margins. The <table> is
+ * that box (`display: block`, the same trick GitHub uses); the one <tbody>
+ * Milkdown renders (prosemirror-tables: ["table", ["tbody", 0]]) carries the
+ * table layout and still fills the full width when the table is narrow.
+ */
 .mesh-doc-prose table {
-  border-collapse: collapse;
-  width: 100%;
-  display: table;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
   font-size: 0.95em;
+}
+
+.mesh-doc-prose table > tbody {
+  display: table;
+  width: 100%;
+  border-collapse: collapse;
 }
 
 /* Column alignment — the thing the old renderer could not express at all — is a
@@ -213,6 +275,16 @@
   border: 1px solid hsl(var(--border));
   padding: 0.4em 0.6em;
   vertical-align: top;
+  /* `anywhere` inside a cell lets the browser shrink a column to one letter,
+     and a nine-column table at 393px came out as "Col/um/n 1". Words stay
+     whole in cells; a table that still does not fit scrolls (above). */
+  overflow-wrap: break-word;
+}
+
+/* A link or a code span in a cell is the exception: one long URL must not
+   force the whole table into a sideways scroll. */
+.mesh-doc-prose :is(th, td) :is(a, code) {
+  overflow-wrap: anywhere;
 }
 
 .mesh-doc-prose th {

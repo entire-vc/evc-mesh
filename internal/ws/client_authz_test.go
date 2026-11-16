@@ -2,16 +2,29 @@ package ws
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 )
 
-// stubAuthorizer answers from a fixed map so the subscription rules can be tested
-// without a database.
+// stubAuthorizer answers the tenancy lookups from memory so the subscription and
+// fan-out rules can be tested without a database. MayAccessProject runs the
+// production rule (mayAccessProject) over those facts, so a test of this stub is
+// a test of the rule, not of a copy of it.
 type stubAuthorizer struct {
 	projectWS map[uuid.UUID]uuid.UUID
+	// roles is the workspace role of a user, keyed by {workspace, user}.
+	roles map[[2]uuid.UUID]string
+	// members holds project_members rows, keyed by {project, user or agent}.
+	members map[[2]uuid.UUID]bool
+	// failMembers makes every project_members lookup fail.
+	failMembers bool
+
+	mu      sync.Mutex
+	lookups int // MayAccessProject calls
 }
 
 func (s *stubAuthorizer) WorkspaceIDBySlug(_ context.Context, _ string) (uuid.UUID, error) {
@@ -29,6 +42,49 @@ func (s *stubAuthorizer) ProjectWorkspaceID(_ context.Context, projectID uuid.UU
 	return uuid.Nil, ErrWorkspaceNotFound
 }
 
+func (s *stubAuthorizer) UserWorkspaceRole(_ context.Context, wsID, userID uuid.UUID) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.roles[[2]uuid.UUID{wsID, userID}]
+}
+
+func (s *stubAuthorizer) ExistsMember(_ context.Context, projectID uuid.UUID, userID, agentID *uuid.UUID) (bool, error) {
+	if s.failMembers {
+		return false, errors.New("lookup failed")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch {
+	case userID != nil:
+		return s.members[[2]uuid.UUID{projectID, *userID}], nil
+	case agentID != nil:
+		return s.members[[2]uuid.UUID{projectID, *agentID}], nil
+	}
+	return false, nil
+}
+
+func (s *stubAuthorizer) MayAccessProject(ctx context.Context, p Principal, projectID uuid.UUID) bool {
+	s.mu.Lock()
+	s.lookups++
+	s.mu.Unlock()
+	return mayAccessProject(ctx, s, p, projectID)
+}
+
+func (s *stubAuthorizer) setMember(projectID, principalID uuid.UUID, on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.members == nil {
+		s.members = map[[2]uuid.UUID]bool{}
+	}
+	s.members[[2]uuid.UUID{projectID, principalID}] = on
+}
+
+func (s *stubAuthorizer) lookupCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lookups
+}
+
 // TestClient_CanSubscribe is the regression test for the in-band half of the
 // WebSocket leak. Fixing only the handshake would have left the same hole one
 // message later: the socket accepted any "subscribe" a connected client sent, so
@@ -42,10 +98,16 @@ func TestClient_CanSubscribe(t *testing.T) {
 	me := uuid.New()
 	someoneElse := uuid.New()
 
-	authz := &stubAuthorizer{projectWS: map[uuid.UUID]uuid.UUID{
-		myProject:    mine,
-		theirProject: theirs,
-	}}
+	agentID := uuid.New()
+	authz := &stubAuthorizer{
+		projectWS: map[uuid.UUID]uuid.UUID{
+			myProject:    mine,
+			theirProject: theirs,
+		},
+		roles: map[[2]uuid.UUID]string{{mine, me}: "member"},
+	}
+	authz.setMember(myProject, me, true)
+	authz.setMember(myProject, agentID, true)
 
 	user := NewClient(nil, nil, Principal{
 		UserID:        me,
@@ -54,7 +116,7 @@ func TestClient_CanSubscribe(t *testing.T) {
 	}, authz)
 
 	agent := NewClient(nil, nil, Principal{
-		AgentID:       uuid.New(),
+		AgentID:       agentID,
 		WorkspaceID:   mine,
 		WorkspaceSlug: "ws-11111111",
 	}, authz)

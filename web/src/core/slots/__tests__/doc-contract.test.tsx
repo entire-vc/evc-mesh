@@ -266,6 +266,22 @@ describe("doc.view contract on mesh-default", () => {
     expect(actions.retry).toHaveBeenCalledTimes(1);
   });
 
+  it("CT-docview-02b a refused cut offers confirmShrink instead of Retry; a container without it keeps Retry", () => {
+    const confirmShrink = vi.fn();
+    const { actions } = mountView(
+      viewData({ save: { state: "error", message: "this cuts most of the page", shrinkRefused: true } }),
+      viewActions({ confirmShrink }),
+    );
+    expect(screen.getByText(/Not saved: this cuts most of the page/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save anyway" }));
+    expect(confirmShrink).toHaveBeenCalledTimes(1);
+    expect(actions.retry).not.toHaveBeenCalled();
+    cleanup();
+    mountView(viewData({ save: { state: "error", message: "this cuts most of the page", shrinkRefused: true } }));
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
   it("CT-docview-03 conflict offers reload / keep-mine through resolveConflict; without it the approved copy stands alone", () => {
     const resolveConflict = vi.fn();
     const { rerender } = mountView(viewData({ save: { state: "conflict" } }), viewActions({ resolveConflict }));

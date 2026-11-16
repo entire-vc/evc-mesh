@@ -213,6 +213,13 @@ components:
           type: string
         icon:
           type: string
+          maxLength: 50
+          description: >-
+            Project icon: one emoji grapheme (`🚀`), a named icon `icon:<name>`
+            with name `[a-z0-9-]{1,40}` (`icon:rocket`; the workspace theme's icon
+            of that name is drawn first, then the core one), or empty for the
+            default. Projects created before this format may still carry a
+            free-text icon; it is returned as stored.
         settings:
           type: object
         default_assignee_type:
@@ -1604,6 +1611,9 @@ paths:
                   type: string
                 icon:
                   type: string
+                  description: >-
+                    One emoji, `icon:<name>` (name `[a-z0-9-]{1,40}`) or empty.
+                    Anything else is refused with 422.
                 settings:
                   type: object
       responses:
@@ -1613,6 +1623,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Project"
+        "422":
+          description: >-
+            `icon` is not one emoji, `icon:<name>` or empty; the body's
+            `validation.icon` names the accepted formats.
 
   /api/v1/projects/{proj_id}:
     parameters:
@@ -1648,6 +1662,10 @@ paths:
                   type: string
                 icon:
                   type: string
+                  description: >-
+                    One emoji, `icon:<name>` (name `[a-z0-9-]{1,40}`) or empty.
+                    Anything else is refused with 422. A legacy free-text icon
+                    already stored may be sent back unchanged.
       responses:
         "200":
           description: Updated project
@@ -1659,6 +1677,9 @@ paths:
           description: >-
             Invalid body. `is_archived` is refused here — use
             POST /projects/{proj_id}/archive or /unarchive.
+        "422":
+          description: >-
+            A changed `icon` is not one emoji, `icon:<name>` or empty.
     delete:
       tags: [Projects]
       summary: Delete project
@@ -3105,6 +3126,12 @@ paths:
                 base_version:
                   type: integer
                   description: The version you read. Omit for an unconditional write.
+                allow_shrink:
+                  type: boolean
+                  description: |
+                    Lifts the shrink guard for this write. Without it, a body under
+                    half the stored size that drops headings the stored body has is
+                    refused with document_shrink_refused. base_version is still checked.
       responses:
         "200":
           description: Updated document
@@ -3114,21 +3141,40 @@ paths:
                 $ref: "#/components/schemas/Document"
         "409":
           description: |
-            The document's version no longer matches base_version. Nothing was
-            written. Re-read the document, re-apply the change and retry with the
-            version returned here.
+            Nothing was written. `document_version_conflict`: the document's version
+            no longer matches base_version; re-read it, re-apply the change and retry
+            with the version returned here. `document_shrink_refused` (in
+            error_code): the body would cut the document to less than half and drop
+            the headings listed in context.dropped_sections; send one section with
+            `section`, or resend with allow_shrink=true if the cut is intended.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   code:
+                    oneOf:
+                      - type: string
+                        enum: [document_version_conflict]
+                      - type: integer
+                  error_code:
                     type: string
-                    enum: [document_version_conflict]
+                    enum: [document_version_conflict, document_shrink_refused]
                   message:
                     type: string
                   current_version:
                     type: integer
+                  context:
+                    type: object
+                    properties:
+                      current_bytes:
+                        type: integer
+                      next_bytes:
+                        type: integer
+                      dropped_sections:
+                        type: array
+                        items:
+                          type: string
     delete:
       tags: [Documents]
       summary: Soft-delete a document and its descendants
@@ -5875,18 +5921,97 @@ paths:
           format: uuid
     get:
       tags: [Triage]
-      summary: List triage inbox tasks across all workspace projects
+      summary: List the human-attention queue across the projects the caller may read
+      description: >
+        Tasks in a triage-category status plus tasks with a live human gate, hard
+        gates first, longest waiting first. Members see only projects they belong
+        to; workspace owners and admins see all. total_count counts every match.
       operationId: listTriageTasks
       parameters:
         - $ref: "#/components/parameters/PageParam"
         - $ref: "#/components/parameters/PageSizeParam"
+        - name: project_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: hard_gates_only
+          in: query
+          schema: { type: boolean }
       responses:
         "200":
-          description: Paginated triage tasks (tasks with no status or in backlog)
+          description: Paginated triage tasks
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/PaginatedResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/workspaces/{ws_id}/tasks/query:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Triage]
+      summary: Dashboard task query across the projects the caller may read
+      description: >
+        Every filter runs on the server; total_count counts every match. Members
+        see only projects they belong to; workspace owners and admins see all.
+      operationId: queryTasks
+      parameters:
+        - name: scope
+          in: query
+          required: true
+          schema: { type: string, enum: [mine, project, workspace] }
+        - name: project_id
+          in: query
+          description: Required for scope=project.
+          schema: { type: string, format: uuid }
+        - name: status_category
+          in: query
+          description: Comma list. Default excludes done and cancelled.
+          schema: { type: string, example: "todo,in_progress" }
+        - name: priority
+          in: query
+          description: Comma list of urgent, high, medium, low, none.
+          schema: { type: string }
+        - name: due_before
+          in: query
+          description: RFC3339 or YYYY-MM-DD; due date strictly before it.
+          schema: { type: string }
+        - name: gated
+          in: query
+          schema: { type: boolean }
+        - name: hard_gates_only
+          in: query
+          schema: { type: boolean }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [updated, priority, due_date, triage], default: updated }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 50 }
+        - $ref: "#/components/parameters/PageParam"
+      responses:
+        "200":
+          description: Paginated tasks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedResponse"
+        "400":
+          description: Invalid filter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "401":
           description: Unauthorized
           content:

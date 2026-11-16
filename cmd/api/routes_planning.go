@@ -41,6 +41,8 @@ func registerPlanningRoutes(deps *apiDeps) {
 
 	// Triage inbox route.
 	api.GET("/workspaces/:ws_id/triage", triageHandler.List)
+	// Dashboard task widgets (SDK TaskQuery): every filter on the server, viewer-scoped.
+	api.GET("/workspaces/:ws_id/tasks/query", triageHandler.Query)
 
 	// Recurring task schedule routes.
 	//

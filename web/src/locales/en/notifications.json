@@ -144,6 +144,7 @@
     }
   },
   "dashboard": {
+    "widgetLoadFailed": "The widget could not be loaded",
     "mentions": {
       "title": "Mentions",
       "myComments": "my comments",
@@ -151,7 +152,17 @@
       "loadFailed": "Mentions could not be loaded",
       "empty": "No mentions yet",
       "document": "Document",
-      "task": "Task"
+      "task": "Task",
+      "onlyNew": "Only new",
+      "emptyNew": "No new mentions",
+      "question": "Question",
+      "failedAll": "Mentions could not be loaded.",
+      "failedDocument": "Mentions in documents could not be loaded.",
+      "failedTask": "Mentions on tasks could not be loaded.",
+      "incomplete": "This list is incomplete — retry to load it again.",
+      "partial": "Some mentions may be missing from this list.",
+      "sectionNew": "New",
+      "sectionShown": "Shown"
     },
     "triage": {
       "title": "Triage",
@@ -183,6 +194,151 @@
       "busy": "busy",
       "offline": "offline",
       "error": "error"
+    },
+    "tasks": {
+      "unknownProject": "Unknown project",
+      "due": "Due date",
+      "triage": {
+        "title": "Triage queue",
+        "open": "Open",
+        "move": "Move",
+        "moveTask": "Move \"{{title}}\"",
+        "by": "by {{name}}"
+      },
+      "list": {
+        "title": "Task list",
+        "empty": "No tasks match this filter"
+      },
+      "move": {
+        "title": "Move task",
+        "submit": "Move",
+        "project": "Project",
+        "status": "Status",
+        "noStatuses": "No statuses available",
+        "cancel": "Cancel",
+        "moving": "Moving...",
+        "movedTo": "Moved to \"{{status}}\"",
+        "failed": "Could not move the task"
+      }
+    },
+    "page": {
+      "stubHint": "Unknown widget type or its extension is turned off",
+      "removeWidget": "Remove widget",
+      "expand": "Expand",
+      "back": "Back",
+      "widgetGone": "This widget is no longer on the dashboard",
+      "loadFailed": "Could not load the dashboard",
+      "retry": "Retry",
+      "notFound": "Dashboard not found",
+      "toHome": "Go to the main dashboard",
+      "shared": "Shared dashboard",
+      "edit": "Edit layout",
+      "done": "Done",
+      "menu": "More",
+      "print": "Print dashboard",
+      "copyToMe": "Make a copy for me",
+      "emptyTitle": "Add your first widget",
+      "emptyHintEdit": "Press the gear and pick a widget from the catalog",
+      "emptyHint": "The owner has not added any widgets yet"
+    },
+    "comms": {
+      "project": "Project",
+      "allProjects": "All projects",
+      "internal": "internal",
+      "showInternal": "Internal",
+      "noneInProject": "No comments in this project",
+      "more": "Load more",
+      "loading": "Loading…"
+    },
+    "myComments": {
+      "title": "My comments",
+      "empty": "You haven't commented on anything yet."
+    },
+    "recentComments": {
+      "title": "Recent comments",
+      "empty": "No comments in this workspace yet."
+    },
+    "analytics": {
+      "period": {
+        "days": "Last {{days}} days"
+      },
+      "menu": "Widget menu",
+      "csv": "Download CSV",
+      "csvBusy": "Downloading…",
+      "csvFailed": "CSV export failed",
+      "loading": "Loading",
+      "error": "Could not load the data",
+      "retry": "Retry",
+      "empty": "No data for this period",
+      "incomplete": "Data incomplete for this period",
+      "incompleteSince": "Data incomplete since {{date}}",
+      "other": "Other",
+      "unassigned": "Unassigned",
+      "unknown": "Unknown",
+      "metric": {
+        "tasks_closed": "Completed",
+        "tasks_created": "Created",
+        "events_total": "Events",
+        "tasks_total": "Total tasks",
+        "tasks_overdue": "Overdue",
+        "triage_waiting": "Awaiting triage",
+        "mentions_unseen": "Unread mentions",
+        "live": "Now, not limited to the period or project",
+        "agents_total": "Agents",
+        "agents_active": "Active agents",
+        "delta": "{{delta}} vs previous period",
+        "same": "Same as the previous period",
+        "noComparison": "No comparison: the previous period is incomplete",
+        "noComparisonCurrent": "No comparison: this period is incomplete",
+        "snapshot": "Now, not limited to the period"
+      },
+      "breakdown": {
+        "status": "Tasks by status",
+        "priority": "Tasks by priority",
+        "assignee": "Tasks by assignee",
+        "project": "Tasks by project"
+      },
+      "status": {
+        "backlog": "backlog",
+        "triage": "triage",
+        "todo": "todo",
+        "in_progress": "in progress",
+        "review": "review",
+        "done": "done",
+        "cancelled": "cancelled"
+      },
+      "timeline": {
+        "title": "Created vs completed",
+        "created": "Created",
+        "completed": "Completed"
+      },
+      "events": {
+        "title": "Events by type"
+      },
+      "leaderboard": {
+        "title": "Completed by agent"
+      },
+      "cost": {
+        "kpis": "Cost",
+        "reported": "Reported cost",
+        "tokens": "Tokens in / out",
+        "sessions": "Sessions",
+        "avg": "Avg per session",
+        "reportedOf": "Reported {{reported}} of {{total}} sessions ({{percent}}%)",
+        "byAgent": "Cost by agent",
+        "byProject": "Cost by project",
+        "byDay": "Cost by day",
+        "total": "Total {{cost}}"
+      },
+      "top": {
+        "titleCost": "Most expensive tasks",
+        "titleTokens": "Top tasks by tokens",
+        "task": "Task",
+        "cost": "Cost",
+        "tokens": "Tokens",
+        "sessions": "Sessions",
+        "sessionsShort": "Sess."
+      }
     }
   }
 }

@@ -14,11 +14,14 @@ const (
 	SlotTaskPanel   = "task.panel"
 	// SlotProjectView is a tab of the project strip; its token always names the project.
 	SlotProjectView = "project.view"
+	// SlotDashboardWidget is a widget on a dashboard (manifest widget with render.frame).
+	// Its token names the dashboard and the widget instance, and the project when the widget is project-scoped.
+	SlotDashboardWidget = "dashboard.widget"
 )
 
 // IsFrameSlot reports whether slot can hold an iframe screen.
 func IsFrameSlot(slot string) bool {
-	return slot == SlotSidebarItem || slot == SlotTaskPanel || slot == SlotProjectView
+	return slot == SlotSidebarItem || slot == SlotTaskPanel || slot == SlotProjectView || slot == SlotDashboardWidget
 }
 
 // ErrNoScreen means the manifest declares no screen for the slot.
@@ -45,8 +48,38 @@ func FrameFor(m extensions.Manifest, settings map[string]any, slot string) (Fram
 	if m.Runtime != "external" || m.External == nil || !IsFrameSlot(slot) {
 		return Frame{}, ErrNoScreen
 	}
+	// A widget's screen is per widget type (widgets[].render.frame): FrameForWidget.
+	if slot == SlotDashboardWidget {
+		return Frame{}, ErrNoScreen
+	}
 	screen, ok := m.External.UI[slot]
-	if !ok || !strings.HasPrefix(screen.Path, "/") || strings.HasPrefix(screen.Path, "//") {
+	if !ok {
+		return Frame{}, ErrNoScreen
+	}
+	return frameAt(m, settings, screen.Path, screen.Title)
+}
+
+// ErrUnknownWidget means the manifest declares no iframe widget with that id.
+var ErrUnknownWidget = errors.New("the extension has no iframe widget with this id")
+
+// FrameForWidget resolves the iframe screen of widget widgetID of manifest m:
+// widgets[].render.frame.path on the service address, with the same address and
+// allowed_domains checks as FrameFor. A widget drawn by a builtin component, or
+// an id the manifest does not declare, is ErrUnknownWidget.
+func FrameForWidget(m extensions.Manifest, settings map[string]any, widgetID string) (Frame, error) {
+	if m.Runtime != "external" || m.External == nil {
+		return Frame{}, ErrNoScreen
+	}
+	for _, w := range m.Widgets {
+		if w.ID == widgetID && w.Render.Frame != nil {
+			return frameAt(m, settings, w.Render.Frame.Path, w.Title)
+		}
+	}
+	return Frame{}, ErrUnknownWidget
+}
+
+func frameAt(m extensions.Manifest, settings map[string]any, path, title string) (Frame, error) {
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
 		return Frame{}, ErrNoScreen
 	}
 	raw, _ := settings[m.External.BaseURLSetting].(string)
@@ -65,7 +98,7 @@ func FrameFor(m extensions.Manifest, settings map[string]any, slot string) (Fram
 	if !HostAllowed(u.Hostname(), allowed) {
 		return Frame{}, ErrDomainNotAllowed
 	}
-	return Frame{URL: base + screen.Path, Origin: u.Scheme + "://" + u.Host, Title: screen.Title}, nil
+	return Frame{URL: base + path, Origin: u.Scheme + "://" + u.Host, Title: title}, nil
 }
 
 // ExpandAllowedDomains resolves `{settings.<key>}` entries of allowed_domains to

@@ -461,7 +461,8 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 				go func() {
 					sendCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 					defer cancel()
-					if sendErr := s.telegramClient.SendMessage(sendCtx, token, chatID, text); sendErr != nil {
+					messageID, sendErr := s.telegramClient.SendMessage(sendCtx, token, chatID, text)
+					if sendErr != nil {
 						var apiErr *TelegramAPIError
 						if errors.As(sendErr, &apiErr) && apiErr.Forbidden() {
 							// The bot was blocked or the chat deleted. Distinct
@@ -475,7 +476,15 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 						}
 						log.Printf("[notification][telegram] NOT DELIVERED: send to chat %d failed for user %s (event %s, workspace %s): %v",
 							chatID, userID, event.EventType, event.WorkspaceID, sendErr)
+						return
 					}
+					// The success side had no line at all, so "delivered" and
+					// "this branch never ran" were the same silence and every
+					// check of the channel needed a person to confirm receipt
+					// No token, chat id or text here: the
+					// message_id Telegram assigned is the receipt.
+					log.Printf("[notification][telegram] delivered: event %s to user %s message_id %d (workspace %s)",
+						event.EventType, userID, messageID, event.WorkspaceID)
 				}()
 			}
 

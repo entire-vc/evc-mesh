@@ -117,6 +117,10 @@ type Comment struct {
 	// highlights it). Computed per-response by the handler, never stored,
 	// hence db:"-" and omitempty.
 	URL string `json:"url,omitempty" db:"-"`
+
+	// Receipt, when set, binds the request's Idempotency-Key to this row in the
+	// insert's transaction; never bound from JSON, never stored.
+	Receipt *IdempotencyReceipt `json:"-" db:"-"`
 }
 
 // Gate receipt outcomes.

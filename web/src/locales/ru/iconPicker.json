@@ -1,0 +1,26 @@
+{
+  "none": "Без иконки",
+  "search": "Поиск",
+  "searchPlaceholder": "Поиск: ракета, rocket…",
+  "recent": "Недавние",
+  "empty": "Ничего не найдено",
+  "clear": "Без иконки",
+  "categories": {
+    "smileys": "Смайлики",
+    "people": "Люди",
+    "nature": "Природа",
+    "food": "Еда",
+    "activity": "Активности",
+    "travel": "Путешествия",
+    "objects": "Предметы",
+    "symbols": "Символы"
+  },
+  "title": "Иконки",
+  "tabEmoji": "Эмодзи",
+  "tabIcons": "Иконки",
+  "themeIcons": "Иконки темы",
+  "coreIcons": "Иконки",
+  "iconsEmpty": "Иконки не найдены",
+  "searchPlaceholderIcons": "Поиск: ракета, rocket…",
+  "tabs": "Тип иконки"
+}

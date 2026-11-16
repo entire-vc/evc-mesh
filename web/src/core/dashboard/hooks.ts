@@ -1,13 +1,16 @@
 // Data hooks for dashboard widgets (spec §3). Views and a theme's own widgets
 // read the core only through these: no fetch in a view, current user's rights.
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router";
 import { api } from "@/lib/api";
-import { fetchMentionInbox, mentionHref, type MentionInboxItem, type MentionSource } from "@/lib/mentions/inbox";
 import { useProjectStore } from "@/stores/project";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { PaginatedResponse, Task, TeamDirectory, TeamDirectoryAgent } from "@/types";
-import type { Async, MentionItem, TaskQuery, MentionsData, SessionItem, TasksData, WidgetViewDataMap } from "./types";
+import { useMentions, useMyComments, useRecentComments, useUnseenMentionCount } from "./widgets/comms/hooks";
+import type { Async, SessionItem, TasksData, WidgetViewDataMap } from "./types";
+import { useTasks, useTriageQueue } from "./tasks/hooks";
+import { myTasksQuery, taskListQuery, triageQueueOptions } from "./widgets/tasks/query";
+
+export { useMentions, useMyComments, useRecentComments, useUnseenMentionCount };
 
 const PRIO = ["urgent", "high", "medium", "low", "none"];
 const SESSIONS_POLL_MS = 30_000;
@@ -39,7 +42,7 @@ function useLoad<T>(load: (wsId: string) => Promise<T>, empty: T, refreshMs?: nu
       live = false;
       if (id) clearInterval(id);
     };
-    // load/empty are module-level constants at every call site (useTasks memoizes its loader by query).
+    // load/empty are module-level constants at every call site.
   }, [wsId, load, empty, refreshMs, surfaceErrors, attempt]);
   return useMemo<Async<T>>(() => {
     if (loaded === null || loaded.wsId !== wsId) return { state: "loading" };
@@ -48,58 +51,21 @@ function useLoad<T>(load: (wsId: string) => Promise<T>, empty: T, refreshMs?: nu
   }, [loaded, wsId]);
 }
 
-interface MentionsRaw {
-  items: MentionInboxItem[];
-  failed: MentionSource[];
-}
-const EMPTY_MENTIONS: MentionsRaw = { items: [], failed: ["task", "document"] };
 const EMPTY_TASKS: TasksData = { items: [], total: 0, projectNames: {} };
 const EMPTY_SESSIONS = { items: [] as SessionItem[] };
 
-const loadMentions = async (wsId: string): Promise<MentionsRaw> => {
-  const { items, failed } = await fetchMentionInbox(wsId, 10);
-  return { items: items.slice(0, 10), failed };
-};
-
-export function useMentions(): Async<MentionsData> {
-  const { wsSlug } = useParams<{ wsSlug: string }>();
-  const { projects } = useProjectStore();
-  const r = useLoad(loadMentions, EMPTY_MENTIONS);
-  return useMemo<Async<MentionsData>>(() => {
-    if (r.state !== "ready") return r;
-    const items = r.value.items.map((m): MentionItem => {
-      const project = projects.find((p) => p.id === m.project_id);
-      // Task mentions keep the /t/:id resolver, which finds its own slugs.
-      // Documents have no such resolver: without the project there is nowhere
-      // honest to point.
-      const href =
-        m.source === "task" ? `/t/${m.task_id}?comment=${m.comment_id}` : mentionHref(m, wsSlug, project?.slug);
-      return {
-        id: m.comment_id,
-        source: m.source,
-        title: m.title,
-        at: m.extracted_at,
-        seen: !!m.seen_at,
-        href,
-        target:
-          m.source === "task"
-            ? { kind: "task", taskId: m.task_id, commentId: m.comment_id }
-            : { kind: "document", docId: m.document_id, projectSlug: project?.slug },
-      };
-    });
-    return { state: "ready", value: { items, failedSources: r.value.failed } };
-  }, [r, projects, wsSlug]);
-}
-
 const loadTriage = async (wsId: string): Promise<TasksData> => {
-  const data = await api<PaginatedResponse<Task>>(`/api/v1/workspaces/${wsId}/triage`, { params: { per_page: 10 } });
+  // The server orders the queue by gate, not by priority: read the whole window (50) so the
+  // priority sort below never drops an urgent row that sits past the first page.
+  const data = await api<PaginatedResponse<Task>>(`/api/v1/workspaces/${wsId}/triage`, { params: { page_size: 50 } });
   const sorted = [...(data?.items ?? [])].sort((a, b) => {
     const pa = PRIO.indexOf(a.priority);
     const pb = PRIO.indexOf(b.priority);
     if (pa !== pb) return pa - pb;
     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
   });
-  return { items: sorted.slice(0, 5), total: sorted.length, projectNames: {} };
+  // the whole queue, not the ten rows read
+  return { items: sorted.slice(0, 5), total: data?.total_count ?? sorted.length, projectNames: {} };
 };
 
 const loadMine = async (wsId: string, perPage = 5): Promise<TasksData> => {
@@ -108,15 +74,33 @@ const loadMine = async (wsId: string, perPage = 5): Promise<TasksData> => {
   return { items, total: items.length, projectNames: {} };
 };
 
-function withProjectNames(r: Async<TasksData>, projects: { id: string; name: string }[]): Async<TasksData> {
+function withProjectNames(r: Async<TasksData>, projects: { id: string; name: string; icon?: string }[]): Async<TasksData> {
   if (r.state !== "ready") return r;
-  return { state: "ready", value: { ...r.value, projectNames: Object.fromEntries(projects.map((p) => [p.id, p.name])) } };
+  return {
+    state: "ready",
+    value: {
+      ...r.value,
+      projectNames: Object.fromEntries(projects.map((p) => [p.id, p.name])),
+      projectIcons: Object.fromEntries(projects.map((p) => [p.id, p.icon ?? ""])),
+    },
+  };
 }
 
 export function useTriageTasks(): Async<TasksData> {
   const { projects } = useProjectStore();
   const r = useLoad(loadTriage, EMPTY_TASKS);
   return useMemo(() => withProjectNames(r, projects), [r, projects]);
+}
+
+const loadTriageCount = async (wsId: string): Promise<number> => {
+  // the queue's own total, not the length of the five rows the triage card draws
+  const data = await api<PaginatedResponse<Task>>(`/api/v1/workspaces/${wsId}/triage`, { params: { per_page: 1 } });
+  return data?.total_count ?? 0;
+};
+
+/** Cards waiting in the triage queue: the «Ждут триажа» metric (W4). A failed read is an error, never a zero. */
+export function useTriageCount(): Async<number> {
+  return useLoad(loadTriageCount, 0, undefined, true);
 }
 
 export function useMyTasks(): Async<TasksData> {
@@ -138,46 +122,22 @@ export function useActiveSessions(): Async<{ items: SessionItem[] }> {
   return useLoad(loadSessions, EMPTY_SESSIONS, SESSIONS_POLL_MS);
 }
 
-const UNSUPPORTED: Async<never> = {
-  state: "error",
-  error: new Error("This task query is not available to dashboard widgets yet"),
-  retry: () => {},
-};
+// useTasks lives with the task widgets (widgets/tasks): every TaskQuery field is filtered on the server.
+export { useTasks } from "./tasks/hooks";
 
-const loadQuery = (q: TaskQuery) => async (wsId: string): Promise<TasksData> => {
-  // a theme widget filters and sorts client-side, so it needs the whole page, not the five rows of the built-in card
-  const base = await (q.gated ? loadTriage(wsId) : loadMine(wsId, 50));
-  let items = base.items;
-  if (q.priority?.length) items = items.filter((t) => q.priority!.includes(t.priority));
-  if (q.dueBefore) items = items.filter((t) => t.due_date && t.due_date < q.dueBefore!);
-  if (q.sort === "priority") items = [...items].sort((a, b) => PRIO.indexOf(a.priority) - PRIO.indexOf(b.priority));
-  if (q.sort === "due_date") {
-    // no due date sorts last
-    const due = (t: Task) => (t.due_date ? new Date(t.due_date).getTime() : Infinity);
-    items = [...items].sort((a, b) => due(a) - due(b));
-  }
-  items = items.slice(0, Math.min(q.limit ?? 50, 50));
-  return { items, total: items.length, projectNames: {} };
-};
-
-/** Tasks for a theme's own widget: closed filters, current user's rights, no fetch in the view. */
-export function useTasks(q: TaskQuery): Async<TasksData> {
-  const { projects } = useProjectStore();
-  const key = JSON.stringify(q);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const load = useMemo(() => loadQuery(q), [key]);
-  const supported = q.scope === "mine" || (q.scope === "workspace" && !!q.gated);
-  const r = useLoad(supported ? load : loadNothing, EMPTY_TASKS, undefined, true);
-  return useMemo(() => (supported ? withProjectNames(r, projects) : UNSUPPORTED), [supported, r, projects]);
-}
-const loadNothing = async (): Promise<TasksData> => EMPTY_TASKS;
-
+type Settings = Readonly<Record<string, unknown>>;
+const NO_SETTINGS: Settings = {};
 const NO_DATA = (): Async<undefined> => ({ state: "ready", value: undefined });
-const WIDGET_HOOKS: Record<string, () => Async<unknown>> = {
+// A hook gets the instance settings; the four pre-registry hooks have none and ignore them.
+const WIDGET_HOOKS: Record<string, (settings: Settings) => Async<unknown>> = {
   mentions: useMentions,
   triage: useTriageTasks,
-  "my-tasks": useMyTasks,
   sessions: useActiveSessions,
+  "my-tasks": (s) => useTasks(myTasksQuery(s)),
+  "triage-queue": (s) => useTriageQueue(triageQueueOptions(s)),
+  "task-list": (s) => useTasks(taskListQuery(s)),
+  "my-comments": useMyComments,
+  "recent-comments": useRecentComments,
 };
 
 /**
@@ -185,8 +145,8 @@ const WIDGET_HOOKS: Record<string, () => Async<unknown>> = {
  * same for the life of the calling component (the hook set depends on it);
  * `Widget` keys its inner component by id, so a reused `Widget` remounts.
  */
-export function useWidgetData<K extends keyof WidgetViewDataMap>(widgetId: K): WidgetViewDataMap[K];
-export function useWidgetData(widgetId: string): Async<unknown>;
-export function useWidgetData(widgetId: string): Async<unknown> {
-  return (WIDGET_HOOKS[widgetId] ?? NO_DATA)();
+export function useWidgetData<K extends keyof WidgetViewDataMap>(widgetId: K, settings?: Settings): WidgetViewDataMap[K];
+export function useWidgetData(widgetId: string, settings?: Settings): Async<unknown>;
+export function useWidgetData(widgetId: string, settings: Settings = NO_SETTINGS): Async<unknown> {
+  return (WIDGET_HOOKS[widgetId] ?? NO_DATA)(settings);
 }

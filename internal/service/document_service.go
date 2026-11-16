@@ -1061,10 +1061,22 @@ func shrinkGuard(current, next string) error {
 	if len(lost) == 0 {
 		return nil
 	}
-	return apierror.Conflict(fmt.Sprintf(
-		"body shrinks from %d to %d bytes and drops %d section(s): %s. body replaces the WHOLE document; "+
-			"to change one section send section=\"<heading>\" with body, or pass allow_shrink=true if the cut is intended",
-		len(current), len(next), len(lost), strings.Join(lost, " | ")))
+	// 409 with its own code rather than the generic "conflict": the editor has to
+	// tell this refusal (the user cut most of the page; one confirmation lets it
+	// through) from a version conflict (someone else's edit landed) and from a
+	// failure (Retry). Under "conflict" it showed "This conflicts with the
+	// current state" and a Retry that could only be refused again.
+	return apierror.DocumentShrinkRefused(
+		fmt.Sprintf(
+			"body shrinks from %d to %d bytes and drops %d section(s): %s. body replaces the WHOLE document; "+
+				"to change one section send section=\"<heading>\" with body, or pass allow_shrink=true if the cut is intended",
+			len(current), len(next), len(lost), strings.Join(lost, " | ")),
+		map[string]any{
+			"current_bytes":    len(current),
+			"next_bytes":       len(next),
+			"dropped_sections": lost,
+		},
+	)
 }
 
 // downloadBody fetches a document's markdown from object storage.

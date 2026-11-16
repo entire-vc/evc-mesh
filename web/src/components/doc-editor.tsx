@@ -48,6 +48,8 @@ import {
 } from "@/lib/artifact-links";
 import { uploadDocumentAttachment } from "@/lib/document-attachments";
 import { makeDocEditor } from "@/lib/milkdown/editor";
+import { blockStatePlugin, createBlockStateStore } from "@/lib/milkdown/block-state";
+import { BlockTypeSelect, TableMenu } from "@/components/editor-block-controls";
 import {
   type AnchorMatch,
   type DocAnchor,
@@ -363,6 +365,11 @@ function MilkdownDoc({
   const buildNodesRef = useRef(buildNodes);
   buildNodesRef.current = buildNodes;
 
+  // Where the cursor is, for the block-type picker and the table menu. A
+  // store rather than state here, so moving the cursor re-renders those two
+  // controls and not the whole editor.
+  const [blockStore] = useState(createBlockStateStore);
+
   useEditor(
     (root) =>
       makeDocEditor({
@@ -370,7 +377,7 @@ function MilkdownDoc({
         defaultValue: valueRef.current,
         editable: !readOnly,
         editorClassName: PROSE_CLASS,
-        plugins: uploadsEnabled ? upload : [],
+        plugins: [...(uploadsEnabled ? upload : []), blockStatePlugin(blockStore)],
         configure: uploadsEnabled
           ? (ctx) => {
               ctx.update(uploadConfig.key, (prev) => ({
@@ -651,6 +658,10 @@ function MilkdownDoc({
           className="sticky top-0 z-10 shrink-0 rounded-t-lg bg-background"
         >
           <div className="flex flex-wrap items-center gap-0.5 border-b border-border px-2 py-1">
+            <BlockTypeSelect ns="docs" store={blockStore} runCommand={runCommand} withView={withView} />
+
+            <div className="mx-1 h-3.5 w-px bg-border" />
+
             <ToolbarButton
               title={t("editor.bold")}
               onClick={() => runCommand(toggleStrongCommand.key)}
@@ -705,6 +716,7 @@ function MilkdownDoc({
             >
               <TableIcon className="h-3.5 w-3.5" />
             </ToolbarButton>
+            <TableMenu ns="docs" store={blockStore} runCommand={runCommand} withView={withView} />
   
             {uploadTarget && (
               <>

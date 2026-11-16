@@ -1,6 +1,6 @@
 import * as i18nFmt from "@/i18n/format";
 import { useCallback, useEffect, useState } from "react";
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 import { Download, ExternalLink, Search, Sparkles, Star, Tag, X } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -19,17 +19,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { IntegrationConfig, SparkAgentManifest } from "@/types";
-import { apiErrorMessage } from "@/lib/api-error";
 
 // Pre-populated domain expertise tags shown as clickable badge-pills.
 const DOMAIN_TAGS = [
@@ -69,8 +60,6 @@ export function SparkPage() {
     error,
     search,
     fetchPopular,
-    selectAgent,
-    selectedAgent,
     clearError,
   } = useSparkStore();
 
@@ -81,7 +70,6 @@ export function SparkPage() {
   // Custom tags added via text input (in addition to domain tags).
   const [customTagInput, setCustomTagInput] = useState("");
   const [customTags, setCustomTags] = useState<string[]>([]);
-  const [installOpen, setInstallOpen] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
 
   // Check if the Spark integration is enabled for this workspace.
@@ -154,20 +142,9 @@ export function SparkPage() {
   const handleCardOpen = useCallback(
     (agent: SparkAgentManifest) => {
       if (!sparkBaseUrl) return;
-      const url = agent.slug
-        ? `${sparkBaseUrl}/agents/${agent.slug}`
-        : `${sparkBaseUrl}/catalog?q=${encodeURIComponent(agent.name)}`;
-      window.open(url, "_blank", "noopener,noreferrer");
+      window.open(sparkAgentUrl(sparkBaseUrl, agent), "_blank", "noopener,noreferrer");
     },
     [sparkBaseUrl],
-  );
-
-  const handleInstallClick = useCallback(
-    (agent: SparkAgentManifest) => {
-      selectAgent(agent);
-      setInstallOpen(true);
-    },
-    [selectAgent],
   );
 
   // Load popular agents on mount — only when Spark is enabled.
@@ -362,22 +339,11 @@ export function SparkPage() {
                 key={agent.id}
                 agent={agent}
                 onOpen={() => handleCardOpen(agent)}
-                onInstall={() => handleInstallClick(agent)}
               />
             ))}
           </div>
         )}
       </div>
-
-      {/* Install dialog */}
-      {selectedAgent && currentWorkspace && (
-        <InstallDialog
-          open={installOpen}
-          onOpenChange={setInstallOpen}
-          agent={selectedAgent}
-          workspaceId={currentWorkspace.id}
-        />
-      )}
     </div>
   );
 }
@@ -386,14 +352,22 @@ export function SparkPage() {
 // Agent Card
 // ---------------------------------------------------------------------------
 
-function SparkAgentCard({
+// The agent's page in the configured Spark catalog; an agent without a slug
+// falls back to a catalog search by its name.
+export function sparkAgentUrl(sparkBaseUrl: string, agent: SparkAgentManifest): string {
+  return agent.slug
+    ? `${sparkBaseUrl}/agents/${agent.slug}`
+    : `${sparkBaseUrl}/catalog?q=${encodeURIComponent(agent.name)}`;
+}
+
+// Open is the card's only action: installing from Mesh is not implemented, so
+// the card offers no Install button.
+export function SparkAgentCard({
   agent,
   onOpen,
-  onInstall,
 }: {
   agent: SparkAgentManifest;
   onOpen: () => void;
-  onInstall: () => void;
 }) {
   const { t } = useTranslation("integrations");
   const typeConfig = agentTypeDisplay(agent.agent_type);
@@ -448,143 +422,19 @@ function SparkAgentCard({
           <span className="text-[10px]">v{agent.version}</span>
         </div>
 
-        <div className="flex gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            className="flex-1 gap-1"
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpen();
-            }}
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            {t("spark.open")}
-          </Button>
-          <Button
-            size="sm"
-            variant="default"
-            className="flex-1"
-            onClick={(e) => {
-              e.stopPropagation();
-              onInstall();
-            }}
-          >
-            {t("spark.install")}
-          </Button>
-        </div>
+        <Button
+          size="sm"
+          variant="default"
+          className="w-full gap-1"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen();
+          }}
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+          {t("spark.open")}
+        </Button>
       </CardContent>
     </Card>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Install Dialog
-// ---------------------------------------------------------------------------
-
-function InstallDialog({
-  open,
-  onOpenChange,
-  agent,
-  workspaceId,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  agent: SparkAgentManifest;
-  workspaceId: string;
-}) {
-  const { t } = useTranslation("integrations");
-  const { install, isInstalling, lastInstallResult, clearInstallResult, error } =
-    useSparkStore();
-  const [done, setDone] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [installError, setInstallError] = useState<string | null>(null);
-
-  const handleInstall = useCallback(async () => {
-    setInstallError(null);
-    try {
-      await install(agent.id, workspaceId);
-      setDone(true);
-    } catch (err) {
-      setInstallError(apiErrorMessage(err, t("spark.installFailed")));
-    }
-  }, [agent.id, workspaceId, install, t]);
-
-  const handleCopyKey = useCallback(async () => {
-    if (lastInstallResult?.api_key) {
-      await navigator.clipboard.writeText(lastInstallResult.api_key);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  }, [lastInstallResult?.api_key]);
-
-  const handleClose = useCallback(() => {
-    clearInstallResult();
-    setDone(false);
-    setCopied(false);
-    setInstallError(null);
-    onOpenChange(false);
-  }, [clearInstallResult, onOpenChange]);
-
-  return (
-    <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent onClose={handleClose}>
-        <DialogHeader>
-          <DialogTitle>
-            {done ? t("spark.installedTitle") : t("spark.installTitle", { name: agent.name })}
-          </DialogTitle>
-          <DialogDescription>
-            {done
-              ? t("spark.installedDesc")
-              : t("spark.installDesc", { name: agent.name })}
-          </DialogDescription>
-        </DialogHeader>
-
-        {done && lastInstallResult ? (
-          <div className="space-y-4 py-2">
-            <div className="rounded-lg border border-border bg-muted/50 p-4">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                {t("spark.apiKeyLabel")}
-              </p>
-              <code className="break-all text-xs">{lastInstallResult.api_key}</code>
-            </div>
-            <Button variant="outline" className="w-full" onClick={() => void handleCopyKey()}>
-              {copied ? t("spark.copied") : t("spark.copyKey")}
-            </Button>
-          </div>
-        ) : (
-          <div className="space-y-3 py-2">
-            <p className="text-sm text-muted-foreground">
-              <Trans
-                i18nKey="spark.createInfo"
-                ns="integrations"
-                values={{ type: agent.agent_type }}
-                components={{ strong: <strong /> }}
-              />
-            </p>
-            {(installError ?? error) && (
-              <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-                {installError ?? error}
-              </div>
-            )}
-          </div>
-        )}
-
-        <DialogFooter>
-          {done ? (
-            <Button onClick={handleClose}>{t("spark.done")}</Button>
-          ) : (
-            <>
-              <Button variant="outline" onClick={handleClose}>
-                {t("spark.cancel")}
-              </Button>
-              <Button onClick={() => void handleInstall()} disabled={isInstalling}>
-                {isInstalling ? t("spark.installing") : t("spark.install")}
-              </Button>
-            </>
-          )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }

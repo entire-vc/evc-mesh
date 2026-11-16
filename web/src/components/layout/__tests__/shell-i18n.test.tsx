@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 
-vi.mock("@/lib/api", () => ({ api: vi.fn().mockResolvedValue({}) }));
+vi.mock("@/lib/api", () => ({ api: vi.fn().mockResolvedValue({}), getAccessToken: vi.fn(() => null) }));
 vi.mock("@/lib/mentions/inbox", () => ({
   fetchUnseenMentionCount: vi.fn().mockResolvedValue(0),
 }));
@@ -74,7 +74,13 @@ describe("shell namespace", () => {
     it("renders English labels by default and Russian after a language switch", async () => {
       const view = renderSidebar();
       expect(screen.getByText("Dashboard")).toBeTruthy();
-      expect(screen.getByText("Triage Inbox")).toBeTruthy();
+      expect(screen.getByText("Team")).toBeTruthy();
+      // The six pages that became dashboard templates (§5.4) have no menu item.
+      const hrefs = [...document.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+      for (const page of ["initiatives", "triage", "activity", "sessions", "analytics", "events"]) {
+        expect(hrefs).not.toContain(`/w/acme/${page}`);
+      }
+      expect(hrefs).toContain("/w/acme/org-chart");
       expect(screen.getByText("No projects yet")).toBeTruthy();
       view.unmount();
 
@@ -83,7 +89,7 @@ describe("shell namespace", () => {
       });
       renderSidebar();
       expect(screen.getByText("Дашборд")).toBeTruthy();
-      expect(screen.getByText("Входящие на разбор")).toBeTruthy();
+      expect(screen.getByText("Команда")).toBeTruthy();
       expect(screen.getByText("Проектов пока нет")).toBeTruthy();
       expect(screen.queryByText("Dashboard")).toBeNull();
     });

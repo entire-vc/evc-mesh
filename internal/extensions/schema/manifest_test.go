@@ -15,7 +15,7 @@ import (
 
 // manifestV1SHA256 is the digest of manifest.v1.json fixed by the extensions
 // manifest ADR. The Spark side pins the same value.
-const manifestV1SHA256 = "ed1e1901417676bd13b27bc4e512fb15faf2d318e628c2a03ef8339d6fc2e0ed"
+const manifestV1SHA256 = "00f143bd045b104cb18c42c961721c75da73795e9759844989d70458fefea424"
 
 const schemaFile = "manifest.v1.json"
 
@@ -54,7 +54,7 @@ func validate(t *testing.T, sch *jsonschema.Schema, file string) error {
 func TestManifestV1_ValidFixturesPass(t *testing.T) {
 	sch := compileSchema(t)
 	files := fixtures(t, "valid")
-	require.Len(t, files, 8, "expected 8 valid fixtures")
+	require.Len(t, files, 10, "expected 10 valid fixtures")
 	for _, f := range files {
 		t.Run(filepath.Base(f), func(t *testing.T) {
 			require.NoError(t, validate(t, sch, f))
@@ -65,7 +65,7 @@ func TestManifestV1_ValidFixturesPass(t *testing.T) {
 func TestManifestV1_InvalidFixturesRejected(t *testing.T) {
 	sch := compileSchema(t)
 	files := fixtures(t, "invalid")
-	require.Len(t, files, 15, "expected 15 invalid fixtures")
+	require.Len(t, files, 20, "expected 20 invalid fixtures")
 	for _, f := range files {
 		t.Run(filepath.Base(f), func(t *testing.T) {
 			require.Error(t, validate(t, sch, f))
@@ -177,4 +177,65 @@ func TestManifestV1_ExternalSignatureVersion(t *testing.T) {
 	require.NoError(t, externalField(t, sch, "signature_version", 1))
 	require.Error(t, externalField(t, sch, "signature_version", 3), "only known versions")
 	require.Error(t, externalField(t, sch, "signature_version", "2"), "a number, not a string")
+}
+
+// TestManifestV1_BuiltinManifestsValid validates the manifest of every builtin
+// extension package: a schema change must keep the shipped ones valid.
+func TestManifestV1_BuiltinManifestsValid(t *testing.T) {
+	sch := compileSchema(t)
+	files, err := filepath.Glob(filepath.Join("..", "*", "mesh-extension.json"))
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(files), 7, "every builtin extension ships a manifest")
+	for _, f := range files {
+		t.Run(filepath.Base(filepath.Dir(f)), func(t *testing.T) {
+			require.NoError(t, validate(t, sch, f))
+		})
+	}
+}
+
+// widgetSettingsField validates widgets-builtin with one extra widget settings field.
+func widgetSettingsField(t *testing.T, sch *jsonschema.Schema, field map[string]any) error {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("fixtures", "valid", "widgets-builtin.json"))
+	require.NoError(t, err)
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(raw, &doc))
+	w := doc["widgets"].([]any)[0].(map[string]any)
+	w["settings"].(map[string]any)["properties"].(map[string]any)["extra"] = field
+	out, err := json.Marshal(doc)
+	require.NoError(t, err)
+	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(out))
+	require.NoError(t, err)
+	return sch.Validate(inst)
+}
+
+func TestManifestV1_WidgetSettingsRefuseSecrets(t *testing.T) {
+	sch := compileSchema(t)
+	require.NoError(t, widgetSettingsField(t, sch, map[string]any{"type": "string", "x-widget": "project-picker"}), "control: a plain field passes")
+	require.Error(t, widgetSettingsField(t, sch, map[string]any{"type": "string", "x-secret": true}))
+	require.Error(t, widgetSettingsField(t, sch, map[string]any{"type": "string", "x-secret": false}), "the key itself is refused")
+	// Deeper than a direct field: a nested object field, a list of subschemas, the settings root.
+	nested := map[string]any{"type": "object", "properties": map[string]any{"token": map[string]any{"type": "string", "x-secret": true}}}
+	require.Error(t, widgetSettingsField(t, sch, nested), "a nested field")
+	require.Error(t, widgetSettings(t, sch, map[string]any{"type": "object", "allOf": []any{map[string]any{"x-secret": true}}}), "inside a list")
+	require.Error(t, widgetSettings(t, sch, map[string]any{"type": "object", "x-secret": true}), "at the root")
+	require.NoError(t, widgetSettings(t, sch, map[string]any{"type": "object", "allOf": []any{map[string]any{"required": []any{"project_id"}}}}),
+		"control: the same shapes without the key pass")
+	// Workspace settings may still hold secrets: the ban is for widget instances only.
+	require.NoError(t, settingsField(t, sch, map[string]any{"type": "string", "x-secret": true}))
+}
+
+// widgetSettings validates widgets-builtin with its first widget's settings replaced.
+func widgetSettings(t *testing.T, sch *jsonschema.Schema, settings map[string]any) error {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("fixtures", "valid", "widgets-builtin.json"))
+	require.NoError(t, err)
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(raw, &doc))
+	doc["widgets"].([]any)[0].(map[string]any)["settings"] = settings
+	out, err := json.Marshal(doc)
+	require.NoError(t, err)
+	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(out))
+	require.NoError(t, err)
+	return sch.Validate(inst)
 }

@@ -10,5 +10,9 @@
     "minutesAgo": "{{count}}m ago",
     "hoursAgo": "{{count}}h ago",
     "daysAgo": "{{count}}d ago"
+  },
+  "iconPicker": {
+    "trigger": "Choose icon",
+    "loadFailed": "Could not load the emoji list"
   }
 }

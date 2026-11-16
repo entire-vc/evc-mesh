@@ -1,0 +1,29 @@
+{
+  "$comment": "Generated from internal/extensions/dashboards/catalog.go. Do not edit: go test ./internal/extensions/dashboards -run TestCoreWidgetsJSON -update",
+  "types": [
+    {"id":"my-tasks","category":"tasks","size":{"default":{"w":6,"h":4},"min":{"w":3,"h":2},"max":{"w":12,"h":8}}},
+    {"id":"triage-queue","category":"tasks","size":{"default":{"w":6,"h":4},"min":{"w":3,"h":2},"max":{"w":12,"h":10}}},
+    {"id":"task-list","category":"tasks","size":{"default":{"w":6,"h":4},"min":{"w":3,"h":2},"max":{"w":12,"h":10}}},
+    {"id":"mentions","category":"communication","size":{"default":{"w":6,"h":4},"min":{"w":3,"h":2},"max":{"w":12,"h":10}}},
+    {"id":"my-comments","category":"communication","size":{"default":{"w":6,"h":4},"min":{"w":3,"h":2},"max":{"w":12,"h":10}}},
+    {"id":"recent-comments","category":"communication","size":{"default":{"w":6,"h":4},"min":{"w":3,"h":2},"max":{"w":12,"h":10}}},
+    {"id":"agents-active","category":"agents","size":{"default":{"w":6,"h":4},"min":{"w":3,"h":2},"max":{"w":12,"h":8}}},
+    {"id":"agents-status","category":"agents","size":{"default":{"w":12,"h":6},"min":{"w":4,"h":3},"max":{"w":12,"h":12}}},
+    {"id":"agents-summary","category":"agents","size":{"default":{"w":4,"h":2},"min":{"w":3,"h":1},"max":{"w":6,"h":2}}},
+    {"id":"cost-kpis","category":"agents","size":{"default":{"w":12,"h":2},"min":{"w":6,"h":2},"max":{"w":12,"h":3}}},
+    {"id":"cost-by-agent","category":"agents","size":{"default":{"w":6,"h":4},"min":{"w":3,"h":3},"max":{"w":12,"h":8}}},
+    {"id":"cost-top-tasks","category":"agents","size":{"default":{"w":6,"h":4},"min":{"w":3,"h":3},"max":{"w":12,"h":8}}},
+    {"id":"cost-by-project","category":"agents","size":{"default":{"w":6,"h":4},"min":{"w":3,"h":3},"max":{"w":12,"h":8}}},
+    {"id":"cost-by-day","category":"agents","size":{"default":{"w":6,"h":4},"min":{"w":4,"h":3},"max":{"w":12,"h":8}}},
+    {"id":"agent-leaderboard","category":"agents","size":{"default":{"w":6,"h":4},"min":{"w":3,"h":3},"max":{"w":12,"h":8}}},
+    {"id":"metric","category":"analytics","size":{"default":{"w":3,"h":2},"min":{"w":2,"h":2},"max":{"w":6,"h":3}}},
+    {"id":"tasks-breakdown","category":"analytics","size":{"default":{"w":6,"h":4},"min":{"w":4,"h":3},"max":{"w":12,"h":8}}},
+    {"id":"tasks-timeline","category":"analytics","size":{"default":{"w":12,"h":4},"min":{"w":6,"h":3},"max":{"w":12,"h":8}}},
+    {"id":"events-breakdown","category":"analytics","size":{"default":{"w":6,"h":4},"min":{"w":4,"h":3},"max":{"w":12,"h":8}}},
+    {"id":"event-feed","category":"events","size":{"default":{"w":12,"h":6},"min":{"w":6,"h":4},"max":{"w":12,"h":12}}},
+    {"id":"initiatives","category":"initiatives","size":{"default":{"w":12,"h":4},"min":{"w":4,"h":3},"max":{"w":12,"h":10}}},
+    {"id":"initiative","category":"initiatives","size":{"default":{"w":6,"h":3},"min":{"w":4,"h":2},"max":{"w":12,"h":6}}}
+  ],
+  "aliases": {"sessions":"agents-active","triage":"triage-queue"},
+  "metrics": ["tasks_total","tasks_created","tasks_closed","tasks_overdue","events_total","triage_waiting","agents_total","agents_active","mentions_unseen"]
+}

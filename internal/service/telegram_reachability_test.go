@@ -26,8 +26,8 @@ import (
 type blackholeClient struct{ err error }
 
 func (c *blackholeClient) GetMe(context.Context, string) (string, error) { return "", c.err }
-func (c *blackholeClient) SendMessage(context.Context, string, int64, string) error {
-	return c.err
+func (c *blackholeClient) SendMessage(context.Context, string, int64, string) (int64, error) {
+	return 0, c.err
 }
 func (c *blackholeClient) GetUpdates(context.Context, string, int64, int) ([]TelegramUpdate, error) {
 	return nil, c.err
@@ -85,7 +85,7 @@ func TestTelegramClient_TransportFailureIsUnreachableNotAPIError(t *testing.T) {
 	baseURL := srv.URL
 	srv.Close()
 
-	err := NewTelegramClientWithBaseURL(baseURL).SendMessage(context.Background(), "secret-token", 42, "hi")
+	_, err := NewTelegramClientWithBaseURL(baseURL).SendMessage(context.Background(), "secret-token", 42, "hi")
 	require.Error(t, err)
 
 	var unreachable *TelegramUnreachableError
@@ -105,7 +105,7 @@ func TestTelegramClient_TransportFailureDoesNotLogTheBotToken(t *testing.T) {
 	srv.Close()
 
 	const token = "123456:AAHsuperSecretBotTokenValue"
-	err := NewTelegramClientWithBaseURL(baseURL).SendMessage(context.Background(), token, 42, "hi")
+	_, err := NewTelegramClientWithBaseURL(baseURL).SendMessage(context.Background(), token, 42, "hi")
 	require.Error(t, err)
 
 	assert.NotContains(t, err.Error(), token, "the bot token is in the error, and therefore in the log")
@@ -225,8 +225,8 @@ func (c *deadlineRecordingClient) GetMe(ctx context.Context, _ string) (string, 
 	*c.seen = ok
 	return "mesh_bot", nil
 }
-func (c *deadlineRecordingClient) SendMessage(context.Context, string, int64, string) error {
-	return nil
+func (c *deadlineRecordingClient) SendMessage(context.Context, string, int64, string) (int64, error) {
+	return 1, nil
 }
 func (c *deadlineRecordingClient) GetUpdates(context.Context, string, int64, int) ([]TelegramUpdate, error) {
 	return nil, nil

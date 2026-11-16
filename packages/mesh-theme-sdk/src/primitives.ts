@@ -14,8 +14,12 @@ export type Permission =
 
 export type ResourceRef = { kind: "task" | "doc" | "project"; id: Id };
 
-export type DragItem = { kind: "task"; id: Id } | { kind: "doc"; id: Id };
-export type DropZoneRef = { kind: "status"; id: Id } | { kind: "doc-parent"; id: Id | null };
+/** `dashboard`: a sidebar dashboard entry; the owner's own menu order, so it needs no move permission. */
+export type DragItem = { kind: "task"; id: Id } | { kind: "doc"; id: Id } | { kind: "dashboard"; id: Id };
+export type DropZoneRef =
+  | { kind: "status"; id: Id }
+  | { kind: "doc-parent"; id: Id | null }
+  | { kind: "dashboard-group"; id: "top" | "bottom" };
 
 export type QuickEditField =
   | "title"

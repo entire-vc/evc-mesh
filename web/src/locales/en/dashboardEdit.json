@@ -1,0 +1,75 @@
+{
+  "region": "Dashboard editing",
+  "add": "Add widget",
+  "cancelChanges": "Cancel changes",
+  "done": "Done",
+  "saving": "Saving…",
+  "saved": "Saved",
+  "stale": "The dashboard was changed in another tab or by another member",
+  "refresh": "Refresh",
+  "saveFailed": "Could not save the change; the previous layout was restored",
+  "empty": "Add your first widget",
+  "removed": "Removed: {{title}}",
+  "undo": "Undo",
+  "retry": "Retry",
+  "save": "Save",
+  "cancel": "Cancel",
+  "gear": "Edit dashboard",
+  "themeV1": "The theme does not support layout editing; the standard view is used for now",
+  "settingsTitle": "Widget settings",
+  "moveUp": "Move up: {{title}}",
+  "moveDown": "Move down: {{title}}",
+  "dragHandle": "Move {{title}}: arrow keys move, Shift plus arrow keys resize",
+  "settings": "Settings: {{title}}",
+  "remove": "Remove: {{title}}",
+  "catalog": {
+    "title": "Add widget",
+    "hint": "The widget is placed in the first free spot.",
+    "search": "Search widgets",
+    "loading": "Loading widgets",
+    "error": "Could not load the widget catalog",
+    "noMatch": "Nothing matches the search",
+    "empty": "No widgets are available to you"
+  },
+  "settingsForm": {
+    "title": "Title",
+    "titleHint": "Replaces the widget name",
+    "autoRefresh": "Refresh automatically",
+    "options": {
+      "status": {
+        "backlog": "Backlog",
+        "triage": "Triage",
+        "todo": "To Do",
+        "in_progress": "In Progress",
+        "review": "Review",
+        "done": "Done",
+        "cancelled": "Cancelled"
+      },
+      "priority": {
+        "urgent": "Urgent",
+        "high": "High",
+        "medium": "Medium",
+        "low": "Low",
+        "none": "None"
+      },
+      "scope": {
+        "mine": "Assigned to me",
+        "project": "One project",
+        "workspace": "Whole workspace"
+      },
+      "sort": {
+        "updated": "Last updated",
+        "priority": "Priority",
+        "due_date": "Due date"
+      }
+    }
+  },
+  "category": {
+    "tasks": "Tasks",
+    "communication": "Communication",
+    "agents": "Agents",
+    "analytics": "Analytics",
+    "events": "Events",
+    "initiatives": "Initiatives"
+  }
+}

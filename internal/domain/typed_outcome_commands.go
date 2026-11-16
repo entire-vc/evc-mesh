@@ -57,6 +57,9 @@ type TaskFinish struct {
 	Comment *Comment
 	// Outcome is appended with the task's id; ID and CreatedAt are filled in.
 	Outcome *TurnOutcome
+	// Receipt, when set, binds the request's Idempotency-Key to the outcome
+	// in the move's transaction.
+	Receipt *IdempotencyReceipt
 }
 
 // AskAgentWrite is the ask_agent transaction: open (or reuse) the request,

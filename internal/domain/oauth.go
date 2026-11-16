@@ -33,6 +33,40 @@ func (c *OAuthClient) IsCIMD() bool {
 	return c.RegistrationType == "cimd"
 }
 
+// OAuthRegistrationStatic marks a client the operator configures
+// (MESH_OIDC_CLIENTS) rather than one that registered itself via DCR or CIMD.
+// Only a static client may use the OpenID Connect identity flow.
+const OAuthRegistrationStatic = "static"
+
+// IsStatic reports whether this client comes from the operator's
+// MESH_OIDC_CLIENTS configuration.
+func (c *OAuthClient) IsStatic() bool {
+	return c.RegistrationType == OAuthRegistrationStatic
+}
+
+// OAuthIdentityCode is a one-time authorization code of the OpenID Connect
+// identity flow (scope openid, no mesh): proof that UserID consented to
+// ClientID, redeemed for an id_token. Unlike OAuthAuthorizationCode it has no
+// grant, workspace or agent behind it.
+type OAuthIdentityCode struct {
+	ID            uuid.UUID  `json:"id" db:"id"`
+	CodeHash      string     `json:"-" db:"code_hash"`
+	ClientID      string     `json:"client_id" db:"client_id"`
+	RedirectURI   string     `json:"redirect_uri" db:"redirect_uri"`
+	CodeChallenge string     `json:"code_challenge" db:"code_challenge"`
+	UserID        uuid.UUID  `json:"user_id" db:"user_id"`
+	Nonce         *string    `json:"nonce,omitempty" db:"nonce"`
+	Scope         string     `json:"scope" db:"scope"`
+	ExpiresAt     time.Time  `json:"expires_at" db:"expires_at"`
+	UsedAt        *time.Time `json:"used_at,omitempty" db:"used_at"`
+	CreatedAt     time.Time  `json:"created_at" db:"created_at"`
+}
+
+// IsUsable reports whether this identity code can still be redeemed.
+func (c *OAuthIdentityCode) IsUsable(now time.Time) bool {
+	return c.UsedAt == nil && now.Before(c.ExpiresAt)
+}
+
 // OAuthAuthorizationCode is a one-time RFC 6749 §4.1.2 authorization code.
 // All identity (client/redirect/user/workspace/agent) beyond client_id and
 // redirect_uri lives on the OAuthGrant it points at.

@@ -19,12 +19,12 @@ import (
 // files here (e.g. agent_api_key_sha256_db_test.go): skip gracefully when no
 // Postgres is reachable rather than requiring a separate CI invocation.
 //
-// This is the negative-control test for #c6dc694e: a tie group of comments
+// This is the negative-control test for an internal ticket: a tie group of comments
 // sharing one created_at, with a page boundary landing inside the group.
 // Pre-fix, ORDER BY c.created_at DESC has no tiebreaker and the cursor is a
 // bare `created_at < $n`, so every row in the tie group not returned on the
 // first page is silently dropped — same class already fixed for tasks in
-// #a1012e55 (ORDER BY updated_at DESC, id ASC).
+// an internal ticket (ORDER BY updated_at DESC, id ASC).
 
 func commentCursorTestDB(t *testing.T) *sqlx.DB {
 	t.Helper()
@@ -125,7 +125,7 @@ func walkRecentByWorkspace(t *testing.T, repo *CommentRepo, wsID uuid.UUID, page
 	t.Helper()
 	ctx := context.Background()
 	var seen []uuid.UUID
-	filter := repository.CommentViewFilter{Limit: pageSize}
+	filter := repository.CommentViewFilter{Limit: pageSize, Viewer: domain.AllProjectsViewer()}
 	for i := 0; i < 100; i++ { // hard cap so a regression can't hang the suite
 		rows, cursor, err := repo.ListRecentByWorkspace(ctx, wsID, filter)
 		require.NoError(t, err)
@@ -146,7 +146,7 @@ func walkByAuthor(t *testing.T, repo *CommentRepo, authorID uuid.UUID, pageSize 
 	t.Helper()
 	ctx := context.Background()
 	var seen []uuid.UUID
-	filter := repository.CommentViewFilter{Limit: pageSize}
+	filter := repository.CommentViewFilter{Limit: pageSize, Viewer: domain.AllProjectsViewer()}
 	for i := 0; i < 100; i++ {
 		rows, cursor, err := repo.ListByAuthor(ctx, authorID, filter)
 		require.NoError(t, err)
@@ -252,7 +252,7 @@ func TestCommentRepo_ListRecentByWorkspace_OldSingleTimestampCursor_StillWorks(t
 	createCursorTestComment(t, commentRepo, fx.taskID, author, "a", base)
 	createCursorTestComment(t, commentRepo, fx.taskID, author, "b", base.Add(time.Second))
 
-	rows, cursor, err := commentRepo.ListRecentByWorkspace(ctx, fx.workspaceID, repository.CommentViewFilter{Limit: 1})
+	rows, cursor, err := commentRepo.ListRecentByWorkspace(ctx, fx.workspaceID, repository.CommentViewFilter{Limit: 1, Viewer: domain.AllProjectsViewer()})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.NotNil(t, cursor)
@@ -261,6 +261,7 @@ func TestCommentRepo_ListRecentByWorkspace_OldSingleTimestampCursor_StillWorks(t
 	rows2, _, err := commentRepo.ListRecentByWorkspace(ctx, fx.workspaceID, repository.CommentViewFilter{
 		Limit:  10,
 		Before: &cursor.CreatedAt,
+		Viewer: domain.AllProjectsViewer(),
 	})
 	require.NoError(t, err)
 	assert.Len(t, rows2, 1, "old-style cursor still returns the older comment")

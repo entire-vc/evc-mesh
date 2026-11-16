@@ -6,6 +6,7 @@ import {
   type Page,
 } from "@playwright/test";
 import { loginWithRetry, pinUiLocale } from "./auth-helper";
+import { rateLimitAware } from "./api-retry";
 
 /**
  * E2E scenario: artifact-view (route /a/:artifactId, an internal ticket)
@@ -120,11 +121,12 @@ test.beforeAll(async ({ browser }) => {
     process.env.E2E_USER_PASSWORD!
   );
   accessToken = token;
-  api = context.request;
+  api = rateLimitAware(context.request);
 
   // The deploy probe (see header). A zero UUID cannot exist, so on a build
   // WITH the route the page stays on /a/ and shows its not-found state; on a
-  // build WITHOUT it the app redirects to /w/<first-workspace>/activity.
+  // build WITHOUT it the app redirects to the first workspace's home (/activity
+  // on builds before the dashboards, /dashboard → /d/<id> after).
   // Listener-free page: it must not pollute the foreign-origin accounting.
   {
     const probe = await context.newPage();
@@ -156,14 +158,14 @@ test.beforeAll(async ({ browser }) => {
       "the deploy probe's session bootstrap (POST /auth/refresh) must succeed"
     ).toBe(200);
     // With the route the page renders its not-found state; without it the app
-    // redirects to /w/<first-workspace>/activity. Whichever comes first —
+    // redirects to the first workspace's home. Whichever comes first —
     // neither within the timeout fails the hook instead of guessing.
     routeDeployed = await Promise.race([
       probe
         .getByRole("heading", { name: "Artifact not found" })
         .waitFor({ timeout: 30_000 })
         .then(() => true),
-      probe.waitForURL(/\/w\/.+\/activity$/, { timeout: 30_000 }).then(() => false),
+      probe.waitForURL(/\/w\/[^/]+\/(activity|dashboard|d\/[^/]+)$/, { timeout: 30_000 }).then(() => false),
     ]);
     await probe.close();
     if (!routeDeployed) return; // no fixtures for a run whose tests all skip

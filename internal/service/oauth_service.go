@@ -153,6 +153,12 @@ type oauthService struct {
 	projectMemberRepo   repository.ProjectMemberRepository
 	httpClient          *http.Client
 	authCache           *oauthAuthCache
+
+	// OpenID Connect identity flow, set once at start by
+	// ConfigureOIDC. oidcKeys nil = the flow is off.
+	oidcIssuer  string
+	oidcKeys    *OIDCKeySet
+	oidcClients map[string]bool
 }
 
 // NewOAuthService constructs the OAuth 2.0 Authorization Server service.
@@ -196,8 +202,9 @@ func (s *oauthService) SetAuthCacheTTLForTesting(ttl time.Duration) {
 func (s *oauthService) PurgeExpired(ctx context.Context) (codes, tokens int64, err error) {
 	now := timeNow()
 	codes, cerr := s.repo.DeleteExpiredCodes(ctx, now.Add(-oauthCodeRetention))
+	identityCodes, ierr := s.repo.DeleteExpiredIdentityCodes(ctx, now.Add(-oauthCodeRetention))
 	tokens, terr := s.repo.DeleteExpiredTokens(ctx, now.Add(-oauthTokenRetention))
-	return codes, tokens, errors.Join(cerr, terr)
+	return codes + identityCodes, tokens, errors.Join(cerr, ierr, terr)
 }
 
 // --- Client registration (DCR + CIMD) ---
@@ -510,7 +517,16 @@ func (s *oauthService) ValidateAuthorize(ctx context.Context, p AuthorizeParams)
 	if oerr != nil {
 		return &AuthorizeValidation{ClientErr: oerr}
 	}
-	if p.RedirectURI == "" || !redirectURIAllowed(p.RedirectURI, client.RedirectURIs) {
+	if client.IsStatic() && !s.staticClientConfigured(client.ClientID) {
+		// Left behind by a client the operator removed from MESH_OIDC_CLIENTS.
+		return &AuthorizeValidation{ClientErr: oautherror.InvalidClient("unknown client_id")}
+	}
+	redirectOK := redirectURIAllowed(p.RedirectURI, client.RedirectURIs)
+	if client.IsStatic() {
+		// Static clients get exact matching only: no loopback port leeway.
+		redirectOK = exactRedirectMatch(p.RedirectURI, client.RedirectURIs)
+	}
+	if p.RedirectURI == "" || !redirectOK {
 		return &AuthorizeValidation{ClientErr: oautherror.InvalidRequest("redirect_uri is missing or not registered for this client")}
 	}
 
@@ -523,6 +539,12 @@ func (s *oauthService) ValidateAuthorize(ctx context.Context, p AuthorizeParams)
 		v.RequestErr = oautherror.InvalidRequest("PKCE code_challenge with code_challenge_method=S256 is required")
 		return v
 	}
+	identity, scopeErr := s.classifyScope(client, p)
+	if scopeErr != nil {
+		v.RequestErr = scopeErr
+		return v
+	}
+	v.Identity = identity
 	return v
 }
 
@@ -533,6 +555,9 @@ func (s *oauthService) ConsentInfo(ctx context.Context, userID uuid.UUID, p Auth
 	}
 	if v.RequestErr != nil {
 		return nil, v.RequestErr
+	}
+	if v.Identity {
+		return identityConsentInfo(v), nil
 	}
 
 	workspaces, err := s.workspaceRepo.ListForUser(ctx, userID)
@@ -571,6 +596,9 @@ func (s *oauthService) Decide(ctx context.Context, in ConsentDecisionInput) (str
 	}
 	if !in.Allow {
 		return appendRedirectError(v.RedirectURI, "access_denied", in.State), nil
+	}
+	if v.Identity {
+		return s.decideIdentity(ctx, v, in)
 	}
 
 	role, isMember, err := s.resolveMemberRole(ctx, in.WorkspaceID, in.UserID)
@@ -1215,6 +1243,9 @@ func (s *oauthService) ExchangeCode(ctx context.Context, clientID, redirectURI, 
 	if !validPKCEVerifier(codeVerifier) {
 		return nil, oautherror.InvalidGrant(oauthInvalidCodeDescription)
 	}
+	if strings.HasPrefix(code, oidcIdentityCodePrefix) {
+		return s.exchangeIdentityCode(ctx, clientID, redirectURI, code, codeVerifier)
+	}
 
 	row, err := s.repo.GetCodeByHash(ctx, sha256Hex(code))
 	if err != nil {
@@ -1706,6 +1737,16 @@ func redirectURIAllowed(presented string, registered []string) bool {
 			return true
 		}
 		if loopbackRedirectMatch(presented, r) {
+			return true
+		}
+	}
+	return false
+}
+
+// exactRedirectMatch is redirectURIAllowed without the loopback exception.
+func exactRedirectMatch(presented string, registered []string) bool {
+	for _, r := range registered {
+		if r == presented {
 			return true
 		}
 	}

@@ -8,8 +8,8 @@ import { useProjectStore } from "@/stores/project";
 import { TaskLink } from "@/core/primitives";
 import { useSlotContext } from "@/core/slots/slot-context";
 import { registerSlotViewOverride } from "@/core/slots/registry";
-import type { WidgetDescriptor } from "@/core/slots/types";
-import { setThemeWidgets } from "../theme-widgets";
+import type { WidgetDescriptorV1 as WidgetDescriptor } from "@/core/slots/types";
+import { setLayoutMajor, setThemeWidgets } from "../theme-widgets";
 import { ownWidgets } from "@/core/themes/bundle";
 import { useThemeStore } from "@/core/themes/store";
 import {
@@ -20,12 +20,14 @@ import {
   resolveWidgets,
   useTasks,
   type DashboardLayoutView,
+  type DashboardLayoutViewV1,
   type DashboardTheme,
   type DashboardWidgetView,
 } from "..";
 
 // The network is the only mock: every widget below runs its real data hook.
-vi.mock("@/lib/api", () => ({ api: vi.fn() }));
+// getAccessToken: no session, so the realtime sockets of the widget hooks stay closed.
+vi.mock("@/lib/api", () => ({ api: vi.fn(), getAccessToken: () => null }));
 import { api } from "@/lib/api";
 
 const base = CORE_WIDGETS[0]!;
@@ -39,9 +41,11 @@ function serve(mode: Mode = "normal") {
     const empty = mode === "empty";
     if (url === "/api/v1/me/tasks") return { items: empty ? [] : [task(1), task(2)] };
     if (url.endsWith("/triage")) return { items: empty ? [] : [task(3, "urgent")] };
-    if (url.endsWith("/team")) return { agents: empty ? [] : [{ id: "a1", name: "Alice", status: "online", is_stale: false }] };
+    if (url.endsWith("/tasks/query")) return { items: empty ? [] : [task(1), task(2)], total_count: empty ? 0 : 2 };
+    if (url.endsWith("/team")) return { agents: empty ? [] : [{ id: "a1", name: "Linus", status: "online", is_stale: false }] };
     if (url === "/api/v1/me/mentions") return empty ? [] : [{ comment_id: "c1", task_id: "t9", task_title: "Mentioned task", extracted_at: "2026-01-01T00:00:00Z", seen_at: null, project_id: "p1", comment_body: "", author_id: "u", author_name: "U" }];
     if (url === "/api/v1/me/document-mentions") { if (mode === "doc-mentions-down") throw new Error("down"); return []; }
+    if (url === "/api/v1/me/comments" || url.endsWith("/comments/recent")) return { items: [], next_cursor: null, next_cursor_id: null };
     return {};
   });
 }
@@ -73,11 +77,13 @@ const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 20
 beforeEach(() => serve());
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
+const ANALYTICS = ["metric", "tasks-breakdown", "tasks-timeline", "events-breakdown", "agent-leaderboard", "cost-kpis", "cost-by-agent", "cost-top-tasks", "cost-by-project", "cost-by-day"];
+
 describe("workspace switch", () => {
   it("never shows the previous workspace's data while the new one loads", async () => {
     mountDashboard({ theme: { settings: { widgets: ["my-tasks"] } } });
-    await settle();
-    expect(screen.getByText("Task 1")).toBeTruthy();
+    // my-tasks' view is a lazy chunk: the first mount in this file waits for it, not for a fixed tick
+    expect(await screen.findByText("Task 1", undefined, { timeout: 10_000 })).toBeTruthy();
     let release!: () => void;
     vi.mocked(api).mockImplementation(() => new Promise((r) => { release = () => r({ items: [{ ...task(7), title: "Other ws task" }] }); }));
     act(() => useWorkspaceStore.setState({ currentWorkspace: { id: "ws2", slug: "other", name: "Other" } as never }));
@@ -88,11 +94,22 @@ describe("workspace switch", () => {
 });
 
 describe("registry", () => {
+  it("PRD §5.3: without a theme widgets setting the default dashboard is the old four; new core groups wait in the catalogue", () => {
+    const r = resolveWidgets({});
+    expect(r.shown.map((d) => d.id)).toEqual(["mentions", "triage", "my-tasks", "sessions"]);
+    expect(r.available.map((d) => d.id)).toEqual(expect.arrayContaining(["agents-active", "agents-status", "agents-summary"]));
+    const theme = { ...base, id: "ink.own", origin: "theme" as const };
+    expect(resolveWidgets({ registry: [...CORE_WIDGETS, theme] }).shown.map((d) => d.id)).toContain("ink.own");
+  });
+
   it("core order, permission filter, picker skips unknown ids, clamp", () => {
-    expect(CORE_WIDGETS.map((d) => d.id)).toEqual(["mentions", "triage", "my-tasks", "sessions"]);
+    // the legacy group first, then the other groups by folder name (widgets/agents, analytics, comms, events, initiatives, tasks)
+    expect(CORE_WIDGETS.map((d) => d.id)).toEqual([
+      "mentions", "triage", "sessions", "agents-active", "agents-status", "agents-summary", ...ANALYTICS, "my-comments", "recent-comments", "event-feed", "initiatives", "initiative", "my-tasks", "triage-queue", "task-list",
+    ]);
     const r = resolveWidgets({ settings: { widgets: ["sessions", "nope", "mentions", "sessions"] } });
     expect(r.shown.map((d) => d.id)).toEqual(["sessions", "mentions"]);
-    expect(r.available.map((d) => d.id)).toEqual(["triage", "my-tasks"]);
+    expect(r.available.map((d) => d.id)).toEqual(["triage", "agents-active", "agents-status", "agents-summary", ...ANALYTICS, "my-comments", "recent-comments", "event-feed", "initiatives", "initiative", "my-tasks", "triage-queue", "task-list"]);
     const gated = [{ ...base, requires: ["task.edit" as const] }, CORE_WIDGETS[1]!];
     expect(resolveWidgets({ registry: gated, can: () => false }).shown.map((d) => d.id)).toEqual(["triage"]);
     expect(clampSize({ w: 4, h: 3 }, { ...base, size: { ...base.size, max: { w: 2, h: 2 } } })).toEqual({ w: 2, h: 2 });
@@ -100,7 +117,7 @@ describe("registry", () => {
 });
 
 describe("dashboard.layout", () => {
-  it("CT-dash-01 mesh-default draws every core widget in registry order via Widget", async () => {
+  it("CT-dash-01 mesh-default draws the default core widgets (PRD 5.3) in registry order via Widget", async () => {
     const { container } = mountDashboard();
     await settle();
     expect(ids(container)).toEqual(["mentions", "triage", "my-tasks", "sessions"]);
@@ -180,17 +197,16 @@ describe("dashboard.layout", () => {
       return (
         <>
           <button onClick={() => setId("sessions")}>flip</button>
-          <Widget id={id} />
+          <Widget instance={{ id, type: id, x: 0, y: 0, w: 6, h: 2, settings: {} }} />
         </>
       );
     };
     const { container } = mountDashboard({ theme: { layout: Flip } });
-    await settle();
-    expect(screen.getByText("Task 1")).toBeTruthy();
+    expect(await screen.findByText("Task 1", undefined, { timeout: 10_000 })).toBeTruthy();
     fireEvent.click(screen.getByText("flip"));
     await settle();
     expect(ids(container)).toEqual(["sessions"]);
-    expect(screen.getByText("Alice")).toBeTruthy();
+    expect(screen.getByText("Linus")).toBeTruthy();
     expect(errors.mock.calls.flat().join(" ")).not.toMatch(/hook/i);
   });
 
@@ -199,7 +215,7 @@ describe("dashboard.layout", () => {
       const { Widget } = data.components;
       return (
         <section data-testid="stub">
-          {[...data.widgets].reverse().map((w) => <Widget key={w.descriptor.id} id={w.descriptor.id} />)}
+          {[...data.widgets].reverse().map((w) => <Widget key={w.instance.id} instance={w.instance} />)}
         </section>
       );
     };
@@ -216,7 +232,7 @@ describe("dashboard.layout", () => {
     const { container } = mountDashboard({ theme: { layout: Stub, widgets: { "my-tasks": Mine } } });
     await settle();
     expect(ids(container)).toEqual(["sessions", "my-tasks", "triage", "mentions"]);
-    expect(screen.getByText("Alice")).toBeTruthy(); // untouched core view, real data
+    expect(screen.getByText("Linus")).toBeTruthy(); // untouched core view, real data
     expect(screen.getByText("link t1").getAttribute("href")).toBe("/t/t1");
     fireEvent.click(screen.getByText("link t1")); // the primitive reaches the widget's openTask
     expect(screen.getByTestId("where").textContent).toBe("/t/t1");
@@ -270,10 +286,31 @@ describe("dashboard.widget.*", () => {
     expect(screen.getByText("Task 1").closest("a")!.getAttribute("href")).toBe("/t/t1");
   });
 
+  it("a v2 group widget picked by the theme is drawn by the host from the folder registry (agents-active)", async () => {
+    const { container } = mountDashboard({ theme: { settings: { widgets: ["agents-active"] } } });
+    await settle();
+    expect(ids(container)).toEqual(["agents-active"]);
+    // The agents group's views load lazily (views.tsx), so the body shows after that load, not after one tick.
+    await waitFor(() => expect(screen.getByText("Active agents")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Linus")).toBeTruthy());
+  });
+
+  it("CT-widget-05 triage: an urgent task past the server's first ten rows still leads the card", async () => {
+    // the server's own order (hard gates first): ten low hard gates, then the urgent one
+    const queue = [...Array.from({ length: 10 }, (_, i) => ({ ...task(20 + i, "low"), title: `Low gate ${i}` })), { ...task(40, "urgent"), title: "Urgent triage" }];
+    vi.mocked(api).mockImplementation(async (url: string, opts?: { params?: { page_size?: number } }) => {
+      if (!url.endsWith("/triage")) return {};
+      return { items: queue.slice(0, opts?.params?.page_size ?? 50), total_count: queue.length };
+    });
+    mountDashboard({ theme: { settings: { widgets: ["triage"] } } });
+    await waitFor(() => expect(screen.getByText("Urgent triage")).toBeTruthy());
+    expect(screen.queryByText("Low gate 4")).toBeNull(); // five rows: the urgent one and four low gates
+  });
+
   it("CT-widget-07 sessions: active agent shown with status", async () => {
     mountDashboard({ theme: { settings: { widgets: ["sessions"] } } });
     await settle();
-    expect(screen.getByText("Alice")).toBeTruthy();
+    expect(screen.getByText("Linus")).toBeTruthy();
   });
 
   it("CT-widget-09 a theme's own widget reads only SDK hooks", async () => {
@@ -287,27 +324,28 @@ describe("dashboard.widget.*", () => {
     await waitFor(() => expect(screen.getByText("n=2")).toBeTruthy());
   });
 
-  it("CT-widget-10 useTasks asks for a full page and sorts by due date, undated last, before the limit", async () => {
-    const dues = [null, "2026-03-09", "2026-03-02", "2026-03-07", "2026-03-01", "2026-03-05", "2026-03-03", "2026-03-04"];
-    vi.mocked(api).mockImplementation(async (url: string, opts?: { params?: { per_page?: number } }) => {
-      if (url !== "/api/v1/me/tasks") return {};
-      const all = dues.map((d, i) => ({ ...task(i + 1), due_date: d }));
-      return { items: all.slice(0, opts?.params?.per_page ?? 20) };
+  it("CT-widget-10 useTasks hands every filter to the server and shows its order and total", async () => {
+    vi.mocked(api).mockImplementation(async (url: string) => {
+      if (url !== "/api/v1/workspaces/ws1/tasks/query") return {};
+      return { items: [task(5), task(3), task(7)], total_count: 12 };
     });
     const Own: DashboardWidgetView = () => {
-      const r = useTasks({ scope: "mine", sort: "due_date", limit: 3 });
-      return <p>{r.state === "ready" ? r.value.items.map((t) => t.id).join(",") : "loading"}</p>;
+      const r = useTasks({ scope: "mine", sort: "due_date", priority: ["urgent", "high"], dueBefore: "2026-12-01", limit: 3 });
+      return <p>{r.state === "ready" ? `${r.value.items.map((t) => t.id).join(",")} of ${r.value.total}` : "loading"}</p>;
     };
     mountDashboard({
       theme: { settings: { widgets: ["ink.due"] }, extraWidgets: [{ ...base, id: "ink.due", origin: "theme" }], widgets: { "ink.due": Own } },
     });
-    await waitFor(() => expect(screen.getByText("t5,t3,t7")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("t5,t3,t7 of 12")).toBeTruthy());
+    expect(vi.mocked(api)).toHaveBeenCalledWith("/api/v1/workspaces/ws1/tasks/query", {
+      params: expect.objectContaining({ scope: "mine", sort: "due_date", priority: "urgent,high", due_before: "2026-12-01", limit: 3 }),
+    });
   });
 
   it("CT-widget-11 useTasks shows a failed read as an error with a retry, not as an empty list", async () => {
     let down = true;
     vi.mocked(api).mockImplementation(async (url: string) => {
-      if (url !== "/api/v1/me/tasks") return {};
+      if (url !== "/api/v1/workspaces/ws1/tasks/query") return {};
       if (down) throw new Error("boom");
       return { items: [task(1)] };
     });
@@ -330,7 +368,8 @@ describe("a live theme bundle (runtime registry, no provider)", () => {
   const own: WidgetDescriptor = { id: "studio.focus", title: "Focus", description: "Due soon", origin: "theme", dataHook: "useTasks", actions: ["openTask"], size: { default: { w: 2, h: 1 }, min: { w: 1, h: 1 }, max: { w: 4, h: 2 } } };
   afterEach(() => { setThemeWidgets([]); useThemeStore.getState().set({ settings: {} }); });
 
-  it("a registered dashboard.layout replaces the default and a theme's own widget is listed and drawn with its view", async () => {
+  it("a registered dashboard.layout (^1) replaces the default and a theme's own widget is listed and drawn with its view", async () => {
+    setLayoutMajor(1); // the runtime records the major the bundle declared
     const disposers = [
       registerSlotViewOverride("dashboard.layout", (({ data }: { data: { widgets: { descriptor: { id: string } }[]; components: { Widget: React.ComponentType<{ id: string }> } } }) => (
         <section data-testid="studio-grid">{data.widgets.map((w) => <data.components.Widget key={w.descriptor.id} id={w.descriptor.id} />)}</section>
@@ -344,6 +383,24 @@ describe("a live theme bundle (runtime registry, no provider)", () => {
     expect(ids(container)).toEqual(["mentions", "triage", "my-tasks", "sessions", "studio.focus"]);
     expect(screen.getByText("Own focus widget")).toBeTruthy();
     disposers.forEach((d) => d());
+    setLayoutMajor(2);
+  });
+
+  it("a ^1 layout gets v1 data from the adapter: (y, x) order, v1 sizes, editing off, no edit actions", async () => {
+    setLayoutMajor(1);
+    let seen: { data: { widgets: { size: { w: number; h: number } }[]; editing: boolean }; actions: Record<string, unknown> } | undefined;
+    const V1: DashboardLayoutViewV1 = (props) => {
+      seen = props as never;
+      return <section>{props.data.widgets.map((w) => <props.data.components.Widget key={w.descriptor.id} id={w.descriptor.id} size={w.size} />)}</section>;
+    };
+    const { container } = mountDashboard({ theme: { layout: V1 } });
+    await settle();
+    expect(ids(container)).toEqual(["mentions", "triage", "my-tasks", "sessions"]);
+    // §5.8 6×4 in a v1 grid of at most 3 rows: 2 columns, 3 rows.
+    expect(seen!.data.widgets.map((w) => w.size)).toEqual(Array(4).fill({ w: 2, h: 3 }));
+    expect(seen!.data.editing).toBe(false);
+    expect(Object.keys(seen!.actions)).toEqual(["openTask"]);
+    setLayoutMajor(2);
   });
 
   it("ownWidgets keeps a well-formed descriptor and drops a foreign id, a viewless one and a wrong size", () => {

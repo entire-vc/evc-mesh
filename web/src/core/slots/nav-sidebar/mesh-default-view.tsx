@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { AlertTriangle, ArchiveRestore, ChevronDown, ChevronRight, FolderKanban, Plus } from "lucide-react";
 import { cn } from "@/lib/cn";
 import {
@@ -15,6 +15,7 @@ import {
 import type { WorkspaceLogoVariant } from "@/components/layout/rail-icon-classes";
 import { MeshIcon } from "@/components/mesh-icon";
 import { Button } from "@/components/ui/button";
+import { EntityIcon } from "@/components/ui/entity-icon";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   DropdownMenu,
@@ -25,7 +26,16 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
-import { navIcon } from "../nav-icons";
+import { navIcon } from "@/core/icons/nav-icons";
+import {
+  DashboardDnd,
+  DashboardGroupRows,
+  DashboardRailAll,
+  DashboardRailTile,
+  dashboardLists,
+} from "./dashboard-nav";
+import { RAIL_BADGE, RAIL_LINK, RAIL_LINK_ACTIVE, ROW_BADGE, ROW_LINK, ROW_LINK_ACTIVE } from "./row-classes";
+import { parseIconValue } from "@/core/icons/value";
 import type { NavItem, NavProject, NavSidebarView } from "./types";
 
 // The sizing/tint recipes this view renders live in `rail-icon-classes.ts`
@@ -83,21 +93,6 @@ function WorkspaceLogo({ iconUrl, name, variant }: WorkspaceLogoProps) {
   );
 }
 
-const RAIL_LINK = "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent";
-const RAIL_LINK_ACTIVE = "bg-sidebar-accent text-sidebar-primary";
-const ROW_LINK = "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent";
-const ROW_LINK_ACTIVE = "bg-sidebar-accent font-medium";
-
-// Whole class strings per tone, so the attention badge stays byte-for-byte what it was.
-const ROW_BADGE: Record<"info" | "attention", string> = {
-  attention: "ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-tone-danger-500 px-1 text-[10px] font-bold text-white",
-  info: "ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-sidebar-primary px-1 text-[10px] font-bold text-primary-foreground",
-};
-const RAIL_BADGE: Record<"info" | "attention", string> = {
-  attention: "absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-tone-danger-500 text-[10px] font-bold text-white",
-  info: "absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-sidebar-primary text-[10px] font-bold text-primary-foreground",
-};
-
 function RailItem({ item }: { item: NavItem }) {
   const { t } = useTranslation("shell");
   const Icon = navIcon(item.icon);
@@ -150,6 +145,15 @@ function RowItem({ item }: { item: NavItem }) {
 }
 
 function ProjectRailIcon({ project }: { project: NavProject }) {
+  const letter = project.name.charAt(0).toUpperCase();
+  // Empty value or an unknown icon name: the project's first letter, as before.
+  const Letter = useMemo(
+    () =>
+      function RailLetter() {
+        return <span>{letter}</span>;
+      },
+    [letter],
+  );
   return (
     <Link
       to={project.href}
@@ -163,12 +167,15 @@ function ProjectRailIcon({ project }: { project: NavProject }) {
          the workspace mark above them. See `rail-icon-classes.ts`. */
       className={cn(projectRailIconParts(project.active))}
     >
-      <span className={PROJECT_RAIL_ICON_LABEL}>{project.icon || project.name.charAt(0).toUpperCase()}</span>
+      <span className={PROJECT_RAIL_ICON_LABEL}>
+        {/* Only a drawn icon is sized; emoji and legacy text keep the label's text size. */}
+        <EntityIcon value={project.icon} fallback={Letter} className={parseIconValue(project.icon).kind === "icon" ? "h-4 w-4" : undefined} />
+      </span>
     </Link>
   );
 }
 
-export const MeshDefaultNavSidebar: NavSidebarView = ({ data, actions }) => {
+export const MeshDefaultNavSidebar: NavSidebarView & { supportsDashboardGroups?: boolean } = ({ data, actions }) => {
   const { t } = useTranslation("shell");
   const [showArchived, setShowArchived] = useState(false);
   const { workspace, items, projects } = data;
@@ -176,6 +183,11 @@ export const MeshDefaultNavSidebar: NavSidebarView = ({ data, actions }) => {
   const inbox = items.filter((i) => i.group === "inbox");
   const tools = items.filter((i) => i.group === "tools");
   const footer = items.filter((i) => i.group === "footer");
+  const lists = dashboardLists(items);
+  const dashboardsReady = data.dashboardsState === "ready";
+  const allHref = data.allDashboardsHref;
+  const { pathname } = useLocation();
+  const allActive = !!allHref && pathname === allHref;
 
   const toggle = (
     <button
@@ -198,6 +210,8 @@ export const MeshDefaultNavSidebar: NavSidebarView = ({ data, actions }) => {
           {top.map((item) => (
             <RailItem key={item.id} item={item} />
           ))}
+          {dashboardsReady && lists.top.map((item) => <DashboardRailTile key={item.id} item={item} />)}
+          {dashboardsReady && lists.top.length > 0 && <div className="my-1 w-6 border-t border-sidebar-border" />}
           {projects.state === "loading" ? (
             <div
               data-testid="sidebar-projects-loading"
@@ -220,10 +234,22 @@ export const MeshDefaultNavSidebar: NavSidebarView = ({ data, actions }) => {
           ) : (
             projects.value.map((project) => <ProjectRailIcon key={project.id} project={project} />)
           )}
-          <div className="my-1 w-6 border-t border-sidebar-border" />
-          {inbox.filter((i) => i.inRail).map((item) => (
-            <RailItem key={item.id} item={item} />
-          ))}
+          {dashboardsReady && (
+            <>
+              <div className="my-1 w-6 border-t border-sidebar-border" />
+              {lists.bottom.map((item) => <DashboardRailTile key={item.id} item={item} />)}
+              {allHref && <DashboardRailAll href={allHref} active={allActive} />}
+            </>
+          )}
+          {/* The core puts nothing here since its inbox pages became dashboards (§5.4); an extension may. */}
+          {inbox.some((i) => i.inRail) && (
+            <>
+              <div className="my-1 w-6 border-t border-sidebar-border" />
+              {inbox.filter((i) => i.inRail).map((item) => (
+                <RailItem key={item.id} item={item} />
+              ))}
+            </>
+          )}
           <div className="my-1 w-6 border-t border-sidebar-border" />
           {tools.filter((i) => i.inRail).map((item) => (
             <RailItem key={item.id} item={item} />
@@ -291,9 +317,13 @@ export const MeshDefaultNavSidebar: NavSidebarView = ({ data, actions }) => {
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto p-3">
+        <DashboardDnd lists={lists} actions={actions} enabled={dashboardsReady}>
         {top.map((item) => (
           <RowItem key={item.id} item={item} />
         ))}
+        {dashboardsReady && (
+          <DashboardGroupRows group="top" title={t("dashboards.titleTop")} lists={lists} actions={actions} state={data.dashboardsState} />
+        )}
 
         {/* Projects */}
         <div className="mt-3">
@@ -338,13 +368,9 @@ export const MeshDefaultNavSidebar: NavSidebarView = ({ data, actions }) => {
                   aria-current={project.active ? "page" : undefined}
                   className={cn(ROW_LINK, project.active && "bg-sidebar-accent font-medium text-sidebar-primary")}
                 >
-                  {project.icon ? (
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center text-sm leading-none">
-                      {project.icon}
-                    </span>
-                  ) : (
-                    <FolderKanban className="h-4 w-4 shrink-0" />
-                  )}
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center text-sm leading-none">
+                    <EntityIcon value={project.icon} fallback={FolderKanban} className="h-4 w-4" />
+                  </span>
                   <span className="flex-1 truncate">{project.name}</span>
                 </Link>
               ))
@@ -379,7 +405,9 @@ export const MeshDefaultNavSidebar: NavSidebarView = ({ data, actions }) => {
                           project.active && "font-medium text-sidebar-primary",
                         )}
                       >
-                        <FolderKanban className="h-4 w-4 shrink-0" />
+                        <span className="flex h-4 w-4 shrink-0 items-center justify-center text-sm leading-none">
+                          <EntityIcon value={project.icon} fallback={FolderKanban} className="h-4 w-4" />
+                        </span>
                         <span className="flex-1 truncate">{project.name}</span>
                       </Link>
                       {actions.unarchiveProject && (
@@ -403,10 +431,27 @@ export const MeshDefaultNavSidebar: NavSidebarView = ({ data, actions }) => {
           )}
         </div>
 
-        <div className="my-2 border-t border-sidebar-border" />
-        {inbox.map((item) => (
-          <RowItem key={item.id} item={item} />
-        ))}
+        {dashboardsReady && (
+          <DashboardGroupRows
+            group="bottom"
+            title={t("dashboards.titleBottom")}
+            lists={lists}
+            actions={actions}
+            state={data.dashboardsState}
+            allHref={allHref}
+            allActive={allActive}
+          />
+        )}
+        </DashboardDnd>
+
+        {inbox.length > 0 && (
+          <>
+            <div className="my-2 border-t border-sidebar-border" />
+            {inbox.map((item) => (
+              <RowItem key={item.id} item={item} />
+            ))}
+          </>
+        )}
 
         <div className="my-2 border-t border-sidebar-border" />
         {tools.map((item) => (
@@ -424,3 +469,6 @@ export const MeshDefaultNavSidebar: NavSidebarView = ({ data, actions }) => {
     </aside>
   );
 };
+
+// This view draws `dashboards-top` / `dashboards-bottom`; a view without the flag gets them folded into `top`.
+MeshDefaultNavSidebar.supportsDashboardGroups = true;

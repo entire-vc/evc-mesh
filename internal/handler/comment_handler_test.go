@@ -617,7 +617,7 @@ func TestCommentHandler_GetMyComments_BadBeforeID(t *testing.T) {
 }
 
 // TestCommentHandler_GetMyComments_TupleCursor pins that before/before_id
-// reach the service as a pair (#c6dc694e) — the id half is the tiebreaker
+// reach the service as a pair — the id half is the tiebreaker
 // that keeps a page boundary landing inside a same-timestamp group from
 // silently dropping the rest of that group.
 func TestCommentHandler_GetMyComments_TupleCursor(t *testing.T) {
@@ -690,10 +690,16 @@ func TestCommentHandler_GetRecentByWorkspace_Success(t *testing.T) {
 	// Same per-row deep-link as GetMyComments. httptest's default host is
 	// example.com over plain http.
 	assert.Equal(t, "http://example.com/t/"+taskID.String()+"?comment="+commentID.String(), got.Items[0].URL)
+	// The recent-comments widget re-reads this list on a live comment.created
+	// frame; a max-age let the browser answer that re-read from its cache and
+	// hide the new comment for up to the cache lifetime.
+	cc := rec.Header().Get("Cache-Control")
+	assert.Contains(t, cc, "no-cache")
+	assert.NotContains(t, cc, "max-age")
 }
 
 // TestCommentHandler_GetRecentByWorkspace_URLRespectsForwardedHeaders pins
-// the #fe507dc9 rule for comments too: behind Caddy the deep-link must carry
+// the an internal ticket rule for comments too: behind Caddy the deep-link must carry
 // the public scheme/host from X-Forwarded-Proto/X-Forwarded-Host, never the
 // internal hop the request actually arrived on.
 func TestCommentHandler_GetRecentByWorkspace_URLRespectsForwardedHeaders(t *testing.T) {
@@ -786,7 +792,7 @@ func TestCommentHandler_GetRecentByWorkspace_BadBeforeID(t *testing.T) {
 }
 
 // TestCommentHandler_GetRecentByWorkspace_TupleCursor pins that before/before_id
-// reach the service as a pair (#c6dc694e) — see the /me/comments twin above.
+// reach the service as a pair — see the /me/comments twin above.
 func TestCommentHandler_GetRecentByWorkspace_TupleCursor(t *testing.T) {
 	wsID := uuid.New()
 	before := time.Now().UTC()
@@ -817,7 +823,7 @@ func TestCommentHandler_GetRecentByWorkspace_TupleCursor(t *testing.T) {
 }
 
 // TestCommentHandler_GetRecentByWorkspace_IncludeInternal pins the query-param
-// wiring for #a7ae4c76 pt.2: default false (unset), explicit values pass
+// wiring for an internal ticket pt.2: default false (unset), explicit values pass
 // through, and an unparseable value is silently ignored — same behavior as
 // the `include_internal` handling on the task-scoped List handler above.
 func TestCommentHandler_GetRecentByWorkspace_IncludeInternal(t *testing.T) {
@@ -864,7 +870,7 @@ func TestCommentHandler_GetRecentByWorkspace_IncludeInternal(t *testing.T) {
 	}
 }
 
-// --- comment.metadata pass-through (task #13e391d2) ---
+// --- comment.metadata pass-through ---
 //
 // The defect these cover was invisible at every layer that had a test: the domain struct,
 // the repository, and the DB column all handled Metadata correctly, and the only thing

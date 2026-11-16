@@ -6,7 +6,9 @@ export type * from "./slots";
 export type * from "./nav";
 export type * from "./auth";
 export type * from "./dashboard";
+export type * from "./icons";
 export { BOARD_CONTRACT_VERSION, DOC_CONTRACT_VERSION } from "./slots";
+export { DASHBOARD_LAYOUT_VERSION, descriptorFromV1, descriptorToV1, sizeToV1, toActionsV1, toLayoutV1 } from "./dashboard";
 export * from "./runtime";
 
 /** Version of the slot contracts this SDK describes. */

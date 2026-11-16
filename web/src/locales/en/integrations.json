@@ -136,6 +136,7 @@
     }
   },
   "eventFeed": {
+    "title": "Event feed",
     "system": "System",
     "live": "Live",
     "offline": "Offline",
@@ -143,12 +144,14 @@
     "autoScrollOff": "Auto-scroll OFF",
     "refresh": "Refresh",
     "filters": "Filters",
+    "filtersActive": "Active filters: {{count}}",
     "reset": "Reset",
     "allProjects": "All Projects",
     "actors": {
       "all": "All actors",
       "agent": "🤖 Agents",
-      "system": "System"
+      "system": "System",
+      "user": "👤 People"
     },
     "realtime": "Real-time",
     "history": "History",
@@ -180,78 +183,12 @@
       "reportedErrorOn": "reported error on",
       "resolvedDependencyOn": "resolved dependency on",
       "published": "published"
-    }
-  },
-  "analytics": {
-    "allProjects": "All Projects",
-    "exportFailed": "Export failed: {{statusText}}",
-    "range": {
-      "d7": "Last 7 days",
-      "d30": "Last 30 days",
-      "d90": "Last 90 days"
     },
-    "export": {
-      "title": "Export data as CSV",
-      "busy": "Exporting...",
-      "label": "Export CSV"
-    },
-    "print": {
-      "title": "Print or save as PDF",
-      "label": "Print / PDF"
-    },
-    "kpi": {
-      "totalTasks": "Total Tasks",
-      "created": "Created (period)",
-      "completed": "Completed (period)",
-      "totalEvents": "Total Events",
-      "retainedSince": "Log only retains data since {{date}}",
-      "noRetained": "No event data retained for this period"
-    },
-    "cards": {
-      "byStatus": "Tasks by Status",
-      "byPriority": "Tasks by Priority",
-      "timeline": "Activity Timeline",
-      "leaderboard": "Agent Leaderboard",
-      "agents": "Agents",
-      "eventsByType": "Events by Type"
-    },
-    "timeline": {
-      "empty": "No data in selected period.",
-      "created": "Created",
-      "completed": "Completed"
-    },
-    "leaderboard": {
-      "agent": "Agent",
-      "completed": "Completed",
-      "empty": "No agent task data yet."
-    },
-    "agents": {
-      "total": "Total",
-      "active": "Active"
-    },
-    "events": {
-      "notRetained": "Event log doesn't retain data this far back — no breakdown available.",
-      "empty": "No events yet."
-    },
-    "labels": {
-      "backlog": "backlog",
-      "todo": "todo",
-      "in_progress": "in progress",
-      "review": "review",
-      "done": "done",
-      "cancelled": "cancelled",
-      "urgent": "urgent",
-      "high": "high",
-      "medium": "medium",
-      "low": "low",
-      "none": "none",
-      "summary": "summary",
-      "status_change": "status change",
-      "context_update": "context update",
-      "error": "error",
-      "dependency_resolved": "dependency resolved",
-      "custom": "custom"
-    }
+    "dateFrom": "From date",
+    "dateTo": "To date",
+    "error": "Could not load events.",
+    "retry": "Retry",
+    "more": "Load more"
   },
   "artifactView": {
     "loadFailed": "could not load artifact",
@@ -304,6 +241,12 @@
     "denying": "Denying…",
     "allow": "Allow",
     "allowing": "Allowing…",
+    "identityTitle": "{{name}} wants to confirm it's you (your Mesh ID)",
+    "identityNote": "Only your sign-in is confirmed. The app gets no access to your workspaces, tasks or documents.",
+    "identityAllow": "Sign in",
+    "identityAllowing": "Signing in…",
+    "identityDeny": "Cancel",
+    "identityDenying": "Cancelling…",
     "signedInAs": "Signed in as {{email}}"
   },
   "orgChart": {
@@ -326,7 +269,7 @@
   "spark": {
     "allTypes": "All Types",
     "notEnabledTitle": "Spark catalog is not enabled",
-    "notEnabledBody": "Enable the Spark Agent Catalog integration to browse and install AI agents into your workspace.",
+    "notEnabledBody": "Enable the Spark Agent Catalog integration to browse AI agents in the catalog.",
     "goToIntegrations": "Go to Integrations",
     "searchResults": "Search results",
     "popularAgents": "Popular agents",
@@ -341,20 +284,7 @@
     "unavailableBody": "The Spark catalog could not be reached. Check that MESH_SPARK_ENABLED=true and the service is running.",
     "by": "by {{author}}",
     "noDescription": "No description provided.",
-    "open": "Open",
-    "install": "Install",
-    "installing": "Installing...",
-    "installFailed": "Installation failed",
-    "installedTitle": "Agent installed",
-    "installTitle": "Install \"{{name}}\"",
-    "installedDesc": "Save your API key — it will only be shown once.",
-    "installDesc": "This will register \"{{name}}\" as an agent in your workspace.",
-    "apiKeyLabel": "API Key (copy now — shown once)",
-    "copied": "Copied!",
-    "copyKey": "Copy API key",
-    "createInfo": "Agent will be created with type <strong>{{type}}</strong> and capabilities from the Spark manifest.",
-    "done": "Done",
-    "cancel": "Cancel"
+    "open": "Open"
   },
   "sessions": {
     "status": {
@@ -376,22 +306,16 @@
       "offlineError": "offline / error"
     },
     "noAgents": "No agents registered in this workspace.",
-    "goToTeam": "Go to Team page to register agents",
-    "cost": {
-      "title": "Cost Tracking",
-      "lastDays": "Last {{days}} days",
-      "noData": "No cost data reported yet for this period. Cost data is available when agents use the <code>session_report</code> MCP tool at the end of each session.",
-      "exampleCall": "Example MCP call:",
-      "reportedCost": "Reported cost",
-      "tokensInOut": "Tokens in / out",
-      "sessions": "Sessions",
-      "avgPerSession": "Avg / reported session",
-      "reportedOf": "{{reported}} of {{total}} sessions reported ({{percent}}%)",
-      "spendByAgent": "Spend by agent",
-      "noAgentData": "No agent data.",
-      "expensiveTasks": "Most expensive tasks",
-      "noTaskSessions": "No task-linked sessions.",
-      "viewAnalytics": "View full analytics →"
+    "widgets": {
+      "activeTitle": "Active agents",
+      "activeEmpty": "No agents online",
+      "activeMore_one": "+{{count}} more active",
+      "activeMore_other": "+{{count}} more active",
+      "statusTitle": "Agents",
+      "statusFilteredOut_one": "{{count}} agent, none match the filter",
+      "statusFilteredOut_other": "{{count}} agents, none match the filter",
+      "summaryTitle": "Agents now",
+      "loadFailed": "Could not load agents"
     }
   },
   "registerAgent": {
@@ -537,7 +461,11 @@
       "noAttempts": "No runs reported for this project yet. Model stays unknown until a run is observed.",
       "noMatch": "No runs match the filters.",
       "scope": "Show",
-      "scopes": { "all": "All runs", "active": "Active", "history": "History" },
+      "scopes": {
+        "all": "All runs",
+        "active": "Active",
+        "history": "History"
+      },
       "search": "Search by run, task, controller or model",
       "showMore": "Show {{count}} more",
       "routeOrder": "{{order}}. {{profile}}",
@@ -550,9 +478,27 @@
       "heartbeat": "heartbeat {{when}}",
       "copy": "Copy {{label}}",
       "copied": "Copied",
-      "ids": { "attempt": "run", "turn": "turn", "task": "task", "controller": "controller", "instance": "instance" },
-      "states": { "starting": "Starting", "running": "Running", "waiting": "Waiting", "stopped": "Stopped", "completed": "Completed", "failed": "Failed" },
-      "freshness": { "unknown": "unknown", "current": "current", "stale": "stale", "offline": "offline" }
+      "ids": {
+        "attempt": "run",
+        "turn": "turn",
+        "task": "task",
+        "controller": "controller",
+        "instance": "instance"
+      },
+      "states": {
+        "starting": "Starting",
+        "running": "Running",
+        "waiting": "Waiting",
+        "stopped": "Stopped",
+        "completed": "Completed",
+        "failed": "Failed"
+      },
+      "freshness": {
+        "unknown": "unknown",
+        "current": "current",
+        "stale": "stale",
+        "offline": "offline"
+      }
     }
   },
   "runtimeTabs": {
@@ -769,6 +715,13 @@
       "addNamed": "Add to {{name}}"
     },
     "missingOption": "{{value}} (not found)",
+    "period": {
+      "days": "Last {{count}} days",
+      "range": "Date range",
+      "from": "From",
+      "to": "To",
+      "invalid": "The start date is after the end date"
+    },
     "checklist": {
       "empty": "Nothing to choose from yet"
     },
@@ -1027,7 +980,8 @@
       "sidebar_item": "Add an item to the sidebar",
       "command": "Add a command to the command palette",
       "doc_panel": "Show a panel in documents",
-      "project_view": "Show a tab in the project"
+      "project_view": "Show a tab in the project",
+      "dashboard_widget": "Offer widgets for dashboards"
     },
     "secrets": {
       "store": "Keep the secret {{name}}"
@@ -1390,8 +1344,11 @@
   },
   "updatesTab": {
     "awaitingConsent": "Awaiting consent",
-    "current": "Installed: {{version}} ({{ref}}, {{sha}})",
-    "latest": "Available: {{version}} ({{ref}}, {{sha}})",
+    "current": "Installed: {{version}} ({{detail}})",
+    "currentBare": "Installed: {{version}}",
+    "running": "Running: {{versions}}",
+    "latest": "Available: {{version}} ({{detail}})",
+    "latestBare": "Available: {{version}}",
     "newPermissions": "New permissions",
     "checkFailed": "Couldn't check: {{reason}}",
     "upToDate": "Up to date.",
@@ -1436,5 +1393,19 @@
     "check": "Check",
     "instanceDisabled": "Disabled at instance level",
     "instanceDisabledNote": "The instance administrator has switched this extension off. The workspace connection is kept."
+  },
+  "widgets": {
+    "remove": "Remove widget",
+    "stub": {
+      "disabled": "The {{name}} extension is off",
+      "consent": "The {{name}} extension waits for an administrator to allow dashboard widgets",
+      "removed": "The {{name}} extension no longer has this widget",
+      "unavailable": "{{name}}: the widget is unavailable right now"
+    },
+    "gitlabFailedPipelines": {
+      "empty": "No failed pipelines in 24 hours",
+      "error": "Could not load the pipelines",
+      "failed": "Pipeline failed"
+    }
   }
 }

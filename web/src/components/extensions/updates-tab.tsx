@@ -13,8 +13,27 @@ import {
 } from "@/lib/extension-repo";
 import type { RepoUpdatesState } from "@/hooks/useRepoUpdates";
 
+/** True when a git ref is the commit itself (a commit-pinned install), not a branch or tag name. */
+function refIsCommit(ref: string, commit: string | undefined): boolean {
+  const r = ref.toLowerCase();
+  const c = (commit ?? "").trim().toLowerCase();
+  if (!c || !/^[0-9a-f]{7,64}$/.test(r)) return false;
+  return c.startsWith(r) || r.startsWith(c);
+}
+
+/**
+ * "(ref, sha)" detail without empty parts: catalog installs carry no git ref, some rows no commit,
+ * and a commit-pinned install's ref is its own sha, which is shown once as the short sha.
+ */
+function versionDetail(ref: string | undefined, commit: string | undefined): string {
+  const r = ref?.trim();
+  return [r && !refIsCommit(r, commit) ? r : "", shortSha(commit)].filter(Boolean).join(", ");
+}
+
 function Row({ u, busy, onUpdate, onRollback }: { u: RepoUpdate; busy: boolean; onUpdate: (u: RepoUpdate) => void; onRollback: (u: RepoUpdate) => void }) {
   const { t } = useTranslation("integrations");
+  const currentDetail = versionDetail(u.current_ref, u.current_commit);
+  const latestDetail = versionDetail(u.latest_ref, u.latest_commit);
   return (
     <li data-testid={`update-row-${u.extension_id}`} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0 space-y-1">
@@ -24,11 +43,20 @@ function Row({ u, busy, onUpdate, onRollback }: { u: RepoUpdate; busy: boolean; 
           {u.pending && <Badge variant="secondary">{t("updatesTab.awaitingConsent")}</Badge>}
         </p>
         <p className="break-words text-xs text-muted-foreground">
-          {t("updatesTab.current", { version: u.current_version, ref: u.current_ref, sha: shortSha(u.current_commit) })}
+          {currentDetail
+            ? t("updatesTab.current", { version: u.current_version, detail: currentDetail })
+            : t("updatesTab.currentBare", { version: u.current_version })}
         </p>
+        {u.reported_versions && u.reported_versions.length > 0 && (
+          <p data-testid={`update-running-${u.extension_id}`} className="break-words text-xs text-muted-foreground">
+            {t("updatesTab.running", { versions: u.reported_versions.join(", ") })}
+          </p>
+        )}
         {u.update_available && (
           <p className="break-words text-xs">
-            {t("updatesTab.latest", { version: u.latest_version, ref: u.latest_ref, sha: shortSha(u.latest_commit) })}
+            {latestDetail
+              ? t("updatesTab.latest", { version: u.latest_version, detail: latestDetail })
+              : t("updatesTab.latestBare", { version: u.latest_version })}
           </p>
         )}
         {u.needs_consent && (

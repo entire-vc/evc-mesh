@@ -116,6 +116,7 @@ var taskComputedCols = `
 			AND COALESCE(v.metadata->'acceptance'->>'result', '') = '') AS acceptance_missing,
 	(SELECT v.pipeline_status FROM vcs_links v WHERE v.task_id = tasks.id AND v.pipeline_status IS NOT NULL ORDER BY v.pipeline_updated_at DESC LIMIT 1) AS vcs_pipeline_status,
 	ARRAY(SELECT DISTINCT v.provider FROM vcs_links v WHERE v.task_id = tasks.id ORDER BY 1) AS vcs_providers,
+	` + activeTaskWaitSQL("tasks") + ` AS has_active_wait,
 	` + falseOpenComputedColsNoAlias + `,
 	CASE
 		WHEN tasks.assignee_type = 'agent' THEN
@@ -198,6 +199,7 @@ var taskComputedColsAliased = `
 			AND COALESCE(v.metadata->'acceptance'->>'result', '') = '') AS acceptance_missing,
 	(SELECT v.pipeline_status FROM vcs_links v WHERE v.task_id = t.id AND v.pipeline_status IS NOT NULL ORDER BY v.pipeline_updated_at DESC LIMIT 1) AS vcs_pipeline_status,
 	ARRAY(SELECT DISTINCT v.provider FROM vcs_links v WHERE v.task_id = t.id ORDER BY 1) AS vcs_providers,
+	` + activeTaskWaitSQL("t") + ` AS has_active_wait,
 	` + falseOpenComputedColsAliased + `,
 	CASE
 		WHEN t.assignee_type = 'agent' THEN
@@ -314,6 +316,9 @@ type taskRow struct {
 	// VCSProviders is the distinct providers of the task's links, so a card can
 	// draw a per-provider badge (extension slot task.badge) without a fetch.
 	VCSProviders pq.StringArray `db:"vcs_providers"`
+	// HasActiveWait is true while the task has a task_waits row not yet resolved
+	// (activeTaskWaitSQL). Only queries that select the computed columns fill it.
+	HasActiveWait bool `db:"has_active_wait"`
 
 	// False-open raw stats — see falseOpenComputedCols*
 	// and toDomain's threshold logic below.
@@ -325,7 +330,7 @@ type taskRow struct {
 
 func (r *taskRow) toDomain() domain.Task {
 	t := r.toDomainBase()
-	t.RuntimeState = domain.ResolveRuntimeState(r.RuntimeState, &t, time.Now().UTC())
+	t.RuntimeState = domain.ResolveRuntimeStateWithWait(r.RuntimeState, &t, time.Now().UTC(), r.HasActiveWait)
 	return t
 }
 
@@ -1629,58 +1634,6 @@ func (r *TaskRepo) ListByStatusCategory(ctx context.Context, workspaceID uuid.UU
 	return pagination.NewPage(items, totalCount, pg), nil
 }
 
-// ListTriageQueue returns the human-attention queue of a workspace: every task in a
-// triage-category status UNION every task with a live human gate (human_gate=true,
-// status not done/cancelled). It is a single predicate over tasks, so a card that is
-// both in triage and gated appears once. Auto-delegation cards are never moved to the
-// triage status, so the gate flag is the only signal for them.
-// Order: live hard gates first, then other gated cards, then plain triage cards; within
-// the gated groups the longest-waiting (oldest human_gate_armed_at) first.
-func (r *TaskRepo) ListTriageQueue(ctx context.Context, workspaceID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error) {
-	pg.Normalize()
-
-	const where = `
-		FROM tasks t
-		INNER JOIN task_statuses ts ON ts.id = t.status_id
-		INNER JOIN projects p ON p.id = t.project_id
-		WHERE p.workspace_id = $1
-		  AND t.deleted_at IS NULL
-		  AND p.deleted_at IS NULL
-		  AND (
-		        ts.category = $2
-		        OR (t.human_gate = true AND ts.category NOT IN ($3, $4))
-		      )`
-
-	var totalCount int
-	if err := r.db.GetContext(ctx, &totalCount, `SELECT COUNT(t.id)`+where,
-		workspaceID, domain.StatusCategoryTriage, domain.StatusCategoryDone, domain.StatusCategoryCancelled); err != nil {
-		return nil, err
-	}
-
-	dataQ := `SELECT t.id, t.version, t.input_revision, t.project_id, t.status_id, t.title, t.description,
-		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
-		t.due_date, t.start_after, t.start_after_origin, t.start_after_receipt_id, t.estimated_hours, t.custom_fields, t.labels,
-		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
-		t.completed_at, t.deleted_at,
-		t.recurring_schedule_id, t.recurring_instance_number,
-		t.delegation_level, t.human_gate, t.human_gate_class, t.human_gate_armed_at,
-		t.gate_author, t.gate_author_type, t.gate_reason, t.recommended_default, t.gate_deadline,
-		` + taskComputedColsAliased + where + `
-		ORDER BY (t.human_gate AND t.human_gate_class = 'hard') DESC,
-		         t.human_gate DESC,
-		         t.human_gate_armed_at ASC NULLS LAST,
-		         t.created_at DESC
-		LIMIT $5 OFFSET $6`
-	var rows []taskRow
-	if err := r.db.SelectContext(ctx, &rows, dataQ,
-		workspaceID, domain.StatusCategoryTriage, domain.StatusCategoryDone, domain.StatusCategoryCancelled,
-		pg.Limit(), pg.Offset()); err != nil {
-		return nil, err
-	}
-
-	return pagination.NewPage(taskRowsToSlice(rows), totalCount, pg), nil
-}
-
 // AtomicCheckout is the legacy unscoped adapter. Same-holder retries preserve
 // the existing token; callers needing the actual lease use AcquireCheckout.
 func (r *TaskRepo) AtomicCheckout(ctx context.Context, taskID, agentID, token uuid.UUID, expiresAt time.Time) error {
@@ -1700,12 +1653,14 @@ func (r *TaskRepo) ReleaseCheckout(ctx context.Context, taskID, token uuid.UUID)
 func (r *TaskRepo) MoveToProject(ctx context.Context, taskID, targetProjectID, targetStatusID uuid.UUID) error {
 	// Same two-statement pattern as Create: acquire advisory lock in Stmt 1 so
 	// Stmt 2's snapshot is fresh and sees all prior committed task_numbers.
+	// MAX runs over every row, soft-deleted included, exactly as in Create: uq_tasks_project_number
+	// covers deleted rows, so a number a deleted task holds is taken (live filter = 409 "already exists").
 	const qLock = `SELECT pg_advisory_xact_lock(hashtext($1::text))`
 	const qUpdate = `
 		UPDATE tasks
 		SET project_id  = $2::uuid,
 		    status_id   = $3,
-		    task_number = (SELECT COALESCE(MAX(task_number), 0) + 1 FROM tasks WHERE project_id = $2::uuid AND deleted_at IS NULL),
+		    task_number = (SELECT COALESCE(MAX(task_number), 0) + 1 FROM tasks WHERE project_id = $2::uuid),
 		    updated_at  = NOW()
 		WHERE id = $1 AND deleted_at IS NULL
 	`
@@ -1793,6 +1748,35 @@ func (r *TaskRepo) FindExpiredInProgressCheckouts(ctx context.Context) ([]domain
 	return taskRowsToSlice(rows), nil
 }
 
+// activeTaskWaitSQL is true for a task whose assignee has a declared wait still in
+// force: a task_waits row not yet resolved, of the agent the task is assigned to and,
+// for a time wait, not past its deadline by more than RuntimeStateStaleAfter. tbl is
+// the outer tasks alias ("t" or "tasks"). The partial index task_waits_one_active
+// (task_id, agent_id WHERE resolved_at IS NULL) serves it.
+//
+// This, not runtime_state, is the authority on "this card waits". wait_for writes the
+// row and a runtime_state with ref "wait:<id>"; the Runner republishes runtime_state
+// on every pass and rewrites that ref to its own vocabulary ("time", "card:#…",
+// "mr:…"), after which the state is live only while the Runner keeps refreshing it.
+// A lane tick that hung past RuntimeStateStaleAfter then let the unleased sweep park
+// cards whose waits were still active, and the waits were cancelled (an internal ticket:
+// an internal ticket on a time wait, an internal ticket on an MR wait whose merge then woke nobody).
+// On prod 14.11, 70 of 76 active waits on unleased in_progress cards carried a
+// Runner ref. The row is ended only by its resolution (met, superseded, cancelled,
+// the card closing), so it does not depend on any writer's refresh cadence.
+//
+// Only the assignee's wait counts: the wait of an agent the card was taken from
+// holds nothing (2 of those 76 on prod). A time wait holds up to its deadline plus
+// RuntimeStateStaleAfter, the window its controller has to act on it; past that it
+// is no different from a stale state.
+func activeTaskWaitSQL(tbl string) string {
+	return fmt.Sprintf(`EXISTS (SELECT 1 FROM task_waits tw
+		WHERE tw.task_id = %[1]s.id AND tw.resolved_at IS NULL
+		  AND %[1]s.assignee_type = 'agent' AND tw.agent_id = %[1]s.assignee_id
+		  AND (tw.until_at IS NULL OR tw.until_at > now() - interval '%[2]d seconds'))`,
+		tbl, int64(domain.RuntimeStateStaleAfter.Seconds()))
+}
+
 // liveRuntimeStateSQL is true for a card whose controller currently says it holds it:
 // a runtime_state of kind working, waiting or queued that is live by the same rule
 // ResolveRuntimeState applies on read (domain/runtime_state.go) — refreshed within
@@ -1865,8 +1849,12 @@ const liveRuntimeStateSQL = `t.runtime_state IS NOT NULL
 // whatever its comments say: see liveRuntimeStateSQL. That is the controller's own
 // statement and is checked first.
 //
+// Nor is a card with an active task_waits row, however stale its runtime_state:
+// see activeTaskWaitSQL. A declared wait is woken by its own observer, not by the
+// lane's refresh, so a late lane tick says nothing about it.
+//
 // A `⏳ WAIT` / `↻ NEXT` line in a comment is NOT an exemption. It was,
-// for drivers that published no runtime state (this change: a card waiting on an open
+// for drivers that published no runtime state (an internal ticket: a card waiting on an open
 // MR was parked ~2h after its WAIT); every lane now runs under the Runner, which
 // publishes runtime_state, and the last such driver (fiddler) was retired on
 // 2026-10-16. A card that only says it waits, with no live controller behind the
@@ -1899,7 +1887,7 @@ const liveRuntimeStateSQL = `t.runtime_state IS NOT NULL
 // definition. Neither is abandoned, which is the only state this sweep exists to
 // clear up.
 func (r *TaskRepo) FindStaleUnleasedInProgress(ctx context.Context, olderThan time.Duration) ([]domain.Task, error) {
-	const q = `
+	q := `
 		SELECT ` + taskBaseColsNoAlias + `
 		FROM tasks t
 		WHERE t.checked_out_by IS NULL
@@ -1917,7 +1905,8 @@ func (r *TaskRepo) FindStaleUnleasedInProgress(ctx context.Context, olderThan ti
 		        COALESCE((SELECT max(a.created_at)  FROM artifacts a WHERE a.task_id  = t.id), t.updated_at),
 		        COALESCE((SELECT max(v.created_at)  FROM vcs_links v WHERE v.task_id  = t.id), t.updated_at)
 		      ) < now() - $1::interval
-		  AND NOT COALESCE((` + liveRuntimeStateSQL + `), false)`
+		  AND NOT COALESCE((` + liveRuntimeStateSQL + `), false)
+		  AND NOT ` + activeTaskWaitSQL("t")
 	var rows []taskRow
 	iv := fmt.Sprintf("%d seconds", int64(olderThan.Seconds()))
 	stale := fmt.Sprintf("%d seconds", int64(domain.RuntimeStateStaleAfter.Seconds()))

@@ -16,7 +16,7 @@ function files(dir: string): string[] {
   });
 }
 
-const views = [...files(join(SRC, "themes/mesh-default")), join(SRC, "core/dashboard/views/mesh-default.tsx")];
+const views = [...files(join(SRC, "themes/mesh-default")), join(SRC, "core/dashboard/widgets/legacy/views.tsx")];
 
 describe("mesh-default views take the core's runtime only through the SDK", () => {
   it("covers the board, list, task, doc and dashboard views", () => {

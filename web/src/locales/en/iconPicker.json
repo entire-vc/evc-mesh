@@ -1,0 +1,26 @@
+{
+  "none": "No icon",
+  "search": "Search",
+  "searchPlaceholder": "Search: rocket, ракета…",
+  "recent": "Recent",
+  "empty": "Nothing found",
+  "clear": "No icon",
+  "categories": {
+    "smileys": "Smileys",
+    "people": "People",
+    "nature": "Nature",
+    "food": "Food",
+    "activity": "Activity",
+    "travel": "Travel",
+    "objects": "Objects",
+    "symbols": "Symbols"
+  },
+  "title": "Icons",
+  "tabEmoji": "Emoji",
+  "tabIcons": "Icons",
+  "themeIcons": "Theme icons",
+  "coreIcons": "Icons",
+  "iconsEmpty": "No icons found",
+  "searchPlaceholderIcons": "Search: rocket, ракета…",
+  "tabs": "Icon type"
+}

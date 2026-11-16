@@ -506,7 +506,7 @@ export function AgentDetailDialog({
                   onChange={(e) => setNameDraft(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") void handleSaveName();
-                    if (e.key === "Escape") setEditingName(false);
+                    if (e.key === "Escape") { e.stopPropagation(); setEditingName(false); }
                   }}
                   className="h-8 flex-1 text-base font-semibold"
                   autoFocus
@@ -709,7 +709,7 @@ export function AgentDetailDialog({
                   onChange={(e) => setRoleDraft(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") void handleSaveRole();
-                    if (e.key === "Escape") setEditingRole(false);
+                    if (e.key === "Escape") { e.stopPropagation(); setEditingRole(false); }
                   }}
                   placeholder={t("agentDetail.role.placeholder")}
                   className="h-7 w-48 text-sm"
@@ -758,7 +758,7 @@ export function AgentDetailDialog({
                   onChange={(e) => setModelDraft(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") void handleSaveModel();
-                    if (e.key === "Escape") setEditingModel(false);
+                    if (e.key === "Escape") { e.stopPropagation(); setEditingModel(false); }
                   }}
                   placeholder={t("agentDetail.model.placeholder")}
                   maxLength={128}
@@ -931,7 +931,7 @@ export function AgentDetailDialog({
                   value={descriptionDraft}
                   onChange={(e) => setDescriptionDraft(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Escape") setEditingDescription(false);
+                    if (e.key === "Escape") { e.stopPropagation(); setEditingDescription(false); }
                     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                       void handleSaveDescription();
                     }
@@ -1001,7 +1001,7 @@ export function AgentDetailDialog({
                   value={callbackUrlDraft}
                   onChange={(e) => setCallbackUrlDraft(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Escape") setEditingCallbackUrl(false);
+                    if (e.key === "Escape") { e.stopPropagation(); setEditingCallbackUrl(false); }
                     if (e.key === "Enter") void handleSaveCallbackUrl();
                   }}
                   placeholder="https://your-agent.example.com/webhook"
@@ -1079,7 +1079,7 @@ export function AgentDetailDialog({
                   onChange={(e) => setProfileFieldDraft(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") void handleSaveProfileField();
-                    if (e.key === "Escape") setEditingProfileField(null);
+                    if (e.key === "Escape") { e.stopPropagation(); setEditingProfileField(null); }
                   }}
                   placeholder="code-review, docs, deploy"
                   className="text-sm"
@@ -1281,7 +1281,7 @@ function ProfileFieldRow({
             onChange={(e) => onDraftChange(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") onSave();
-              if (e.key === "Escape") onCancel();
+              if (e.key === "Escape") { e.stopPropagation(); onCancel(); }
             }}
             placeholder={placeholder}
             aria-label={ariaLabel ?? label}

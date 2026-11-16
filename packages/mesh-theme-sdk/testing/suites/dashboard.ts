@@ -4,13 +4,13 @@
 // run on: CT-common-03 (no fetch) and CT-widget-01 (three states) already cover what a core widget can show.
 import { fireEvent, waitFor } from "@testing-library/react";
 import { expect } from "vitest";
-import type { MentionItem, SessionItem, Task, WidgetSize } from "../../src/index";
+import type { MentionItem, SessionItem, Task, WidgetSizeV1 as WidgetSize } from "../../src/index";
 import { fixtures } from "../fixtures";
 import type { WidgetData } from "../fixtures/dashboard";
 import { button, calls, markup, tick, visibleText } from "../helpers";
 import { defineTests } from "../suite";
 import type { Mounted } from "../types";
-import type { DashboardData } from "../mounters/dashboard";
+import type { DashboardData, DashboardDataV1 } from "../mounters/dashboard";
 
 const F = fixtures.dashboard;
 const LAYOUT = ["dashboard.layout"];
@@ -61,16 +61,18 @@ function pinnedWide(root: Element): string[] {
 }
 
 defineTests([
-  // ---------------------------------------------------------------- dashboard.layout
+  // ---------------------------------------------------------------- dashboard.layout 1.x
+  // ---------------------------------------------------------------- dashboard.layout 1.x (a theme that declared ^1)
   {
     id: "CT-dash-01",
     title: "draws exactly data.widgets, in their order, each through components.Widget",
     slots: LAYOUT,
+    majors: [1],
     run({ mount }) {
-      const m = mount<DashboardData>({ data: F.dashboard({ widgets: ["triage", "my-tasks"] }), themeSettings: { widgets: ["triage", "my-tasks"] } });
+      const m = mount<DashboardDataV1>({ data: F.dashboardV1({ widgets: ["triage", "my-tasks"] }), themeSettings: { widgets: ["triage", "my-tasks"] } });
       expect(shownIds(m.container)).toEqual(["triage", "my-tasks"]);
       m.unmount();
-      const r = mount<DashboardData>({ data: F.dashboard({ widgets: ["sessions", "mentions"] }) });
+      const r = mount<DashboardDataV1>({ data: F.dashboardV1({ widgets: ["sessions", "mentions"] }) });
       expect(shownIds(r.container), "the view draws data.widgets, not its own set").toEqual(["sessions", "mentions"]);
     },
   },
@@ -78,8 +80,9 @@ defineTests([
     id: "CT-dash-02",
     title: "no widgets: an empty state with a reason, not a blank field",
     slots: LAYOUT,
+    majors: [1],
     run({ mount }) {
-      const m = mount<DashboardData>({ data: F.dashboard({ widgets: [] }), themeSettings: { widgets: [] } });
+      const m = mount<DashboardDataV1>({ data: F.dashboardV1({ widgets: [] }), themeSettings: { widgets: [] } });
       expect(shownIds(m.container)).toEqual([]);
       expect(visibleText(m.container).trim().length, "an empty dashboard must say why").toBeGreaterThan(0);
     },
@@ -88,12 +91,13 @@ defineTests([
     id: "CT-dash-04",
     title: "isMobile: every widget kept, in order, nothing pinned to more than one column",
     slots: LAYOUT,
+    majors: [1],
     run({ mount }) {
       const ids = [...F.CORE_WIDGET_IDS];
-      const desk = mount<DashboardData>();
+      const desk = mount<DashboardDataV1>();
       expect(shownIds(desk.container)).toEqual(ids);
       desk.unmount();
-      const m = mount<DashboardData>({ isMobile: true });
+      const m = mount<DashboardDataV1>({ isMobile: true });
       expect(shownIds(m.container), "no widget dropped, order kept").toEqual(ids);
       // jsdom has no layout: what can be checked is an inline grid the view sets for the phone.
       m.container.querySelectorAll<HTMLElement>("[style]").forEach((e) => {
@@ -107,10 +111,11 @@ defineTests([
     id: "CT-dash-05",
     title: "a size outside the registry's min..max ends up drawn within it",
     slots: LAYOUT,
+    majors: [1],
     run({ mount }) {
       const tooBig: WidgetSize = { w: 9 as WidgetSize["w"], h: 9 as WidgetSize["h"] };
       const tooSmall: WidgetSize = { w: 0 as WidgetSize["w"], h: 0 as WidgetSize["h"] };
-      const m = mount<DashboardData>({
+      const m = mount<DashboardDataV1>({
         data: (d) => ({ ...d, widgets: d.widgets.map((w, i) => ({ ...w, size: i % 2 ? tooSmall : tooBig })) }),
       });
       const data = m.data();
@@ -132,11 +137,114 @@ defineTests([
     id: "CT-dash-06",
     title: "an extension's widget in the registry is drawn; the layout does not fail on an unknown id",
     slots: LAYOUT,
+    majors: [1],
     run({ mount }) {
       const ext = F.descriptor("gitlab.pipelines", { origin: "extension", title: "Pipelines" });
       const own = F.descriptor("ink.unknown-to-the-view", { origin: "theme" });
-      const m = mount<DashboardData>({ data: F.dashboard({ widgets: [F.descriptor("mentions"), ext, own, F.descriptor("sessions")] }) });
+      const m = mount<DashboardDataV1>({ data: F.dashboardV1({ widgets: [F.descriptor("mentions"), ext, own, F.descriptor("sessions")] }) });
       expect(shownIds(m.container)).toEqual(["mentions", "gitlab.pipelines", "ink.unknown-to-the-view", "sessions"]);
+    },
+  },
+
+  // ---------------------------------------------------------------- dashboard.layout 2.0.0 (coordinates)
+  {
+    id: "CT-dash-01",
+    title: "draws exactly data.widgets, each through components.Widget with its instance, in (y, x) order",
+    slots: LAYOUT,
+    majors: [2],
+    run({ mount }) {
+      const m = mount<DashboardData>({ data: F.dashboard({ widgets: ["triage", "my-tasks"] }), themeSettings: { widgets: ["triage", "my-tasks"] } });
+      expect(shownIds(m.container)).toEqual(["triage", "my-tasks"]);
+      m.unmount();
+      const r = mount<DashboardData>({ data: F.dashboard({ widgets: ["sessions", "mentions"] }) });
+      expect(shownIds(r.container), "the view draws data.widgets, not its own set").toEqual(["sessions", "mentions"]);
+      r.unmount();
+      // Coordinates decide the order: the same widgets, listed the other way round, are drawn by (y, x).
+      const shuffled = mount<DashboardData>({ data: (d) => ({ ...d, widgets: [...d.widgets].reverse() }) });
+      expect(shownIds(shuffled.container), "drawn in (y, x) order whatever the array order").toEqual([...F.CORE_WIDGET_IDS]);
+    },
+  },
+  {
+    id: "CT-dash-02",
+    title: "no widgets: an empty state with a reason, not a blank field",
+    slots: LAYOUT,
+    majors: [2],
+    run({ mount }) {
+      const m = mount<DashboardData>({ data: F.dashboard({ widgets: [] }), themeSettings: { widgets: [] } });
+      expect(shownIds(m.container)).toEqual([]);
+      expect(visibleText(m.container).trim().length, "an empty dashboard must say why").toBeGreaterThan(0);
+    },
+  },
+  {
+    id: "CT-dash-04",
+    title: "isMobile: every widget kept, in (y, x) order, nothing pinned to more than one column",
+    slots: LAYOUT,
+    majors: [2],
+    run({ mount }) {
+      const ids = [...F.CORE_WIDGET_IDS];
+      const desk = mount<DashboardData>();
+      expect(shownIds(desk.container)).toEqual(ids);
+      desk.unmount();
+      const m = mount<DashboardData>({ isMobile: true });
+      expect(shownIds(m.container), "no widget dropped, order kept").toEqual(ids);
+      m.container.querySelectorAll<HTMLElement>("[style]").forEach((e) => {
+        const cols = e.style.gridTemplateColumns;
+        if (cols) expect(cols.trim().split(/\s+/).length, `grid-template-columns: ${cols}`).toBe(1);
+        if (e.style.columnCount) expect(Number(e.style.columnCount)).toBeLessThanOrEqual(1);
+      });
+    },
+  },
+  {
+    id: "CT-dash-05",
+    title: "an instance outside the descriptor's min..max (cells) ends up drawn within it, and within 12 columns",
+    slots: LAYOUT,
+    majors: [2],
+    run({ mount }) {
+      const m = mount<DashboardData>({
+        data: (d) => ({
+          ...d,
+          widgets: d.widgets.map((w, i) => ({ ...w, instance: { ...w.instance, w: i % 2 ? 0 : 40, h: i % 2 ? 0 : 40 } })),
+        }),
+      });
+      const data = m.data();
+      expect(shownIds(m.container)).toEqual(data.widgets.map((w) => w.descriptor.id));
+      for (const w of data.widgets) {
+        const el = m.container.querySelector(`[data-mesh-widget="${w.descriptor.id}"]`)!;
+        const [sw, sh] = (el.getAttribute("data-mesh-size") ?? "").split("x").map(Number);
+        const { min, max } = w.descriptor.size;
+        expect(sw! >= min.w && sw! <= max.w && sh! >= min.h && sh! <= max.h, `${w.descriptor.id} drawn ${sw}x${sh}`).toBe(true);
+      }
+      m.container.querySelectorAll<HTMLElement>("[style]").forEach((e) => {
+        const span = /span\s+(\d+)/.exec(e.style.gridColumn || e.style.gridColumnEnd || "");
+        if (span) expect(Number(span[1])).toBeLessThanOrEqual(12);
+      });
+    },
+  },
+  {
+    id: "CT-dash-06",
+    title: "an extension's or external widget in the registry is drawn; the layout does not fail on an unknown id",
+    slots: LAYOUT,
+    majors: [2],
+    run({ mount }) {
+      const ext = F.descriptor("gitlab.pipelines", { origin: "extension", title: "Pipelines" });
+      const outside = F.descriptor("acme.sales", { origin: "external" });
+      const own = F.descriptor("ink.unknown-to-the-view", { origin: "theme" });
+      const m = mount<DashboardData>({ data: F.dashboard({ widgets: [F.descriptor("mentions"), ext, outside, own, F.descriptor("sessions")] }) });
+      expect(shownIds(m.container)).toEqual(["mentions", "gitlab.pipelines", "acme.sales", "ink.unknown-to-the-view", "sessions"]);
+    },
+  },
+  {
+    id: "CT-dash-07",
+    title: "not editable: no edit control is offered; the edit actions are absent and nothing is called on mount",
+    slots: LAYOUT,
+    majors: [2],
+    run({ mount }) {
+      const m = mount<DashboardData>({ data: F.dashboard({ editable: false }) });
+      const data = m.data();
+      expect(data.canEdit).toBe(false);
+      for (const name of ["moveWidget", "resizeWidget", "addWidget", "removeWidget", "updateWidgetSettings"]) {
+        expect(calls(m, name), `${name} must not be called on mount`).toHaveLength(0);
+      }
     },
   },
 
@@ -215,7 +323,7 @@ defineTests([
   {
     id: "CT-widget-04",
     title: "task rows: a real href; a link to the task opens it through openTask on a plain click",
-    slots: ["dashboard.widget.triage", "dashboard.widget.my-tasks"],
+    slots: ["dashboard.widget.triage", "dashboard.widget.my-tasks", "dashboard.widget.triage-queue", "dashboard.widget.task-list"],
     run({ mount }) {
       const m = mount<WidgetData>();
       const items = readyValue<{ items: Task[] }>(m.data()).items;
@@ -236,13 +344,13 @@ defineTests([
         expect(clickAndSee(el!, { ctrlKey: true }).prevented, "Ctrl+click is left to the browser").toBe(false);
         expect(calls(m, "openTask")).toEqual([]);
       }
-      if (m.data().id === "my-tasks") expect(taskLinks, "my-tasks rows link to their task").toBe(items.length);
+      if (m.data().id !== "triage") expect(taskLinks, `${m.data().id} rows link to their task`).toBe(items.length);
     },
   },
   {
     id: "CT-widget-05",
-    title: "my-tasks: a role without task.edit gets no inline editors and no quickEdit",
-    slots: ["dashboard.widget.my-tasks"],
+    title: "task widgets: a role without task.edit gets no inline editors and no quickEdit",
+    slots: ["dashboard.widget.my-tasks", "dashboard.widget.triage-queue", "dashboard.widget.task-list"],
     async run({ mount }) {
       const m = mount<WidgetData>({ role: "viewer" });
       await tick();
@@ -253,8 +361,8 @@ defineTests([
   },
   {
     id: "CT-widget-06",
-    title: "my-tasks: a realtime update brings a new result; the list changes without remounting the widget",
-    slots: ["dashboard.widget.my-tasks"],
+    title: "task widgets: a realtime update brings a new result; the list changes without remounting the widget",
+    slots: ["dashboard.widget.my-tasks", "dashboard.widget.triage-queue", "dashboard.widget.task-list"],
     async run({ mount }) {
       const m = mount<WidgetData>();
       const first = readyValue<{ items: Task[] }>(m.data()).items[0]!;

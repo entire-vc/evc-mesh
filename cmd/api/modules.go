@@ -37,6 +37,7 @@ var apiModules = []func(*apiDeps){
 	registerGovernanceRoutes,
 	registerInboxRoutes,
 	registerMemoryRoutes,
+	registerDashboardRoutes,
 	startRecurringScheduler,
 	startMemoryJobs,
 	startSweepers,

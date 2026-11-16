@@ -47,12 +47,57 @@ type IdempotencyStore interface {
 	Claim(ctx context.Context, s domain.IdempotencyScope, hash string) (*domain.IdempotencyRecord, uuid.UUID, error)
 	Complete(ctx context.Context, s domain.IdempotencyScope, token uuid.UUID, status int, contentType string, body []byte) error
 	Release(ctx context.Context, s domain.IdempotencyScope, token uuid.UUID) error
+	// FindReceipt returns the write recorded under a receipt scope, or nil.
+	FindReceipt(ctx context.Context, s domain.IdempotencyReceiptScope, hash string) (*domain.IdempotentWrite, error)
+}
+
+// IdempotencyRequest is the keyed request as the handler sees it: a write
+// route builds its receipt from it (recorded with the written row, task
+// an internal ticket) and, before any check that could refuse a repeat, looks up a
+// write the key already produced.
+type IdempotencyRequest struct {
+	ActorType   domain.ActorType
+	ActorID     uuid.UUID
+	Key         string
+	RequestHash string
+	store       IdempotencyStore
+}
+
+// Receipt is the receipt of this request's write on route and task (uuid.Nil
+// when the write belongs to no task); nil on a nil request.
+func (r *IdempotencyRequest) Receipt(route string, taskID uuid.UUID) *domain.IdempotencyReceipt {
+	if r == nil {
+		return nil
+	}
+	return &domain.IdempotencyReceipt{IdempotencyReceiptScope: r.scope(route, taskID), RequestHash: r.RequestHash}
+}
+
+// Written returns the write this key already produced on route and task, or
+// nil (also on a nil request).
+func (r *IdempotencyRequest) Written(ctx context.Context, route string, taskID uuid.UUID) (*domain.IdempotentWrite, error) {
+	if r == nil {
+		return nil, nil
+	}
+	return r.store.FindReceipt(ctx, r.scope(route, taskID), r.RequestHash)
+}
+
+func (r *IdempotencyRequest) scope(route string, taskID uuid.UUID) domain.IdempotencyReceiptScope {
+	return domain.IdempotencyReceiptScope{ActorType: r.ActorType, ActorID: r.ActorID, Route: route, TaskID: taskID, Key: r.Key}
+}
+
+type idemRequestCtxKey struct{}
+
+// IdempotencyRequestFrom returns the keyed request carried by ctx, or nil
+// when the request has no Idempotency-Key.
+func IdempotencyRequestFrom(ctx context.Context) *IdempotencyRequest {
+	r, _ := ctx.Value(idemRequestCtxKey{}).(*IdempotencyRequest)
+	return r
 }
 
 // Idempotency makes a create route safe to retry. A request with an
 // Idempotency-Key header claims the key in the scope actor + method + path:
 //
-//   - first request: runs, and its answer (status below 500) is stored;
+//   - first request: runs, and its answer (status below 400) is stored;
 //   - repeat with the same body: gets the stored answer, header
 //     Idempotent-Replayed: true, and nothing is written again;
 //   - repeat with another body: 409 idempotency_key_reused;
@@ -60,7 +105,7 @@ type IdempotencyStore interface {
 //     idempotency_request_in_progress with Retry-After.
 //
 // An error returned up the chain is rendered by Echo's error handler and kept
-// like a written answer; a 5xx releases the key so a retry runs again. Without the header the route behaves as before. maxBody caps the
+// like a written answer; a 4xx or 5xx releases the key so a retry runs again. Without the header the route behaves as before. maxBody caps the
 // body read for the fingerprint (the handler applies its own, tighter limits).
 // Mount it after authentication: the scope needs the actor.
 func Idempotency(store IdempotencyStore, maxBody int64) echo.MiddlewareFunc {
@@ -109,6 +154,9 @@ func Idempotency(store IdempotencyStore, maxBody int64) echo.MiddlewareFunc {
 					log.Printf("[idempotency] release %s %s: %v", req.Method, req.URL.Path, err)
 				}
 			}
+			ir := &IdempotencyRequest{ActorType: actorType, ActorID: actorID, Key: key, RequestHash: hash, store: store}
+			c.SetRequest(req.WithContext(context.WithValue(req.Context(), idemRequestCtxKey{}, ir)))
+
 			rw := &idemRecorder{ResponseWriter: c.Response().Writer}
 			c.Response().Writer = rw
 			// A panic answers 500 further up (Recover): free the key for the
@@ -121,21 +169,27 @@ func Idempotency(store IdempotencyStore, maxBody int64) echo.MiddlewareFunc {
 				}
 			}()
 			// An error returned up the chain is rendered here, inside the
-			// recorder, so a 4xx from it is kept and replayed like any other
-			// answer; Echo's error handler then sees a committed response.
+			// recorder, so its status decides like any other answer whether the
+			// key is kept; Echo's error handler then sees a committed response.
 			if herr := next(c); herr != nil {
 				c.Error(herr)
 			}
 			c.Response().Writer = rw.ResponseWriter
 
 			status := c.Response().Status
-			if status >= http.StatusInternalServerError || rw.overflow {
+			// Only a write that happened is replayed. A refusal (4xx) wrote
+			// nothing: keeping it would pin a gate's past verdict to the key,
+			// so a retry after the caller met the gate (a comment before
+			// finish_task) would get the stale 422 for 24 hours instead of
+			// being checked again. The retry re-runs against the current state.
+			if status >= http.StatusBadRequest || rw.overflow {
 				release()
 				return nil
 			}
 			if err := store.Complete(ctx, scope, token, status, c.Response().Header().Get(echo.HeaderContentType), rw.buf.Bytes()); err != nil {
-				// The write happened; only the replay is lost. Leave the claim:
-				// it turns stale and a retry then runs again.
+				// The write happened; only this stored answer is lost. Leave the
+				// claim: it turns stale, and a retry then runs the handler again,
+				// which finds the write by its receipt and replays it.
 				log.Printf("[idempotency] complete %s %s: %v", req.Method, req.URL.Path, err)
 			}
 			return nil

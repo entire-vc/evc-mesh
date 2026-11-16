@@ -37,6 +37,7 @@ func (h *MentionHandler) List(c echo.Context) error {
 		return err
 	}
 
+	filter.Viewer = authorFeedViewer(c, actorID, actorType)
 	kind := mentionKind(actorType)
 	views, err := h.mentionService.List(c.Request().Context(), actorID, kind, filter)
 	if err != nil {
@@ -78,7 +79,7 @@ func (h *MentionHandler) UnseenCount(c echo.Context) error {
 	}
 
 	kind := mentionKind(actorType)
-	count, err := h.mentionService.CountUnseen(c.Request().Context(), actorID, kind, workspaceID)
+	count, err := h.mentionService.CountUnseen(c.Request().Context(), actorID, kind, workspaceID, authorFeedViewer(c, actorID, actorType))
 	if err != nil {
 		return err
 	}

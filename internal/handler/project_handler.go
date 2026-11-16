@@ -156,6 +156,9 @@ func (h *ProjectHandler) Create(c echo.Context) error {
 			"name": "name is required",
 		}))
 	}
+	if err := domain.ValidateIconValue(req.Icon); err != nil {
+		return c.JSON(http.StatusUnprocessableEntity, projectIconError())
+	}
 
 	project := &domain.Project{
 		ID:                  uuid.New(),
@@ -174,6 +177,16 @@ func (h *ProjectHandler) Create(c echo.Context) error {
 
 	project.URL = computeProjectURL(c.Request(), project.ID)
 	return c.JSON(http.StatusCreated, project)
+}
+
+// projectIconError is the 422 body for a project icon outside the picker's
+// formats. Validation map keeps the field name for form-level display.
+func projectIconError() *apierror.Error {
+	e := apierror.ValidationError(map[string]string{
+		"icon": domain.ErrInvalidIconValue.Error() + ", e.g. \"🚀\" or \"icon:rocket\"",
+	})
+	e.Code = http.StatusUnprocessableEntity
+	return e
 }
 
 // GetByID handles GET /projects/:proj_id
@@ -226,7 +239,12 @@ func (h *ProjectHandler) Update(c echo.Context) error {
 	if req.Description != nil {
 		project.Description = *req.Description
 	}
-	if req.Icon != nil {
+	// A legacy free-text icon stays readable and may be sent back unchanged;
+	// only a new value has to pass the shared icon validator.
+	if req.Icon != nil && *req.Icon != project.Icon {
+		if err := domain.ValidateIconValue(*req.Icon); err != nil {
+			return c.JSON(http.StatusUnprocessableEntity, projectIconError())
+		}
 		project.Icon = *req.Icon
 	}
 	if req.Settings != nil {

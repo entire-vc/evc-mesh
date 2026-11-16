@@ -360,8 +360,25 @@ func linkWaitTarget(ctx context.Context, tx *sqlx.Tx, workspaceID uuid.UUID, sco
 		edgeAgent = &w.AgentID
 	}
 	if target.Released {
-		return domain.NewOutcomeError(domain.CodeAlreadyMet, "target_task_id: the target card already meets "+cond)
+		msg, merr := alreadyMetMessage(ctx, tx, w.TaskID, *w.TargetTaskID, cond, w.Criterion)
+		if merr != nil {
+			return merr
+		}
+		return domain.NewOutcomeError(domain.CodeAlreadyMet, msg)
 	}
+	criterion := ""
+	if w.Criterion != nil {
+		criterion = *w.Criterion
+	}
+	// A wait without a criterion keeps the one an existing edge of the same
+	// condition already names. A changed condition or criterion is a new
+	// question for the edge: its evidence no longer answers it (the same rule
+	// as the dependency update).
+	const keptCriterion = `CASE WHEN EXCLUDED.criterion = '' AND task_dependencies.condition IS NOT DISTINCT FROM EXCLUDED.condition
+		    THEN task_dependencies.criterion ELSE EXCLUDED.criterion END`
+	const edgeChanged = `task_dependencies.condition IS DISTINCT FROM EXCLUDED.condition
+		    OR task_dependencies.criterion IS DISTINCT FROM ` + keptCriterion + `
+		    OR task_dependencies.dependency_type <> 'blocks'`
 	// Ownership: a new edge belongs to this wait. On a conflict the edge passes
 	// to this wait only from an earlier wait of the same agent on the same card;
 	// an edge with no owner (a person's, a lead's, an older one) or another
@@ -374,18 +391,16 @@ func linkWaitTarget(ctx context.Context, tx *sqlx.Tx, workspaceID uuid.UUID, sco
 		Inserted   bool      `db:"inserted"`
 		Owned      bool      `db:"owned"`
 	}
-	err = tx.GetContext(ctx, &edge, `INSERT INTO task_dependencies (id, task_id, depends_on_task_id, dependency_type, created_at, condition, wait_agent_id)
-		VALUES ($1, $2, $3, 'blocks', now(), $4, $5)
+	err = tx.GetContext(ctx, &edge, `INSERT INTO task_dependencies (id, task_id, depends_on_task_id, dependency_type, created_at, condition, wait_agent_id, criterion)
+		VALUES ($1, $2, $3, 'blocks', now(), $4, $5, $7)
 		ON CONFLICT (task_id, depends_on_task_id) DO UPDATE SET dependency_type = 'blocks',
-		condition = EXCLUDED.condition, wait_agent_id = EXCLUDED.wait_agent_id,
-		evidence_status = CASE WHEN task_dependencies.condition IS DISTINCT FROM EXCLUDED.condition
-		    OR task_dependencies.dependency_type <> 'blocks' THEN 'revoked' ELSE task_dependencies.evidence_status END,
-		generation = task_dependencies.generation + CASE WHEN task_dependencies.condition IS DISTINCT FROM EXCLUDED.condition
-		    OR task_dependencies.dependency_type <> 'blocks' THEN 1 ELSE 0 END
+		condition = EXCLUDED.condition, wait_agent_id = EXCLUDED.wait_agent_id, criterion = `+keptCriterion+`,
+		evidence_status = CASE WHEN `+edgeChanged+` THEN 'revoked' ELSE task_dependencies.evidence_status END,
+		generation = task_dependencies.generation + CASE WHEN `+edgeChanged+` THEN 1 ELSE 0 END
 		RETURNING id, generation, (xmax = 0) AS inserted,
 		    (xmax = 0 OR EXISTS (SELECT 1 FROM task_waits ow WHERE ow.id = task_dependencies.owner_wait_id
 		        AND ow.task_id = task_dependencies.task_id AND ow.agent_id = $6)) AS owned`,
-		uuid.New(), w.TaskID, *w.TargetTaskID, cond, edgeAgent, w.AgentID)
+		uuid.New(), w.TaskID, *w.TargetTaskID, cond, edgeAgent, w.AgentID, criterion)
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && pqErr.Constraint == "completion_cycle" {
 		return domain.NewOutcomeError(domain.CodeInvalidTarget, "target_task_id: waiting on this card would close a dependency cycle")
@@ -395,6 +410,58 @@ func linkWaitTarget(ctx context.Context, tx *sqlx.Tx, workspaceID uuid.UUID, sco
 	}
 	w.DependencyID, w.DependencyGeneration, w.DependencyOwned = &edge.ID, &edge.Generation, &edge.Owned
 	return nil
+}
+
+// alreadyMetMessage explains an already_met card wait: the target's final
+// status and its category, who moved it there and when (the latest status
+// change in its activity, card_wait_target_closure — the same snapshot a met
+// card wait keeps), for an evidence-only condition whether the named
+// result was recorded, and what to do instead of waiting.
+//
+// Evidence answers only the result it was recorded for: the edge's condition
+// must be the requested one and its criterion the effective one, which is the
+// requested criterion or, when none is given, the one the edge already names
+// (the same keep rule as the edge upsert). Evidence for another criterion or
+// condition does not name the result this wait asks for.
+func alreadyMetMessage(ctx context.Context, tx *sqlx.Tx, source, target uuid.UUID, cond string, criterion *string) (string, error) {
+	requested := ""
+	if criterion != nil {
+		requested = *criterion
+	}
+	var row struct {
+		Status   string     `db:"status"`
+		Category string     `db:"category"`
+		Closer   *string    `db:"closer"`
+		At       *time.Time `db:"at"`
+		Evidence bool       `db:"evidence"`
+	}
+	err := tx.GetContext(ctx, &row, `SELECT c.status, c.category, c.closed_by AS closer, c.closed_at AS at,
+		       EXISTS (SELECT 1 FROM task_dependencies d WHERE d.task_id = $2 AND d.depends_on_task_id = $1
+		               AND d.condition = $3 AND ($4 = '' OR d.criterion = $4)
+		               AND `+domain.DependencySatisfiedSQL("d")+`) AS evidence
+		  FROM card_wait_target_closure($1) c`, target, source, cond, requested)
+	if err != nil {
+		return "", err
+	}
+	closer := "an unrecorded actor"
+	if row.Closer != nil && *row.Closer != "" {
+		closer = *row.Closer
+	}
+	at := "at an unrecorded time"
+	if row.At != nil {
+		at = "at " + row.At.UTC().Format(time.RFC3339)
+	}
+	msg := fmt.Sprintf("target_task_id: the target card already meets %s: it is in %q (%s), moved there by %s %s",
+		cond, row.Status, row.Category, closer, at)
+	if domain.DependencyCondition(cond).EvidenceOnly() {
+		if row.Evidence {
+			msg += "; the named result is recorded as evidence on this card's edge"
+		} else {
+			msg += "; it closed without evidence of the named result"
+		}
+	}
+	return msg + ". Read its closing comment; if the result you need is not there, ask its owner (ask_agent) " +
+		"or wait on the card that will produce it.", nil
 }
 
 // declareWaitTx is TaskWaitRepo.Declare inside the command's transaction.
@@ -423,10 +490,10 @@ func declareWaitWithIDTx(ctx context.Context, tx *sqlx.Tx, w *domain.TaskWait) e
 			 event_ref, evidence_source, evidence_why, until_at_offset, evidence_status,
 			 after_sha, after_pipeline_id, after_status, registration, registration_ref,
 			 addressee, question, server_observed,
-			 id, dependency_id, dependency_generation, dependency_owned)
+			 id, dependency_id, dependency_generation, dependency_owned, criterion)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
 			$18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
-			$31, $32, $33, $34)
+			$31, $32, $33, $34, $35)
 		RETURNING id, created_at`,
 		w.TaskID, w.AgentID, w.SessionID, w.Kind, w.TargetTaskID, w.TargetCondition,
 		w.VCSLinkID, w.Provider, w.ProjectPath, w.MRIID, w.PipelineID, w.RequiredJobs,
@@ -434,7 +501,7 @@ func declareWaitWithIDTx(ctx context.Context, tx *sqlx.Tx, w *domain.TaskWait) e
 		w.EventRef, w.Source, w.Why, w.UntilAtOffset, w.EvidenceStatus,
 		w.AfterSHA, w.AfterPipelineID, w.AfterStatus, w.Registration, w.RegistrationRef,
 		w.Addressee, w.Question, w.ServerObserved,
-		w.ID, w.DependencyID, w.DependencyGeneration, w.DependencyOwned,
+		w.ID, w.DependencyID, w.DependencyGeneration, w.DependencyOwned, w.Criterion,
 	).Scan(&w.ID, &w.CreatedAt)
 }
 

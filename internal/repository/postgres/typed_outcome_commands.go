@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -62,7 +63,11 @@ func writeTaskFinish(ctx context.Context, tx *sqlx.Tx, taskID uuid.UUID, f *doma
 		return err
 	}
 	f.Outcome.TaskID = taskID
-	return appendOutcomeTx(ctx, tx, f.Outcome)
+	if err := appendOutcomeTx(ctx, tx, f.Outcome); err != nil {
+		return err
+	}
+	// A replay answers with the outcome and the closing comment written here.
+	return recordReceiptTx(ctx, tx, f.Receipt, f.Outcome.ID, domain.CommandResult{Outcome: f.Outcome, CommentID: f.Comment.ID})
 }
 
 // lockCommandTask locks the card and refuses a command from an agent other
@@ -157,20 +162,21 @@ func (r *TaskRepo) AskAgent(ctx context.Context, in domain.AskAgentWrite) (*doma
 		return nil, err
 	}
 
+	if rerr := refuseAnsweredRepeat(ctx, tx, in, to); rerr != nil {
+		return nil, rerr
+	}
+
+	// An open request with the same normalized question is reused; the unique
+	// index keys on lower(btrim(question)) only, so a spacing variant would
+	// otherwise slip past ON CONFLICT and file a second open request.
 	var req domain.DecisionRequest
-	reused := false
-	err = tx.GetContext(ctx, &req, `
-		INSERT INTO decision_requests (task_id, from_agent_id, to_agent_id, question)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (task_id, from_agent_id, to_agent_id, md5(lower(btrim(question))))
-		   WHERE state = 'open' DO NOTHING
-		RETURNING `+decisionRequestCols, in.TaskID, in.Caller, to.ID, in.Question)
+	reused := true
+	err = tx.GetContext(ctx, &req, `SELECT `+decisionRequestCols+` FROM decision_requests
+		 WHERE task_id = $1 AND from_agent_id = $2 AND to_agent_id = $3 AND state = 'open'
+		   AND `+normalizedQuestionSQL("question")+` = `+normalizedQuestionSQL("$4")+`
+		 ORDER BY created_at LIMIT 1`, in.TaskID, in.Caller, to.ID, in.Question)
 	if errors.Is(err, sql.ErrNoRows) {
-		reused = true
-		err = tx.GetContext(ctx, &req, `SELECT `+decisionRequestCols+` FROM decision_requests
-			 WHERE task_id = $1 AND from_agent_id = $2 AND to_agent_id = $3
-			   AND md5(lower(btrim(question))) = md5(lower(btrim($4))) AND state = 'open'`,
-			in.TaskID, in.Caller, to.ID, in.Question)
+		reused, err = insertDecisionRequest(ctx, tx, &req, in, to)
 	}
 	if err != nil {
 		return nil, err
@@ -204,6 +210,65 @@ func (r *TaskRepo) AskAgent(ctx context.Context, in domain.AskAgentWrite) (*doma
 	}
 	return &domain.AskAgentResult{Request: &req, Reused: reused, To: *to, Wait: wait, Outcome: outcome,
 		CommentID: comment.ID, Released: released}, nil
+}
+
+// insertDecisionRequest files a new open request; a concurrent identical one
+// (same unique key) is returned instead, reused.
+func insertDecisionRequest(ctx context.Context, tx *sqlx.Tx, req *domain.DecisionRequest,
+	in domain.AskAgentWrite, to *domain.AgentRef) (bool, error) {
+	err := tx.GetContext(ctx, req, `
+		INSERT INTO decision_requests (task_id, from_agent_id, to_agent_id, question)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (task_id, from_agent_id, to_agent_id, md5(lower(btrim(question))))
+		   WHERE state = 'open' DO NOTHING
+		RETURNING `+decisionRequestCols, in.TaskID, in.Caller, to.ID, in.Question)
+	if !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	return true, tx.GetContext(ctx, req, `SELECT `+decisionRequestCols+` FROM decision_requests
+		 WHERE task_id = $1 AND from_agent_id = $2 AND to_agent_id = $3
+		   AND md5(lower(btrim(question))) = md5(lower(btrim($4))) AND state = 'open'`,
+		in.TaskID, in.Caller, to.ID, in.Question)
+}
+
+// normalizedQuestionSQL folds case and every run of whitespace, so a repeat
+// that differs only in spacing or case reads as the same question.
+func normalizedQuestionSQL(expr string) string {
+	return `lower(btrim(regexp_replace(` + expr + `, '\s+', ' ', 'g')))`
+}
+
+// refuseAnsweredRepeat refuses (already_answered) a question this card
+// already asked the same addressee and got answered, even when an identical
+// request is also open (a leftover from before this refusal): asking it again
+// would file or re-wait a request, reopen the addressee's request card and
+// wake it for an answer that already exists.
+func refuseAnsweredRepeat(ctx context.Context, tx *sqlx.Tx, in domain.AskAgentWrite, to *domain.AgentRef) error {
+	var prev struct {
+		ID              uuid.UUID  `db:"id"`
+		AnswerCommentID *uuid.UUID `db:"answer_comment_id"`
+		AnsweredAt      *time.Time `db:"answered_at"`
+	}
+	err := tx.GetContext(ctx, &prev, `
+		SELECT r.id, r.answer_comment_id, r.answered_at FROM decision_requests r
+		 WHERE r.task_id = $1 AND r.from_agent_id = $2 AND r.to_agent_id = $3 AND r.state = 'answered'
+		   AND `+normalizedQuestionSQL("r.question")+` = `+normalizedQuestionSQL("$4")+`
+		 ORDER BY r.answered_at DESC NULLS LAST LIMIT 1`, in.TaskID, in.Caller, to.ID, in.Question)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	comment, at := "(none recorded)", "(time not recorded)"
+	if prev.AnswerCommentID != nil {
+		comment = prev.AnswerCommentID.String()
+	}
+	if prev.AnsweredAt != nil {
+		at = prev.AnsweredAt.UTC().Format(time.RFC3339)
+	}
+	return domain.NewOutcomeError(domain.CodeAlreadyAnswered, fmt.Sprintf(
+		"%s already answered this question on this card: request %s, answer comment %s, answered at %s. "+
+			"Read that answer; a new question must say what changed.", to.Name, prev.ID, comment, at))
 }
 
 // AnswerDecision answers an open request: the answer comment on the asking

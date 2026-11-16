@@ -203,6 +203,7 @@ services:
       MESH_RATE_LIMIT_AUTH_RPM: ${MESH_RATE_LIMIT_AUTH_RPM:-5}
       MESH_RATE_LIMIT_REFRESH_RPM: ${MESH_RATE_LIMIT_REFRESH_RPM:-60}
       MESH_RATE_LIMIT_API_RPM: ${MESH_RATE_LIMIT_API_RPM:-600}
+      MESH_RATE_LIMIT_API_RPM_OVERRIDES: ${MESH_RATE_LIMIT_API_RPM_OVERRIDES:-}
       MESH_RATE_LIMIT_OAUTH_TOKEN_RPM: ${MESH_RATE_LIMIT_OAUTH_TOKEN_RPM:-}
       # Client-IP trust boundary, shared with the nginx service below (same
       # variable, same meaning: extra CIDRs, beyond loopback/private, whose
@@ -254,6 +255,12 @@ services:
       # Empty (the generated path, and the default) interpolates to "" and
       # puts nothing in `docker inspect`.
       MESH_METRICS_TOKEN: ${MESH_METRICS_TOKEN:-}
+      # OpenID Connect provider (off while the key path is empty). Put the
+      # PEM files in ./volumes/secrets and point at /run/mesh-secrets/<file>;
+      # see docs/self-hosting.md "OpenID Connect provider".
+      MESH_OIDC_SIGNING_KEY_FILE: ${MESH_OIDC_SIGNING_KEY_FILE:-}
+      MESH_OIDC_PUBLISHED_KEY_FILES: ${MESH_OIDC_PUBLISHED_KEY_FILES:-}
+      MESH_OIDC_CLIENTS: ${MESH_OIDC_CLIENTS:-}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8005/health"]
       interval: 15s

@@ -16,7 +16,7 @@
  * already enforces for the Mentions tab).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 
 const mockedNavigate = vi.fn();
@@ -33,6 +33,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useNotificationStore } from "@/stores/notification";
 import { useProjectStore } from "@/stores/project";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useWebSocketStore } from "@/stores/websocket";
 import type { DocumentMention, Mention, Notification, Project, User } from "@/types";
 
 const mockedApi = api as unknown as ReturnType<typeof vi.fn>;
@@ -185,6 +186,26 @@ describe("NotificationBell — merged @-mention inbox", () => {
     );
   });
 
+  it("a live mention raises the badge: the frame as the hub sends it (empty type, name in data.event)", async () => {
+    mockBackend({ notifications: [], tasks: [TASK_MENTION], docs: [] });
+    renderBell();
+    await waitFor(() => expect(screen.getByRole("button", { name: /1 unread/ })).toBeInTheDocument());
+    const frame = { type: "", channel: "ws:user:u1", data: { event: "mention.badge", workspace_id: "ws-1", task_id: "task-2" }, timestamp: "1" };
+    act(() => useWebSocketStore.setState({ lastEvent: frame as never }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /2 unread/ })).toBeInTheDocument());
+  });
+
+  it("a mention of another workspace does not raise this workspace's badge", async () => {
+    mockBackend({ notifications: [], tasks: [TASK_MENTION], docs: [] });
+    renderBell();
+    await waitFor(() => expect(screen.getByRole("button", { name: /1 unread/ })).toBeInTheDocument());
+    const frame = { type: "", channel: "ws:user:u1", data: { event: "mention.badge", workspace_id: "ws-other" }, timestamp: "1" };
+    act(() => useWebSocketStore.setState({ lastEvent: frame as never }));
+    // positive control in the same render: an event of this workspace still counts
+    act(() => useWebSocketStore.setState({ lastEvent: { ...frame, data: { event: "mention.badge", workspace_id: "ws-1" } } as never }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /2 unread/ })).toBeInTheDocument());
+  });
+
   it("shows a document mention too, even though document.mentioned never reaches /notifications", async () => {
     mockBackend({ notifications: [], tasks: [], docs: [DOC_MENTION] });
     renderBell();
@@ -231,7 +252,7 @@ describe("NotificationBell — merged @-mention inbox", () => {
     );
     // Carries `?comment=` now, so task-panel.tsx can focus and scroll to the
     // specific comment the mention names, same as the document branch always
-    // has (see #8d097e67).
+    // has (see an internal ticket).
     expect(mockedNavigate).toHaveBeenCalledWith("/w/acme/p/demo/t/task-1?comment=c-task-1");
   });
 

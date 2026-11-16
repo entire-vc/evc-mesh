@@ -20,7 +20,8 @@ import (
 // agree with the Go predicate domain.TaskDependency.Released and with the
 // expected column below: the stored edge (condition_satisfied), the graph
 // (unfinished_blockers), the card counter (open_dependency_count) and the
-// reaper's HasOpenBlockedDependents.
+// reaper's HasOpenBlockedDependents, and the server-observed card wait that
+// resolve_server_card_waits releases.
 func TestDependencyConditionState_SQLReadersAgreeWithGoPredicate(t *testing.T) {
 	type blockerCase struct {
 		name     string
@@ -129,6 +130,18 @@ func TestDependencyConditionState_SQLReadersAgreeWithGoPredicate(t *testing.T) {
 		}
 	}
 
+	// Third reader: a server-observed card wait on the same edge, resolved by
+	// the plpgsql twin resolve_server_card_waits.
+	agent := uuid.New()
+	f.exec(t, `INSERT INTO agents(id,workspace_id,name,slug,api_key_hash,api_key_prefix) VALUES($1,$2,'parity',$3,'parity','parity')`, agent, f.ws, agent.String())
+	waitOf := map[uuid.UUID]uuid.UUID{}
+	for _, p := range probes {
+		id := uuid.New()
+		f.exec(t, `INSERT INTO task_waits(id,task_id,agent_id,kind,target_task_id,target_condition,server_observed) VALUES($1,$2,$3,'card',$4,$5,true)`, id, p.dep, agent, p.blk, string(p.cond))
+		f.exec(t, `SELECT resolve_server_card_waits($1)`, p.blk)
+		waitOf[p.dep] = id
+	}
+
 	snapshot := f.read(t, uuid.Nil)
 	for _, p := range probes {
 		p := p
@@ -141,6 +154,7 @@ func TestDependencyConditionState_SQLReadersAgreeWithGoPredicate(t *testing.T) {
 
 			goState := domain.BlockerState{Category: domain.StatusCategory(p.blocker.category), IsShipped: p.blocker.shipped, HasDeployment: p.blocker.deployed == deployedMeta && p.blocker.linkType == "" && !p.blocker.held}
 			assert.Equal(t, want, edges[0].Released(goState), "Go predicate")
+			assert.Equal(t, edges[0].ReleasedByOf(goState), edges[0].ReleasedBy, "released_by: SQL twin equals the Go one")
 
 			wantOpen := 1
 			if want {
@@ -154,6 +168,17 @@ func TestDependencyConditionState_SQLReadersAgreeWithGoPredicate(t *testing.T) {
 			deployedSet, err := repo.DeployedTasks(ctx, []uuid.UUID{p.blk})
 			require.NoError(t, err)
 			assert.Equal(t, p.blocker.deployed == deployedMeta && p.blocker.linkType == "" && !p.blocker.held, deployedSet[p.blk], "DeployedTasks")
+
+			var wait struct {
+				Met        bool    `db:"met"`
+				ReleasedBy *string `db:"released_by"`
+			}
+			require.NoError(t, f.db.Get(&wait, `SELECT resolved_at IS NOT NULL AND resolution='met' AS met, released_by FROM task_waits WHERE id=$1`, waitOf[p.dep]))
+			assert.Equal(t, want, wait.Met, "server-observed wait (resolve_server_card_waits)")
+			if want {
+				require.NotNil(t, wait.ReleasedBy)
+				assert.Equal(t, edges[0].ReleasedBy, *wait.ReleasedBy, "released_by: wait equals the edge")
+			}
 		})
 	}
 
@@ -239,6 +264,7 @@ func TestDependencyConditionState_ReaperAndEvidenceStillRelease(t *testing.T) {
 	edges, err := repo.ListByTask(ctx, evidenced)
 	require.NoError(t, err)
 	assert.True(t, edges[0].ConditionSatisfied, "evidence still releases a typed edge whatever the blocker")
+	assert.Equal(t, domain.ReleasedByEvidence, edges[0].ReleasedBy)
 
 	f.exec(t, `DELETE FROM task_dependencies WHERE task_id=$1`, waiting)
 	open, err = repo.HasOpenBlockedDependents(ctx, blocker)

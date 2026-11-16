@@ -74,6 +74,7 @@ func TestContract_RefExt_InstallTokenAndSubscriptions(t *testing.T) {
 
 	require.NoError(t, r.hs.Run(ctx, r.p, r.ws, r.settings()))
 	assert.True(t, r.ext.Installed(r.ws.String()), "the reference service accepted Mesh's signed install")
+	assert.Equal(t, r.settings(), r.ext.Settings(r.ws.String()), "install carried the declared workspace settings")
 	require.NotEmpty(t, r.tokens.current)
 	assert.Equal(t, r.tokens.current, r.ext.Token(r.ws.String()), "and the token Mesh delivered")
 	require.NotNil(t, r.tokens.deliveredAt, "Mesh counted the delivery as confirmed")
@@ -160,4 +161,17 @@ func TestContract_RefExt_InstallCode(t *testing.T) {
 	r.secrets.vals[InstallCodeName(refextID)] = "BIND-9K4M"
 	r.secrets.mu.Unlock()
 	require.NoError(t, r.hs.Ensure(ctx, r.p, r.ws, r.settings()))
+}
+
+// The reference widget's iframe screen comes from widgets[].render.frame, not external.ui.
+func TestContract_RefExt_WidgetFrame(t *testing.T) {
+	m := refextManifest(t)
+	settings := map[string]any{"service_url": "https://ref.example.com"}
+	f, err := FrameForWidget(m, settings, "status")
+	require.NoError(t, err)
+	require.Equal(t, "https://ref.example.com/mesh/ui/widget", f.URL)
+	_, err = FrameForWidget(m, settings, "missing")
+	require.ErrorIs(t, err, ErrUnknownWidget)
+	_, err = FrameFor(m, settings, SlotDashboardWidget)
+	require.ErrorIs(t, err, ErrNoScreen)
 }

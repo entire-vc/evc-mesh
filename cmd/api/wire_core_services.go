@@ -260,6 +260,7 @@ func wireCoreServices(deps *apiDeps) {
 	// of AgentService gets.
 	oauthRepo := postgres.NewOAuthRepo(db)
 	oauthService := service.NewOAuthService(oauthRepo, agentService, userRepo, workspaceRepo, workspaceMemberRepo, agentWorkspaceGrantRepo, projectMemberRepo)
+	configureOIDC(cfg, oauthService)
 	chatSessionService := service.NewChatSessionService(postgres.NewChatSessionTokenRepo(db), agentService, workspaceRepo, workspaceMemberRepo, projectRepo, projectMemberRepo, agentWorkspaceGrantRepo)
 
 	// Agent notification service for push mechanisms (callback_url, SSE, long-poll).
@@ -467,6 +468,7 @@ func wireCoreServices(deps *apiDeps) {
 		service.WithAgentNotifyService(agentNotifySvc),
 		service.WithRulesConfigService(rulesService),
 		service.WithContextCacheInvalidator(ctxCacheSvc),
+		service.WithReassignReleasesCheckout(cfg.Checkout.ReassignReleases),
 		service.WithNotificationService(notificationService),
 		service.WithProjectMemberRepoTask(projectMemberRepo),
 		service.WithTaskAgentRepo(agentRepo),

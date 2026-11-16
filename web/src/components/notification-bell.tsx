@@ -135,8 +135,8 @@ export function NotificationBell() {
 
   // Live badge: the server publishes mention.badge (comment_service.go,
   // document_comment_mentions.go) on the user's personal channel for both
-  // task and document mentions; mention.created is accepted too — see the
-  // identical comment in sidebar.tsx, same reasoning applies here.
+  // task and document mentions, name in data.event — see the comment in
+  // sidebar.tsx, same reasoning applies here.
   useEffect(() => {
     if (!user?.id) return;
     const channel = `ws:user:${user.id}`;
@@ -145,7 +145,9 @@ export function NotificationBell() {
   }, [user?.id, wsSubscribe, wsUnsubscribe]);
 
   useEffect(() => {
-    if (lastEvent?.type === "mention.badge" || lastEvent?.type === "mention.created") {
+    // The personal channel carries every workspace's mentions; the badge counts
+    // the current one. Keyed on lastEvent only: a workspace switch is no event.
+    if (lastEvent?.data?.event === "mention.badge" && lastEvent.data.workspace_id === currentWorkspace?.id) {
       setMentionCount((n) => n + 1);
     }
   }, [lastEvent]);

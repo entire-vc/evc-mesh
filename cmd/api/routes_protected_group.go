@@ -79,6 +79,7 @@ func registerProtectedGroup(deps *apiDeps) {
 	api.Use(mw.RateLimit(mw.RateLimitConfig{
 		Enabled:     cfg.RateLimit.Enabled,
 		RPM:         cfg.RateLimit.APIRPM,
+		Overrides:   cfg.RateLimit.APIRPMOverrides,
 		KeyFunc:     mw.RateLimitKeyByActor,
 		RedisClient: sharedRedis,
 		Name:        "api",

@@ -43,6 +43,8 @@ type fakeVCSLinkRepo struct {
 	upsertErr error
 	// upsertErrFor fails Upsert only for links of this task.
 	upsertErrFor uuid.UUID
+	// listByTaskErrFor fails ListByTask only for this task.
+	listByTaskErrFor uuid.UUID
 }
 
 func newFakeVCSLinkRepo() *fakeVCSLinkRepo {
@@ -97,6 +99,9 @@ func (r *fakeVCSLinkRepo) Delete(_ context.Context, id uuid.UUID) error {
 func (r *fakeVCSLinkRepo) ListByTask(_ context.Context, taskID uuid.UUID) ([]domain.VCSLink, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.listByTaskErrFor != uuid.Nil && taskID == r.listByTaskErrFor {
+		return nil, fmt.Errorf("list links of task %s failed", taskID)
+	}
 	var out []domain.VCSLink
 	for _, l := range r.links {
 		if l.TaskID == taskID {
@@ -240,9 +245,6 @@ func (r *fakeTaskRepo) CountByStatusCategory(context.Context, uuid.UUID) (map[do
 	return nil, nil
 }
 func (r *fakeTaskRepo) ListByStatusCategory(context.Context, uuid.UUID, domain.StatusCategory, pagination.Params) (*pagination.Page[domain.Task], error) {
-	return nil, nil
-}
-func (r *fakeTaskRepo) ListTriageQueue(context.Context, uuid.UUID, pagination.Params) (*pagination.Page[domain.Task], error) {
 	return nil, nil
 }
 func (r *fakeTaskRepo) ListAllBacklogTasks(context.Context) ([]domain.Task, error) {

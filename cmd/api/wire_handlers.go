@@ -145,6 +145,7 @@ func wireHandlers(deps *apiDeps) {
 	agentHandler.SetRepositoryAccessReader(agentRepositoryAccessRepo)
 	agentRepositoryAccessHandler := handler.NewAgentRepositoryAccessHandler(agentRepositoryAccessRepo)
 	eventHandler := handler.NewEventHandler(eventBusService)
+	workspaceEventHandler := handler.NewWorkspaceEventHandler(postgres.NewWorkspaceEventFeedRepo(db))
 	activityHandler := handler.NewActivityHandler(activityLogService)
 	secretHandler := handler.NewSecretHandler(secretService, activityLogService)
 	customFieldHandler := handler.NewCustomFieldHandler(customFieldService)
@@ -291,6 +292,7 @@ func wireHandlers(deps *apiDeps) {
 	deps.httpShutdownCh = httpShutdownCh
 	deps.agentRepositoryAccessHandler = agentRepositoryAccessHandler
 	deps.eventHandler = eventHandler
+	deps.workspaceEventHandler = workspaceEventHandler
 	deps.activityHandler = activityHandler
 	deps.secretHandler = secretHandler
 	deps.customFieldHandler = customFieldHandler

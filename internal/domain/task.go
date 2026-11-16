@@ -457,6 +457,11 @@ type TaskDependency struct {
 	// TaskDependency.Released): the evidence half OR the blocker's own state
 	// for the condition. Always true for a non-blocks edge.
 	ConditionSatisfied bool `json:"condition_satisfied" db:"condition_satisfied"`
+	// ReleasedBy says what released a released blocks edge, computed on read
+	// by DependencyReleasedBySQL (Go twin: TaskDependency.ReleasedByOf):
+	// evidence, closure_without_evidence (an evidence-only condition released
+	// only because the blocker closed) or target_state; "" while it holds.
+	ReleasedBy string `json:"released_by,omitempty" db:"released_by"`
 	// OwnerWaitID is the typed card wait that owns this edge (NULL: a person,
 	// a lead or an older edge; nobody's to remove by owner). OwnerAgentID is
 	// that wait's agent. Any change of the edge outside a typed wait clears it.
@@ -478,6 +483,20 @@ const (
 	DependencyConditionShipped           DependencyCondition = "shipped"
 	DependencyConditionDeployed          DependencyCondition = "deployed"
 	DependencyConditionAccepted          DependencyCondition = "accepted"
+)
+
+// What released a blocks edge (TaskDependency.ReleasedBy, TaskWait.ReleasedBy).
+const (
+	// ReleasedByEvidence: trusted evidence on the edge released it.
+	ReleasedByEvidence = "evidence"
+	// ReleasedByClosureWithoutEvidence: an evidence-only condition
+	// (access_ready, contract_ready, artifact_published) released only
+	// because the blocker reached done or cancelled; the named result was
+	// never recorded.
+	ReleasedByClosureWithoutEvidence = "closure_without_evidence"
+	// ReleasedByTargetState: the blocker's own state meets the condition
+	// (task_done, shipped, deployed, accepted).
+	ReleasedByTargetState = "target_state"
 )
 
 // Valid reports whether c is a known condition.
@@ -564,6 +583,30 @@ func (d TaskDependency) Released(b BlockerState) bool {
 	}
 }
 
+// ReleasedByOf says what released the edge for blocker state b
+// (ReleasedBy* constants), "" while the edge still holds.
+// DependencyReleasedBySQL must stay equivalent.
+func (d TaskDependency) ReleasedByOf(b BlockerState) string {
+	if d.DependencyType != DependencyTypeBlocks || !d.Released(b) {
+		return ""
+	}
+	if d.EvidenceSatisfied() {
+		return ReleasedByEvidence
+	}
+	if d.Condition.EvidenceOnly() {
+		return ReleasedByClosureWithoutEvidence
+	}
+	return ReleasedByTargetState
+}
+
+// EvidenceOnly reports a condition only evidence meets by itself; the
+// blocker's closure releases it as a fallback (access_ready, contract_ready,
+// artifact_published).
+func (c DependencyCondition) EvidenceOnly() bool {
+	return c == DependencyConditionAccessReady || c == DependencyConditionContractReady ||
+		c == DependencyConditionArtifactPublished
+}
+
 // DependencyReleasedSQL is the SQL twin of TaskDependency.Released for the
 // task_dependencies row aliased edge, whose blocker is the tasks row aliased
 // blocker with status category expression category (for example "bts.category").
@@ -577,6 +620,16 @@ func DependencyReleasedSQL(edge, blocker, category string) string {
 		" WHEN 'deployed' THEN (" + blocker + ".is_shipped OR " + deployed + ")" +
 		" WHEN 'accepted' THEN " + category + " = 'done'" +
 		" ELSE " + category + " IN ('done', 'cancelled') END), false)"
+}
+
+// DependencyReleasedBySQL is the SQL twin of TaskDependency.ReleasedByOf over
+// the same aliases as DependencyReleasedSQL: an empty string while the edge holds.
+func DependencyReleasedBySQL(edge, blocker, category string) string {
+	return "(CASE WHEN " + edge + ".dependency_type <> 'blocks' OR NOT " + DependencyReleasedSQL(edge, blocker, category) + " THEN ''" +
+		" WHEN COALESCE(" + DependencySatisfiedSQL(edge) + ", false) THEN '" + ReleasedByEvidence + "'" +
+		" WHEN " + edge + ".condition IN ('" + string(DependencyConditionAccessReady) + "', '" + string(DependencyConditionContractReady) +
+		"', '" + string(DependencyConditionArtifactPublished) + "') THEN '" + ReleasedByClosureWithoutEvidence + "'" +
+		" ELSE '" + ReleasedByTargetState + "' END)"
 }
 
 // DeploymentReleasesSQL is the SQL form of BlockerState.HasDeployment for the

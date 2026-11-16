@@ -78,11 +78,40 @@ describe("AgentRepositoryAccess", () => {
       return Promise.reject(new Error("unexpected"));
     });
     render(<AgentRepositoryAccess agent={agent(null)} canEdit />);
-    fireEvent.change(await screen.findByLabelText("Project path"), { target: { value: "g/other" } });
+    // Wait for the authoritative GET to land before editing; otherwise the load can overwrite the change under CI load.
+    await waitFor(() => expect((screen.getByLabelText("Project path") as HTMLInputElement).value).toBe("g/p"));
+    fireEvent.change(screen.getByLabelText("Project path"), { target: { value: "g/other" } });
     fireEvent.click(screen.getByText("Save"));
     await waitFor(() => expect(screen.getByTestId("repository-access-conflict")).toBeTruthy());
     expect((screen.getByLabelText("Project path") as HTMLInputElement).value).toBe("g/other");
     expect(screen.getByText("Reload from server")).toBeTruthy();
+  });
+
+  it("409 banner shows the server's current revision and list (re-read), keeps the unsaved input", async () => {
+    const other = { provider: "gitlab", host: "gitlab.com", project_path: "g/someone-else" };
+    let gets = 0;
+    vi.mocked(api).mockImplementation((path: string, opts?: { method?: string }) => {
+      if (path.includes("/history")) return Promise.resolve({ items: [] });
+      if (opts?.method === "PUT") return Promise.reject(Object.assign(new Error("conflict"), { status: 409 }));
+      if (path === "/api/v1/agents/a1") {
+        gets += 1;
+        // first GET (open): rev 3; after the parallel write: rev 4
+        return Promise.resolve(agent(gets === 1 ? { revision: 3, repositories: [repo] } : { revision: 4, repositories: [repo, other] }));
+      }
+      return Promise.reject(new Error("unexpected"));
+    });
+    render(<AgentRepositoryAccess agent={agent(null)} canEdit />);
+    // Wait for the authoritative GET to land before editing; otherwise the load can overwrite the change under CI load.
+    await waitFor(() => expect((screen.getByLabelText("Project path") as HTMLInputElement).value).toBe("g/p"));
+    fireEvent.change(screen.getByLabelText("Project path"), { target: { value: "g/mine" } });
+    fireEvent.click(screen.getByText("Save"));
+    const banner = await screen.findByTestId("repository-access-conflict");
+    await waitFor(() => {
+      expect(banner.textContent).toContain("4");
+      expect(banner.textContent).toContain("g/someone-else");
+    });
+    expect(banner.textContent).not.toContain("revision 3");
+    expect((screen.getByLabelText("Project path") as HTMLInputElement).value).toBe("g/mine");
   });
 
   it("is read-only without edit rights", async () => {
@@ -120,7 +149,9 @@ describe("AgentRepositoryAccess", () => {
     mockApi(undefined, { revision: 1, repositories: [repo] });
     useAgentStore.setState({ agents: [agent()] });
     render(<Live />);
-    fireEvent.change(await screen.findByLabelText("Project path"), { target: { value: "g/mine" } });
+    // Wait for the authoritative GET to land before editing; otherwise the load can overwrite the change under CI load.
+    await waitFor(() => expect((screen.getByLabelText("Project path") as HTMLInputElement).value).toBe("g/p"));
+    fireEvent.change(screen.getByLabelText("Project path"), { target: { value: "g/mine" } });
     // a concurrent change arrives through the store while the draft is dirty
     act(() => useAgentStore.setState({ agents: [agent({ revision: 2, repositories: [{ ...repo, project_path: "g/theirs" }] })] }));
     expect((screen.getByLabelText("Project path") as HTMLInputElement).value).toBe("g/mine");
@@ -202,7 +233,9 @@ describe("AgentRepositoryAccess", () => {
     });
     useAgentStore.setState({ agents: [agent(null)] });
     const first = render(<Live />);
-    fireEvent.change(await screen.findByLabelText("Project path"), { target: { value: "g/saved" } });
+    // Wait for the authoritative GET to land before editing; otherwise the load can overwrite the change under CI load.
+    await waitFor(() => expect((screen.getByLabelText("Project path") as HTMLInputElement).value).toBe("g/p"));
+    fireEvent.change(screen.getByLabelText("Project path"), { target: { value: "g/saved" } });
     fireEvent.click(screen.getByText("Save"));
     await waitFor(() => expect(screen.getByTestId("repository-access-revision").textContent).toContain("2"));
     first.unmount();

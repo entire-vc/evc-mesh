@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/google/uuid"
@@ -64,10 +66,10 @@ func (h *TrDocumentHandler) Get(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("relay_url must use relay:// scheme"))
 	}
 
-	slug, docPath := splitRelayURL(rawRelayURL)
+	host, docPath := splitRelayURL(rawRelayURL)
 	// `..` in a path handed to another service is a traversal attempt whichever
 	// way that service resolves it. Refused here rather than forwarded.
-	if strings.Contains(slug+"/"+docPath, "..") {
+	if strings.Contains(host+"/"+docPath, "..") {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid relay_url path"))
 	}
 	if docPath == "" {
@@ -88,13 +90,15 @@ func (h *TrDocumentHandler) Get(c echo.Context) error {
 	}
 
 	var settings domain.TeamRelaySettings
-	if jsonErr := json.Unmarshal(pi.Settings, &settings); jsonErr != nil || settings.ShareSlug == "" {
+	if jsonErr := json.Unmarshal(pi.Settings, &settings); jsonErr != nil {
 		return c.JSON(http.StatusOK, map[string]any{"available": false})
 	}
 	// A link to somebody else's share is not something this project's key may
 	// read, and asking anyway would be using our credential to fetch content the
-	// caller has no relationship with.
-	if slug != settings.ShareSlug {
+	// caller has no relationship with. The link names this project's share by
+	// its slug (older links, published shares) or by its ID (shares that were
+	// never published have no slug).
+	if !linkIsOwnShare(host, settings) {
 		return c.JSON(http.StatusOK, map[string]any{"available": false})
 	}
 
@@ -113,7 +117,7 @@ func (h *TrDocumentHandler) Get(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"available": false})
 	}
 
-	doc, err := teamrelay.FetchDocument(c.Request().Context(), relayURL, settings.ShareSlug, docPath, pi.AgentKey)
+	doc, err := readShareDocument(c.Request().Context(), relayURL, settings, docPath, pi.AgentKey)
 	if err != nil {
 		// The relay was unreachable, or refused the key. Reported as unavailable
 		// rather than as a 500: nothing on OUR side is broken, and the page has
@@ -134,14 +138,46 @@ func (h *TrDocumentHandler) Get(c echo.Context) error {
 	})
 }
 
-// splitRelayURL takes `relay://<slug>/<path...>` apart. A URL with no path
+// linkIsOwnShare reports whether a relay:// host names this integration's
+// share: its slug (case-sensitive, as before) or its UUID (any case).
+func linkIsOwnShare(host string, settings domain.TeamRelaySettings) bool {
+	if settings.ShareSlug != "" && host == settings.ShareSlug {
+		return true
+	}
+	return settings.ShareID != "" && strings.EqualFold(host, settings.ShareID)
+}
+
+// readShareDocument reads a document by share ID through the sync protocol
+// (the same route the Docs mount reads with, so it works for a share that was
+// never published). The slug route is the fallback for older integrations
+// whose key is write-only: the ID route requires the literal read scope.
+// A nil document with a nil error means "not found".
+func readShareDocument(ctx context.Context, relayURL string, settings domain.TeamRelaySettings, docPath, agentKey string) (*teamrelay.Document, error) {
+	if settings.ShareID == "" {
+		return teamrelay.FetchDocument(ctx, relayURL, settings.ShareSlug, docPath, agentKey)
+	}
+	synced, err := teamrelay.SyncDownload(ctx, relayURL, settings.ShareID, docPath, agentKey)
+	if err == nil {
+		return &teamrelay.Document{Path: docPath, Name: path.Base(docPath), Content: string(synced.Content)}, nil
+	}
+	if settings.ShareSlug != "" {
+		log.Printf("[tr-document] read by share id %s failed (%v); falling back to slug %s", settings.ShareID, err, settings.ShareSlug)
+		return teamrelay.FetchDocument(ctx, relayURL, settings.ShareSlug, docPath, agentKey)
+	}
+	if errors.Is(err, teamrelay.ErrNotFound) {
+		return nil, nil
+	}
+	return nil, err
+}
+
+// splitRelayURL takes `relay://<slug-or-share-id>/<path...>` apart. A URL with no path
 // yields an empty path, which the caller reads as "this points at a folder".
-func splitRelayURL(relayURL string) (slug, docPath string) {
+func splitRelayURL(relayURL string) (host, docPath string) {
 	without := strings.TrimPrefix(relayURL, "relay://")
 	parts := strings.SplitN(without, "/", 2)
-	slug = parts[0]
+	host = parts[0]
 	if len(parts) == 2 {
 		docPath = parts[1]
 	}
-	return slug, docPath
+	return host, docPath
 }

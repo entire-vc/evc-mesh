@@ -24,6 +24,9 @@ import (
 func wireStorage(deps *apiDeps) {
 	// 1. Load configuration from environment.
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Refusing to start: %v", err)
+	}
 
 	// Say out loud, once, whether integration credentials are actually being
 	// encrypted at rest. Previously the only signal was a log line emitted

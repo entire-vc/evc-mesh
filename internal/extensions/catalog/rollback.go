@@ -73,6 +73,11 @@ func (in *Installer) rollbackPlan(ctx context.Context, row *domain.InstalledExte
 	if row.Blocked {
 		return nil, apiErr(http.StatusConflict, CodeBlocked, "blocked by the catalog: "+row.BlockedReason)
 	}
+	if _, running, rerr := in.runnerFloor(ctx, row); rerr != nil {
+		return nil, rerr
+	} else if running != "" && semverNewer(running, snap.Version) {
+		return nil, runnerAhead("rolling back", snap.Version, running)
+	}
 
 	old, err := repoinstall.ValidateManifest(snap.Manifest)
 	if err != nil {

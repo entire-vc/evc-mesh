@@ -54,12 +54,13 @@ func (r *CommentRepo) Create(ctx context.Context, comment *domain.Comment) error
 		comment.AuthorID, comment.AuthorType, comment.Body,
 		metadata, comment.SystemCode, comment.SystemParams, comment.IsInternal,
 		comment.CreatedAt, comment.UpdatedAt}
-	if comment.Fence == nil {
+	if comment.Fence == nil && comment.Receipt == nil {
 		_, err := r.db.ExecContext(ctx, q, args...)
 		return err
 	}
 	// A fenced comment commits only while the caller holds the named lock,
-	// checked under the task row lock in the insert's own transaction.
+	// checked under the task row lock in the insert's own transaction; a keyed
+	// one records its receipt in that transaction too.
 	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
@@ -70,6 +71,17 @@ func (r *CommentRepo) Create(ctx context.Context, comment *domain.Comment) error
 	}
 	if _, err := tx.ExecContext(ctx, q, args...); err != nil {
 		return err
+	}
+	if comment.Receipt != nil {
+		// The replay answers like the create does: with the enriched row
+		// (author_name), read in the insert's own transaction.
+		var snapshot domain.Comment
+		if err := tx.GetContext(ctx, &snapshot, commentEnrichedSelect+` FROM comments c WHERE c.id = $1`, comment.ID); err != nil {
+			return err
+		}
+		if err := recordReceiptTx(ctx, tx, comment.Receipt, comment.ID, &snapshot); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -226,7 +238,25 @@ func nextCommentCursor(rows []domain.CommentView, limit int) *domain.CommentCurs
 	return &domain.CommentCursor{CreatedAt: last.CreatedAt, ID: last.CommentID}
 }
 
-// ListByAuthor returns the caller's own comments across workspaces, newest first.
+// authorFeedViewerCond is the per-row project access rule for a list that
+// spans workspaces (GET /me/comments), where no request workspace role exists
+// to resolve owner/admin up front: the row's project must pass
+// projectViewerCond, or, for a human viewer, the user must be owner/admin of
+// the row's workspace (the bypass UserMayAccessProject grants). An agent
+// passes only through its own project memberships.
+func authorFeedViewerCond(v domain.ProjectViewer, args []interface{}) (cond string, outArgs []interface{}) {
+	cond, args = projectViewerCond(v, args)
+	if v.UserID == nil || v.AllProjects || v.ExtensionConnectionID != nil {
+		return cond, args
+	}
+	args = append(args, *v.UserID)
+	n := len(args)
+	return fmt.Sprintf(`(%s OR EXISTS (SELECT 1 FROM workspaces w WHERE w.id = p.workspace_id AND w.deleted_at IS NULL AND (w.owner_id = $%d OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = w.id AND wm.user_id = $%d AND wm.role IN ('owner','admin')))))`,
+		cond, n, n), args
+}
+
+// ListByAuthor returns the caller's own comments across workspaces, newest
+// first, limited to projects filter.Viewer may still open.
 func (r *CommentRepo) ListByAuthor(ctx context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) ([]domain.CommentView, *domain.CommentCursor, error) {
 	limit := filter.Limit
 	if limit <= 0 {
@@ -247,6 +277,9 @@ func (r *CommentRepo) ListByAuthor(ctx context.Context, authorID uuid.UUID, filt
 		args = append(args, *filter.ProjectID)
 		where += fmt.Sprintf(` AND t.project_id = $%d`, len(args))
 	}
+	var viewer string
+	viewer, args = authorFeedViewerCond(filter.Viewer, args)
+	where += ` AND ` + viewer
 	where, args = cursorWhere(where, args, filter)
 
 	args = append(args, limit)
@@ -263,7 +296,8 @@ func (r *CommentRepo) ListByAuthor(ctx context.Context, authorID uuid.UUID, filt
 	return rows, nextCommentCursor(rows, limit), nil
 }
 
-// ListRecentByWorkspace returns workspace-wide recent comments, newest first.
+// ListRecentByWorkspace returns workspace-wide recent comments, newest first,
+// limited to projects filter.Viewer may open.
 func (r *CommentRepo) ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter repository.CommentViewFilter) ([]domain.CommentView, *domain.CommentCursor, error) {
 	limit := filter.Limit
 	if limit <= 0 {
@@ -278,6 +312,9 @@ func (r *CommentRepo) ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID,
 	if !filter.IncludeInternal {
 		where += ` AND c.is_internal = false`
 	}
+	var viewer string
+	viewer, args = projectViewerCond(filter.Viewer, args)
+	where += ` AND ` + viewer
 	where, args = cursorWhere(where, args, filter)
 
 	args = append(args, limit)

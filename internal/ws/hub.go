@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -116,12 +117,28 @@ func (h *Hub) fanOut(msg *redis.Message) {
 
 	// Derive workspace channel from Redis channel (ws:slug -> workspace:slug).
 	wsChannel := msg.Channel // e.g. "ws:my-workspace"
+	personal := strings.HasPrefix(msg.Channel, personalChannelPrefix)
+
+	// A frame about a project carries that project's data (task.created puts the
+	// title in Changes, task.updated the changed fields), so it reaches only the
+	// clients that may open the project — through ws:<slug> and project:<id>
+	// alike. Events with no project are workspace-wide and pass as before.
+	// EventBusMessage.ProjectID is a plain uuid, so "no project" arrives as the
+	// nil uuid; an unparseable id is treated as a project nobody may see.
+	var projectID uuid.UUID
+	projectScoped := false
 	projectChannel := ""
 	// A personal channel (ws:user:<id>) goes only to its exact subscriber. Its
 	// payload may still carry a project_id (chat threads, mentions); falling back
-	// to project subscribers would hand one user's events to every member.
-	if event.ProjectID != "" && !strings.HasPrefix(msg.Channel, personalChannelPrefix) {
-		projectChannel = projectChannelPrefix + event.ProjectID
+	// to project subscribers would hand one user's events to every member. Its
+	// addressee is decided by the channel name, so the project rule is not applied.
+	if event.ProjectID != "" && !personal {
+		parsed, perr := uuid.Parse(event.ProjectID)
+		if perr != nil || parsed != uuid.Nil {
+			projectScoped = true
+			projectID = parsed // uuid.Nil on a parse error: MayReceiveProject refuses it
+			projectChannel = projectChannelPrefix + event.ProjectID
+		}
 	}
 
 	h.clients.Range(func(_, value any) bool {
@@ -133,13 +150,17 @@ func (h *Hub) fanOut(msg *redis.Message) {
 		subscribedToProject := projectChannel != "" && client.Subscriptions[projectChannel]
 		client.mu.RUnlock()
 
-		if subscribedToWS || subscribedToProject {
-			select {
-			case client.Send <- outBytes:
-			default:
-				// Client send buffer is full; drop the message.
-				log.Printf("[ws-hub] Dropping message for slow client %s", client.ID)
-			}
+		if !subscribedToWS && !subscribedToProject {
+			return true
+		}
+		if projectScoped && !client.MayReceiveProject(projectID) {
+			return true
+		}
+		select {
+		case client.Send <- outBytes:
+		default:
+			// Client send buffer is full; drop the message.
+			log.Printf("[ws-hub] Dropping message for slow client %s", client.ID)
 		}
 
 		return true

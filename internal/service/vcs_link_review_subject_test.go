@@ -348,3 +348,101 @@ func TestPatchMetadata_RoleReviewLetsDoneGatePass(t *testing.T) {
 		})
 	}
 }
+
+// role=review on a link means "the subject this card signs off",
+// not "this card is a review card". A card that also owns its own MR/PR is an
+// implementation card; the merge of the reference MR must not close it — its
+// own links drive its status (applyPRTransitionPolicy).
+const ownMRURL = "https://gitlab.example.invalid/entire-vc/evc-keep/-/merge_requests/129"
+
+func TestHandleMR_Merged_ReviewSubjectKeepsCardWithOwnMR(t *testing.T) {
+	for _, cat := range []domain.StatusCategory{domain.StatusCategoryTodo, domain.StatusCategoryInProgress, domain.StatusCategoryReview} {
+		t.Run(string(cat), func(t *testing.T) {
+			h := newHarness(t)
+			work := h.makeTask(t, domain.StatusCategoryInProgress)
+			impl := h.makeTask(t, cat)
+			h.bindReview(impl, ownMRURL, `{}`)
+			h.bindReview(impl, reviewSubjectURL, `{"role":"review"}`)
+
+			_, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), mergedMREvent(101, work.ID, "MESH-"+work.ID.String()))
+			require.NoError(t, err)
+
+			assert.Equal(t, h.statusIDs[cat], h.taskRepo.tasks[impl.ID].StatusID, "card owning its own MR must keep its status")
+			links, _ := h.repo.ListByTask(context.Background(), impl.ID)
+			require.Len(t, links, 2)
+			for _, l := range links {
+				if l.IsReviewSubject() {
+					assert.Equal(t, domain.VCSLinkStatusMerged, l.Status, "the reference link records the merge")
+				} else {
+					assert.Equal(t, domain.VCSLinkStatusOpen, l.Status, "own MR untouched")
+				}
+			}
+			require.NotEmpty(t, h.commentSvc.created)
+			last := h.commentSvc.created[len(h.commentSvc.created)-1]
+			assert.Equal(t, impl.ID, last.TaskID)
+			assert.Contains(t, last.Body, "reference MR !101 merged")
+			assert.Contains(t, last.Body, "owns its own MR/PR "+ownMRURL)
+			assert.Contains(t, last.Body, "status unchanged")
+		})
+	}
+}
+
+// Links that are not the card's own work do not make it an implementation
+// card: a pure review card with a mention or a second review subject still
+// closes on the merge.
+func TestHandleMR_Merged_ReviewCardWithMentionOrSecondSubjectStillCloses(t *testing.T) {
+	for name, meta := range map[string]string{
+		"relates_to mention":    `{"relation":"relates_to"}`,
+		"second review subject": `{"role":"review"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			work := h.makeTask(t, domain.StatusCategoryInProgress)
+			review := h.makeTask(t, domain.StatusCategoryReview)
+			h.bindReview(review, ownMRURL, meta)
+			h.bindReview(review, reviewSubjectURL, `{"role":"review"}`)
+
+			_, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), mergedMREvent(101, work.ID, "MESH-"+work.ID.String()))
+			require.NoError(t, err)
+
+			assert.Equal(t, h.statusIDs[domain.StatusCategoryDone], h.taskRepo.tasks[review.ID].StatusID)
+		})
+	}
+}
+
+// When the card's own links cannot be read, it is not known whether the card
+// is an implementation card: fail closed, keep the status, post nothing.
+func TestHandleMR_Merged_ReviewSubjectOwnLinksReadFailureKeepsCard(t *testing.T) {
+	h := newHarness(t)
+	work := h.makeTask(t, domain.StatusCategoryInProgress)
+	review := h.makeTask(t, domain.StatusCategoryReview)
+	h.bindReview(review, reviewSubjectURL, `{"role":"review"}`)
+	h.repo.listByTaskErrFor = review.ID
+
+	_, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), mergedMREvent(101, work.ID, "MESH-"+work.ID.String()))
+	require.NoError(t, err)
+
+	assert.Equal(t, h.statusIDs[domain.StatusCategoryReview], h.taskRepo.tasks[review.ID].StatusID)
+	for _, c := range h.commentSvc.created {
+		assert.NotEqual(t, review.ID, c.TaskID, "no comment on a card whose links could not be read")
+	}
+}
+
+// The card's own MR still moves it by the ordinary rules once the reference
+// it reviewed has merged.
+func TestHandleMR_Merged_OwnMRAfterReviewSubjectMovesCard(t *testing.T) {
+	h := newHarness(t)
+	work := h.makeTask(t, domain.StatusCategoryInProgress)
+	impl := h.makeTask(t, domain.StatusCategoryInProgress)
+	h.bindReview(impl, "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/129", `{}`)
+	h.bindReview(impl, reviewSubjectURL, `{"role":"review"}`)
+
+	_, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), mergedMREvent(101, work.ID, "MESH-"+work.ID.String()))
+	require.NoError(t, err)
+	assert.Equal(t, h.statusIDs[domain.StatusCategoryInProgress], h.taskRepo.tasks[impl.ID].StatusID)
+
+	_, err = h.svc.HandleGitLabMergeRequestEvent(context.Background(), mergedMREvent(129, impl.ID, "MESH-"+impl.ID.String()))
+	require.NoError(t, err)
+
+	assert.Equal(t, h.statusIDs[domain.StatusCategoryReview], h.taskRepo.tasks[impl.ID].StatusID, "own merge moves in_progress→review as before")
+}

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { render, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
@@ -147,5 +149,48 @@ describe("content that already exists in production", () => {
 
     expect(c.querySelector("img")).toBeNull();
     expect(c.textContent).toContain("onerror");
+  });
+});
+
+/**
+ * A long fenced-code line wraps in a description or a comment the same way it
+ * wraps in a document.
+ *
+ * The document viewer and the editors are ProseMirror views, and ProseMirror's
+ * stylesheet gives `.ProseMirror pre` `white-space: pre-wrap`. MarkdownView
+ * renders the same nodes with no .ProseMirror root around them, so that rule
+ * never reached a description or a comment and their <pre> stayed `pre`: a
+ * 600-character line was cut at 393px behind a sideways scroll. jsdom applies
+ * no stylesheet, so the two halves of the contract are pinned separately: the
+ * rendered <pre> sits under .mesh-doc-prose and outside any .ProseMirror, and
+ * the .mesh-doc-prose stylesheet itself makes <pre> wrap. The pixel half
+ * (client width == scroll width at 393 on a saved description and comment) is
+ * e2e/markdown-view-code-wrap.spec.ts.
+ */
+describe("fenced code in a description or a comment", () => {
+  const LONG = "const_long_code_".repeat(40);
+
+  it("renders under .mesh-doc-prose, where ProseMirror's own pre rule cannot reach", async () => {
+    const c = await renderMd("```ts\n" + LONG + "\n```");
+    const pre = c.querySelector("pre");
+
+    expect(pre?.textContent).toContain(LONG);
+    expect(pre?.closest(".mesh-doc-prose")).not.toBeNull();
+    // The reason the rule has to live on .mesh-doc-prose: there is no
+    // .ProseMirror ancestor here to inherit it from.
+    expect(pre?.closest(".ProseMirror")).toBeNull();
+  });
+
+  it("is told to wrap by the .mesh-doc-prose stylesheet itself", () => {
+    const css = readFileSync(
+      resolvePath(process.cwd(), "src/components/doc-editor.css"),
+      "utf8",
+    ).replace(/\/\*[\s\S]*?\*\//g, "");
+    const block = /\.mesh-doc-prose pre\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+
+    expect(block).toMatch(/white-space\s*:\s*pre-wrap/);
+    // And nothing later in the file switches it back for code inside a pre.
+    const codeBlock = /\.mesh-doc-prose pre code\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(codeBlock).not.toMatch(/white-space\s*:\s*(pre|nowrap)\s*;/);
   });
 });

@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"regexp"
 	"slices"
@@ -168,6 +169,9 @@ const (
 	// CodeGateNotArmed: ask_human posted the question but the human gate did
 	// not arm (the comment-text gate is off, or the ask was suppressed).
 	CodeGateNotArmed = "gate_not_armed"
+	// CodeAlreadyAnswered: ask_agent repeats a question the same addressee
+	// already answered on this card; the refusal names that answer.
+	CodeAlreadyAnswered = "already_answered"
 )
 
 // OutcomeError is a refusal the agent sees in the same turn: Code is one of the
@@ -190,6 +194,19 @@ type TaskWait struct {
 	Kind            TaskWaitKind `json:"kind" db:"kind"`
 	TargetTaskID    *uuid.UUID   `json:"target_task_id,omitempty" db:"target_task_id"`
 	TargetCondition *string      `json:"target_condition,omitempty" db:"target_condition"`
+	// Criterion names the result a card wait with target_condition
+	// artifact_published waits for; the edge stores the same text and the
+	// producer's evidence must name it.
+	Criterion *string `json:"criterion,omitempty" db:"criterion"`
+	// ReleasedBy is set when a card wait is met: what released its edge
+	// (ReleasedBy* constants). closure_without_evidence means the target
+	// closed but nobody recorded the named result.
+	ReleasedBy *string `json:"released_by,omitempty" db:"released_by"`
+	// The target's status name and its latest status change (who, when) at
+	// the moment a card wait was met; absent on every other wait.
+	TargetStatus   *string    `json:"target_status,omitempty" db:"target_status"`
+	TargetClosedBy *string    `json:"target_closed_by,omitempty" db:"target_closed_by"`
+	TargetClosedAt *time.Time `json:"target_closed_at,omitempty" db:"target_closed_at"`
 	// ServerObserved waits are resolved by Mesh; the runner reads only the
 	// receipt on this source card, including after target deletion or revoke.
 	ServerObserved bool `json:"server_observed,omitempty" db:"server_observed"`
@@ -242,6 +259,9 @@ type TaskWait struct {
 // MaxResolveCauseLen bounds the cause the resolver gives.
 const MaxResolveCauseLen = 200
 
+// MaxWaitCriterionLen bounds a card wait's criterion (characters).
+const MaxWaitCriterionLen = 500
+
 // ResolvableByRoute reports whether the resolve route may set r: every
 // resolution but superseded, which only a newer wait of the same agent sets.
 func (r WaitResolution) ResolvableByRoute() bool {
@@ -261,6 +281,9 @@ func (w *TaskWait) Validate(now time.Time) error {
 	// whole text in the card comment and the wait row stores its first
 	// MaxWaitNoteLen characters (the column's char_length bound).
 	w.Note = ClipRunes(w.Note, MaxWaitNoteLen)
+	if w.Criterion != nil && w.Kind != TaskWaitCard {
+		return outcomeErr(CodeInvalidTarget, "criterion is a field of an on=card wait")
+	}
 	switch w.Kind {
 	case TaskWaitCard:
 		if w.TargetTaskID == nil {
@@ -271,6 +294,15 @@ func (w *TaskWait) Validate(now time.Time) error {
 		}
 		if w.TargetCondition != nil && !DependencyCondition(*w.TargetCondition).Valid() {
 			return outcomeErr(CodeInvalidTarget, "unknown target_condition")
+		}
+		if w.Criterion != nil {
+			if w.TargetCondition == nil || DependencyCondition(*w.TargetCondition) != DependencyConditionArtifactPublished {
+				return outcomeErr(CodeInvalidTarget, "criterion is read only with target_condition=artifact_published: "+
+					"it names the result the target card must publish")
+			}
+			if strings.TrimSpace(*w.Criterion) == "" || utf8.RuneCountInString(*w.Criterion) > MaxWaitCriterionLen {
+				return outcomeErr(CodeInvalidTarget, fmt.Sprintf("criterion must be 1 to %d characters", MaxWaitCriterionLen))
+			}
 		}
 	case TaskWaitMR:
 		if emptyStr(w.Provider) || emptyStr(w.ProjectPath) || w.MRIID == nil {

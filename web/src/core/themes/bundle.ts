@@ -7,9 +7,11 @@
 //   export default {
 //     views: { "board.card": { contract: "^1", view: Component }, ... },
 //   }
-import type { SlotView, WidgetDescriptor } from "@/core/slots/types";
+import type { ComponentType } from "react";
+import type { SlotView, WidgetDescriptorV1 as WidgetDescriptor } from "@/core/slots/types";
+import { clearThemeIcons, registerThemeIcons } from "@/core/icons/theme-icons";
 import { registerSlotView, unregisterThemeViews } from "@/core/slots/registry";
-import { coreSlotVersion, satisfies } from "./versions";
+import { LEGACY_MAJORS, coreSlotVersion, satisfies } from "./versions";
 import { reportThemeIssue } from "./log";
 
 export interface BundleView {
@@ -21,6 +23,10 @@ export interface ViewsBundle {
   views: Record<string, BundleView>;
   /** Descriptors of the theme's own dashboard widgets; each has a `dashboard.widget.<name>` view in `views`. */
   widgets?: WidgetDescriptor[];
+  /** The theme's own icons: kebab-case name -> component. Drawn for `icon:<name>`; may redraw a core icon of the same name. */
+  icons?: Record<string, ComponentType<{ className?: string }>>;
+  /** Search keywords for `icons`, per name: `{ en: "rocket launch", ru: "ракета" }`. */
+  icons_meta?: Record<string, { en?: string | string[]; ru?: string | string[] }>;
 }
 
 export const BUNDLE_TIMEOUT_MS = 10_000;
@@ -138,13 +144,20 @@ export function registerThemeViews(themeId: string, bundle: ViewsBundle): string
   // A bundle that replaces an earlier one of the same theme must not leave the old views behind
   // for slots the new one omits or no longer satisfies.
   unregisterThemeViews(themeId);
+  clearThemeIcons(themeId);
+  if (bundle.icons) {
+    const { dropped } = registerThemeIcons(themeId, bundle.icons, bundle.icons_meta);
+    for (const name of dropped) {
+      reportThemeIssue({ code: "bundle-invalid", theme: themeId, message: `icon "${name}" skipped: name must match [a-z0-9-]{1,40} and the value must be a component` });
+    }
+  }
   for (const [slot, entry] of Object.entries(bundle.views)) {
     const core = coreSlotVersion(slot);
     if (!core) {
       reportThemeIssue({ code: "contract-mismatch", theme: themeId, slot, message: "slot is not in this core's catalog" });
     } else if (typeof entry?.view !== "function" || typeof entry.contract !== "string") {
       reportThemeIssue({ code: "bundle-invalid", theme: themeId, slot, message: "view entry needs {contract, view}" });
-    } else if (!satisfies(entry.contract, core)) {
+    } else if (!satisfies(entry.contract, core, LEGACY_MAJORS[slot] ?? [])) {
       reportThemeIssue({
         code: "contract-mismatch",
         theme: themeId,

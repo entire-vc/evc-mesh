@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
+import { useLocation, useNavigate, useParams } from "react-router";
 import { useTranslation } from "react-i18next";
 import { useTaskStore } from "@/stores/task";
 import { useProjectStore } from "@/stores/project";
@@ -10,8 +10,6 @@ export function TaskDetailPage() {
   const { wsSlug, projectSlug, taskId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const [searchParams] = useSearchParams();
-  const fromTriage = searchParams.get("from") === "triage";
   const { projects } = useProjectStore();
   const currentTask = useTaskStore((state) =>
     taskId ? state.tasksById[taskId] ?? null : null,
@@ -19,7 +17,7 @@ export function TaskDetailPage() {
 
   // The URL's :projectSlug is never checked against the task it names — a
   // task loads identically under any project's slug in this workspace
-  // (#b2be54e8). There's no separate "wrong project" state to render; once
+  //. There's no separate "wrong project" state to render; once
   // the task and this workspace's projects have both loaded, replace a
   // mismatched slug with the task's real one so stale or hand-edited links
   // self-heal onto the canonical URL instead of silently lying about which
@@ -38,10 +36,6 @@ export function TaskDetailPage() {
   }, [wsSlug, taskId, projectSlug, currentTask, projects, location.search, navigate]);
 
   const handleBack = () => {
-    if (fromTriage) {
-      navigate(`/w/${wsSlug}/triage`);
-      return;
-    }
     const taskProject = projects.find((p) => p.id === currentTask?.project_id);
     const resolvedSlug = taskProject?.slug;
     if (resolvedSlug) {
@@ -57,7 +51,7 @@ export function TaskDetailPage() {
     <TaskPanel
       taskId={taskId ?? null}
       onBack={handleBack}
-      backLabel={fromTriage ? t("panel.header.backToTriage") : t("panel.header.backToBoard")}
+      backLabel={t("panel.header.backToBoard")}
       className="h-full"
     />
   );

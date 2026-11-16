@@ -112,8 +112,12 @@ export function DatePickerPopover({
   }, [open]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === "Escape") setOpen(false);
-  }, []);
+    if (e.key === "Escape" && open) {
+      // Close the popover only; a surrounding dialog stays open.
+      e.stopPropagation();
+      setOpen(false);
+    }
+  }, [open]);
 
   const handleDateChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {

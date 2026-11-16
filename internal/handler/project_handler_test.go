@@ -42,7 +42,7 @@ func TestProjectHandler_Create_Success(t *testing.T) {
 
 	h, e := setupProjectTest(mockSvc)
 
-	body := `{"name":"My Project","slug":"my-proj","description":"A cool project","icon":"rocket"}`
+	body := `{"name":"My Project","slug":"my-proj","description":"A cool project","icon":"icon:rocket"}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
@@ -150,7 +150,7 @@ func TestProjectHandler_GetByID_Found(t *testing.T) {
 }
 
 // TestProjectHandler_GetByID_URLRespectsForwardedHeaders pins the same rule
-// computeTaskURL established (#fe507dc9): behind Caddy the URL must carry the
+// computeTaskURL established: behind Caddy the URL must carry the
 // public scheme/host from X-Forwarded-Proto/X-Forwarded-Host, never the
 // internal one the request actually arrived on.
 func TestProjectHandler_GetByID_URLRespectsForwardedHeaders(t *testing.T) {
@@ -241,7 +241,7 @@ func TestProjectHandler_List_Success(t *testing.T) {
 	assert.Len(t, page.Items, 2)
 	// Every item of a list response carries its own deep-link — a field the
 	// handler computes on some paths only reads as absent on the others
-	// (the #fc032545 lesson on tasks).
+	// (the an internal ticket lesson on tasks).
 	for _, p := range page.Items {
 		assert.Equal(t, "http://example.com/p/"+p.ID.String(), p.URL)
 	}
@@ -275,7 +275,7 @@ func TestProjectHandler_List_WithFilters(t *testing.T) {
 
 // --- TestProjectHandler_Delete ---
 
-// #ddd219f4: DELETE used to call Archive and answer 204, so "Delete" in the UI
+// DELETE used to call Archive and answer 204, so "Delete" in the UI
 // left the project alive. It must reach the real delete and never the archive.
 func TestProjectHandler_Delete_DeletesNotArchives(t *testing.T) {
 	projID := uuid.New()
@@ -422,12 +422,12 @@ func TestProjectHandler_Update_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "New Name", result.Name)
 	// Update answers with the deep-link too, not just Get/List/Create — a
-	// field some paths compute and others skip reads as absent (#fc032545).
+	// field some paths compute and others skip reads as absent.
 	// httptest's default host is example.com over plain http.
 	assert.Equal(t, "http://example.com/p/"+projID.String(), result.URL)
 }
 
-// #ddd219f4: PATCH {is_archived:true} was answered 200 with nothing changed,
+// PATCH {is_archived:true} was answered 200 with nothing changed,
 // because the field wasn't in the request contract. It must be refused loudly.
 func TestProjectHandler_Update_IsArchivedRefused(t *testing.T) {
 	mockSvc := &MockProjectService{

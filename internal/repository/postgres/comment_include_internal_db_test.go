@@ -15,7 +15,7 @@ import (
 
 // No //go:build integration tag — same convention as comment_cursor_tiebreak_db_test.go.
 //
-// Covers #a7ae4c76 pt.2: ListRecentByWorkspace hardcoded `c.is_internal =
+// Covers an internal ticket pt.2: ListRecentByWorkspace hardcoded `c.is_internal =
 // false` with no way to see internal comments, which makes the workspace
 // feed structurally blind to any orphaned-mention sweep over internal
 // comments. Fix: CommentViewFilter.IncludeInternal (default false, so
@@ -52,7 +52,7 @@ func TestCommentRepo_ListRecentByWorkspace_IncludeInternal(t *testing.T) {
 	internal2 := createCursorTestCommentWithVisibility(t, commentRepo, fx.taskID, author, "internal 2", base.Add(3*time.Second), true)
 
 	t.Run("default (no filter set) excludes internal — unchanged behavior", func(t *testing.T) {
-		rows, _, err := commentRepo.ListRecentByWorkspace(ctx, fx.workspaceID, repository.CommentViewFilter{Limit: 200})
+		rows, _, err := commentRepo.ListRecentByWorkspace(ctx, fx.workspaceID, repository.CommentViewFilter{Viewer: domain.AllProjectsViewer(), Limit: 200})
 		require.NoError(t, err)
 		got := commentViewIDs(rows)
 		assert.ElementsMatch(t, []uuid.UUID{external1, external2}, got)
@@ -62,13 +62,13 @@ func TestCommentRepo_ListRecentByWorkspace_IncludeInternal(t *testing.T) {
 	})
 
 	t.Run("IncludeInternal=false is equivalent to unset", func(t *testing.T) {
-		rows, _, err := commentRepo.ListRecentByWorkspace(ctx, fx.workspaceID, repository.CommentViewFilter{Limit: 200, IncludeInternal: false})
+		rows, _, err := commentRepo.ListRecentByWorkspace(ctx, fx.workspaceID, repository.CommentViewFilter{Viewer: domain.AllProjectsViewer(), Limit: 200, IncludeInternal: false})
 		require.NoError(t, err)
 		assert.ElementsMatch(t, []uuid.UUID{external1, external2}, commentViewIDs(rows))
 	})
 
 	t.Run("IncludeInternal=true adds exactly the internal rows, each flagged", func(t *testing.T) {
-		rows, _, err := commentRepo.ListRecentByWorkspace(ctx, fx.workspaceID, repository.CommentViewFilter{Limit: 200, IncludeInternal: true})
+		rows, _, err := commentRepo.ListRecentByWorkspace(ctx, fx.workspaceID, repository.CommentViewFilter{Viewer: domain.AllProjectsViewer(), Limit: 200, IncludeInternal: true})
 		require.NoError(t, err)
 		assert.ElementsMatch(t, []uuid.UUID{external1, external2, internal1, internal2}, commentViewIDs(rows))
 
@@ -98,7 +98,7 @@ func TestCommentRepo_ListByAuthor_IgnoresIncludeInternal(t *testing.T) {
 	external := createCursorTestCommentWithVisibility(t, commentRepo, fx.taskID, author, "external", base, false)
 	createCursorTestCommentWithVisibility(t, commentRepo, fx.taskID, author, "internal", base.Add(time.Second), true)
 
-	rows, _, err := commentRepo.ListByAuthor(ctx, author, repository.CommentViewFilter{Limit: 200, IncludeInternal: true})
+	rows, _, err := commentRepo.ListByAuthor(ctx, author, repository.CommentViewFilter{Viewer: domain.AllProjectsViewer(), Limit: 200, IncludeInternal: true})
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []uuid.UUID{external}, commentViewIDs(rows))
 }

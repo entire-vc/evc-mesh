@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -97,4 +98,70 @@ func (r *IdempotencyRepo) Release(ctx context.Context, s domain.IdempotencyScope
 func (r *IdempotencyRepo) purgeExpired(ctx context.Context) {
 	_, _ = r.db.ExecContext(ctx, `DELETE FROM idempotency_keys WHERE ctid IN
 		(SELECT ctid FROM idempotency_keys WHERE expires_at < now() LIMIT 100)`)
+}
+
+const receiptScopeWhere = `actor_type=$1 AND actor_id=$2 AND route=$3 AND task_id=$4 AND idem_key=$5`
+
+func receiptScopeArgs(s domain.IdempotencyReceiptScope) []any {
+	return []any{string(s.ActorType), s.ActorID, s.Route, s.TaskID, s.Key}
+}
+
+// FindReceipt returns the write recorded under the scope, or nil when there
+// is none. SameRequest compares its fingerprint with hash.
+func (r *IdempotencyRepo) FindReceipt(ctx context.Context, s domain.IdempotencyReceiptScope, hash string) (*domain.IdempotentWrite, error) {
+	return findReceipt(ctx, r.db, s, hash)
+}
+
+func findReceipt(ctx context.Context, q sqlx.QueryerContext, s domain.IdempotencyReceiptScope, hash string) (*domain.IdempotentWrite, error) {
+	var row struct {
+		domain.IdempotentWrite
+		RequestHash string `db:"request_hash"`
+	}
+	err := sqlx.GetContext(ctx, q, &row, `SELECT resource_id, response, created_at, request_hash
+		FROM idempotency_receipts WHERE `+receiptScopeWhere, receiptScopeArgs(s)...)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("idempotency receipt read: %w", err)
+	}
+	w := row.IdempotentWrite
+	w.SameRequest = row.RequestHash == hash
+	return &w, nil
+}
+
+// recordReceiptTx records the receipt of a keyed write in the write's own
+// transaction, after the written row: resourceID names the row, response is
+// the snapshot a replay answers with. Without a receipt it does nothing.
+//
+// If the scope already holds a receipt (a concurrent repeat committed first:
+// the insert waits on the unique key until that transaction ends), it returns
+// that write as a *domain.IdempotentWrite; the caller's transaction must then
+// roll back, so the second write leaves no row.
+func recordReceiptTx(ctx context.Context, tx *sqlx.Tx, rc *domain.IdempotencyReceipt, resourceID uuid.UUID, response any) error {
+	if rc == nil {
+		return nil
+	}
+	body, err := json.Marshal(response)
+	if err != nil {
+		return fmt.Errorf("idempotency receipt snapshot: %w", err)
+	}
+	args := append(receiptScopeArgs(rc.IdempotencyReceiptScope), rc.RequestHash, resourceID, body)
+	res, err := tx.ExecContext(ctx, `INSERT INTO idempotency_receipts
+		(actor_type, actor_id, route, task_id, idem_key, request_hash, resource_id, response)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`, args...)
+	if err != nil {
+		return fmt.Errorf("idempotency receipt: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		return nil
+	}
+	existing, err := findReceipt(ctx, tx, rc.IdempotencyReceiptScope, rc.RequestHash)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return fmt.Errorf("idempotency receipt: key %q conflicted but no receipt is readable", rc.Key)
+	}
+	return existing
 }

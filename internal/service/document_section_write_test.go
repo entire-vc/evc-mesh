@@ -36,9 +36,29 @@ func TestDocumentService_Update_SectionBodyAsWholeDocumentIsRefused(t *testing.T
 	var apiErr *apierror.Error
 	require.ErrorAs(t, err, &apiErr)
 	assert.Equal(t, 409, apiErr.StatusCode())
+	// Its own code: the editor offers "save the shorter version" on it, which it
+	// must never offer on a version conflict or a plain failure.
+	assert.Equal(t, apierror.CodeDocumentShrinkRefused, apiErr.ErrorCode)
 	for _, lost := range []string{"1. Section 1", "2. Section 2", "3. Section 3", "5. Section 5"} {
 		assert.Contains(t, apiErr.Message, lost, "the refusal names what would vanish")
 	}
+	assert.Equal(t, []string{"1. Section 1", "2. Section 2", "3. Section 3", "5. Section 5"}, apiErr.Context["dropped_sections"])
+	assert.Equal(t, len(body), apiErr.Context["current_bytes"])
+	assert.Equal(t, body, f.storedBody(t, doc), "nothing was written")
+}
+
+// allow_shrink lifts the shrink guard only: a stale base_version is still a
+// version conflict, so the editor's confirmed cut cannot overwrite an edit that
+// landed in between.
+func TestDocumentService_Update_AllowShrinkKeepsTheVersionCheck(t *testing.T) {
+	f := setupDocumentService(t)
+	body := fiveSectionDoc()
+	doc := f.create(t, "Canon", body)
+
+	_, err := f.update(t, doc.ID, UpdateDocumentInput{Body: ptr("## only\n"), AllowShrink: true, BaseVersion: ptr(7)})
+
+	var conflict *DocumentVersionConflictError
+	require.ErrorAs(t, err, &conflict)
 	assert.Equal(t, body, f.storedBody(t, doc), "nothing was written")
 }
 

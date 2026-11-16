@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -54,9 +56,12 @@ func (h *TrSearchHandler) Search(c echo.Context) error {
 		return c.JSON(http.StatusNotFound, apierror.NotFound("TeamRelayIntegration"))
 	}
 
+	// A share that was never web-published has no slug, only its ID: new
+	// integrations are saved with share_id and an empty share_slug. Either one
+	// is enough to search; neither is a configuration gap.
 	var settings domain.TeamRelaySettings
-	if jsonErr := json.Unmarshal(pi.Settings, &settings); jsonErr != nil || settings.ShareSlug == "" {
-		return c.JSON(http.StatusUnprocessableEntity, apierror.BadRequest("TR integration not configured: missing share_slug"))
+	if jsonErr := json.Unmarshal(pi.Settings, &settings); jsonErr != nil || (settings.ShareID == "" && settings.ShareSlug == "") {
+		return c.JSON(http.StatusUnprocessableEntity, apierror.BadRequest("TR integration not configured: missing share_id and share_slug"))
 	}
 
 	project, err := h.projectSvc.GetByID(c.Request().Context(), projectID)
@@ -68,10 +73,30 @@ func (h *TrSearchHandler) Search(c echo.Context) error {
 		return c.JSON(http.StatusServiceUnavailable, apierror.ServiceUnavailable("relay URL not configured: no active team_relay integration for this workspace and no instance setting"))
 	}
 
-	docs, err := teamrelay.SearchDocs(c.Request().Context(), relayURL, settings.ShareSlug, pi.AgentKey, q, limit)
+	docs, err := searchShare(c.Request().Context(), relayURL, settings, pi.AgentKey, q, limit)
 	if err != nil {
 		return c.JSON(http.StatusBadGateway, apierror.InternalError("relay search failed"))
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{"docs": docs})
+}
+
+// searchShare searches by share ID when the integration has one, the same way
+// the artifact upload addresses the share. The slug path is the fallback for
+// older integrations: some of them hold a write-only key, which the UUID route
+// refuses (it requires the literal read scope) while the slug route accepts it.
+func searchShare(ctx context.Context, relayURL string, settings domain.TeamRelaySettings, agentKey, q string, limit int) ([]teamrelay.RelayDoc, error) {
+	if settings.ShareID == "" {
+		return teamrelay.SearchDocs(ctx, relayURL, settings.ShareSlug, agentKey, q, limit)
+	}
+	linkHost := settings.ShareSlug
+	if linkHost == "" {
+		linkHost = settings.ShareID
+	}
+	docs, err := teamrelay.SearchDocsByShareID(ctx, relayURL, settings.ShareID, linkHost, agentKey, q, limit)
+	if err == nil || settings.ShareSlug == "" {
+		return docs, err
+	}
+	log.Printf("[tr-search] search by share id %s failed (%v); falling back to slug %s", settings.ShareID, err, settings.ShareSlug)
+	return teamrelay.SearchDocs(ctx, relayURL, settings.ShareSlug, agentKey, q, limit)
 }

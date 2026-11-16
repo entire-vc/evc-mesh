@@ -3,15 +3,21 @@
  * extension (docs/extensions/ui-iframe.md). Pure functions, no DOM, so the rules
  * that keep a foreign page in its box are testable on their own.
  *
- * Mesh -> screen:  mesh.context, mesh.context.error, mesh.revoked
+ * Mesh -> screen:  mesh.context (with the Mesh theme), mesh.theme, mesh.context.error,
+ *                  mesh.revoked
+ *                  (dashboard.widget, v2: mesh.widget.settings, mesh.widget.refresh,
+ *                  mesh.widget.visibility)
  * Screen -> Mesh:  mesh.ready, mesh.resize, mesh.navigate, mesh.toast, mesh.state,
  *                  mesh.app-ready, mesh.app-error
+ *                  (dashboard.widget, v2: mesh.open, mesh.widget.configure)
  *
  * A message is acted on only when BOTH hold: it came from the iframe's own
  * window and its origin is exactly the origin of the service the manifest
  * points at. Everything else is dropped without a sound.
  */
 export const FRAME_PROTOCOL_VERSION = 1;
+/** Version of the dashboard.widget slot: v1 plus the widget messages; a v1 screen is unaffected. */
+export const WIDGET_PROTOCOL_VERSION = 2;
 
 export const MIN_FRAME_HEIGHT = 120;
 export const MAX_FRAME_HEIGHT = 4000;
@@ -29,7 +35,12 @@ export type FrameCommand =
   | { type: "toast"; level: ToastLevel; message: string }
   | { type: "state"; section: string; replace: boolean }
   | { type: "app-ready" }
-  | { type: "app-error"; message: string };
+  | { type: "app-error"; message: string }
+  | { type: "open"; target: OpenTarget }
+  | { type: "configure" };
+
+/** What a widget asks Mesh to open; Mesh checks access itself before it does. */
+export type OpenTarget = { kind: "task" | "doc" | "project"; id: string };
 
 export interface FrameMessageSource {
   origin: string;
@@ -48,12 +59,51 @@ export interface FrameContext {
   locale: string;
   /** The section the address points at (`/memory/search#q`, see `normalizeSection`); "" for the screen's start. */
   section?: string;
+  /**
+   * The Mesh theme at that moment. Every slot gets it; for a screen slot (v1) the
+   * field is additive, so `version` stays 1. A widget carries it in `widget.theme`.
+   */
+  theme?: FrameTheme;
+  /** dashboard.widget only: the slot, the widget instance and the theme at that moment (protocol v2). */
+  widget?: WidgetContext;
+}
+
+export type ThemeMode = "light" | "dark";
+
+/** Light/dark mode and the computed values of the Mesh CSS variables (`lib/widget-theme`). */
+export interface FrameTheme {
+  mode: ThemeMode;
+  tokens: Record<string, string>;
+}
+
+export interface WidgetContext {
+  type: string;
+  instanceId: string;
+  dashboardId: string;
+  settings: Record<string, unknown>;
+  size: { w: number; h: number };
+  theme: FrameTheme;
 }
 
 export function contextMessage(ctx: FrameContext) {
+  const w = ctx.widget;
+  const theme = ctx.theme ?? w?.theme;
   return {
     type: "mesh.context",
-    version: FRAME_PROTOCOL_VERSION,
+    version: w ? WIDGET_PROTOCOL_VERSION : FRAME_PROTOCOL_VERSION,
+    ...(w
+      ? {
+          slot: "dashboard.widget",
+          widget: {
+            type: w.type,
+            instance_id: w.instanceId,
+            dashboard_id: w.dashboardId,
+            settings: w.settings,
+            size: w.size,
+          },
+        }
+      : {}),
+    ...(theme ? { theme } : {}),
     token: ctx.token,
     expires_at: ctx.expiresAt,
     workspace_id: ctx.workspaceId,
@@ -63,6 +113,23 @@ export function contextMessage(ctx: FrameContext) {
     locale: ctx.locale,
     path: ctx.section ?? "",
   };
+}
+
+/** The theme changed: sent to every mounted frame, screen slots and widgets alike (same shape as in `mesh.context`). */
+export function themeMessage(theme: FrameTheme) {
+  return { type: "mesh.theme", version: WIDGET_PROTOCOL_VERSION, mode: theme.mode, tokens: theme.tokens };
+}
+
+export function widgetSettingsMessage(settings: Record<string, unknown>, size?: { w: number; h: number }) {
+  return { type: "mesh.widget.settings", version: WIDGET_PROTOCOL_VERSION, settings, ...(size ? { size } : {}) };
+}
+
+export function widgetRefreshMessage() {
+  return { type: "mesh.widget.refresh", version: WIDGET_PROTOCOL_VERSION };
+}
+
+export function widgetVisibilityMessage(visible: boolean) {
+  return { type: "mesh.widget.visibility", version: WIDGET_PROTOCOL_VERSION, visible };
 }
 
 /** Why a context refresh failed, as told to the screen. */
@@ -99,6 +166,14 @@ export function contextErrorMessage(status: number) {
     reason: contextErrorReason(status),
   };
 }
+
+/**
+ * How long a revoked frame stays in the page, hidden behind the stub, after
+ * `mesh.revoked` was posted to it. `postMessage` is delivered later, as a task
+ * of the frame's own process: an iframe taken out of the DOM at once loses the
+ * message. The hidden frame is no longer listened to; it only gets the news.
+ */
+export const REVOKED_DELIVERY_GRACE_MS = 2_000;
 
 export function revokedMessage(status: number) {
   return {
@@ -166,9 +241,24 @@ export function parseFrameMessage(
       const message = typeof m.message === "string" ? m.message.trim().slice(0, MAX_APP_ERROR_LENGTH) : "";
       return { type: "app-error", message };
     }
+    case "mesh.open": {
+      const target = parseOpenTarget(m);
+      return target ? { type: "open", target } : null;
+    }
+    case "mesh.widget.configure":
+      return { type: "configure" };
     default:
       return null;
   }
+}
+
+const OPEN_ID = /^[A-Za-z0-9-]{1,64}$/;
+
+/** `{kind: "task"|"doc"|"project", id}`: an id of a plain shape, nothing that could be a path or a URL. */
+function parseOpenTarget(m: Record<string, unknown>): OpenTarget | null {
+  const kind = m.kind;
+  if (kind !== "task" && kind !== "doc" && kind !== "project") return null;
+  return typeof m.id === "string" && OPEN_ID.test(m.id) ? { kind, id: m.id } : null;
 }
 
 /**

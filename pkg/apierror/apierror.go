@@ -155,6 +155,19 @@ func DocumentSlugTaken() *Error {
 	}
 }
 
+// CodeDocumentShrinkRefused marks a 409 where a whole-body write would cut the
+// document to less than half and drop headings it had — what a section written
+// back as the whole document looks like. Nothing was written. It is not a
+// version race and not a failure: retrying the same write is refused again; an
+// intended cut is resent with allow_shrink=true.
+const CodeDocumentShrinkRefused = "document_shrink_refused"
+
+// DocumentShrinkRefused creates the 409 for a whole-body write the shrink guard
+// stopped. context carries current_bytes, next_bytes and dropped_sections.
+func DocumentShrinkRefused(message string, context map[string]any) *Error {
+	return &Error{Code: http.StatusConflict, ErrorCode: CodeDocumentShrinkRefused, Message: message, Context: context}
+}
+
 // TooManyRequests creates a 429 error.
 func TooManyRequests(message string) *Error {
 	if message == "" {

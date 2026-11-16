@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { fetchUnseenMentionCount } from "@/lib/mentions/inbox";
@@ -15,13 +15,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { CreateProjectDialog } from "@/components/create-project-dialog";
 import { apiErrorMessage } from "@/lib/api-error";
 import { api } from "@/lib/api";
 import { useSidebarItems } from "@/lib/extension-slots";
 import "@/core/slots/mesh-default";
 import { resolveSlotView, useSlotRegistryVersion, useThemeSettings, withSlotFallback } from "@/core/slots/registry";
 import { useBuildSlotContext } from "@/core/slots/use-slot-context";
+import { normalizeNavGroups } from "@/core/slots/nav-sidebar/groups";
+import { useDashboardsNav } from "./use-dashboards-nav";
 import type { Async } from "@/core/slots/types";
 import type {
   NavItem,
@@ -35,6 +36,11 @@ interface SidebarProps {
   collapsed: boolean;
   onToggle?: () => void;
 }
+
+// Loaded on first open, so the dialog and its icon picker are not in the first-paint bundle.
+const CreateProjectDialog = lazy(() =>
+  import("@/components/create-project-dialog").then((m) => ({ default: m.CreateProjectDialog })),
+);
 
 // The container of the `nav.sidebar` slot: the stores, permissions, the mention counter and
 // the two dialogs live here; what is drawn lives in the active theme's view
@@ -151,17 +157,19 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   // Increment badge on an incoming mention.
   //
   // The server publishes "mention.badge" for both task and document mentions
-  // (comment_service.go, document_comment_mentions.go); "mention.created" is
-  // what this listener was originally written against and no publisher has ever
-  // emitted it. Both names are accepted rather than one renamed, so this stays
-  // correct whichever the server sends.
+  // (comment_service.go, document_comment_mentions.go) on the personal channel,
+  // with the name in data.event: the hub copies only a bus event's event_type
+  // into `type`, so `type` arrives empty here ("mention.created" was never
+  // emitted).
   useEffect(() => {
-    if (lastEvent?.type === "mention.badge" || lastEvent?.type === "mention.created") {
+    // The personal channel carries every workspace's mentions; the badge counts
+    // the current one. Keyed on lastEvent only: a workspace switch is no event.
+    if (lastEvent?.data?.event === "mention.badge" && lastEvent.data.workspace_id === currentWorkspace?.id) {
       setUnseenCount((n) => n + 1);
     }
   }, [lastEvent]);
 
-  // Clear badge when ActivityPage marks all visible mentions as shown.
+  // Clear badge when the Mentions widget marks all visible mentions as shown.
   useEffect(() => {
     const handler = (e: Event) => {
       setUnseenCount((e as CustomEvent<{ newCount: number }>).detail.newCount);
@@ -174,6 +182,14 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const ws = wsSlug ? `/w/${wsSlug}` : null;
   const wsHref = (suffix: string) => (ws ? `${ws}/${suffix}` : "/");
 
+  // The user's dashboards (groups above and below the projects). Until the list is loaded — or if it cannot
+  // be — the single legacy «Dashboard» entry stays, so the home screen never disappears from the menu.
+  const dash = useDashboardsNav({
+    workspace: currentWorkspace ? { id: currentWorkspace.id, slug: currentWorkspace.slug } : null,
+    path,
+    unseenCount,
+  });
+
   const items: NavItem[] = [];
   const core = (
     id: string,
@@ -184,19 +200,16 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     active: boolean,
     extra: Partial<NavItem> = {},
   ) => items.push({ id, group, icon, label, href, active, origin: "core", inRail: true, ...extra });
-  core("dashboard", "top", "LayoutDashboard", t("nav.dashboard"), wsHref("dashboard"), path.endsWith("/dashboard"));
-  core("initiatives", "inbox", "Target", t("nav.initiatives"), wsHref("initiatives"), path.endsWith("/initiatives"));
-  core("triage", "inbox", "Inbox", t("nav.triage"), wsHref("triage"), path.endsWith("/triage"));
-  core("activity", "inbox", "Bell", t("nav.activity"), wsHref("activity"), path.includes("/activity"), {
-    badge: { count: unseenCount, tone: "attention" },
-  });
+  if (dash.state !== "ready") {
+    core("dashboard", "top", "LayoutDashboard", t("nav.dashboard"), wsHref("dashboard"), path.endsWith("/dashboard"));
+  }
+  items.push(...dash.items);
+  // Initiatives, Triage, Activity, Sessions, Analytics and Events are dashboard templates now (PRD §5.4, §5.9):
+  // the mention counter sits on the first dashboard with a «Mentions» widget and on the bell.
   core("team", "tools", "Bot", t("nav.team"), wsHref("org-chart"), path.endsWith("/org-chart"));
   core("memory", "tools", "Brain", t("nav.memory"), wsHref("memories"), path.endsWith("/memories"));
-  core("sessions", "tools", "MonitorDot", t("nav.sessions"), wsHref("sessions"), path.endsWith("/sessions"));
   // Workspace integration decides when it exists; otherwise the instance flag.
   if (sparkVisible) core("spark", "tools", "Sparkles", t("nav.spark"), wsHref("spark"), path.endsWith("/spark"));
-  core("analytics", "tools", "BarChart2", t("nav.analytics"), wsHref("analytics"), path.endsWith("/analytics"));
-  core("events", "tools", "Activity", t("nav.events"), wsHref("events"), path.endsWith("/events"));
   core("extensions", "tools", "Plug", t("nav.extensions"), wsHref("extensions"), path.endsWith("/extensions"));
   core("runner", "tools", "Server", t("nav.myRunner"), wsHref("runner"), path.endsWith("/runner"), { inRail: false });
   if (wsSlug) {
@@ -257,6 +270,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       current: w.slug === wsSlug,
     })),
     items,
+    dashboardsState: dash.state,
+    allDashboardsHref: dash.allHref,
     projects: projectsState,
     collapsed,
     isMobile: typeof window.matchMedia === "function" && window.matchMedia("(max-width: 767px)").matches,
@@ -266,6 +281,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   };
 
   const actions: NavSidebarActions = {
+    ...dash.actions,
     toggleCollapsed: () => onToggle?.(),
     switchWorkspace: (slug) => navigate(`/w/${slug}`),
     createProject: () => setShowCreateProject(true),
@@ -286,16 +302,21 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   );
   const themeSettings = useThemeSettings();
   useSlotRegistryVersion();
+  const ActiveView = resolveSlotView("nav.sidebar") as { supportsDashboardGroups?: boolean };
   const View = withSlotFallback("nav.sidebar", resolveSlotView("nav.sidebar"));
+  data.items = normalizeNavGroups(data.items, !!ActiveView.supportsDashboardGroups);
 
   return (
     <>
       <View data={data} actions={actions} themeSettings={themeSettings} ctx={ctx} />
 
-      <CreateProjectDialog
-        open={showCreateProject}
-        onOpenChange={setShowCreateProject}
-      />
+      {dash.dialogs}
+
+      {showCreateProject && (
+        <Suspense fallback={null}>
+          <CreateProjectDialog open onOpenChange={setShowCreateProject} />
+        </Suspense>
+      )}
 
     {/* Create workspace dialog */}
     <Dialog open={createWsOpen} onOpenChange={(open) => { setCreateWsOpen(open); if (!open) { setWsName(""); setWsSlugDraft(""); setWsError(null); } }}>

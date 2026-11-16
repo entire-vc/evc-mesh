@@ -90,6 +90,12 @@
       "items": { "$ref": "#/$defs/extensionId" }
     },
     "project_view": { "$ref": "#/$defs/projectView" },
+    "widgets": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": { "$ref": "#/$defs/widget" }
+    },
     "external": {
       "oneOf": [
         { "type": "null" },
@@ -137,6 +143,16 @@
       "if": { "required": ["capabilities"], "properties": { "capabilities": { "required": ["ui"], "properties": { "ui": { "contains": { "const": "project.view" } } } } } },
       "then": { "required": ["project_view"], "properties": { "levels": { "properties": { "project": { "const": true } } } } },
       "else": { "not": { "required": ["project_view"] } }
+    },
+    {
+      "if": { "required": ["capabilities"], "properties": { "capabilities": { "required": ["ui"], "properties": { "ui": { "contains": { "const": "dashboard.widget" } } } } } },
+      "then": { "required": ["widgets"] },
+      "else": { "not": { "required": ["widgets"] } }
+    },
+    {
+      "if": { "properties": { "runtime": { "const": "external" } } },
+      "then": { "properties": { "widgets": { "items": { "properties": { "render": { "required": ["frame"] } } } } } },
+      "else": { "properties": { "widgets": { "items": { "properties": { "render": { "required": ["builtin"] } } } } } }
     },
     {
       "if": { "properties": { "kind": { "const": "theme" } } },
@@ -255,7 +271,77 @@
       "dependentRequired": { "views": ["slots", "contract_report"], "slots": ["views"] }
     },
     "slot": {
-      "enum": ["workspace.settings", "project.settings", "task.panel", "task.badge", "task.actions", "sidebar.item", "command", "doc.panel", "project.view"]
+      "enum": ["workspace.settings", "project.settings", "task.panel", "task.badge", "task.actions", "sidebar.item", "command", "doc.panel", "project.view", "dashboard.widget"]
+    },
+    "widgetCells": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["w", "h"],
+      "properties": {
+        "w": { "type": "integer", "minimum": 1, "maximum": 12 },
+        "h": { "type": "integer", "minimum": 1, "maximum": 12 }
+      }
+    },
+    "widget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "category", "size", "scope", "render"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,39}$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "title_i18n": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 80 } },
+        "description": { "type": "string", "maxLength": 300 },
+        "description_i18n": { "type": "object", "additionalProperties": { "type": "string", "maxLength": 300 } },
+        "category": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,39}$" },
+        "size": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["default"],
+          "properties": {
+            "default": { "$ref": "#/$defs/widgetCells" },
+            "min": { "$ref": "#/$defs/widgetCells" },
+            "max": { "$ref": "#/$defs/widgetCells" }
+          }
+        },
+        "settings": { "$ref": "#/$defs/widgetSettings" },
+        "requires": { "type": "array", "uniqueItems": true, "maxItems": 10, "items": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)*$" } },
+        "scope": { "enum": ["workspace", "project", "user"] },
+        "render": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "maxProperties": 1,
+          "properties": {
+            "builtin": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]{0,63}$" },
+            "frame": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path"],
+              "properties": {
+                "path": { "type": "string", "pattern": "^/" },
+                "min_refresh_s": { "type": "integer", "minimum": 5 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "widgetSettings": {
+      "$comment": "Settings of a widget instance belong to the person who placed it: no x-secret at any depth (ParseManifest refuses it the same way).",
+      "type": "object",
+      "allOf": [{ "$ref": "#/$defs/noSecretKey" }],
+      "properties": {
+        "properties": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/field" }
+        }
+      }
+    },
+    "noSecretKey": {
+      "$comment": "No object anywhere inside carries an x-secret key.",
+      "if": { "type": "object" },
+      "then": { "not": { "required": ["x-secret"] }, "additionalProperties": { "$ref": "#/$defs/noSecretKey" } },
+      "else": { "if": { "type": "array" }, "then": { "items": { "$ref": "#/$defs/noSecretKey" } } }
     },
     "settingsLevel": {
       "type": "object",

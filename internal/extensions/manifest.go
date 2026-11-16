@@ -32,6 +32,8 @@ type Manifest struct {
 	ProjectView *ProjectView `json:"project_view,omitempty"`
 	// Theme is the block of a kind=theme extension, decoded by internal/themes.
 	Theme json.RawMessage `json:"theme,omitempty"`
+	// Widgets are the dashboard widget types of the dashboard.widget slot.
+	Widgets []Widget `json:"widgets,omitempty"`
 
 	Raw json.RawMessage `json:"-"`
 }
@@ -107,6 +109,9 @@ func ParseManifest(raw []byte) (Manifest, error) {
 	}
 	if m.ID == "" || m.Version == "" || m.Runtime == "" {
 		return Manifest{}, fmt.Errorf("parse manifest: id, version and runtime are required")
+	}
+	if err := checkWidgets(m.Widgets); err != nil {
+		return Manifest{}, fmt.Errorf("parse manifest: %w", err)
 	}
 	m.Raw = append(json.RawMessage(nil), raw...)
 	return m, nil

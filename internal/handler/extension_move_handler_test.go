@@ -141,6 +141,10 @@ func (s *idemMem) Complete(_ context.Context, sc domain.IdempotencyScope, _ uuid
 	return nil
 }
 
+func (s *idemMem) FindReceipt(context.Context, domain.IdempotencyReceiptScope, string) (*domain.IdempotentWrite, error) {
+	return nil, nil
+}
+
 func (s *idemMem) Release(_ context.Context, sc domain.IdempotencyScope, _ uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

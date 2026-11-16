@@ -104,6 +104,29 @@ func TestResolveRuntimeState_WaitStateAgesOnlyByUntil(t *testing.T) {
 	assert.True(t, ResolveRuntimeState(raw, &Task{}, rsNow).Stale, "a runner-written state still ages")
 }
 
+// The Runner rewrites a wait's "wait:" ref on every pass. While the card's wait is
+// active, a waiting state is current whatever ref, refresh time or until it carries;
+// with no active wait, or for another kind, the refresh window and until apply.
+func TestResolveRuntimeStateWithWait_ActiveWaitKeepsWaitingCurrent(t *testing.T) {
+	ref := "time"
+	until := rsNow.Add(20 * time.Hour)
+	late := rsNow.Add(-RuntimeStateStaleAfter - 5*time.Minute)
+	waiting := RuntimeState{Kind: RuntimeKindWaiting, Since: late, Until: &until, Ref: &ref, UpdatedAt: late}
+	raw, err := waiting.Marshal()
+	require.NoError(t, err)
+
+	assert.False(t, ResolveRuntimeStateWithWait(raw, &Task{}, rsNow, true).Stale, "active wait, late tick: current")
+	assert.True(t, ResolveRuntimeStateWithWait(raw, &Task{}, rsNow, false).Stale, "no active wait: the refresh window applies")
+	assert.False(t, ResolveRuntimeStateWithWait(raw, &Task{}, until.Add(time.Minute), true).Stale,
+		"until has passed but the wait is still active: its deadline grace is the caller's predicate")
+	assert.True(t, ResolveRuntimeStateWithWait(raw, &Task{}, until.Add(time.Second), false).Stale, "no active wait, until has passed")
+
+	working := RuntimeState{Kind: RuntimeKindWorking, Since: late, UpdatedAt: late}
+	raw, err = working.Marshal()
+	require.NoError(t, err)
+	assert.True(t, ResolveRuntimeStateWithWait(raw, &Task{}, rsNow, true).Stale, "a working claim still ages")
+}
+
 func TestResolveRuntimeState_CheckoutFallback(t *testing.T) {
 	holder := uuid.New()
 	acquired := rsNow.Add(-10 * time.Minute)

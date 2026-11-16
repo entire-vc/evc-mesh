@@ -110,6 +110,7 @@ const gitlabExt = {
   manifest: { capabilities: {}, settings: { instance: { type: "object", properties: { base_url: { type: "string", title: "Base URL" }, token: { type: "string", title: "Access token", "x-secret": true } }, required: ["base_url"] } } },
 };
 let installed = [graphite, forge, meshDefault], instTheme = { theme_id: null, settings: {}, version: 1, contrast_warnings: [] };
+let triageRows = false; // dashboard-tasks.spec: the triage queue has cards only when a spec asks for them
 let role = "owner", wsTheme = { theme_id: null, settings: {}, version: 1, contrast_warnings: [] };
 let broadcastMoves = false, mode = "normal", ordered = initialOrder, taskCalls = [], writes = [];
 // Agent executions (org chart + agent detail "Route & runs"): the scenario is picked per spec through /__fixture {exec}.
@@ -169,11 +170,19 @@ const execScenarios = {
   error: () => null,
 };
 let execScenario = "main", execOn = false;
+// The dashboards API, as a server answers for a fresh workspace: one virtual default dashboard. The sidebar menu reads
+// the list on every page; `dashboards: "missing"` in the /__fixture POST stands for a server without the API (the
+// legacy dashboard page, which dashboard.spec and board-studio's dashboard walk draw).
+let dashboardsMissing = false;
+const defaultDashboard = {
+  id: "default", name: "Dashboard", icon: "", placement: "top", position: 0, is_default: true, virtual: true,
+  shared: false, hidden: false, can_edit: true, can_manage: true, widget_types: [],
+};
 const HOST = "127.0.0.1";
 const sockets = new Set();
 const connLog = []; // the last [fixture-conn] lines, served at GET /__fixture/conn-log for fixture-connections.spec.ts
 const server = http.createServer(async (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", `http://${HOST}:3019`);
+  res.setHeader("Access-Control-Allow-Origin", process.env.BOARD_FIXTURE_APP_ORIGIN ?? `http://${HOST}:3019`);
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
@@ -189,8 +198,10 @@ const server = http.createServer(async (req, res) => {
       let raw = ""; for await (const part of req) raw += part;
       const next = JSON.parse(raw);
       mode = next.mode ?? "normal"; taskCalls = []; writes = []; broadcastMoves = next.broadcastMoves === true;
+      triageRows = next.triage === true;
       role = next.role ?? "owner";
       execScenario = next.exec ?? "main"; execOn = next.exec != null;
+      dashboardsMissing = next.dashboards === "missing";
       if (next.resetTheme) {
         wsTheme = { theme_id: null, settings: {}, version: 1, contrast_warnings: [] };
         instTheme = { ...wsTheme }; installed = [graphite, forge, meshDefault]; adminAllowed = {}; adminAuto = false; themePuts = 0; failThemes = 0; themesDelay = 0; iconUrl = null;
@@ -219,13 +230,28 @@ const server = http.createServer(async (req, res) => {
   else if (url.pathname === "/api/v1/workspaces") body = [{ ...workspace, icon_url: iconUrl }];
   else if (url.pathname.endsWith("/projects")) body = { items: [project, otherProject], total_count: 2 };
   else if (url.pathname.endsWith("/statuses")) body = url.pathname.includes("/other-project/") ? statuses.map((s) => ({ ...s, project_id: otherProject.id })) : statuses;
-  else if (url.pathname === "/api/v1/me/tasks") {
-    // Dashboard "My tasks" widget: five assigned tasks, none, or a failing API.
+  else if (url.pathname === "/api/v1/me/tasks" || url.pathname.endsWith("/tasks/query")) {
+    // Dashboard task widgets ("My tasks", a theme's own widget through useTasks): five assigned tasks, already in
+    // due-date order, none, or a failing API.
     if (mode === "error") { status = 503; body = { message: "Fixture tasks unavailable" }; }
     else {
       const day = (n) => new Date(Date.now() + n * 864e5).toISOString();
       const rows = mode === "empty" ? [] : tasks.slice(315, 320).map((task, i) => ({ ...task, title: `Assigned task ${i + 1}`, priority: ["urgent", "high", "medium", "low", "medium"][i], due_date: [day(-2), day(1), day(3), day(20), null][i] }));
       body = { items: rows, page: 1, page_size: 5, total_count: rows.length, has_more: false };
+    }
+  }
+  else if (/^\/api\/v1\/workspaces\/[^/]+\/triage$/.test(url.pathname)) {
+    // Dashboard triage queue: with `triage: true`, three cards from two projects (one title long enough to need
+    // truncation); otherwise empty, so the default dashboard of the other specs is unchanged.
+    if (mode === "error") { status = 503; body = { message: "Fixture triage unavailable" }; }
+    else {
+      const ago = (h) => new Date(Date.now() - h * 36e5).toISOString();
+      const rows = mode === "empty" || !triageRows ? [] : [
+        { ...tasks[321], id: "triage-1", title: "Customer reports that exports from the reporting page time out on large workspaces after the last release", priority: "urgent", human_gate: true, created_by_name: "Ada Lovelace", created_at: ago(3) },
+        { ...tasks[322], id: "triage-2", project_id: otherProject.id, title: "Typo on the pricing page", priority: "low", created_by_name: "Grace Hopper", created_at: ago(50) },
+        { ...tasks[323], id: "triage-3", title: "Flaky login on Safari", priority: "high", created_by_name: "Board reviewer", created_at: ago(0.5) },
+      ];
+      body = { items: rows, page: 1, page_size: rows.length, total_count: rows.length, has_more: false };
     }
   }
   else if (url.pathname.endsWith("/tasks")) {
@@ -359,6 +385,9 @@ const server = http.createServer(async (req, res) => {
     if (task) { Object.assign(task, next, { updated_at: new Date().toISOString() }); writes.push({ patch: task.id, ...next }); }
     body = task ?? {};
   }
+  // a server without the dashboards API: the dashboard entry falls back to the legacy page, the menu to its one entry
+  else if (url.pathname.startsWith("/api/v1/dashboards/") || (dashboardsMissing && /^\/api\/v1\/workspaces\/[^/]+\/dashboards$/.test(url.pathname))) { status = 404; body = { error: "not found" }; }
+  else if (/^\/api\/v1\/workspaces\/[^/]+\/dashboards$/.test(url.pathname) && req.method === "GET") body = { dashboards: [defaultDashboard] };
   else if (url.pathname.startsWith("/api/v1/tasks/")) body = tasks.find((task) => task.id === url.pathname.split("/").at(-1)) ?? {};
   else if (url.pathname === "/api/v1/runtime-flags") body = {};
   res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
@@ -401,4 +430,5 @@ server.on("clientError", (err, socket) => {
   logConn(`:${st?.peer} clientError ${err.code ?? ""} ${err.message} served=${st?.served}`);
   if (socket.writable) socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"); else socket.destroy();
 });
-server.listen(8019, "127.0.0.1", () => console.log(`Board fixture listening on 127.0.0.1:8019 (node ${process.version}, keepAliveTimeout=${server.keepAliveTimeout}ms, buffer=${server.keepAliveTimeoutBuffer ?? "n/a"}ms)`));
+const PORT = Number(process.env.BOARD_FIXTURE_PORT ?? 8019);
+server.listen(PORT, "127.0.0.1", () => console.log(`Board fixture listening on 127.0.0.1:${PORT} (node ${process.version}, keepAliveTimeout=${server.keepAliveTimeout}ms, buffer=${server.keepAliveTimeoutBuffer ?? "n/a"}ms)`));

@@ -563,13 +563,17 @@ describe("NotificationSettingsPage — subscription scope", () => {
   it("keeps a stored enabled email preference enabled when only the scope is saved on an unavailable channel", async () => {
     let savedBody: { channel?: string; is_enabled?: boolean; config?: Record<string, unknown> } | undefined;
     mockApiByRoute({
-      preferences: [pref({ channel: "email", is_enabled: true, config: { email: "a@b.co" } })],
+      preferences: [pref({ channel: "email", is_enabled: true, config: { email: "a@b.co", scope: "all" } })],
       available: false,
       onSave: (b) => { savedBody = b as typeof savedBody; },
     });
     renderPage();
     switchToTab(/Email/);
     await waitFor(() => expect(screen.getByText("Email notifications are not available")).toBeInTheDocument());
+    // The banner can commit before the effect that copies the stored preference into
+    // the form has run; a click in that gap is overwritten by the stored scope. The
+    // stored scope is `all`, so its radio being checked means hydration is done.
+    await waitFor(() => expect(scopeRadio(/All workspace events/)).toHaveAttribute("aria-checked", "true"));
     fireEvent.click(scopeRadio(/Mentions and assignments only/));
     fireEvent.click(screen.getByRole("button", { name: /Save preferences/ }));
     await waitFor(() => expect(savedBody).toBeDefined());

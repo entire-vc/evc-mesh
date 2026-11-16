@@ -10,6 +10,14 @@ Author guide: `docs/themes/author-guide.md`. A theme repository to copy: `packag
 - **Slot contracts (types):** `board.layout`, `board.column`, `board.card`, `task.row`, `task.view`,
   `dashboard.layout`, `dashboard.widget.<id>`, `nav.sidebar`, `nav.topbar`, `doc.tree`, `doc.view`,
   `auth.screen`. Each slot has `*Data`, `*Actions`, `*Settings` and a `*View` type.
+- **Dashboard (`dashboard.layout` 2.0.0):** a 12-column grid. `WidgetDescriptor` (id, title, category, origin
+  `core|extension|theme|external`, `size{default,min,max}` in cells, JSON-Schema `settings` with `x-widget`, `scope`,
+  `requires`, `actions`), `WidgetInstance` (`{id, type, x, y, w, h, settings}`), `WidgetViewProps`, the layout's
+  `columns`, `editing`, `canEdit` and the edit actions (`moveWidget`, `resizeWidget`, `addWidget`, `removeWidget`,
+  `updateWidgetSettings`), and the `PeriodValue` / `EventTypeValue` of the `period` and `event-type-picker`
+  controls. 1.x stays for one more release as `DashboardLayoutViewV1` / `DashboardLayoutDataV1` /
+  `WidgetDescriptorV1`; the core serves it to a theme that declared `^1` through `toLayoutV1` (widgets in `(y, x)`
+  order, sizes cut to the 1.x limits, `editing: false`, no edit actions).
 - **Primitives:** `Draggable`, `DropZone`, `DndProvider`, `Can` / `useCan`, `InlineEdit`, `TaskLink`, `TaskBadges` (the `task.badge` insertion point a card must carry),
   `useRealtime`.
 - **Data hooks:** `useTasks`, `useWidgetData`, `useMentions`, `useMyTasks`, `useTriageTasks`,

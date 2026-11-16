@@ -88,12 +88,32 @@ function buildSha(): Plugin {
   };
 }
 
+// Writes which source modules each chunk holds (dist/.vite/chunk-modules.json, paths relative to web/), so
+// web/perf/check-registry-preloads.mjs can tell a widget view chunk by its modules, not by its name. Build
+// metadata only: nothing under dist/assets changes.
+function chunkModules(): Plugin {
+  return {
+    name: "chunk-modules",
+    apply: "build",
+    generateBundle(_options, bundle) {
+      const out: Record<string, string[]> = {};
+      for (const chunk of Object.values(bundle)) {
+        if (chunk.type !== "chunk") continue;
+        out[chunk.fileName] = chunk.moduleIds
+          .filter((id) => id.startsWith(__dirname) && !id.includes("/node_modules/"))
+          .map((id) => id.slice(__dirname.length + 1).replace(/\?.*$/, ""));
+      }
+      this.emitFile({ type: "asset", fileName: ".vite/chunk-modules.json", source: JSON.stringify(out) });
+    },
+  };
+}
+
 // The perf-counter build (web/perf/README.md, part 2). Separate outDir so it
 // can never be mistaken for, or overwrite, the dist/ that ships.
 const PERF_PROFILER = process.env.VITE_PERF_PROFILER === "1";
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), swCacheVersion(), buildSha()],
+  plugins: [react(), tailwindcss(), swCacheVersion(), buildSha(), chunkModules()],
   resolve: {
     alias: [
       { find: "@", replacement: fileURLToPath(new URL("./src", import.meta.url)) },
@@ -133,6 +153,23 @@ export default defineConfig({
             {
               name: "extension-libs",
               test: /src[\\/]lib[\\/]extension-(?:repo|instance|settings|connect|admin)\./,
+              includeDependenciesRecursively: false,
+            },
+            // The initiatives widgets and their two pages share parts, hooks,
+            // rights and the initiative store; left to the splitter they ship as three chunks (dashboard,
+            // list page, detail page importers) that each pay their own gzip
+            // dictionary. index.ts stays out: the registry imports it eagerly.
+            {
+              name: "initiatives",
+              test: /src[\\/](?:core[\\/]dashboard[\\/]widgets[\\/]initiatives[\\/](?:views|parts|hooks|rights)\.tsx?|pages[\\/](?:initiatives|initiative-detail)\.tsx|stores[\\/]initiative\.ts)$/,
+              includeDependenciesRecursively: false,
+            },
+            // The event-feed widget's dashboard views (views.tsx, view.tsx) ship with the widget the
+            // Events page already loads, not as a chunk of their own. index.ts and schema.ts stay out:
+            // the registry imports them eagerly.
+            {
+              name: "event-feed-widget",
+              test: /src[\\/]core[\\/]dashboard[\\/]widgets[\\/]events[\\/](?:views|view|event-feed-widget|settings|use-events)\.tsx?$/,
               includeDependenciesRecursively: false,
             },
             // Everything /login loads before first paint goes in one chunk, its icons

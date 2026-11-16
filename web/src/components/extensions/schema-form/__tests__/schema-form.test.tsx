@@ -312,3 +312,34 @@ describe("SchemaForm from a manifest (no hand-written fields)", () => {
     expect(screen.getByText("Выдаётся Keep при подключении")).toBeTruthy();
   });
 });
+
+describe("dashboard controls: period and event-type-picker", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      period: { type: "object", title: "Period", "x-widget": "period" },
+      events: { type: "array", title: "Events", items: { type: "string" }, "x-widget": "event-type-picker", "x-options": { "task.created": "Task created", "task.done": "Task done" } },
+    },
+  } as never;
+
+  it("period: 7/30/90 days or a range; the chosen value is {days} or {from, to}", async () => {
+    const onValuesChange = vi.fn();
+    render(<SchemaForm schema={schema} manifest={{} as never} value={{ period: { days: 30 } }} onSubmit={vi.fn()} onValuesChange={onValuesChange} />);
+    const select = screen.getByRole("combobox") as HTMLSelectElement;
+    expect(select.value).toBe("30");
+    fireEvent.change(select, { target: { value: "90" } });
+    expect(onValuesChange).toHaveBeenLastCalledWith(expect.objectContaining({ period: { days: 90 } }));
+    fireEvent.change(select, { target: { value: "range" } });
+    const last = onValuesChange.mock.calls[onValuesChange.mock.calls.length - 1]![0].period as { from: string; to: string };
+    expect(Object.keys(last).sort()).toEqual(["from", "to"]);
+    expect(screen.getByLabelText("From")).toBeTruthy();
+  });
+
+  it("event-type-picker: a checklist of the declared types; ticking returns the list", () => {
+    const onValuesChange = vi.fn();
+    render(<SchemaForm schema={schema} manifest={{} as never} value={{ events: ["task.done"] }} onSubmit={vi.fn()} onValuesChange={onValuesChange} />);
+    expect((screen.getByLabelText("Task done") as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByLabelText("Task created"));
+    expect(onValuesChange).toHaveBeenLastCalledWith(expect.objectContaining({ events: ["task.done", "task.created"] }));
+  });
+});

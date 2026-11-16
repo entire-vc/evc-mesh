@@ -174,9 +174,17 @@ function SaveIndicator({ save, actions }: { save: DocViewData["save"]; actions: 
       <span className="flex items-center gap-1 text-xs text-destructive">
         <AlertCircle className="h-3 w-3" />
         {t("save.notSaved", { message: save.message })}
-        <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={actions.retry}>
-          {t("save.retry")}
-        </Button>
+        {save.shrinkRefused && actions.confirmShrink ? (
+          // Retry would only be refused again: the one way forward is to say
+          // the cut is meant.
+          <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={actions.confirmShrink}>
+            {t("save.saveShorter")}
+          </Button>
+        ) : (
+          <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={actions.retry}>
+            {t("save.retry")}
+          </Button>
+        )}
       </span>
     );
   }

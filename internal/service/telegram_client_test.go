@@ -53,12 +53,13 @@ func TestTelegramClient_SendMessage(t *testing.T) {
 	client, closeFn := newTestTelegramServer(t, func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/bottest-token/sendMessage", r.URL.Path)
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 4242}})
 	})
 	defer closeFn()
 
-	err := client.SendMessage(t.Context(), "test-token", 12345, "hello")
+	messageID, err := client.SendMessage(t.Context(), "test-token", 12345, "hello")
 	require.NoError(t, err)
+	assert.EqualValues(t, 4242, messageID)
 	assert.EqualValues(t, 12345, gotBody["chat_id"])
 	assert.Equal(t, "hello", gotBody["text"])
 }
@@ -72,7 +73,7 @@ func TestTelegramClient_SendMessage_ForbiddenWhenBlocked(t *testing.T) {
 	})
 	defer closeFn()
 
-	err := client.SendMessage(t.Context(), "test-token", 1, "hi")
+	_, err := client.SendMessage(t.Context(), "test-token", 1, "hi")
 	require.Error(t, err)
 	var apiErr *TelegramAPIError
 	require.ErrorAs(t, err, &apiErr)

@@ -398,7 +398,16 @@ export interface DocViewDoc {
 export interface DocViewData {
   doc: Async<DocViewDoc>;
   /** `idle` (additive): nothing edited yet, no indicator. */
-  save: { state: DocSaveState; message?: string };
+  save: {
+    state: DocSaveState;
+    message?: string;
+    /**
+     * Additive: with `state: "error"`, the save was refused because it would cut most of the page
+     * (drop its headings), not because it failed. Retry is refused again; `actions.confirmShrink`
+     * saves the cut on purpose.
+     */
+    shrinkRefused?: boolean;
+  };
   components: {
     /** Core block: the editor with save and version-conflict handling. Exactly one per view. */
     Editor: React.FC;
@@ -432,6 +441,8 @@ export interface DocViewActions {
    * carries no buttons, so the Mesh container does not supply it.
    */
   resolveConflict?(choice: "reload" | "keep-mine"): void;
+  /** Additive: saves the draft that `save.shrinkRefused` refused, accepting that it cuts the page. */
+  confirmShrink?(): void;
   /** Additive: absent when the viewer cannot edit. */
   startEditing?(): void;
   finishEditing?(): void;
