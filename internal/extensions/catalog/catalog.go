@@ -23,6 +23,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/entire-vc/evc-mesh/internal/extensions"
 )
 
 // PinnedPublicKey is the production catalog key (raw 32 bytes, standard
@@ -85,6 +87,10 @@ func (r Release) Flatten() []string {
 			return nil
 		}
 		for _, v := range vals {
+			// Downloadable catalog releases cannot register inbound hooks.
+			if g == "webhooks_in" || extensions.IsDeprecatedCapability(g, v) {
+				continue
+			}
 			out = append(out, g+":"+v)
 		}
 	}

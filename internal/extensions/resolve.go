@@ -108,5 +108,3 @@ func (b BaseProvider) Health(_ context.Context, r Resolved) HealthReport {
 }
 
 func (b BaseProvider) Hooks() Hooks { return Hooks{} }
-
-func (b BaseProvider) UI() UIContribs { return UIContribs{} }

@@ -19,7 +19,7 @@ import (
 const Manifest = `{"id":"demo","name":"Demo","version":"1.0.0","kind":"integration","runtime":"builtin","category":"vcs",
  "levels":{"instance":true,"workspace":true,"project":false},
  "settings":{"workspace":{"properties":{"base_url":{"type":"string"},"token":{"type":"string","x-secret":true}}}},
- "capabilities":{"api":["tasks.read"],"events":["task.updated"]}}`
+ "capabilities":{"api":["tasks.read"],"events":["task.updated"],"secrets":["token"]}}`
 
 // MemIntegrations is an in-memory integration_configs table.
 type MemIntegrations struct {

@@ -60,7 +60,7 @@ func TestExtensionWorkspaceHandler(t *testing.T) {
 
 	code, _ = call(http.MethodPost, root+"/demo/connect", `{`)
 	assert.Equal(t, http.StatusBadRequest, code)
-	code, out = call(http.MethodPost, root+"/demo/connect", `{"consent":{"capabilities":["api:tasks.read","events:task.updated"]}}`)
+	code, out = call(http.MethodPost, root+"/demo/connect", `{"consent":{"capabilities":["api:tasks.read","events:task.updated","secrets:token"]}}`)
 	assert.Equal(t, http.StatusConflict, code, "the disable above already created the workspace row")
 	assert.Equal(t, "already_connected", out["error_code"])
 
@@ -82,7 +82,7 @@ func TestExtensionWorkspaceHandler(t *testing.T) {
 	code, _ = call(http.MethodDelete, root+"/demo", "")
 	assert.Equal(t, http.StatusNotFound, code)
 
-	code, out = call(http.MethodPost, root+"/demo/connect", `{"consent":{"capabilities":["api:tasks.read","events:task.updated"]}}`)
+	code, out = call(http.MethodPost, root+"/demo/connect", `{"consent":{"capabilities":["api:tasks.read","events:task.updated","secrets:token"]}}`)
 	assert.Equal(t, http.StatusCreated, code)
 	assert.Equal(t, "workspace", out["status"].(map[string]any)["source"])
 
@@ -120,7 +120,7 @@ func TestExtensionWorkspaceHandler_ListJSONReportsInstanceDisabled(t *testing.T)
 		root := "/workspaces/" + uuid.NewString() + "/extensions"
 		if connect {
 			req := httptest.NewRequest(http.MethodPost, root+"/demo/connect",
-				strings.NewReader(`{"settings":{"base_url":"https://x.example"},"consent":{"capabilities":["api:tasks.read","events:task.updated"]}}`))
+				strings.NewReader(`{"settings":{"base_url":"https://x.example"},"consent":{"capabilities":["api:tasks.read","events:task.updated","secrets:token"]}}`))
 			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 			rec := httptest.NewRecorder()
 			e.ServeHTTP(rec, req)

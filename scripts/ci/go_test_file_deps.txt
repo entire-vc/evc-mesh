@@ -43,3 +43,4 @@ internal/themes <- packages/mesh-theme-sdk/cli/**/* packages/mesh-theme-sdk/fixt
 internal/extensions/external <- examples/external-extension/mesh-extension.json
 internal/extensions/catalog <- internal/extensions/catalog/testdata/**/*
 examples/external-extension/refext <- web/board-e2e/refext-widget.html
+internal/extensions/conformance <- internal/extensions/schema/**/* packages/mesh-theme-sdk/schema/manifest.v1.json web/src/**/*.ts web/src/**/*.tsx internal/**/*.go cmd/**/*.go

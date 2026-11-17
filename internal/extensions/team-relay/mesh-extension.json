@@ -135,10 +135,7 @@
       ],
       "reasoning": "Syncs documents and artifacts with the relay at the URL from settings"
     },
-    "ui": [
-      "project.settings",
-      "workspace.settings"
-    ],
+    "ui": [],
     "secrets": [
       "agent_key"
     ]

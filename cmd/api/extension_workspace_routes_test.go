@@ -68,7 +68,7 @@ func TestWorkspaceExtensionRoutes_Contract(t *testing.T) {
 		return rec, out
 	}
 	status := func(m map[string]any) map[string]any { return m["status"].(map[string]any) }
-	const consent = `{"settings":{"base_url":"https://x","token":"s3cret"},"consent":{"capabilities":["api:tasks.read","events:task.updated"]}}`
+	const consent = `{"settings":{"base_url":"https://x","token":"s3cret"},"consent":{"capabilities":["api:tasks.read","events:task.updated","secrets:token"]}}`
 
 	rec, body := call(http.MethodGet, base, "")
 	require.Equal(t, http.StatusOK, rec.Code)

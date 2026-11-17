@@ -100,6 +100,8 @@ export interface CatalogEntry {
   activity?: ExtensionActivityDto;
   /** Catalog-supplied extras (absent for built-ins). */
   versions?: VersionEntry[];
+  /** Not-installed catalog row: the commit of the release an install puts in place. */
+  commitSha?: string;
   checks?: ChecksCard;
   /** Removing the connection can also delete the extension's data (`?data=delete`). */
   canPurgeData: boolean;
@@ -131,6 +133,7 @@ export interface SummaryDto {
   allowed?: boolean; created_at?: string; updated_at?: string;
   manifest?: ExtensionManifest;
   versions?: VersionEntry[]; checks?: ChecksCard;
+  commit_sha?: string;
 }
 export interface WorkspaceDto {
   id: string; name: string; version: string; kind: string; category: string;
@@ -182,6 +185,7 @@ export function mergeCatalog(
       enabled: Boolean(status?.enabled),
       createdAt: s.created_at ?? "", updatedAt: s.updated_at ?? "",
       manifest: s.manifest ?? {}, status, connection: w?.connection, activity: w?.activity, versions: s.versions, checks: s.checks,
+      commitSha: s.commit_sha || undefined,
       canPurgeData: Boolean(w?.can_purge_data), managedElsewhere: Boolean(w?.settings_managed_elsewhere),
       hidden: Boolean(w?.hidden),
     };

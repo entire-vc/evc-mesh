@@ -62,6 +62,11 @@ Both `false` for an extension with no instance level.
 
 `source`: `builtin` | `catalog` | `repo`. `runtime` and `kind` as in the manifest.
 
+`inactive_reason` appears only on an installed extension that is not active:
+`mesh_api_incompatible` — an external extension whose manifest `mesh_api` this
+Mesh's extension API version does not satisfy. It keeps its installed row but is
+not started: no slots, no events. Absent for an active extension.
+
 ### ExtensionStatus
 
 What the runtime acts on for one extension in one workspace (one function,
@@ -175,6 +180,7 @@ still govern: see `status.source`).
 | `POST /extensions/{id}/update` | instance admin | `{ consent_commit_sha?, target_version?, expected_target_commit_sha?, target_scope? }` | `200 { outcome: updated \| up_to_date \| pending_consent, ... }`. An update that adds permissions stays `pending_consent` until `consent_commit_sha` names that commit. `target_version` + `expected_target_commit_sha` choose a release: from the default catalogue (`target_scope` absent or `"default"`; a pinned install becomes unpinned) or from Spark's exact receipt (`target_scope: "scoped"`; the install stays or becomes pinned) |
 | `POST /extensions/update-all` | instance admin | – | `200 { results: [...] }`, same shape per extension |
 | `POST /extensions/{id}/rollback` | instance admin | – | `200` the version before the last update; `409` when there is none |
+| `DELETE /extensions/{id}` | instance admin | – | `200 { extension_id, version, source, connections_disabled, tokens_revoked, data_kept: true }`. `404` not installed, `409` built-in (switch it off instead) or theme (`DELETE /instance/themes/{id}`). See [Uninstalling an extension](#uninstalling-an-extension) |
 | `POST /extensions/{id}/move-to-catalog/plan` | instance admin | `{ target_version?, target_scope? }` | `200 MovePlan`; changes nothing. See [Moving a repository install to the catalog](#moving-a-repository-install-to-the-catalog) |
 | `POST /extensions/{id}/move-to-catalog` | instance admin | `{ expected_version, expected_commit_sha, target_version, target_commit_sha, target_scope?, consent_commit_sha? }`, header `Idempotency-Key` | `200 { outcome: moved \| already_moved, plan }` |
 | `POST /extensions/{id}/repin/plan` | instance admin | `{ repo_url?, ref, auth_token?, remove_auth_token? }` | `200 RepinPlan`; changes nothing. See [Re-pinning a repository install](#re-pinning-a-repository-install) |
@@ -184,6 +190,33 @@ For a tag `ref` the updates check also offers a newer semver tag; for a branch i
 compares the head with the installed `commit_sha`. With the instance auto-update
 flag on, a background pass every 30 minutes applies updates that add no
 permissions; the others wait for consent.
+
+### Uninstalling an extension
+
+The instance administrator removes an extension installed from the catalog or a
+repository with `DELETE /extensions/{id}`, or with **Uninstall** on the
+extension's page (a confirmation names what happens). In one transaction:
+
+- the `installed_extensions` row is deleted: the extension is no longer listed
+  as installed and no longer registered, so none of its UI slots is served
+  (other API replicas drop it on their next registry sync);
+- every workspace connection of the extension is switched off, so no event is
+  delivered to it;
+- every extension actor token is revoked: a call with it answers `401`;
+- the stored access token of a private repository is deleted;
+- an `uninstalled` entry is written to the instance journal.
+
+**The extension's data is kept**: its `ext_<id>_*` tables and their rows, the
+workspace connections with their settings and consent, event subscriptions,
+project bindings, instance settings and the allow-list entry. Installing the
+same id again (`POST /extensions/install`) sees all of it; each workspace then
+switches the extension on again itself, which issues a new token. Deleting the
+data is a separate, explicit action: the retention purge of removed extensions
+(off by default) and `data=delete` on a workspace disconnect.
+
+A built-in extension cannot be uninstalled (`409`): switch it off in the
+instance settings or the workspace instead. A theme is removed with
+`DELETE /instance/themes/{id}`, which also resets the workspaces that chose it.
 
 ### Moving a repository install to the catalog
 
@@ -243,7 +276,8 @@ The same version as the repository install is allowed; an older one is not
 `409 extension_rollback_unavailable`: a catalog rollback only restores a catalog
 snapshot. From then on update, auto-update and rollback of the id go through the
 catalog path only and never call the old repository. Going back to a repository
-means uninstalling and installing again.
+means [uninstalling](#uninstalling-an-extension) (the data stays) and installing
+again.
 
 A retry of an apply that already happened answers `200 already_moved` and
 writes nothing. With an `Idempotency-Key` header the retry returns the stored
@@ -558,3 +592,30 @@ Alias response bodies are unchanged from today.
 - `PUT /api/v1/extensions/keep/instance-settings` with `{"enabled": true, "settings": {"secret_provider": "builtin"|"keep"}}` chooses where new x-secret values are stored (default `builtin`). With `keep`, saving a secret fails while Keep is not configured or unreachable; values stored earlier keep resolving through their own provider. The change takes effect within 30 seconds and is journaled by key only.
 
 Instance administrator = a human user (never an agent key) with the owner/admin role in the oldest non-deleted workspace of the instance. There is no separate instance-level role.
+
+## Deprecated manifest v1 declarations
+
+Manifest v1 still accepts these values for compatibility with installed releases,
+but parsing ignores them and reports each omission in the server log and in
+`warnings` on the install response, repository preview and installed catalog entry:
+
+- UI slots: `command`, `doc.panel`, `workspace.settings`, `project.settings`.
+  Declare `levels.workspace` and `levels.project` and the corresponding `settings`
+  schemas to provide settings forms. There is no command or document panel host.
+- API rights: `workspaces:write`, `members:write`, `agents:write`,
+  `agent_keys:read`, `agent_keys:write`, `secrets:read`, `secrets:write`.
+  Workspace, member, agent and secret administration is not an extension API.
+  Agent key routes use `agent_key:rotate` with their existing authorization checks.
+
+The schemas retain these values with per-value `deprecated` annotations. Stored
+manifests and recorded consent are unchanged. Catalog `manifest.capabilities`
+and repository preview capabilities contain only the effective declarations.
+Removing a right never requests consent again or disables an existing connection;
+new rights still require consent. Removed rights stop acting immediately.
+
+`capabilities.secrets` must equal the union of setting names marked `x-secret`
+at the instance, workspace and project levels (including shared `#/schemas/…`
+references). A missing or extra name rejects the manifest and names the field.
+`webhooks_in` is for builtins only: every name must have a POST route at
+`/webhooks/{extension_id}/{name}` in `Hooks().Routes`. External repository and
+catalog declarations are accepted for v1 compatibility, ignored and warned about.

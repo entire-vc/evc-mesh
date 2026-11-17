@@ -831,7 +831,13 @@
       "roleLoading": "Checking your workspace role…",
       "roleError": "Could not check your workspace role.",
       "roleRetry": "Retry",
-      "manageInRunner": "Manage in Runner"
+      "manageInRunner": "Manage in Runner",
+      "uninstall": "Uninstall",
+      "uninstalling": "Uninstalling…",
+      "uninstallTitle": "Uninstall {{name}} from this instance?",
+      "uninstallBody": "It stops working in every workspace: its panels disappear, events are no longer delivered and its access tokens are revoked. Its data is kept — installing the same version again brings it back, and workspaces switch it on again themselves.",
+      "uninstalled": "{{name}} uninstalled. Its data is kept.",
+      "uninstallThemeBody": "The theme is removed from the instance; workspaces that use it go back to the default theme."
     },
     "permissions": {
       "none": "This extension asks for no special permissions.",
@@ -1247,6 +1253,7 @@
       "theme_selected_instance": "Default theme set to {{ext}}",
       "theme_selected_workspace": "A workspace switched to the {{ext}} theme",
       "theme_deleted": "Theme {{ext}} removed",
+      "uninstalled": "{{ext}} {{version}} uninstalled, its data kept",
       "actions": {
         "settings_changed": "Settings changed",
         "allow_changed": "Allow-list changed",
@@ -1256,7 +1263,8 @@
         "rolled_back": "Rolled back",
         "update_pending_consent": "Update waiting for consent",
         "theme_selected": "Theme chosen",
-        "theme_deleted": "Theme removed"
+        "theme_deleted": "Theme removed",
+        "uninstalled": "Uninstalled"
       }
     },
     "tabs": {
@@ -1341,6 +1349,11 @@
     "refsFailed": "Couldn't read the repository.",
     "previewFailed": "Couldn't read the manifest.",
     "installFailed": "Couldn't install the extension."
+  },
+  "installConsent": {
+    "title": "Install {{name}} to this instance?",
+    "hint": "The extension gets the permissions below on this instance. Connecting it to a workspace is a separate step.",
+    "unknown": "not stated"
   },
   "updatesTab": {
     "awaitingConsent": "Awaiting consent",

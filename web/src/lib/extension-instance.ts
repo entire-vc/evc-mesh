@@ -3,7 +3,7 @@ import { refreshSlotRegistryAfterChange } from "@/lib/extension-slots";
 import type { FieldSchema, Values } from "@/components/extensions/schema-form";
 
 /**
- * Instance administration of extensions (W2.8): allow-list, auto-update flag,
+ * Instance administration of extensions: allow-list, auto-update flag,
  * journal and the per-extension instance settings. Every route is for the
  * instance administrator; anyone else gets a 403 which the page shows as "no access".
  */
@@ -97,6 +97,25 @@ export const listExtensionSummaries = () => api<{ extensions: InstanceExtensionS
 
 export const setExtensionAllowed = (id: string, allowed: boolean) =>
   api(`/api/v1/extensions/${id}/allowed`, { method: "PUT", body: { allowed } }).then((res) => {
+    refreshSlotRegistryAfterChange();
+    return res;
+  });
+/** What `DELETE /extensions/:id` changed; the extension's data is always kept. */
+export interface UninstallResult {
+  extension_id: string;
+  version: string;
+  source: string;
+  connections_disabled: number;
+  tokens_revoked: number;
+  data_kept: boolean;
+}
+
+/**
+ * Remove a catalog or repository extension from the instance (instance administrator only).
+ * Its data stays for a reinstall; a built-in answers 409 (it is switched off instead).
+ */
+export const uninstallExtension = (id: string) =>
+  api<UninstallResult>(`/api/v1/extensions/${encodeURIComponent(id)}`, { method: "DELETE" }).then((res) => {
     refreshSlotRegistryAfterChange();
     return res;
   });

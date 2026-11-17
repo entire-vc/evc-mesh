@@ -26,6 +26,16 @@ type ExtensionHandler struct {
 	}
 	catalog CatalogSource        // optional: the signed Spark catalog
 	builtin func(id string) bool // optional: ids whose code ships with Mesh
+	// inactive, optional: why an installed extension is not active
+	// (external.Runtime.InactiveReason); "" for an active one.
+	inactive func(id string) string
+}
+
+// WithInactiveReason adds the runtime's inactive reason (for example
+// mesh_api_incompatible) to every installed entry that is not active.
+func (h *ExtensionHandler) WithInactiveReason(reason func(id string) string) *ExtensionHandler {
+	h.inactive = reason
+	return h
 }
 
 // WithAllowList adds the instance allow-list verdict to every catalog entry.
@@ -69,8 +79,16 @@ type extensionSummaryResponse struct {
 	CreatedAt     time.Time              `json:"created_at"`
 	UpdatedAt     time.Time              `json:"updated_at"`
 	Manifest      json.RawMessage        `json:"manifest"`
+	Warnings      []string               `json:"warnings,omitempty"`
 	Instance      instanceStatusResponse `json:"instance"`
 	Allowed       bool                   `json:"allowed"`
+	// CommitSHA is the commit of the catalog release a not-installed catalog
+	// row would install; the install dialog shows it before consent.
+	CommitSHA string `json:"commit_sha,omitempty"`
+	// InactiveReason says why an installed extension is not active (no slots,
+	// no events) while its row stays installed: mesh_api_incompatible. Absent
+	// for an active extension.
+	InactiveReason string `json:"inactive_reason,omitempty"`
 }
 
 // List handles GET /extensions.
@@ -106,7 +124,7 @@ func (h *ExtensionHandler) summary(c echo.Context, row *domain.InstalledExtensio
 		Runtime: m.Runtime, Publisher: m.Publisher, Description: m.Description,
 		Category: m.Category, Levels: m.Levels, Source: string(row.Source), Installed: true,
 		TrustLevel: string(row.TrustLevel), Blocked: row.Blocked,
-		BlockedReason: row.BlockedReason, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, Manifest: m.Raw, Allowed: true,
+		BlockedReason: row.BlockedReason, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, Manifest: m.EffectiveJSON(), Warnings: m.Warnings, Allowed: true,
 	}
 	if h.allow != nil {
 		ok, aerr := h.allow.Allowed(c.Request().Context(), row.ExtensionID)
@@ -114,6 +132,9 @@ func (h *ExtensionHandler) summary(c echo.Context, row *domain.InstalledExtensio
 			return extensionSummaryResponse{}, false, fmt.Errorf("allow-list %q: %w", row.ExtensionID, aerr)
 		}
 		s.Allowed = ok
+	}
+	if h.inactive != nil {
+		s.InactiveReason = h.inactive(row.ExtensionID)
 	}
 	if h.instance != nil {
 		is, ierr := h.instance.InstanceSetting(c.Request().Context(), row.ExtensionID)

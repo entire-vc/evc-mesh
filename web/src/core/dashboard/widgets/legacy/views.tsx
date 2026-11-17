@@ -10,6 +10,7 @@ import { EntityIcon } from "@/components/ui/entity-icon";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
 import type { DashboardWidgetView } from "../../types";
+import { useWidgetTitle } from "../../config";
 import { MentionsWidgetView } from "../comms/views";
 import { Body, WidgetEmpty, plainClick } from "./parts";
 
@@ -36,13 +37,14 @@ const agentStatusLabel = (t: T, status: string) => t(`dashboard.agentStatus.${st
 
 export const TriageWidgetView: DashboardWidgetView<"triage"> = ({ data, actions }) => {
   const { t } = useTranslation("notifications");
+  const title = useWidgetTitle(t("dashboard.triage.title"));
   return (
     <Card>
       <CardContent className="pt-4">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="flex items-center gap-1.5 text-sm font-semibold">
             <Inbox className="h-4 w-4" />
-            {t("dashboard.triage.title")}
+            {title}
           </h3>
         </div>
         <Body result={data.result} rows={3} isEmpty={(v) => v.items.length === 0} empty={<WidgetEmpty icon={Inbox} message={t("dashboard.triage.empty")} />}>
@@ -80,6 +82,7 @@ export const TriageWidgetView: DashboardWidgetView<"triage"> = ({ data, actions 
 
 export const SessionsWidgetView: DashboardWidgetView<"sessions"> = ({ data, ctx }) => {
   const { t } = useTranslation("notifications");
+  const title = useWidgetTitle(t("dashboard.sessions.title"));
   // The agents are in Team now that the Sessions page is a dashboard template (§5.9).
   const sessionsTo = ctx.wsSlug ? `/w/${ctx.wsSlug}/org-chart` : "/";
   return (
@@ -88,7 +91,7 @@ export const SessionsWidgetView: DashboardWidgetView<"sessions"> = ({ data, ctx 
         <div className="mb-3 flex items-center justify-between">
           <Link to={sessionsTo} className="flex items-center gap-1.5 text-sm font-semibold hover:text-primary">
             <MonitorDot className="h-4 w-4" />
-            {t("dashboard.sessions.title")}
+            {title}
             <ArrowRight className="h-3 w-3 opacity-50" />
           </Link>
         </div>

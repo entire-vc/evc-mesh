@@ -3,7 +3,6 @@ package migrationlint
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -135,20 +134,8 @@ func TestLint_BrokenFixtureIsRed(t *testing.T) {
 	require.Equal(t, "tasks", v[0].Table)
 }
 
-// TestExtensionMigrationsStayInNamespace is the CI gate: every migration under
-// internal/extensions/<id>/migrations/*.sql may touch only ext_<id>_* tables.
-func TestExtensionMigrationsStayInNamespace(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join("..", "*", "migrations", "*.sql"))
-	require.NoError(t, err)
-	for _, f := range files {
-		id := filepath.Base(filepath.Dir(filepath.Dir(f)))
-		b, err := os.ReadFile(f)
-		require.NoError(t, err)
-		for _, v := range Lint(id, string(b)) {
-			t.Errorf("%s: %s", strings.TrimPrefix(f, "../"), v)
-		}
-	}
-}
+// The CI gate over real migrations is TestMigrationLint_BuiltinExtensions in
+// internal/extensions/builtin: it knows every builtin extension id.
 
 // A per-person row may follow the membership: a composite foreign key to
 // workspace_members is allowed, writing to workspace_members is not.

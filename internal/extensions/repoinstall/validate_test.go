@@ -90,3 +90,13 @@ func TestSemverOrdering(t *testing.T) {
 	assert.False(t, IsNewerTag("v1.0.0", "v1.1.0"))
 	assert.False(t, IsNewerTag("edge", "v1.0.0"))
 }
+
+func TestValidateManifestAcceptsDeprecatedV1AndWarns(t *testing.T) {
+	raw := manifestJSON(t, func(m map[string]any) {
+		m["capabilities"] = map[string]any{"api": []string{"tasks:read", "secrets:write"}, "ui": []string{"command"}, "webhooks_in": []string{"incoming"}}
+	})
+	m, err := ValidateManifest([]byte(raw))
+	require.NoError(t, err, "v1 schema must continue accepting old declarations")
+	require.Equal(t, []string{"api:tasks:read"}, Capabilities(m))
+	require.Len(t, m.Warnings, 3)
+}

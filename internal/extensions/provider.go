@@ -60,20 +60,10 @@ type Route struct {
 	Middlewares []echo.MiddlewareFunc
 }
 
-// EventHandler reacts to a Mesh event (names come from the manifest `events`).
-type EventHandler func(ctx context.Context, workspaceID uuid.UUID, payload []byte) error
-
-// Hooks are the entry points an extension adds to the core: inbound routes
-// (including public webhooks) and event handlers keyed by event name.
+// Hooks are the inbound routes an extension adds to the core, including
+// public webhooks.
 type Hooks struct {
-	Routes        []Route
-	EventHandlers map[string]EventHandler
-}
-
-// UIContribs lists the UI components a builtin extension offers per slot.
-type UIContribs struct {
-	// Slots maps a manifest slot name (e.g. "task.panel") to a component id.
-	Slots map[string]string
+	Routes []Route
 }
 
 // Provider is the contract every extension implements.
@@ -87,8 +77,6 @@ type Provider interface {
 	Resolve(ctx context.Context, workspaceID uuid.UUID) (Resolved, error)
 	// Health runs a live check of the resolved connection.
 	Health(ctx context.Context, r Resolved) HealthReport
-	// Hooks returns inbound routes and event handlers.
+	// Hooks returns inbound routes.
 	Hooks() Hooks
-	// UI returns the components for UI slots.
-	UI() UIContribs
 }

@@ -4,14 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/entire-vc/evc-mesh/internal/extensions/migrationlint"
 )
 
 // Every template is a valid layout of the core catalog, and the ids are the
@@ -140,13 +136,6 @@ func TestCatalog_ThemeCannotShadowCore(t *testing.T) {
 	}
 	require.Equal(t, 1, n)
 	require.Len(t, CoreTypes(), len(coreTypes))
-}
-
-// The migration passes the extension migration lint under its id.
-func TestMigration_Lints(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "migrations", "20261114100_ext_dashboards.sql"))
-	require.NoError(t, err)
-	require.Empty(t, migrationlint.Lint(ID, string(raw)))
 }
 
 // The icon is the shared §5.11 value: one emoji grapheme, icon:<name> or

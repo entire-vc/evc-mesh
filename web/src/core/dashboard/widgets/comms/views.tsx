@@ -11,7 +11,7 @@ import { cn } from "@/lib/cn";
 import { useProjectStore } from "@/stores/project";
 import type { CommentItem, DashboardWidgetView, MentionItem } from "../../types";
 import { Body, WidgetEmpty, formatShort, plainClick } from "../legacy/parts";
-import { boolSetting, numberSetting, stringSetting, useWidgetConfig } from "../../config";
+import { boolSetting, numberSetting, stringSetting, useWidgetConfig, useWidgetTitle } from "../../config";
 
 /** Markdown reduced to a line of text: a row is a link, so it cannot hold the links and mentions of rendered markdown. */
 export function plainPreview(md: string, max = 240): string {
@@ -24,7 +24,8 @@ export function plainPreview(md: string, max = 240): string {
   return t.length > max ? `${t.slice(0, max)}…` : t;
 }
 
-function Shell({ title, icon: Icon, controls, children }: { title: string; icon: ElementType; controls?: ReactNode; children: ReactNode }) {
+function Shell({ title: typeTitle, icon: Icon, controls, children }: { title: string; icon: ElementType; controls?: ReactNode; children: ReactNode }) {
+  const title = useWidgetTitle(typeTitle);
   return (
     <Card className="@container min-w-0">
       <CardContent className="flex max-h-[32rem] min-w-0 flex-col pt-4">

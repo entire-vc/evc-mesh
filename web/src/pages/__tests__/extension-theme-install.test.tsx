@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import type { CatalogState } from "@/hooks/useExtensionCatalog";
 import { mergeCatalog, type WorkspaceDto } from "@/hooks/useExtensionCatalog";
@@ -64,10 +64,36 @@ describe("builtin theme missing from the instance", () => {
   it("an instance admin installs it through the theme-install API and the catalog is re-read", async () => {
     mount();
     fireEvent.click(screen.getByRole("button", { name: "Install to instance" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/api/v1/instance/themes", { method: "POST", body: { source: "builtin", id: "board-studio" } }));
+    expect(apiMock.mock.calls.filter(([path]) => path === "/api/v1/instance/themes")).toHaveLength(1);
     await waitFor(() => expect(state.value.reload).toHaveBeenCalled());
     // the active workspace theme is not touched
     expect(apiMock.mock.calls.some(([, o]) => (o as { method?: string } | undefined)?.method === "PUT")).toBe(false);
+  });
+
+  it.each([
+    { rights: "API permissions", capabilities: { api: ["tasks:read"] }, visible: "Read tasks" },
+    { rights: "network domains alone", capabilities: { network: { allowed_domains: ["themes.example"] } }, visible: "themes.example" },
+  ])("requires consent for $rights, cancels without a request, then installs once after confirmation", async ({ capabilities, visible }) => {
+    setCatalog(mergeCatalog([], [], [theme({ manifest: { capabilities } }) as never]));
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Install to instance" }));
+    let dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain(visible);
+    expect(apiMock.mock.calls.filter(([, options]) => options?.method === "POST")).toHaveLength(0);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(apiMock.mock.calls.filter(([, options]) => options?.method === "POST")).toHaveLength(0);
+    expect(state.value.reload).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Install to instance" }));
+    dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Install" }));
+    await waitFor(() => expect(state.value.reload).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const posts = apiMock.mock.calls.filter(([, options]) => options?.method === "POST");
+    expect(posts).toEqual([["/api/v1/instance/themes", { method: "POST", body: { source: "builtin", id: "board-studio" } }]]);
   });
 
   it("a workspace-only admin gets the way to the instance admin and no install button", () => {

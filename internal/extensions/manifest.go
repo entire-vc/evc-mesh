@@ -35,7 +35,9 @@ type Manifest struct {
 	// Widgets are the dashboard widget types of the dashboard.widget slot.
 	Widgets []Widget `json:"widgets,omitempty"`
 
-	Raw json.RawMessage `json:"-"`
+	// Warnings describe declarations accepted for v1 compatibility but ignored.
+	Warnings []string        `json:"-"`
+	Raw      json.RawMessage `json:"-"`
 }
 
 // ProjectView is the manifest block of the project.view slot: a tab in the
@@ -113,6 +115,9 @@ func ParseManifest(raw []byte) (Manifest, error) {
 	if err := checkWidgets(m.Widgets); err != nil {
 		return Manifest{}, fmt.Errorf("parse manifest: %w", err)
 	}
+	if err := m.normalize(); err != nil {
+		return Manifest{}, fmt.Errorf("parse manifest: %w", err)
+	}
 	m.Raw = append(json.RawMessage(nil), raw...)
 	return m, nil
 }
@@ -162,16 +167,21 @@ func (m Manifest) SettingFields(levelName string) map[string]SettingField {
 		return nil
 	}
 	lv := *settings[levelName]
+	out := make(map[string]SettingField)
 	if name, ok := strings.CutPrefix(lv.Ref, "#/schemas/"); ok {
 		var schemas map[string]level
 		if json.Unmarshal(m.Schemas, &schemas) != nil {
 			return nil
 		}
-		lv = schemas[name]
+		for k, f := range schemas[name].Properties {
+			out[k] = SettingField(f)
+		}
 	}
-	out := make(map[string]SettingField, len(lv.Properties))
+	// Draft 2020-12 applies properties beside a ref too. A sibling must not
+	// remove a secret or read-only flag declared by the referenced schema.
 	for k, f := range lv.Properties {
-		out[k] = SettingField(f)
+		prev := out[k]
+		out[k] = SettingField{Secret: prev.Secret || f.Secret, ReadOnly: prev.ReadOnly || f.ReadOnly}
 	}
 	return out
 }

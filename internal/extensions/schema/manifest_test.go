@@ -15,7 +15,7 @@ import (
 
 // manifestV1SHA256 is the digest of manifest.v1.json fixed by the extensions
 // manifest ADR. The Spark side pins the same value.
-const manifestV1SHA256 = "00f143bd045b104cb18c42c961721c75da73795e9759844989d70458fefea424"
+const manifestV1SHA256 = "1d4c5aec4b4785b73db7a95c8d3802d5425b6c6d19c448b5fbb01122292294c3"
 
 const schemaFile = "manifest.v1.json"
 

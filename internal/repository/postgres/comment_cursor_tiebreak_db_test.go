@@ -85,9 +85,8 @@ func newCursorTestFixture(t *testing.T, db *sqlx.DB) cursorTestFixture {
 }
 
 // createCursorTestUser inserts a real user row so a comment authored by it
-// resolves author_name via commentViewSelect's correlated subquery instead of
-// scanning NULL (the subquery finds no row for an author_id with no matching
-// user, which errors the scan rather than falling through to the CASE's ELSE).
+// resolves a real author_name via commentViewSelect's correlated subquery
+// (an author_id with no matching user reads as an empty name).
 func createCursorTestUser(t *testing.T, db *sqlx.DB) uuid.UUID {
 	t.Helper()
 	suffix := uuid.New().String()[:8]

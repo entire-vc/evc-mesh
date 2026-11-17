@@ -9,6 +9,9 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/extensions/builtin"
+	"github.com/entire-vc/evc-mesh/internal/extensions/github"
+	"github.com/entire-vc/evc-mesh/internal/extensions/gitlab"
+	"github.com/entire-vc/evc-mesh/internal/handler"
 )
 
 // Every builtin provider is listed once, carries a valid manifest and can be
@@ -55,4 +58,32 @@ func TestProviders_ResolveHonoursAllowList(t *testing.T) {
 		require.False(t, res.Enabled, "%s resolves as on while disallowed", p.Manifest().ID)
 		require.Nil(t, res.Settings, "%s hands settings while disallowed", p.Manifest().ID)
 	}
+}
+
+// Every declared inbound webhook names a real POST route, rather than only
+// appearing in the consent dialog. A fabricated name must fail the same check.
+func TestProviders_WebhooksHaveRoutes(t *testing.T) {
+	webhooks := handler.NewVCSLinkHandler(nil)
+	for _, p := range builtin.Providers(extensions.Deps{}) {
+		// main installs the HTTP handlers before registering these hooks.
+		switch p := p.(type) {
+		case *github.Provider:
+			p.WebhookHandler = webhooks.GitHubWebhook
+		case *gitlab.Provider:
+			p.WebhookHandler = webhooks.GitLabWebhook
+		}
+		for _, name := range p.Manifest().Capabilities.WebhooksIn {
+			require.True(t, hasWebhookRoute(p, name), "%s: no route for %s", p.Manifest().ID, name)
+		}
+		require.False(t, hasWebhookRoute(p, "invented-webhook"), "%s: negative control", p.Manifest().ID)
+	}
+}
+
+func hasWebhookRoute(p extensions.Provider, name string) bool {
+	for _, route := range p.Hooks().Routes {
+		if route.Method == "POST" && route.Path == "/webhooks/"+p.Manifest().ID+"/"+name && route.Handler != nil {
+			return true
+		}
+	}
+	return false
 }

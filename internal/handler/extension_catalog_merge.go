@@ -2,12 +2,14 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/extensions/catalog"
 )
 
@@ -105,6 +107,7 @@ func (h *ExtensionHandler) Catalog(c echo.Context) error {
 				ID: e.ID, Name: e.Name, Version: e.Latest.Version, Kind: e.Kind, Runtime: e.Runtime,
 				Publisher: e.Publisher, Category: e.Category, Source: string(src),
 				TrustLevel: e.Trust, PageURL: e.PageURL, Allowed: domain.DefaultExtensionAllowed(e.Trust),
+				CommitSHA: e.Latest.CommitSHA, Manifest: releaseManifest(*e),
 			}
 			if b, hit := cat.Blocks(e.ID, e.Latest.Version); hit {
 				s.Blocked, s.BlockedReason = true, b.Reason
@@ -143,4 +146,37 @@ func (h *ExtensionHandler) CatalogCard(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadGateway, "spark card is unavailable")
 	}
 	return extensionJSON(c, http.StatusOK, card)
+}
+
+// releaseManifest is the manifest part a not-installed catalog row can show:
+// the effective permissions of its latest release. The signed source stays
+// unchanged, just as installed manifests do. Nil when it declares none.
+func releaseManifest(entry catalog.Entry) json.RawMessage {
+	var caps map[string]json.RawMessage
+	if len(entry.Latest.Capabilities) == 0 || json.Unmarshal(entry.Latest.Capabilities, &caps) != nil || caps == nil {
+		return nil
+	}
+	for _, group := range []string{"api", "ui", "webhooks_in"} {
+		raw, ok := caps[group]
+		if !ok {
+			continue
+		}
+		var values []string
+		if json.Unmarshal(raw, &values) != nil {
+			return nil
+		}
+		kept := make([]string, 0, len(values))
+		for _, value := range values {
+			if extensions.IsDeprecatedCapability(group, value) || (group == "webhooks_in" && (entry.Runtime != "builtin" || entry.Kind == "theme")) {
+				continue
+			}
+			kept = append(kept, value)
+		}
+		caps[group], _ = json.Marshal(kept)
+	}
+	out, err := json.Marshal(map[string]any{"capabilities": caps})
+	if err != nil {
+		return nil
+	}
+	return out
 }

@@ -62,6 +62,61 @@ func TestRuntimePreviewUnknownAndDisabledCannotOpenReserve(t *testing.T) {
 	require.Equal(t, "integration_or_admission_disabled", result.Reason)
 }
 
+func TestRuntimePreviewKnownPoolBlockSurvivesUnknownWindow(t *testing.T) {
+	for _, blocked := range []string{"exhausted", "threshold"} {
+		for _, reverse := range []bool{false, true} {
+			for _, uncertain := range []string{"missing", "unverified", "stale", "future", "unknown", "invalid_threshold"} {
+				t.Run(fmt.Sprintf("%s/reverse=%t/%s", blocked, reverse, uncertain), func(t *testing.T) {
+					c, b, facts, now := runtimeRouteFixture(t)
+					account := c.Accounts["preferred"]
+					account.QuotaPoolsByMode["subscription"] = []string{"shared-window", "long-window"}
+					if reverse {
+						slices.Reverse(account.QuotaPoolsByMode["subscription"])
+					}
+					c.Accounts["preferred"] = account
+					pool := c.Pools["long-window"]
+					pool.ThresholdRef = "soft-1"
+					c.Pools["long-window"] = pool
+					pools := facts["preferred"].Pools
+					fact := RuntimePoolObservation{State: "available", Verified: true, ObservedAt: now.Add(-time.Second)}
+					switch uncertain {
+					case "missing":
+						delete(pools, "shared-window")
+					case "unverified":
+						fact.Verified = false
+					case "stale":
+						fact.ObservedAt = now.Add(-time.Duration(b.Policy.EvidenceMaxAgeSeconds+1) * time.Second)
+					case "future":
+						fact.ObservedAt = now.Add(time.Second)
+					case "unknown":
+						fact.State = "unknown"
+					case "invalid_threshold":
+						fact.State = "threshold"
+					}
+					if uncertain != "missing" {
+						pools["shared-window"] = fact
+					}
+					pools["long-window"] = RuntimePoolObservation{State: blocked, ThresholdRef: "soft-1", EvidenceKind: "configured_threshold", Verified: true, ObservedAt: now.Add(-time.Second)}
+					request := RuntimePreviewInput{Purpose: "new_launch"}
+					result := PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, nil, request, now)
+					require.Equal(t, "reserve", result.SelectedProfileID)
+					reason := "quota_blocked"
+					if blocked == "threshold" {
+						reason = "threshold_blocked"
+					}
+					require.Equal(t, reason, result.Trace[0].Reason)
+					require.False(t, result.LaunchAuthorized)
+					// Without a confirmed block, the same uncertainty still stops routing.
+					pools["long-window"] = RuntimePoolObservation{State: "available", Verified: true, ObservedAt: now.Add(-time.Second)}
+					result = PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, nil, request, now)
+					require.Empty(t, result.SelectedProfileID)
+					require.Equal(t, "primary_has_no_sole_quota_trigger", result.Reason)
+				})
+			}
+		}
+	}
+}
+
 func TestRuntimePreviewSharedPoolAliasAndExplicitAPI(t *testing.T) {
 	c, b, facts, now := runtimeRouteFixture(t)
 	account := c.Accounts["reserve"]

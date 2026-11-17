@@ -54,7 +54,6 @@ func TestBaseProviderDefaults(t *testing.T) {
 	require.True(t, b.Health(context.Background(), extensions.Resolved{Enabled: true}).OK)
 	require.False(t, b.Health(context.Background(), extensions.Resolved{}).OK)
 	require.Empty(t, b.Hooks().Routes)
-	require.Empty(t, b.UI().Slots)
 }
 
 type fakeConsentRepo struct {

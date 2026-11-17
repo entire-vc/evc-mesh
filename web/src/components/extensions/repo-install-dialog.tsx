@@ -8,9 +8,9 @@ import { Select } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { apiErrorMessage } from "@/lib/api-error";
-import { capabilityText, describeCapabilities } from "@/lib/extension-capabilities";
+import { ConsentSummary } from "@/components/extensions/install-consent";
 import {
-  installRepoExtension, listRepoRefs, previewRepoExtension, shortSha,
+  installRepoExtension, listRepoRefs, previewRepoExtension,
   type RepoPreview, type RepoRefs,
 } from "@/lib/extension-repo";
 
@@ -83,7 +83,6 @@ export function RepoInstallDialog({ onClose, onInstalled }: { onClose: () => voi
   };
 
   const list = kind === "tag" ? (refs?.tags ?? []) : (refs?.branches ?? []);
-  const lines = preview ? describeCapabilities(preview.manifest?.capabilities) : [];
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} className="max-w-xl">
@@ -174,33 +173,22 @@ export function RepoInstallDialog({ onClose, onInstalled }: { onClose: () => voi
           )}
 
           {preview && (
-            <section data-testid="repo-preview" aria-label={t("repoInstall.manifest")} className="space-y-3 rounded-lg border border-border p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="text-sm font-semibold">{preview.name}</h3>
-                <Badge variant="outline">{preview.version}</Badge>
+            <ConsentSummary
+              testId="repo-preview"
+              subject={{
+                name: preview.name, version: preview.version, publisher: preview.publisher,
+                commitSha: preview.commit_sha, description: preview.description, capabilities: preview.manifest?.capabilities,
+              }}
+              badges={<>
                 <Badge variant="warning">{t("catalog.trust.custom")}</Badge>
                 <Badge variant="success">{t("repoInstall.compatible", { range: preview.mesh_api })}</Badge>
-              </div>
-              <p className="text-sm text-muted-foreground">{preview.description}</p>
-              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                <dt>{t("repoInstall.publisher")}</dt><dd className="min-w-0 break-words">{preview.publisher}</dd>
-                <dt>{t("repoInstall.commit")}</dt><dd className="font-mono">{shortSha(preview.commit_sha)}</dd>
-              </dl>
-              <div>
-                <p className="mb-1 text-sm font-medium">{t("repoInstall.permissions")}</p>
-                {lines.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">{t("repoInstall.noPermissions")}</p>
-                ) : (
-                  <ul className="list-disc space-y-0.5 pl-5 text-sm">
-                    {lines.map((l) => <li key={l.raw}>{capabilityText(t, l)}</li>)}
-                  </ul>
-                )}
-              </div>
+              </>}
+            >
               <p role="note" className="flex items-start gap-2 rounded-md border border-border bg-muted p-2 text-sm">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
                 {t("repoInstall.customWarning")}
               </p>
-            </section>
+            </ConsentSummary>
           )}
         </div>
 

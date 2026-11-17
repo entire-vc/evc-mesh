@@ -192,15 +192,19 @@ const commentViewSelect = `SELECT
 	c.body       AS comment_body,
 	c.author_id,
 	c.author_type AS author_kind,
-	CASE
+	-- CommentView.AuthorName is a plain string, so this column must never be
+	-- NULL: one unresolvable author failed the scan of the whole page and the
+	-- feed answered 500. A feed row is history, so a soft-deleted
+	-- agent keeps the name it wrote under; an author with no row at all reads
+	-- as '' (the outer COALESCE), as the ELSE arm always did.
+	COALESCE(CASE
 		WHEN c.author_type = 'agent' THEN
-			(SELECT name FROM agents WHERE id = c.author_id AND deleted_at IS NULL)
+			(SELECT name FROM agents WHERE id = c.author_id)
 		WHEN c.author_type = 'user' THEN
 			(SELECT COALESCE(NULLIF(u.display_name, ''), SPLIT_PART(u.email, '@', 1)) FROM users u WHERE u.id = c.author_id)
 		WHEN c.author_type = 'extension' THEN
 			(SELECT COALESCE(NULLIF(ea.display_name, ''), ea.extension_id) FROM extension_actors ea WHERE ea.actor_id = c.author_id)
-		ELSE ''
-	END AS author_name,
+	END, '') AS author_name,
 	c.is_internal,
 	c.created_at,
 	c.updated_at

@@ -178,12 +178,12 @@ func (manifestProvider) Resolve(context.Context, uuid.UUID) (extensions.Resolved
 func (manifestProvider) Health(context.Context, extensions.Resolved) extensions.HealthReport {
 	return extensions.HealthReport{}
 }
-func (manifestProvider) Hooks() extensions.Hooks   { return extensions.Hooks{} }
-func (manifestProvider) UI() extensions.UIContribs { return extensions.UIContribs{} }
+func (manifestProvider) Hooks() extensions.Hooks { return extensions.Hooks{} }
 
 func registeredSecretHandler(t *testing.T, repo *fakeInstRepo) *ExtensionInstanceSettingsHandler {
 	t.Helper()
 	m, err := extensions.ParseManifest([]byte(`{"id":"acme","version":"1.0.0","runtime":"builtin",
+		"capabilities":{"secrets":["api_key"]},
 		"settings":{"instance":{"$ref":"#/schemas/connection"}},
 		"schemas":{"connection":{"properties":{"base_url":{"type":"string"},"api_key":{"type":"string","x-secret":true}}}}}`))
 	require.NoError(t, err)

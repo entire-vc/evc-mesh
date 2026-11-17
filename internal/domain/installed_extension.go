@@ -162,3 +162,15 @@ const (
 	RepoTokenReplace RepoTokenChange = "replace"
 	RepoTokenRemove  RepoTokenChange = "remove"
 )
+
+// ExtensionUninstallReport is what removing an extension from the instance
+// changed. The extension's data is never part of it: it is kept.
+type ExtensionUninstallReport struct {
+	ExtensionID string `json:"extension_id"`
+	Version     string `json:"version"`
+	Source      string `json:"source"`
+	// Connections is how many workspace connections were switched off.
+	Connections int64 `json:"connections_disabled"`
+	// TokensRevoked is how many extension actor tokens were revoked.
+	TokensRevoked int64 `json:"tokens_revoked"`
+}

@@ -21,7 +21,6 @@ type widgetProvider struct {
 func (p *widgetProvider) Manifest() extensions.Manifest                   { return p.m }
 func (p *widgetProvider) Validate(extensions.Level, map[string]any) error { return nil }
 func (p *widgetProvider) Hooks() extensions.Hooks                         { return extensions.Hooks{} }
-func (p *widgetProvider) UI() extensions.UIContribs                       { return extensions.UIContribs{} }
 func (p *widgetProvider) Health(context.Context, extensions.Resolved) extensions.HealthReport {
 	return extensions.HealthReport{}
 }
