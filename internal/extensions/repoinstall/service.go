@@ -93,6 +93,7 @@ type Preview struct {
 	CommitSHA    string          `json:"commit_sha"`
 	TrustLevel   string          `json:"trust_level"`
 	Warning      string          `json:"warning"`
+	Warnings     []string        `json:"warnings,omitempty"`
 }
 
 // Refs is the tag and branch list the install form offers.
@@ -181,7 +182,7 @@ func (s *Service) Preview(ctx context.Context, repoURL, ref, token string) (*Pre
 	}
 	m := f.manifest
 	return &Preview{
-		Manifest: m.Raw, ID: m.ID, Name: m.Name, Version: m.Version, Publisher: m.Publisher, Description: m.Description,
+		Manifest: m.EffectiveJSON(), Warnings: m.Warnings, ID: m.ID, Name: m.Name, Version: m.Version, Publisher: m.Publisher, Description: m.Description,
 		MeshAPI: m.MeshAPI, Compatible: true, Capabilities: Capabilities(m), Ref: ref, CommitSHA: f.sha,
 		TrustLevel: string(domain.ExtensionTrustCustom), Warning: customWarning,
 	}, nil

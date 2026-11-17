@@ -842,8 +842,7 @@
   },
   "capabilities": {
     "api": [
-      "agents:read",
-      "agent_keys:read"
+      "agents:read"
     ],
     "events": [],
     "webhooks_in": [],

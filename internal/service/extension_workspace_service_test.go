@@ -45,7 +45,7 @@ func requireAPIErr(t *testing.T, err error, status int, code string) {
 	}
 }
 
-var fullConsent = []string{"api:tasks.read", "events:task.updated"}
+var fullConsent = []string{"api:tasks.read", "events:task.updated", "secrets:token"}
 
 func TestExtensionWorkspace_ConnectLifecycle(t *testing.T) {
 	ctx := context.Background()

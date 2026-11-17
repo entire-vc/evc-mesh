@@ -86,8 +86,10 @@ def profile_data(path: Path, packages: list[str] | None = None) -> bytes:
     if not data.startswith(b'mode: atomic\n'):
         raise ValueError('test profile is not atomic')
     blocks = parse_profile(str(path), '')
-    if not any(blocks.values()):
-        raise ValueError('test profile has no measured blocks')
+    # A profile without blocks is valid only for packages that have no code to
+    # measure: a selection of test-only packages (internal/extensions/conformance
+    # scans web/src, so a web-only diff selects just it) prints "[no statements]".
+    measured = any(blocks.values())
     # A valid, hash-matched subset of the profile would otherwise pass a
     # docs-only diff: diff_coverage has no changed blocks to inspect there.
     # Resolve the active package files with the same race/build-tag selection
@@ -106,7 +108,10 @@ def profile_data(path: Path, packages: list[str] | None = None) -> bytes:
         packages += 1
         import_path = package['ImportPath']
         directory = Path(package['Dir'])
-        for name in package.get('GoFiles', []) + package.get('CgoFiles', []):
+        sources = package.get('GoFiles', []) + package.get('CgoFiles', [])
+        if sources and not measured:
+            raise ValueError('test profile has no measured blocks')
+        for name in sources:
             file_path = f'{import_path}/{name}'
             actual = {block[:5] for block in blocks.get(file_path, [])}
             for block in instrumented_blocks(str(directory / name), str(directory)):

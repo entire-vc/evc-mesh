@@ -37,6 +37,8 @@ FILES = {
     'b/b_test.go': 'package b\n\nimport "testing"\n\nfunc TestQuad(t *testing.T) {\n\tif Quad(1) != 4 {\n\t\tt.Fatal("x")\n\t}\n}\n',
     'c/c.go': 'package c\n\nfunc One() int { return 1 }\n',
     'c/c_test.go': 'package c\n\nimport "testing"\n\nfunc TestOne(t *testing.T) {\n\tif One() != 1 {\n\t\tt.Fatal("x")\n\t}\n}\n',
+    # A test-only package (like internal/extensions/conformance): no code, so its profile has no blocks.
+    'd/d_test.go': 'package d\n\nimport "testing"\n\nfunc TestNothing(t *testing.T) {}\n',
 }
 
 
@@ -100,6 +102,19 @@ class SelectionManifest(unittest.TestCase):
         self.assertNotEqual(refused.returncode, 0, 'verify accepted a profile that lacks the changed package')
         self.assertIn('omits packages with changed Go files', refused.stderr)
         self.assertIn(f'{MODULE}/a', refused.stderr)
+
+    def test_a_selection_of_a_test_only_package_is_a_valid_empty_profile(self):
+        # A web-only diff selects only the test-only package: "[no statements]" is not a broken run.
+        ran = self.run_selection([f'{MODULE}/d'])
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertEqual(self.manifest()['test_args'][0], f'{MODULE}/d')
+
+    def test_red_control_an_empty_profile_for_a_package_with_code_is_refused(self):
+        self.assertEqual(self.run_selection([f'{MODULE}/c', f'{MODULE}/d']).returncode, 0)
+        (self.repo / 'coverage.out').write_text('mode: atomic\n', encoding='utf-8')
+        refused = self.artifact('create', 'coverage.out', 'manifest.json')
+        self.assertNotEqual(refused.returncode, 0, 'an empty profile passed for a package with code')
+        self.assertIn('no measured blocks', refused.stderr)
 
     def test_a_selection_cannot_be_verified_without_a_diff_base(self):
         self.assertEqual(self.run_selection([f'{MODULE}/a', f'{MODULE}/b']).returncode, 0)

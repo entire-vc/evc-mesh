@@ -27,6 +27,22 @@ type ExtensionInstanceAdminHandler struct {
 	installed repository.InstalledExtensionRepository
 	admins    InstanceAdminChecker
 	usage     ExtensionUsageCounter
+	uninstall ExtensionUninstaller
+	// onUninstalled re-syncs the extension registry so the removed extension
+	// stops being served at once; other replicas pick it up on their next sync.
+	onUninstalled func(ctx context.Context)
+}
+
+// ExtensionUninstaller removes an installed extension from the instance and
+// keeps its data (postgres.ExtensionUninstallRepo).
+type ExtensionUninstaller interface {
+	Uninstall(ctx context.Context, extensionID string, journal *domain.InstanceExtensionJournalEntry) (*domain.ExtensionUninstallReport, error)
+}
+
+// WithUninstall enables DELETE /extensions/:ext_id; onUninstalled may be nil.
+func (h *ExtensionInstanceAdminHandler) WithUninstall(u ExtensionUninstaller, onUninstalled func(ctx context.Context)) *ExtensionInstanceAdminHandler {
+	h.uninstall, h.onUninstalled = u, onUninstalled
+	return h
 }
 
 // ExtensionUsageCounter counts, per extension id, the workspaces where it is on.
@@ -178,6 +194,37 @@ func (h *ExtensionInstanceAdminHandler) SetAllowed(c echo.Context) error {
 	}
 	appendJournal(c, h.policy, uid, extID, domain.InstanceJournalAllowChanged, map[string]any{"allowed": body.Allowed})
 	return c.JSON(http.StatusOK, map[string]any{"extension_id": extID, "allowed": body.Allowed, "allow_explicit": true})
+}
+
+// Uninstall handles DELETE /extensions/:ext_id: the instance administrator
+// removes an extension installed from the catalog or a repository. Its slots
+// are no longer served, its connections are off (no events, its tokens are
+// revoked) and its data stays for a reinstall. 409 for a built-in extension
+// (it is switched off instead) and for a theme (the themes page removes it).
+func (h *ExtensionInstanceAdminHandler) Uninstall(c echo.Context) error {
+	uid, denied, err := authorizeInstanceAdmin(c, h.admins)
+	if denied {
+		return err
+	}
+	if h.uninstall == nil {
+		return c.JSON(http.StatusNotImplemented, apierror.BadRequest("uninstall is not enabled on this instance"))
+	}
+	ctx := c.Request().Context()
+	extID := c.Param("ext_id")
+	// The repository fills the details from the row it locked, so the journal
+	// names the version that was actually removed.
+	journal := &domain.InstanceExtensionJournalEntry{ActorID: &uid, ExtensionID: extID, Action: domain.InstanceJournalUninstalled}
+	rep, uerr := h.uninstall.Uninstall(ctx, extID, journal)
+	if uerr != nil {
+		return handleError(c, uerr)
+	}
+	if h.onUninstalled != nil {
+		h.onUninstalled(ctx)
+	}
+	return c.JSON(http.StatusOK, map[string]any{
+		"extension_id": rep.ExtensionID, "version": rep.Version, "source": rep.Source,
+		"connections_disabled": rep.Connections, "tokens_revoked": rep.TokensRevoked, "data_kept": true,
+	})
 }
 
 type autoUpdateBody struct {

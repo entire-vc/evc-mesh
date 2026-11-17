@@ -14,6 +14,7 @@ import * as fmt from "@/i18n/format";
 import { cn } from "@/lib/cn";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { Async } from "../../types";
+import { useWidgetTitle } from "../../config";
 import { downloadAnalyticsCsv } from "./filters";
 import type { AnalyticsQuery } from "./use-analytics";
 
@@ -102,8 +103,9 @@ function periodLabel(at: AT, q: AnalyticsQuery): string {
 
 /** Card of one widget: title, period, the "⋯" menu with the CSV export of the instance's filter. */
 /** `query` absent: a live workspace count that no period or project narrows, so no period label and no CSV. */
-export function WidgetFrame({ title, query, children }: { title: string; query?: AnalyticsQuery; children: ReactNode }) {
+export function WidgetFrame({ title: typeTitle, query, children }: { title: string; query?: AnalyticsQuery; children: ReactNode }) {
   const at = useAT();
+  const title = useWidgetTitle(typeTitle);
   const wsId = useWorkspaceStore((s) => s.currentWorkspace?.id);
   const [busy, setBusy] = useState(false);
   const download = async () => {

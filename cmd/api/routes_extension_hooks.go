@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
+	"log"
+
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
+	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 )
 
 // registerExtensionHookRoutes mounts instance extension settings, the routes
@@ -24,6 +28,16 @@ func registerExtensionHookRoutes(deps *apiDeps) {
 	api.GET("/extensions/instance/journal", extensionInstanceAdminHandler.Journal, mw.RequireUserAuth())
 	api.PUT("/extensions/instance/auto-update", extensionInstanceAdminHandler.SetAutoUpdate, mw.RequireUserAuth())
 	api.PUT("/extensions/:ext_id/allowed", extensionInstanceAdminHandler.SetAllowed, mw.RequireUserAuth())
+	// Uninstall a catalog or repository extension; its data stays (D2).
+	extensionInstanceAdminHandler.WithUninstall(postgres.NewExtensionUninstallRepo(deps.db), func(ctx context.Context) {
+		if deps.externalRuntime == nil {
+			return
+		}
+		if err := deps.externalRuntime.Sync(ctx); err != nil {
+			log.Printf("[extensions] external runtime sync after uninstall: %v", err)
+		}
+	})
+	api.DELETE("/extensions/:ext_id", extensionInstanceAdminHandler.Uninstall, mw.RequireUserAuth())
 
 	// Routes contributed by registered extensions (Hooks()). GitHub's webhook
 	// route is canonical at /webhooks/github/github; the two older paths below

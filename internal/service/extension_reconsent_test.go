@@ -18,8 +18,8 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
-// demo 1.0.0 (exttest.Manifest) declares api:tasks.read and events:task.updated.
-var demoDeclared = []string{"api:tasks.read", "events:task.updated"}
+// demo 1.0.0 also declares its x-secret setting.
+var demoDeclared = []string{"api:tasks.read", "events:task.updated", "secrets:token"}
 
 type memInstalled struct{ c *exttest.MemConsents }
 
@@ -32,7 +32,8 @@ func demoRepoRow(version, commit string, api, events []string) *domain.Installed
 	e, _ := json.Marshal(events)
 	m := `{"id":"demo","name":"Demo","version":"` + version + `","kind":"integration","runtime":"builtin","category":"vcs",
  "levels":{"instance":true,"workspace":true,"project":false},
- "capabilities":{"api":` + string(a) + `,"events":` + string(e) + `}}`
+ "settings":{"workspace":{"properties":{"token":{"type":"string","x-secret":true}}}},
+ "capabilities":{"api":` + string(a) + `,"events":` + string(e) + `,"secrets":["token"]}}`
 	return &domain.InstalledExtension{ExtensionID: "demo", Version: version, Manifest: json.RawMessage(m),
 		Source: domain.ExtensionSourceRepo, CommitSHA: commit}
 }
@@ -82,7 +83,7 @@ func TestReconsent_RefusesAnotherVersionOrCommit(t *testing.T) {
 	// Positive control: the installed release is accepted.
 	v, err := svc.Reconsent(ctx, ws, "demo", nil, "0.4.0", "c4")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"api:tasks.read", "api:tasks.write", "events:task.updated"}, v.Connection.ConsentedCapabilities)
+	assert.Equal(t, []string{"api:tasks.read", "api:tasks.write", "events:task.updated", "secrets:token"}, v.Connection.ConsentedCapabilities)
 
 	_, err = svc.Reconsent(ctx, ws, "demo", nil, "", "")
 	assert.Equal(t, http.StatusBadRequest, asAPIError(t, err).Code, "a version is required")
@@ -148,7 +149,7 @@ func TestReconsent_DroppedRightsAreNotPendingAndLeaveTheRecord(t *testing.T) {
 	ctx := context.Background()
 	svc, f, ws := reconsentFx(t)
 	f.Consents.Installed["demo"] = demoRepoRow("0.3.0", "c3", []string{"tasks.read", "docs:read"}, []string{"task.updated"})
-	_, err := svc.Connect(ctx, ws, "demo", nil, map[string]any{}, []string{"api:docs:read", "api:tasks.read", "events:task.updated"})
+	_, err := svc.Connect(ctx, ws, "demo", nil, map[string]any{}, []string{"api:docs:read", "api:tasks.read", "events:task.updated", "secrets:token"})
 	require.NoError(t, err)
 	f.Consents.Installed["demo"] = demoRepoRow("0.4.0", "c4", []string{"tasks.read"}, []string{"task.updated"})
 
@@ -159,7 +160,7 @@ func TestReconsent_DroppedRightsAreNotPendingAndLeaveTheRecord(t *testing.T) {
 
 	r, err := svc.Reconsent(ctx, ws, "demo", nil, "0.4.0", "c4")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"api:tasks.read", "events:task.updated"}, r.Connection.ConsentedCapabilities)
+	assert.Equal(t, []string{"api:tasks.read", "events:task.updated", "secrets:token"}, r.Connection.ConsentedCapabilities)
 }
 
 type reconsentHook struct {

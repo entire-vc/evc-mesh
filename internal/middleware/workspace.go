@@ -552,6 +552,7 @@ var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/extensions/:ext_id/instance-settings":                                                true,
 	"/api/v1/extensions/:ext_id/catalog-card":                                                     true,
 	"/api/v1/extensions/:ext_id/allowed":                                                          true,
+	"/api/v1/extensions/:ext_id":                                                                  true, // DELETE uninstalls: :ext_id is a manifest id in the instance-level installed_extensions, which no workspace owns; ExtensionInstanceAdminHandler.Uninstall answers 403 unless the caller is an instance admin before anything is read or written
 	"/api/v1/extensions/:ext_id/update":                                                           true,
 	"/api/v1/extensions/:ext_id/rollback":                                                         true,
 	"/api/v1/extensions/:ext_id/move-to-catalog":                                                  true, // :ext_id is a manifest id in the instance-level installed_extensions, which no workspace owns; ExtensionRepoInstallHandler answers 403 unless the caller is an instance admin before anything is read or written

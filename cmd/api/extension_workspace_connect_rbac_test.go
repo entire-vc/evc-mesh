@@ -20,6 +20,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/handler"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/service"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 const connectRBACManifest = `{"schema":1,"id":"keepish","name":"Keepish","version":"0.1.0","kind":"plugin","runtime":"external",
@@ -126,6 +127,11 @@ func TestExtensionConsentRoute_RBAC(t *testing.T) {
 	_, err = svc.Connect(context.Background(), ws, "demo", nil, map[string]any{}, []string{"api:tasks.read"})
 	require.Error(t, err, "consent must cover the declared set")
 	_, err = svc.Connect(context.Background(), ws, "demo", nil, map[string]any{}, []string{"api:tasks.read", "events:task.updated"})
+	require.Error(t, err, "consent must also cover the declared secret")
+	var validation *apierror.Error
+	require.ErrorAs(t, err, &validation)
+	require.Contains(t, validation.Validation["consent"], "secrets:token")
+	_, err = svc.Connect(context.Background(), ws, "demo", nil, map[string]any{}, []string{"api:tasks.read", "events:task.updated", "secrets:token"})
 	require.NoError(t, err)
 	row := f.Integ.Find(ws, "demo")
 	// Recorded before the version was stored.
@@ -168,5 +174,5 @@ func TestExtensionConsentRoute_RBAC(t *testing.T) {
 		assert.Equal(t, false, conn["needs_consent"])
 		assert.Nil(t, conn["pending_consent"])
 	}
-	assert.Equal(t, []string{"api:tasks.read", "events:task.updated"}, f.Consents.ByID[row.ID].Capabilities)
+	assert.Equal(t, []string{"api:tasks.read", "events:task.updated", "secrets:token"}, f.Consents.ByID[row.ID].Capabilities)
 }

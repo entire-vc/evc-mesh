@@ -92,10 +92,7 @@
     ],
     "events": [],
     "webhooks_in": [],
-    "ui": [
-      "project.settings",
-      "workspace.settings"
-    ],
+    "ui": [],
     "secrets": []
   }
 }

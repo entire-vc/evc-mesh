@@ -71,9 +71,7 @@
     }
   },
   "capabilities": {
-    "api": [
-      "agents:write"
-    ],
+    "api": [],
     "events": [],
     "webhooks_in": [],
     "ui": [],

@@ -291,6 +291,7 @@ type Manifest struct {
 	Slots    map[string]string            // slot → ^N; defaults to board.card when Views is set
 	Settings map[string]any               // manifest "settings" block, optional
 	Schemas  map[string]any               // manifest "schemas" block (targets of a settings $ref), optional
+	Secrets  []string                     // explicitly declared capabilities.secrets, optional
 	// ReportBundleSHA overrides the bundle hash in the contract report (a stale report).
 	ReportBundleSHA string
 }
@@ -344,6 +345,9 @@ func (m Manifest) JSON() []byte {
 	}
 	if m.Schemas != nil {
 		doc["schemas"] = m.Schemas
+	}
+	if m.Secrets != nil {
+		doc["capabilities"] = map[string]any{"secrets": m.Secrets}
 	}
 	out, _ := json.Marshal(doc)
 	return out

@@ -81,7 +81,7 @@ func combos() []combo {
 func providersUnderTest(t *testing.T, st *comboStores) []extensions.Provider {
 	t.Helper()
 	ps := builtin.Providers(extensions.Deps{Conns: st, Inst: st})
-	stub, _ := newStub(t, nil, nil)
+	stub := newStub(t, nil, nil)
 	stub.Conns, stub.Inst = st, st
 	// The stub borrows the gitlab manifest; once the real GitLab provider is
 	// builtin it covers that id itself.
@@ -157,7 +157,7 @@ func TestResolveStatus_RedControl_RowOnlyUI(t *testing.T) {
 func newHealthReg(t *testing.T, ok bool) (reg *extensions.Registry, calls *int, id string, now *time.Time) {
 	t.Helper()
 	n := 0
-	stub, _ := newStub(t, &extensions.Connection{IsActive: true}, nil)
+	stub := newStub(t, &extensions.Connection{IsActive: true}, nil)
 	reg = extensions.NewRegistry()
 	require.NoError(t, reg.Register(healthProvider{stubProvider: stub, calls: &n, ok: ok}))
 	t0 := time.Unix(1_000_000, 0)
@@ -192,7 +192,7 @@ func TestResolveStatus_HealthCachedFor60s(t *testing.T) {
 
 func TestResolveStatus_PassingCheckClearsLastError(t *testing.T) {
 	calls, ok := 0, false
-	stub, _ := newStub(t, &extensions.Connection{IsActive: true}, nil)
+	stub := newStub(t, &extensions.Connection{IsActive: true}, nil)
 	reg := extensions.NewRegistry()
 	require.NoError(t, reg.Register(healthProvider{stubProvider: stub, calls: &calls, okNow: &ok}))
 	ws, ctx := uuid.New(), context.Background()
@@ -210,7 +210,7 @@ func TestResolveStatus_PassingCheckClearsLastError(t *testing.T) {
 
 func TestResolveStatus_DisabledSkipsHealthAndFillsFields(t *testing.T) {
 	calls := 0
-	stub, _ := newStub(t, &extensions.Connection{IsActive: false}, nil)
+	stub := newStub(t, &extensions.Connection{IsActive: false}, nil)
 	reg := extensions.NewRegistry()
 	require.NoError(t, reg.Register(healthProvider{stubProvider: stub, calls: &calls}))
 	s, err := reg.ResolveStatus(context.Background(), uuid.New(), stub.Manifest().ID)
@@ -232,7 +232,7 @@ func (f fakeConsents) Consented(context.Context, uuid.UUID, string) ([]string, e
 }
 
 func TestResolveStatus_ConsentStoreAndErrors(t *testing.T) {
-	stub, _ := newStub(t, &extensions.Connection{IsActive: true}, nil)
+	stub := newStub(t, &extensions.Connection{IsActive: true}, nil)
 	reg := extensions.NewRegistry().WithConsentStore(fakeConsents{caps: []string{"api:read"}})
 	require.NoError(t, reg.Register(stub))
 	s, err := reg.ResolveStatus(context.Background(), uuid.New(), stub.Manifest().ID)
@@ -247,7 +247,7 @@ func TestResolveStatus_ConsentStoreAndErrors(t *testing.T) {
 	_, err = bad.ResolveStatus(context.Background(), uuid.New(), stub.Manifest().ID)
 	require.ErrorContains(t, err, "db down")
 
-	failing, _ := newStub(t, nil, nil)
+	failing := newStub(t, nil, nil)
 	failing.Conns = fakeConns{err: errors.New("conn down")}
 	freg := extensions.NewRegistry()
 	require.NoError(t, freg.Register(failing))
@@ -271,7 +271,7 @@ func (r recordedConsents) Reconsent(context.Context, uuid.UUID, string, domain.E
 // recorded row has consented to nothing (it is shown as needing consent), not
 // to what the manifest declares.
 func TestWithIntegrationConsents_RecordedWinsOverDeclared(t *testing.T) {
-	stub, _ := newStub(t, &extensions.Connection{IsActive: true}, nil)
+	stub := newStub(t, &extensions.Connection{IsActive: true}, nil)
 	id := stub.Manifest().ID
 
 	recorded := extensions.NewRegistry().WithIntegrationConsents(recordedConsents{c: &domain.ExtensionConsent{Capabilities: []string{"api:only"}}})
@@ -291,7 +291,7 @@ func TestWithIntegrationConsents_RecordedWinsOverDeclared(t *testing.T) {
 // nothing, even though the store answers (nil, nil) for it exactly as it does for
 // a legacy connection without a record.
 func TestWithIntegrationConsents_UnconnectedHasNoConsent(t *testing.T) {
-	stub, _ := newStub(t, nil, nil)
+	stub := newStub(t, nil, nil)
 	reg := extensions.NewRegistry().WithIntegrationConsents(recordedConsents{})
 	require.NoError(t, reg.Register(stub))
 	s, err := reg.ResolveStatus(context.Background(), uuid.New(), stub.Manifest().ID)
@@ -303,7 +303,7 @@ func TestWithIntegrationConsents_UnconnectedHasNoConsent(t *testing.T) {
 // With only the instance level on there is no workspace connection, so nothing
 // is reported as workspace consent.
 func TestWithIntegrationConsents_InstanceOnlyHasNoWorkspaceConsent(t *testing.T) {
-	stub, _ := newStub(t, nil, &extensions.InstanceSetting{Enabled: true})
+	stub := newStub(t, nil, &extensions.InstanceSetting{Enabled: true})
 	reg := extensions.NewRegistry().WithIntegrationConsents(recordedConsents{})
 	require.NoError(t, reg.Register(stub))
 	s, err := reg.ResolveStatus(context.Background(), uuid.New(), stub.Manifest().ID)
@@ -321,7 +321,7 @@ func TestResolveStatus_ReplaceAndUnregisterDropCachedHealth(t *testing.T) {
 	require.Equal(t, 1, *calls)
 
 	// A new provider must not be answered from the old provider's cached report.
-	stub, _ := newStub(t, &extensions.Connection{IsActive: true}, nil)
+	stub := newStub(t, &extensions.Connection{IsActive: true}, nil)
 	require.Equal(t, id, stub.Manifest().ID)
 	require.NoError(t, reg.Replace(healthProvider{stubProvider: stub, calls: calls, ok: true}))
 	_, err = reg.ResolveStatus(ctx, ws, id)
@@ -354,7 +354,7 @@ func (p blockingHealth) Health(_ context.Context, r extensions.Resolved) extensi
 }
 
 func TestResolveStatus_SlowHealthDoesNotBlockOthers(t *testing.T) {
-	stub, _ := newStub(t, &extensions.Connection{IsActive: true}, nil)
+	stub := newStub(t, &extensions.Connection{IsActive: true}, nil)
 	slowWS, fastWS := uuid.New(), uuid.New()
 	bp := blockingHealth{stubProvider: stub, block: slowWS, started: make(chan struct{}),
 		release: make(chan struct{}), calls: &atomic.Int32{}}
@@ -385,7 +385,7 @@ func TestResolveStatus_SlowHealthDoesNotBlockOthers(t *testing.T) {
 }
 
 func TestResolveStatus_ConcurrentSameKeyComputesOnce(t *testing.T) {
-	stub, _ := newStub(t, &extensions.Connection{IsActive: true}, nil)
+	stub := newStub(t, &extensions.Connection{IsActive: true}, nil)
 	ws := uuid.New()
 	bp := blockingHealth{stubProvider: stub, block: ws, started: make(chan struct{}),
 		release: make(chan struct{}), calls: &atomic.Int32{}}

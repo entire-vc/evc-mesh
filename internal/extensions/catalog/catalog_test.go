@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -457,5 +458,15 @@ func TestRefresh_ForcedAndRegularNeverOverlap(t *testing.T) {
 	wg.Wait()
 	if m := atomic.LoadInt32(&maxInflight); m != 1 {
 		t.Fatalf("refreshes overlapped: %d in flight at once", m)
+	}
+}
+
+// A signed catalog may still list old v1 declarations. They cannot create a
+// fresh consent request when the installed manifest has already dropped them.
+func TestReleaseFlattenDropsRetiredCapabilities(t *testing.T) {
+	got := (Release{Capabilities: []byte(`{"api":["tasks:read","agent_keys:read","secrets:write"],"ui":["command","task.panel"],"webhooks_in":["incoming"]}`)}).Flatten()
+	want := []string{"api:tasks:read", "ui:task.panel"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("flatten: %v, want %v", got, want)
 	}
 }

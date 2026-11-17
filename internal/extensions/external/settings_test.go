@@ -16,7 +16,7 @@ import (
 const settingsManifest = `{"schema":1,"id":"hello","name":"Hello","version":"0.1.0","kind":"plugin","runtime":"external",
  "mesh_api":">=1","publisher":"example","category":"development",
  "levels":{"instance":false,"workspace":true,"project":false},
- "capabilities":{"api":["tasks:read"],"events":["task.updated"],"ui":[]},
+ "capabilities":{"api":["tasks:read"],"events":["task.updated"],"ui":[],"secrets":["api_key"]},
  "external":{"base_url_setting":"hello_url","health_path":"/healthz","install_path":"/mesh/install","events_path":"/mesh/events"},
  "settings":{"workspace":{"$ref":"#/schemas/ws"}},
  "schemas":{"ws":{"type":"object","properties":{

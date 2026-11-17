@@ -222,15 +222,16 @@ func (m *extRtSubs) Delete(_ context.Context, id uuid.UUID) error {
 }
 
 type externalRig struct {
-	reg     *extensions.Registry
-	rt      *external.Runtime
-	inst    *extRtInstalled
-	conns   extRtConns
-	subs    *extRtSubs
-	secrets *extRtSecrets
-	wsvc    *ExtensionWorkspaceService
-	hook    *external.Hook
-	ws      uuid.UUID
+	reg      *extensions.Registry
+	rt       *external.Runtime
+	inst     *extRtInstalled
+	conns    extRtConns
+	subs     *extRtSubs
+	secrets  *extRtSecrets
+	wsvc     *ExtensionWorkspaceService
+	hook     *external.Hook
+	consents *exttest.MemConsents
+	ws       uuid.UUID
 }
 
 func newExternalRig(t *testing.T) *externalRig {
@@ -244,6 +245,7 @@ func newExternalRig(t *testing.T) *externalRig {
 	r.rt = &external.Runtime{Reg: r.reg, Installed: r.inst, Deps: deps, Client: &http.Client{Timeout: 3 * time.Second}, HS: hs}
 	r.hook = &external.Hook{Reg: r.reg, Conns: r.conns, HS: hs}
 	consents := &exttest.MemConsents{Integ: r.conns.MemIntegrations, ByID: map[uuid.UUID]domain.ExtensionConsent{}}
+	r.consents = consents
 	r.reg.WithConsentStore(extensions.IntegrationConsents{Repo: consents, Declared: func(string) []string { return nil }})
 	r.wsvc = NewExtensionWorkspaceService(r.reg, r.conns, consents).WithExternalHook(r.hook)
 	return r
@@ -445,4 +447,68 @@ func TestExternalRuntime_DoesNotShadowBuiltin(t *testing.T) {
 	require.NoError(t, r.rt.Sync(context.Background()))
 	p, _ := f.Registry.Get("demo")
 	assert.Equal(t, "builtin", p.Manifest().Runtime)
+}
+
+// gatedDispatcher is the dispatcher as production wires it: delivery is gated
+// on the workspace consent and on the extension being registered and still
+// declaring the event (cmd/api extensionDeclared).
+func (r *externalRig) gatedDispatcher() (*webhookService, *recordingWebhookRepo) {
+	disp, repo := r.dispatcher()
+	disp.ext.consents = r.consents
+	disp.ext.declared = func(id string) ([]string, bool) {
+		p, ok := r.reg.Get(r.reg.Canonical(id))
+		if !ok {
+			return nil, false
+		}
+		return extensions.DeclaredCapabilities(p.Manifest().Capabilities), true
+	}
+	return disp, repo
+}
+
+// After a Mesh upgrade an installed extension whose mesh_api is no longer
+// satisfied is not active: its existing connection and subscription stay, but
+// it receives no events and reports mesh_api_incompatible. The compatible
+// extension (positive control) is delivered to before and after.
+func TestExternalRuntime_IncompatibleMeshAPIGetsNoEvents(t *testing.T) {
+	r := newExternalRig(t)
+	ctx := context.Background()
+	hello := newHelloService(t, "")
+	r.inst.put("hello", helloManifest, false)
+	require.NoError(t, r.rt.Sync(ctx))
+	r.connect(t, hello.srv.URL)
+
+	disp, repo := r.gatedDispatcher()
+	disp.Dispatch(ctx, r.ws, "task.updated", map[string]any{"task_id": "t-before"})
+	extRtWaitDeliveries(t, repo, 1)
+
+	r.inst.put("hello", strings.ReplaceAll(helloManifest, `"mesh_api":">=1"`, `"mesh_api":">=2"`), false)
+	require.NoError(t, r.rt.Sync(ctx))
+	_, ok := r.reg.Get("hello")
+	assert.False(t, ok, "an incompatible extension is not registered")
+	assert.Equal(t, external.ReasonMeshAPIIncompatible, r.rt.InactiveReason("hello"))
+	conn := r.conns.Find(r.ws, "hello")
+	require.NotNil(t, conn, "the connection is kept")
+	disp.Dispatch(ctx, r.ws, "task.updated", map[string]any{"task_id": "t-incompatible"})
+
+	r.inst.put("hello", helloManifest, false)
+	require.NoError(t, r.rt.Sync(ctx))
+	assert.Empty(t, r.rt.InactiveReason("hello"))
+	disp.Dispatch(ctx, r.ws, "task.updated", map[string]any{"task_id": "t-after"})
+
+	ds := extRtWaitDeliveries(t, repo, 2)
+	assert.Never(t, func() bool {
+		repo.mu.Lock()
+		defer repo.mu.Unlock()
+		return len(repo.deliveries) > 2
+	}, 300*time.Millisecond, 20*time.Millisecond, "no delivery while incompatible")
+	var got []string
+	for _, d := range ds {
+		assert.True(t, d.Success)
+		var p struct {
+			TaskID string `json:"task_id"`
+		}
+		require.NoError(t, json.Unmarshal(d.Payload, &p))
+		got = append(got, p.TaskID)
+	}
+	assert.ElementsMatch(t, []string{"t-before", "t-after"}, got)
 }

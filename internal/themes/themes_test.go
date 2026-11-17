@@ -383,7 +383,7 @@ func TestAsset_ServedWrappedInTheLayer(t *testing.T) {
 func TestResolve_SecretSettingsNeverLeave(t *testing.T) {
 	svc, inst, _, _ := newService()
 	ctx, actor, ws := context.Background(), uuid.New(), uuid.New()
-	inst.Add("vault", themestest.Manifest{ID: "vault", Settings: map[string]any{
+	inst.Add("vault", themestest.Manifest{ID: "vault", Secrets: []string{"key"}, Settings: map[string]any{
 		"instance": map[string]any{"type": "object", "properties": map[string]any{
 			"label": map[string]any{"type": "string"},
 			"key":   map[string]any{"type": "string", "x-secret": true, "default": "built-in"},
@@ -403,7 +403,8 @@ func TestResolve_SecretBesideARefNeverLeaves(t *testing.T) {
 	svc, inst, _, _ := newService()
 	ctx, actor := context.Background(), uuid.New()
 	inst.Add("vault", themestest.Manifest{
-		ID: "vault",
+		ID:      "vault",
+		Secrets: []string{"key"},
 		Schemas: map[string]any{"base": map[string]any{"type": "object", "properties": map[string]any{
 			"label": map[string]any{"type": "string"},
 		}}},

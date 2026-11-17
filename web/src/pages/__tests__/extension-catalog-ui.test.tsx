@@ -217,8 +217,85 @@ describe("Spark-listed extension", () => {
     const btn = (await screen.findByRole("button", { name: "Install to instance" })) as HTMLButtonElement;
     expect(btn.disabled).toBe(false);
     fireEvent.click(btn);
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Install" }));
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/api/v1/extensions/install", { method: "POST", body: { source: "catalog", id: "mesh-ext-hello" } }));
     await waitFor(() => expect(state.value.reload).toHaveBeenCalled());
+  });
+});
+
+describe("catalog install consent", () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const rich = () => sum("mesh-ext-hello", {
+    name: "Hello", runtime: "external", source: "catalog", trust_level: "verified", publisher: "Acme Labs", version: "1.4.0",
+    commit_sha: SHA,
+    manifest: { capabilities: { api: ["tasks:read", "comments:write"], network: { allowed_domains: ["api.acme.example"], reasoning: "Talks to Acme" } } },
+  });
+  const installCalls = () => apiMock.mock.calls.filter(([url]) => url === "/api/v1/extensions/install");
+
+  beforeEach(() => {
+    state.value = { ...state.value, entries: mergeCatalog([], [], [rich()]) };
+    apiMock.mockImplementation((url: string) =>
+      url === "/api/v1/extensions/install" ? Promise.resolve({ extension_id: "mesh-ext-hello", version: "1.4.0" })
+        : url === "/api/v1/extensions/instance/overview" ? Promise.resolve({ auto_update: false, items: [] })
+        : Promise.reject(new Error("no card")));
+  });
+
+  const openDialog = async () => {
+    mount("/w/acme/extensions/mesh-ext-hello", "detail");
+    fireEvent.click(await screen.findByRole("button", { name: "Install to instance" }));
+    return screen.findByRole("dialog", { name: "Install Hello to this instance?" });
+  };
+
+  it("Install opens the consent dialog with permissions, domains, publisher and release commit, and sends nothing", async () => {
+    const dialog = await openDialog();
+    const consent = within(dialog).getByTestId("catalog-install-consent");
+    expect(consent.textContent).toContain("Acme Labs");
+    expect(consent.textContent).toContain("1.4.0");
+    expect(consent.textContent).toContain(SHA.slice(0, 8));
+    expect(within(consent).getByText(SHA.slice(0, 8)).getAttribute("title")).toBe(SHA);
+    expect(consent.textContent).toContain("api.acme.example");
+    expect(consent.textContent).toContain("Talks to Acme");
+    // the same permission lines as the Permissions tab
+    const raws = within(consent).getAllByRole("listitem").map((li) => li.getAttribute("title")).filter(Boolean);
+    expect(raws).toEqual(["tasks:read", "comments:write"]);
+    expect(installCalls()).toHaveLength(0);
+  });
+
+  it("Cancel closes the dialog without calling install", async () => {
+    const dialog = await openDialog();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(installCalls()).toHaveLength(0);
+    expect(state.value.reload).not.toHaveBeenCalled();
+  });
+
+  it("confirming installs exactly once, then closes and reloads", async () => {
+    const dialog = await openDialog();
+    const confirm = within(dialog).getByRole("button", { name: "Install" });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(state.value.reload).toHaveBeenCalled());
+    expect(installCalls()).toEqual([["/api/v1/extensions/install", { method: "POST", body: { source: "catalog", id: "mesh-ext-hello" } }]]);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("a failed install keeps the dialog open with the error", async () => {
+    apiMock.mockImplementation((url: string) =>
+      url === "/api/v1/extensions/install" ? Promise.reject(new Error("boom"))
+        : url === "/api/v1/extensions/instance/overview" ? Promise.resolve({ auto_update: false, items: [] })
+        : Promise.reject(new Error("no card")));
+    const dialog = await openDialog();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Install" }));
+    expect(await within(dialog).findByTestId("catalog-install-error")).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(state.value.reload).not.toHaveBeenCalled();
+  });
+
+  it("an extension without a commit or rights still asks, and says so", async () => {
+    state.value = { ...state.value, entries: mergeCatalog([], [], [sum("mesh-ext-hello", { name: "Hello", runtime: "external", source: "catalog", trust_level: "verified", manifest: {} })]) };
+    const dialog = await openDialog();
+    expect(dialog.textContent).toContain("The extension asks for no permissions.");
+    expect(dialog.textContent).toContain("not stated");
   });
 });
 

@@ -14,3 +14,10 @@ export function numberSetting(c: WidgetConfig, key: string, def: number, min: nu
 }
 export const boolSetting = (c: WidgetConfig, key: string, def = false): boolean => (typeof c[key] === "boolean" ? (c[key] as boolean) : def);
 export const stringSetting = (c: WidgetConfig, key: string): string | undefined => (typeof c[key] === "string" && c[key] ? (c[key] as string) : undefined);
+
+/** The instance title from its settings (§5.6: the title replaces the type name), else the widget's own name. */
+export function widgetTitle(c: WidgetConfig, fallback: string): string {
+  const v = c.title;
+  return typeof v === "string" && v.trim() ? v.trim() : fallback;
+}
+export const useWidgetTitle = (fallback: string): string => widgetTitle(useWidgetConfig(), fallback);

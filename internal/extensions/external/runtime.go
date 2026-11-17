@@ -14,8 +14,14 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
+	"github.com/entire-vc/evc-mesh/internal/extensions/repoinstall"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 )
+
+// ReasonMeshAPIIncompatible is the inactive reason of an installed external
+// extension whose manifest mesh_api this Mesh's ExtensionsAPIVersion does not
+// satisfy (typically after a Mesh upgrade).
+const ReasonMeshAPIIncompatible = "mesh_api_incompatible"
 
 // Runtime keeps the extension registry in step with the source=repo rows of
 // installed_extensions: every installed, not blocked, runtime=external row is
@@ -27,14 +33,29 @@ type Runtime struct {
 	Client    *http.Client
 	HS        *Handshaker
 
-	mu      sync.Mutex
-	managed map[string]string // extension id -> manifest digest registered by this runtime
+	mu       sync.Mutex
+	managed  map[string]string // extension id -> manifest digest registered by this runtime
+	inactive map[string]string // installed extension id -> why it is not registered
+}
+
+// InactiveReason reports why the installed external extension id is not
+// active as of the last Sync: ReasonMeshAPIIncompatible, or "" when it is
+// active or not an installed external extension.
+func (r *Runtime) InactiveReason(id string) string {
+	if r == nil {
+		return ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.inactive[id]
 }
 
 // Sync reconciles the registry with the installed rows. Call it at startup and
 // after install, update and rollback; Run repeats it so a removal or block done
 // elsewhere is picked up. A row that cannot be turned into a provider is
-// logged and skipped, never fatal.
+// logged and skipped, never fatal. A row whose mesh_api this Mesh does not
+// satisfy is kept installed but not registered (no slots, no events); its
+// reason is reported by InactiveReason and logged when it changes.
 func (r *Runtime) Sync(ctx context.Context) error {
 	rows, err := r.Installed.List(ctx)
 	if err != nil {
@@ -46,6 +67,7 @@ func (r *Runtime) Sync(ctx context.Context) error {
 		r.managed = map[string]string{}
 	}
 	want := map[string]bool{}
+	inactive := map[string]string{}
 	for i := range rows {
 		row := rows[i]
 		if (row.Source != domain.ExtensionSourceRepo && row.Source != domain.ExtensionSourceCatalog) || row.Blocked {
@@ -54,6 +76,14 @@ func (r *Runtime) Sync(ctx context.Context) error {
 		m, perr := extensions.ParseManifest(row.Manifest)
 		if perr != nil || m.Runtime != "external" {
 			log.Printf("[extensions] external runtime: skip %s: not a runnable external manifest", row.ExtensionID)
+			continue
+		}
+		if !repoinstall.MeshAPICompatible(m.MeshAPI, extensions.ExtensionsAPIVersion) {
+			inactive[row.ExtensionID] = ReasonMeshAPIIncompatible
+			if r.inactive[row.ExtensionID] != ReasonMeshAPIIncompatible {
+				log.Printf("[extensions] external runtime: %s inactive: %s (needs mesh_api %q, this Mesh provides %d)",
+					row.ExtensionID, ReasonMeshAPIIncompatible, m.MeshAPI, extensions.ExtensionsAPIVersion)
+			}
 			continue
 		}
 		if _, taken := r.Reg.Get(m.ID); taken && r.managed[m.ID] == "" {
@@ -82,6 +112,7 @@ func (r *Runtime) Sync(ctx context.Context) error {
 			delete(r.managed, id)
 		}
 	}
+	r.inactive = inactive
 	return nil
 }
 

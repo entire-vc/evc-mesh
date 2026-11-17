@@ -1,0 +1,5 @@
+# Fixture for TestConformanceRedOnStaleGap: each line below is stale.
+# The line numbers are asserted by the test.
+slot task.panel — rendered by the slot host, so this line is stale
+api tasks:read — mapped by many routes, so this line is stale
+slot no.such.slot — names a slot the schema does not declare

@@ -33,10 +33,9 @@ func (f fakeInst) InstanceSetting(context.Context, string) (*extensions.Instance
 }
 
 // stubProvider is the test provider: shared Resolve via BaseProvider, own
-// Validate, one route and one event handler.
+// Validate and one route.
 type stubProvider struct {
 	extensions.BaseProvider
-	handled *int
 }
 
 func (stubProvider) Validate(extensions.Level, map[string]any) error { return nil }
@@ -48,9 +47,6 @@ func (p stubProvider) Hooks() extensions.Hooks {
 			Path:    "/webhooks/stub",
 			Handler: func(c echo.Context) error { return c.String(http.StatusOK, "stub") },
 		}},
-		EventHandlers: map[string]extensions.EventHandler{
-			"task.updated": func(context.Context, uuid.UUID, []byte) error { *p.handled++; return nil },
-		},
 	}
 }
 
@@ -63,12 +59,10 @@ func stubManifest(t *testing.T) extensions.Manifest {
 	return m
 }
 
-func newStub(t *testing.T, row *extensions.Connection, inst *extensions.InstanceSetting) (p stubProvider, handled *int) {
-	n := 0
+func newStub(t *testing.T, row *extensions.Connection, inst *extensions.InstanceSetting) stubProvider {
 	return stubProvider{
 		BaseProvider: extensions.BaseProvider{Man: stubManifest(t), Conns: fakeConns{row: row}, Inst: fakeInst{s: inst}},
-		handled:      &n,
-	}, &n
+	}
 }
 
 func TestResolve_SixCases(t *testing.T) {
@@ -93,7 +87,7 @@ func TestResolve_SixCases(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			p, _ := newStub(t, tc.row, tc.inst)
+			p := newStub(t, tc.row, tc.inst)
 			reg := extensions.NewRegistry()
 			require.NoError(t, reg.Register(p))
 
@@ -115,7 +109,7 @@ func TestResolve_StoreErrorPropagates(t *testing.T) {
 
 func TestRegistry_RegisterRules(t *testing.T) {
 	reg := extensions.NewRegistry()
-	p, _ := newStub(t, nil, nil)
+	p := newStub(t, nil, nil)
 	require.NoError(t, reg.Register(p))
 	require.Error(t, reg.Register(p), "duplicate id must be refused")
 	require.Error(t, reg.Register(stubProvider{}), "empty id must be refused")
@@ -128,9 +122,9 @@ func TestRegistry_RegisterRules(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRegistry_HooksWalk(t *testing.T) {
+func TestRegistry_RegisterRoutes(t *testing.T) {
 	reg := extensions.NewRegistry()
-	p, handled := newStub(t, nil, nil)
+	p := newStub(t, nil, nil)
 	require.NoError(t, reg.Register(p))
 
 	e := echo.New()
@@ -139,12 +133,6 @@ func TestRegistry_HooksWalk(t *testing.T) {
 	e.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/webhooks/stub", http.NoBody))
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "stub", rec.Body.String())
-
-	hs := reg.EventHandlers("task.updated")
-	require.Len(t, hs, 1)
-	require.NoError(t, hs[0](context.Background(), uuid.New(), nil))
-	require.Equal(t, 1, *handled)
-	require.Empty(t, reg.EventHandlers("comment.created"))
 }
 
 type fakeInstalledRepo struct{ got []*domain.InstalledExtension }
@@ -162,7 +150,7 @@ func (f *fakeInstalledRepo) List(context.Context) ([]domain.InstalledExtension, 
 
 func TestRegistry_SyncBuiltin(t *testing.T) {
 	reg := extensions.NewRegistry()
-	p, _ := newStub(t, nil, nil)
+	p := newStub(t, nil, nil)
 	require.NoError(t, reg.Register(p))
 
 	repo := &fakeInstalledRepo{}

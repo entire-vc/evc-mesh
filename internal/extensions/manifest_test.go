@@ -11,9 +11,9 @@ func TestManifest_InstanceSecretKeys(t *testing.T) {
 		raw  string
 		want []string
 	}{
-		"ref": {`{"id":"a","version":"1","runtime":"builtin","settings":{"instance":{"$ref":"#/schemas/c"}},
+		"ref": {`{"capabilities":{"secrets":["s","t"]},"id":"a","version":"1","runtime":"builtin","settings":{"instance":{"$ref":"#/schemas/c"}},
 			"schemas":{"c":{"properties":{"t":{"x-secret":true},"u":{},"s":{"x-secret":true}}}}}`, []string{"s", "t"}},
-		"inline":       {`{"id":"a","version":"1","runtime":"builtin","settings":{"instance":{"properties":{"k":{"x-secret":true}}}}}`, []string{"k"}},
+		"inline":       {`{"capabilities":{"secrets":["k"]},"id":"a","version":"1","runtime":"builtin","settings":{"instance":{"properties":{"k":{"x-secret":true}}}}}`, []string{"k"}},
 		"no-secrets":   {`{"id":"a","version":"1","runtime":"builtin","settings":{"instance":{"properties":{"k":{}}}}}`, nil},
 		"no-settings":  {`{"id":"a","version":"1","runtime":"builtin"}`, nil},
 		"dangling-ref": {`{"id":"a","version":"1","runtime":"builtin","settings":{"instance":{"$ref":"#/schemas/x"}},"schemas":{}}`, nil},
@@ -26,7 +26,7 @@ func TestManifest_InstanceSecretKeys(t *testing.T) {
 }
 
 func TestManifest_SecretKeysPerLevel(t *testing.T) {
-	m, err := ParseManifest([]byte(`{"id":"a","version":"1","runtime":"builtin",
+	m, err := ParseManifest([]byte(`{"id":"a","version":"1","runtime":"builtin","capabilities":{"secrets":["i","p","w"]},
 		"settings":{"instance":{"properties":{"i":{"x-secret":true}}},"workspace":{"$ref":"#/schemas/w"},"project":{"properties":{"p":{"x-secret":true}}}},
 		"schemas":{"w":{"properties":{"w":{"x-secret":true},"n":{}}}}}`))
 	require.NoError(t, err)

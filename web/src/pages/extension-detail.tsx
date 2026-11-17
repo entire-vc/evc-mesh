@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MarkdownView } from "@/components/markdown-view";
 import { ExtensionIcon, KindTrustBadges } from "@/components/extensions/catalog";
+import { CatalogInstallDialog, declaresRights } from "@/components/extensions/install-consent";
 import { extensionState } from "@/lib/extensionState";
 import { ExtensionStateBadge, ExtensionStateNote } from "@/components/extensions/extension-state";
 import { useExtensionCatalog, type CatalogEntry } from "@/hooks/useExtensionCatalog";
@@ -23,6 +24,7 @@ import { setExtensionAllowed } from "@/lib/extension-instance";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { cn } from "@/lib/cn";
 import { isRunnerProduct, runnerScreenPath } from "@/lib/runner-product";
+import { UninstallExtensionButton } from "@/components/extensions/uninstall-extension";
 
 export const DETAIL_TABS = ["description", "permissions", "versions", "checks", "support"] as const;
 export type DetailTab = (typeof DETAIL_TABS)[number];
@@ -152,6 +154,7 @@ type RoleState = "loading" | "error" | "known";
 function PrimaryAction({ entry, wsSlug, isAdmin, isInstanceAdmin, roleState = "known", onRetryRole, onInstalled }: { entry: CatalogEntry; wsSlug: string; isAdmin: boolean; isInstanceAdmin: boolean; roleState?: RoleState; onRetryRole?: () => void; onInstalled: () => void }) {
   const { t } = useTranslation("integrations");
   const [busy, setBusy] = useState(false);
+  const [consent, setConsent] = useState(false);
   const navigate = useNavigate();
   const wsId = useWorkspaceStore((s) => s.currentWorkspace?.id ?? "");
   const settings = extensionSettingsPath(entry, wsSlug);
@@ -183,7 +186,18 @@ function PrimaryAction({ entry, wsSlug, isAdmin, isInstanceAdmin, roleState = "k
   const builtinTheme = entry.kind === "theme" && entry.source === "builtin";
   if (!entry.installed && (entry.source === "catalog" || builtinTheme) && isInstanceAdmin) {
     const install = builtinTheme ? () => installBuiltinTheme(entry.id) : () => installCatalogExtension(entry.id);
-    return <Button disabled={busy} onClick={run(install, t("detail.action.installed", { name: entry.name }))}>{t("detail.action.install")}</Button>;
+    // A catalog extension is installed only after the administrator sees its rights, publisher and commit,
+    // as with a repository install. A built-in theme ships inside Mesh: with no declared rights there is
+    // nothing to consent to, so it stays one click.
+    if (builtinTheme && !declaresRights(entry.manifest.capabilities)) {
+      return <Button disabled={busy} onClick={run(install, t("detail.action.installed", { name: entry.name }))}>{t("detail.action.install")}</Button>;
+    }
+    return (
+      <>
+        <Button onClick={() => setConsent(true)}>{t("detail.action.install")}</Button>
+        {consent && <CatalogInstallDialog entry={entry} install={install} onClose={() => setConsent(false)} onInstalled={onInstalled} />}
+      </>
+    );
   }
   if (!entry.installed) {
     if (roleGate && !isAdmin) return roleGate;
@@ -332,7 +346,10 @@ export function ExtensionDetailPage() {
             {state.state !== "blocked" && <ExtensionStateNote state={state} className="mt-1" />}
           </div>
         </div>
-        <PrimaryAction entry={entry} wsSlug={wsSlug} isAdmin={isAdmin} isInstanceAdmin={isInstanceAdmin} roleState={roleState} onRetryRole={() => wsId && void fetchMyRole(wsId)} onInstalled={catalog.reload} />
+        <div className="flex flex-wrap items-start gap-2">
+          <PrimaryAction entry={entry} wsSlug={wsSlug} isAdmin={isAdmin} isInstanceAdmin={isInstanceAdmin} roleState={roleState} onRetryRole={() => wsId && void fetchMyRole(wsId)} onInstalled={catalog.reload} />
+          <UninstallExtensionButton entry={entry} isInstanceAdmin={isInstanceAdmin} onUninstalled={catalog.reload} />
+        </div>
       </header>
 
       {entry.blocked && (

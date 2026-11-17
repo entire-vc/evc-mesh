@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/labstack/echo/v4"
@@ -126,4 +127,33 @@ func TestExtensionCatalog_ServesRegistryRows(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	require.Len(t, body.Extensions, 1)
 	assert.Equal(t, "team-relay", body.Extensions[0]["id"])
+}
+
+// An installed extension the runtime keeps inactive carries the reason; an
+// active one has no inactive_reason key at all, so its entry is unchanged.
+func TestExtensionList_InactiveReason(t *testing.T) {
+	future := strings.Replace(testManifest, `"id":"team-relay"`, `"id":"future"`, 1)
+	h := NewExtensionHandler(&fakeInstalledRepo{rows: []domain.InstalledExtension{
+		{ExtensionID: "team-relay", Version: "1.2.0", Manifest: json.RawMessage(testManifest)},
+		{ExtensionID: "future", Version: "1", Source: domain.ExtensionSourceRepo, Manifest: json.RawMessage(future)},
+	}}, nil).WithInactiveReason(func(id string) string {
+		if id == "future" {
+			return "mesh_api_incompatible"
+		}
+		return ""
+	})
+	rec := doExt(t, h.List, http.MethodGet)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Extensions []map[string]any `json:"extensions"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Len(t, body.Extensions, 2, "an inactive extension stays in the installed list")
+	byID := map[string]map[string]any{}
+	for _, x := range body.Extensions {
+		byID[x["id"].(string)] = x
+	}
+	assert.Equal(t, "mesh_api_incompatible", byID["future"]["inactive_reason"])
+	_, has := byID["team-relay"]["inactive_reason"]
+	assert.False(t, has, "an active extension has no inactive_reason")
 }

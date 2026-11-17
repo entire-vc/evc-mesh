@@ -129,11 +129,13 @@ func PreviewRuntime(c *RuntimeCatalog, binding RuntimeBinding, revision int64, e
 			}
 		}
 		quota, threshold := false, false
+		unknown := ""
 		for _, ref := range account.QuotaPoolsByMode[profile.ExecutionMode] {
 			pool, _ := c.ResolvePool(ref)
 			fact, found := observation.Pools[pool]
 			if !found || !fact.Verified || fact.ObservedAt.IsZero() || fact.ObservedAt.After(now) || now.Sub(fact.ObservedAt) > time.Duration(binding.Policy.EvidenceMaxAgeSeconds)*time.Second {
-				return "pool_evidence_unavailable"
+				unknown = "pool_evidence_unavailable"
+				continue
 			}
 			switch fact.State {
 			case "available":
@@ -141,18 +143,28 @@ func PreviewRuntime(c *RuntimeCatalog, binding RuntimeBinding, revision int64, e
 				quota = true
 			case "threshold":
 				if c.Pools[pool].ThresholdRef == "" || c.Pools[pool].ThresholdRef != fact.ThresholdRef || fact.EvidenceKind != "configured_threshold" {
-					return "pool_evidence_unknown"
+					if unknown == "" {
+						unknown = "pool_evidence_unknown"
+					}
+					continue
 				}
 				threshold = true
 			default:
-				return "pool_evidence_unknown"
+				if unknown == "" {
+					unknown = "pool_evidence_unknown"
+				}
 			}
 		}
+		// Any confirmed blocking window rules this account out. An unknown
+		// sibling window cannot make it usable or hide its quota route trigger.
 		if quota {
 			return "quota_blocked"
 		}
 		if threshold {
 			return "threshold_blocked"
+		}
+		if unknown != "" {
+			return unknown
 		}
 		return "available"
 	}

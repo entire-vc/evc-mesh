@@ -22,6 +22,9 @@ const (
 	// InstanceJournalRepinned: a repository install was pinned to another ref,
 	// commit, URL or credential by the admin.
 	InstanceJournalRepinned = "repinned"
+	// InstanceJournalUninstalled: the admin removed a catalog or repository
+	// extension from the instance; its data was kept.
+	InstanceJournalUninstalled = "uninstalled"
 )
 
 // InstanceExtensionPolicy is an explicit allow/deny of one extension.

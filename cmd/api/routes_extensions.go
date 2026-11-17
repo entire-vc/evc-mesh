@@ -100,7 +100,8 @@ func registerExtensionRoutes(deps *apiDeps) {
 		_, ok := extensionRegistry.Get(id)
 		return ok || themes.BuiltinKnown(id)
 	}
-	extensionHandler := handler.NewExtensionHandler(installedExtRepo, extensionInstanceStore).WithAllowList(extensionPolicyRepo).WithCatalog(extensionCatalog).WithBuiltins(shipsWithMesh)
+	extensionHandler := handler.NewExtensionHandler(installedExtRepo, extensionInstanceStore).WithAllowList(extensionPolicyRepo).WithCatalog(extensionCatalog).WithBuiltins(shipsWithMesh).
+		WithInactiveReason(externalRuntime.InactiveReason)
 	api.GET("/extensions", extensionHandler.List)
 	api.GET("/extensions/catalog", extensionHandler.Catalog)
 	api.GET("/extensions/:ext_id/catalog-card", extensionHandler.CatalogCard)

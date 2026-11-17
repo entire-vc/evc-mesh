@@ -49,6 +49,8 @@ export function journalLine(t: T, e: InstanceJournalEntry, names: Map<string, st
       return t(d.level === "workspace" ? "instanceAdmin.journal.theme_selected_workspace" : "instanceAdmin.journal.theme_selected_instance", { ext });
     case "theme_deleted":
       return t("instanceAdmin.journal.theme_deleted", { ext });
+    case "uninstalled":
+      return t("instanceAdmin.journal.uninstalled", { ext, version: d.version ?? "" });
     default:
       return t("instanceAdmin.journal.other", { action: e.action, ext });
   }

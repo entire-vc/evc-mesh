@@ -1,0 +1,10 @@
+# Elements of the extension contract with no consumer yet: a manifest may
+# declare them (or provider.go promises them), but nothing renders, routes,
+# enforces or calls them. One line per element: "<kind> <name> — <reason>".
+# Kinds: slot, theme-slot, api, capability, contract.
+#
+# This list may only shrink. When an element gains a consumer, the conformance
+# test fails on its line until the line is deleted. Each line is closed either
+# by building the consumer or by deprecating the element in manifest.v1.json
+# (and the SDK copy) / provider.go.
+

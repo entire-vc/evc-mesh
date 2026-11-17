@@ -171,3 +171,54 @@ func TestExtensionCatalog_BuiltinRecordsJoinByID(t *testing.T) {
 	assert.Equal(t, "catalog", byID["hello"]["id_conflict"], "a repo install of a catalog id is flagged, not shown as the record")
 	assert.Nil(t, relay["id_conflict"])
 }
+
+// A not-installed catalog row carries what the install dialog shows before
+// consent: the commit of the release Install puts in place and the permissions
+// that release declares in the signed catalog.
+func TestExtensionCatalog_CatalogRowCarriesReleaseCommitAndCapabilities(t *testing.T) {
+	caps := json.RawMessage(`{"api":["tasks:read","agent_keys:read","secrets:write"],"ui":["command","task.panel"],"webhooks_in":["inbound"],"network":{"allowed_domains":["api.example.com"]}}`)
+	cat := &catalog.Catalog{Extensions: []catalog.Entry{
+		{ID: "mesh-ext-hello", Name: "Hello", Runtime: "external", Trust: "verified", Publisher: "acme",
+			Latest: catalog.Release{Version: "1.2.0", CommitSHA: "0123456789abcdef0123456789abcdef01234567", Capabilities: caps}},
+		{ID: "mesh-ext-bare", Name: "Bare", Runtime: "external", Trust: "verified", Latest: catalog.Release{Version: "0.1.0"}},
+	}}
+	h := NewExtensionHandler(builtinRepo(), nil).WithCatalog(fakeCatalog{cat: cat, at: time.Now()})
+	rec := doExt(t, h.Catalog, http.MethodGet)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Extensions []struct {
+			ID        string          `json:"id"`
+			CommitSHA string          `json:"commit_sha"`
+			Manifest  json.RawMessage `json:"manifest"`
+		} `json:"extensions"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	byID := map[string]int{}
+	for i, e := range body.Extensions {
+		byID[e.ID] = i
+	}
+	hello := body.Extensions[byID["mesh-ext-hello"]]
+	assert.Equal(t, "0123456789abcdef0123456789abcdef01234567", hello.CommitSHA)
+	assert.JSONEq(t, `{"capabilities":{"api":["tasks:read"],"ui":["task.panel"],"webhooks_in":[],"network":{"allowed_domains":["api.example.com"]}}}`, string(hello.Manifest))
+	assert.Equal(t, caps, cat.Extensions[0].Latest.Capabilities, "signed catalog metadata is not rewritten")
+	bare := body.Extensions[byID["mesh-ext-bare"]]
+	assert.Empty(t, bare.CommitSHA)
+	assert.Equal(t, "null", string(bare.Manifest), "a release without permissions declares none")
+}
+
+func TestReleaseManifestWebhookScope(t *testing.T) {
+	for _, tc := range []struct {
+		name, runtime, kind, want string
+	}{
+		{"external", "external", "integration", `[]`},
+		{"builtin", "builtin", "integration", `["inbound"]`},
+		{"theme", "builtin", "theme", `[]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entry := catalog.Entry{Runtime: tc.runtime, Kind: tc.kind, Latest: catalog.Release{
+				Capabilities: json.RawMessage(`{"api":["secrets:write","tasks:read"],"ui":["command","task.panel"],"webhooks_in":["inbound"],"secrets":["token"]}`),
+			}}
+			require.JSONEq(t, `{"capabilities":{"api":["tasks:read"],"ui":["task.panel"],"webhooks_in":`+tc.want+`,"secrets":["token"]}}`, string(releaseManifest(entry)))
+		})
+	}
+}

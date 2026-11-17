@@ -1,0 +1,13 @@
+{
+  "$comment": "Fixture for TestConformanceRedOnInventedSlot: the server schema reduced to what the audit reads, plus a slot no code renders (hologram.panel).",
+  "properties": {
+    "capabilities": {
+      "properties": {
+        "api": { "type": "array", "items": { "type": "string", "pattern": "^((tasks):(read|write))$" } }
+      }
+    }
+  },
+  "$defs": {
+    "slot": { "enum": ["task.panel", "hologram.panel"] }
+  }
+}

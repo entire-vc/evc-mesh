@@ -11,6 +11,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/extensions/catalog"
 	"github.com/entire-vc/evc-mesh/internal/extensions/repoinstall"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -181,6 +182,7 @@ func (h *ExtensionRepoInstallHandler) Install(c echo.Context) error {
 	}
 	return c.JSON(http.StatusCreated, map[string]any{
 		"extension_id": row.ExtensionID, "version": row.Version, "source": row.Source, "trust_level": row.TrustLevel,
+		"warnings": manifestWarnings(row.Manifest),
 		"repo_url": row.RepoURL, "repo_ref": row.RepoRef, "commit_sha": row.CommitSHA,
 	})
 }
@@ -321,6 +323,16 @@ func (h *ExtensionRepoInstallHandler) installFromCatalog(c echo.Context, uid uui
 	}
 	return c.JSON(http.StatusCreated, map[string]any{
 		"extension_id": row.ExtensionID, "version": row.Version, "source": row.Source, "trust_level": row.TrustLevel,
+		"warnings":   manifestWarnings(row.Manifest),
 		"commit_sha": row.CommitSHA, "artifact_sha256": row.ArtifactSHA256, "catalog_scope": scope,
 	})
+}
+
+func manifestWarnings(raw json.RawMessage) []string {
+	// Installation already validated this document.
+	m, err := extensions.ParseManifest(raw)
+	if err != nil {
+		return nil
+	}
+	return m.Warnings
 }

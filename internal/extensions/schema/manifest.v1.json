@@ -52,7 +52,7 @@
         "api": {
           "type": "array",
           "uniqueItems": true,
-          "items": { "type": "string", "pattern": "^((tasks|comments|artifacts|docs|projects|workspaces|members|agents|agent_keys|vcs_links|events|secrets):(read|write)|agent_key:rotate|ext_token:self_rotate|members:authorize)$" }
+          "items": { "allOf": [{ "if": { "enum": ["workspaces:write", "members:write", "agents:write", "agent_keys:read", "agent_keys:write", "secrets:read", "secrets:write"] }, "then": { "deprecated": true, "description": "Accepted for v1 compatibility and ignored; no extension API grants these rights." } }], "type": "string", "pattern": "^((tasks|comments|artifacts|docs|projects|workspaces|members|agents|agent_keys|vcs_links|events|secrets):(read|write)|agent_key:rotate|ext_token:self_rotate|members:authorize)$" }
         },
         "events": {
           "type": "array",
@@ -271,6 +271,7 @@
       "dependentRequired": { "views": ["slots", "contract_report"], "slots": ["views"] }
     },
     "slot": {
+      "allOf": [{ "if": { "enum": ["workspace.settings", "project.settings", "command", "doc.panel"] }, "then": { "deprecated": true, "description": "Accepted for v1 compatibility and ignored. Settings forms use levels instead." } }],
       "enum": ["workspace.settings", "project.settings", "task.panel", "task.badge", "task.actions", "sidebar.item", "command", "doc.panel", "project.view", "dashboard.widget"]
     },
     "widgetCells": {

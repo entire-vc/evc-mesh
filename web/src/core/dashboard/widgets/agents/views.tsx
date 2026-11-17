@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
 import type { Async, WidgetViewProps } from "../../types";
+import { widgetTitle, type WidgetConfig } from "../../config";
 import { AgentSessionCard, statusConfig, useAgentCardDirectory, type AgentStatusEntry } from "./agent-card";
 import {
   clampLimit,
@@ -147,7 +148,7 @@ export function AgentsActiveWidget({ settings }: Partial<WidgetViewProps<AgentsA
   const { t } = useTranslation(NS);
   const result = useActiveAgents(clampLimit(settings?.limit));
   return (
-    <Frame icon={MonitorDot} title={settings?.title || t("sessions.widgets.activeTitle")}>
+    <Frame icon={MonitorDot} title={widgetTitle((settings ?? {}) as WidgetConfig, t("sessions.widgets.activeTitle"))}>
       <AgentsActiveBody result={result} />
     </Frame>
   );
@@ -197,7 +198,7 @@ export function AgentsStatusWidget({ settings }: Partial<WidgetViewProps<AgentsS
   const result = useAgentsStatus();
   const filter: AgentsStatusFilter = { statuses: settings?.statuses, onlyWithTask: settings?.onlyWithTask };
   return (
-    <Frame icon={Bot} title={settings?.title || t("sessions.widgets.statusTitle")}>
+    <Frame icon={Bot} title={widgetTitle((settings ?? {}) as WidgetConfig, t("sessions.widgets.statusTitle"))}>
       <AgentsStatusBody result={result} filter={filter} />
     </Frame>
   );
@@ -245,7 +246,7 @@ export function AgentsSummaryWidget({ settings }: Partial<WidgetViewProps<{ titl
   const { t } = useTranslation(NS);
   const result = useAgentsSummary();
   return (
-    <Frame icon={Users} title={settings?.title || t("sessions.widgets.summaryTitle")}>
+    <Frame icon={Users} title={widgetTitle((settings ?? {}) as WidgetConfig, t("sessions.widgets.summaryTitle"))}>
       <AgentsSummaryBody result={result} />
     </Frame>
   );

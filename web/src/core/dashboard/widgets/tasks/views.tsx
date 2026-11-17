@@ -11,6 +11,7 @@ import { InlineEdit, ListedTasksProvider, TaskLink, useCan } from "@/core/primit
 import { cn } from "@/lib/cn";
 import type { Task } from "@/types";
 import type { Async, DashboardWidgetView, TasksData } from "../../types";
+import { useWidgetTitle } from "../../config";
 import { PRIORITY_COLORS, priorityLabel } from "../legacy/views";
 import { Body, WidgetEmpty, formatShort } from "../legacy/parts";
 
@@ -25,7 +26,8 @@ function PriorityBadge({ priority }: { priority: string }) {
   );
 }
 
-function Shell({ title, icon: Icon, count, children }: { title: string; icon: ElementType; count?: number; children: ReactNode }) {
+function Shell({ title: typeTitle, icon: Icon, count, children }: { title: string; icon: ElementType; count?: number; children: ReactNode }) {
+  const title = useWidgetTitle(typeTitle);
   return (
     <Card className="@container h-full min-w-0">
       <CardContent className="flex h-full max-h-[40rem] min-w-0 flex-col pt-4">

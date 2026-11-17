@@ -136,18 +136,6 @@ func (r *Registry) RegisterRoutes(e *echo.Echo) {
 	}
 }
 
-// EventHandlers returns the handlers registered for an event, ordered by
-// extension id.
-func (r *Registry) EventHandlers(event string) []EventHandler {
-	var out []EventHandler
-	for _, p := range r.List() {
-		if h, ok := p.Hooks().EventHandlers[event]; ok {
-			out = append(out, h)
-		}
-	}
-	return out
-}
-
 // SyncBuiltin upserts every registered provider's manifest into
 // installed_extensions with source=builtin. Rows of other sources are not
 // overwritten.

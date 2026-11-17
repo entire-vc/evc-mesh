@@ -450,3 +450,33 @@ push the default branch/tag, submit through `mesh-ext publish`, request the
 normal catalogue approval, and verify the published ID/version from the public
 API and a verified catalogue. Record command exits, package digest, immutable
 commit and final release status. Implementation help is not part of this check.
+
+## Deprecated manifest v1 declarations
+
+**Availability:** These rules are part of an upcoming Mesh update. They do not
+describe behavior in existing deployments until that update is installed.
+
+Manifest v1 still accepts these values for compatibility with installed releases,
+but parsing ignores them and reports each omission in the server log and in
+`warnings` on the install response, repository preview and installed catalog entry:
+
+- UI slots: `command`, `doc.panel`, `workspace.settings`, `project.settings`.
+  Declare `levels.workspace` and `levels.project` and the corresponding `settings`
+  schemas to provide settings forms. There is no command or document panel host.
+- API rights: `workspaces:write`, `members:write`, `agents:write`,
+  `agent_keys:read`, `agent_keys:write`, `secrets:read`, `secrets:write`.
+  Workspace, member, agent and secret administration is not an extension API.
+  Agent key routes use `agent_key:rotate` with their existing authorization checks.
+
+The schemas retain these values with per-value `deprecated` annotations. Stored
+manifests and recorded consent are unchanged. Catalog `manifest.capabilities`
+and repository preview capabilities contain only the effective declarations.
+Removing a right never requests consent again or disables an existing connection;
+new rights still require consent. Removed rights stop acting immediately.
+
+`capabilities.secrets` must equal the union of setting names marked `x-secret`
+at the instance, workspace and project levels (including shared `#/schemas/…`
+references). A missing or extra name rejects the manifest and names the field.
+`webhooks_in` is for builtins only: every name must have a POST route at
+`/webhooks/{extension_id}/{name}` in `Hooks().Routes`. External repository and
+catalog declarations are accepted for v1 compatibility, ignored and warned about.
