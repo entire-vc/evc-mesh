@@ -350,3 +350,71 @@ func TestAnalyticsService_Overdue(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, m.TaskMetrics.Overdue, "the same member once their own task is past due")
 }
+
+// TestAnalyticsService_LeaderboardPeriod: tasks_by_agent (the agent-leaderboard
+// widget) counts only done tasks whose completed_at falls inside [From, To],
+// both bounds inclusive, and still only over the viewer's projects.
+func TestAnalyticsService_LeaderboardPeriod(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	f := seedAccessFixture(t, db) // hiddenTaskDone: agent, done, completed now
+
+	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 1, 2, 23, 59, 59, 0, time.UTC)
+	statusOf := func(project uuid.UUID, category string) uuid.UUID {
+		var id uuid.UUID
+		require.NoError(t, db.GetContext(ctx, &id, `SELECT id FROM task_statuses WHERE project_id = $1 AND category = $2`, project, category))
+		return id
+	}
+	n := 10
+	task := func(project uuid.UUID, category string, completed time.Time) {
+		n++
+		_, err := db.ExecContext(ctx, `INSERT INTO tasks (id, project_id, status_id, title, description, assignee_type, assignee_id, priority, position, custom_fields, labels, task_number, created_by, created_by_type, created_at, updated_at, completed_at)
+			VALUES ($1,$2,$3,'Leaderboard task','','agent',$4,'medium',$5,'{}','{}',$6,$7,'user',$8,$8,$8)`,
+			uuid.New(), project, statusOf(project, category), f.agent, float64(n), n, f.outside, completed)
+		require.NoError(t, err)
+	}
+	// Hidden: before, both bounds, inside, after; plus an open task inside.
+	task(f.hidden, "done", from.Add(-time.Second))
+	task(f.hidden, "done", from)
+	task(f.hidden, "done", from.Add(12*time.Hour))
+	task(f.hidden, "done", to)
+	task(f.hidden, "done", to.Add(time.Second))
+	task(f.hidden, "todo", from.Add(time.Hour))
+	// Shared: one done task inside the period.
+	task(f.shared, "done", from.Add(time.Hour))
+
+	leaderboard := func(v AnalyticsViewer, project *uuid.UUID, from, to time.Time) []AgentTaskRow {
+		t.Helper()
+		m, err := NewAnalyticsService(db).GetMetrics(ctx, AnalyticsFilter{WorkspaceID: f.ws, ProjectID: project, From: from, To: to, Viewer: v})
+		require.NoError(t, err)
+		return m.AgentMetrics.TasksByAgent
+	}
+	one := func(completed int) []AgentTaskRow {
+		return []AgentTaskRow{{AgentID: f.agent, AgentName: "Access Agent", Completed: completed}}
+	}
+	hiddenViewer := AnalyticsViewer{ActorID: f.hiddenMember}
+	sharedViewer := AnalyticsViewer{ActorID: f.sharedMember}
+	owner := AnalyticsViewer{ActorID: f.outside, AllProjects: true}
+
+	t.Run("P's member: only the in-period done tasks of P, bounds inclusive", func(t *testing.T) {
+		require.Equal(t, one(3), leaderboard(hiddenViewer, nil, from, to))
+		require.Equal(t, one(3), leaderboard(hiddenViewer, &f.hidden, from, to))
+	})
+	t.Run("member of the other project: its own in-period task, none of P", func(t *testing.T) {
+		require.Equal(t, one(1), leaderboard(sharedViewer, nil, from, to))
+	})
+	t.Run("owner: every project, still bounded by the period", func(t *testing.T) {
+		require.Equal(t, one(4), leaderboard(owner, nil, from, to))
+		require.Equal(t, one(1), leaderboard(owner, &f.shared, from, to))
+	})
+	t.Run("a period with no completions is empty", func(t *testing.T) {
+		future := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+		require.Empty(t, leaderboard(owner, nil, future, future.Add(48*time.Hour-time.Second)))
+		// Positive control: the same viewer over the fixture's own completion (now).
+		require.Equal(t, one(1), leaderboard(owner, nil, time.Now().Add(-time.Hour), time.Now().Add(time.Hour)))
+	})
+	t.Run("no project membership: nothing", func(t *testing.T) {
+		require.Empty(t, leaderboard(AnalyticsViewer{ActorID: f.outside}, nil, from, to))
+	})
+}

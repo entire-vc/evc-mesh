@@ -151,6 +151,20 @@ func (s *autoTransitionService) parentTransitionCandidate(ctx context.Context, t
 	if !allSubtasksTerminal(subtasks, categories) {
 		return nil, uuid.Nil, nil
 	}
+	// The parent's own typed card wait on a subtask means that subtask was
+	// something the owner waited for (an unblock), not the rest of the
+	// parent's result: releasing the wait must wake the owner, not hand the
+	// unfinished parent to review.
+	if s.depRepo != nil {
+		deps, depErr := s.depRepo.ListByTask(ctx, taskID)
+		if depErr != nil {
+			return nil, uuid.Nil, depErr
+		}
+		if dep := ownerWaitOnSubtask(deps, subtasks); dep != nil {
+			log.Printf("[auto-transition] holding parent %s: owner wait %s on subtask %s", taskID, *dep.OwnerWaitID, dep.DependsOnTaskID)
+			return nil, uuid.Nil, nil
+		}
+	}
 	target, exists, err := s.resolveTargetFromRule(ctx, parent.ProjectID, domain.TriggerAllSubtasksDone)
 	if err != nil {
 		return nil, uuid.Nil, err
@@ -165,6 +179,22 @@ func (s *autoTransitionService) parentTransitionCandidate(ctx context.Context, t
 		target, err = s.findTargetStatus(ctx, parent.ProjectID, domain.StatusCategoryReview, domain.StatusCategoryDone)
 	}
 	return parent, target, err
+}
+
+// ownerWaitOnSubtask returns the parent's blocks edge owned by a typed card
+// wait (owner_wait_id) whose blocker is one of its subtasks, or nil.
+func ownerWaitOnSubtask(deps []domain.TaskDependency, subtasks []domain.Task) *domain.TaskDependency {
+	children := make(map[uuid.UUID]bool, len(subtasks))
+	for _, sub := range subtasks {
+		children[sub.ID] = true
+	}
+	for i := range deps {
+		dep := &deps[i]
+		if dep.DependencyType == domain.DependencyTypeBlocks && dep.OwnerWaitID != nil && children[dep.DependsOnTaskID] {
+			return dep
+		}
+	}
+	return nil
 }
 
 // taskSnapshot prevents mutable repository test doubles/caches from changing the

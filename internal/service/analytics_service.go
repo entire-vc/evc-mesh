@@ -312,18 +312,21 @@ func (s *analyticsService) queryAgentMetrics(ctx context.Context, filter Analyti
 		return nil, err
 	}
 
-	// Per-agent count of tasks in a done status, over the projects in scope.
+	// Per-agent count of tasks in a done status completed within the period,
+	// over the projects in scope (same bounds as CompletedThisPeriod).
 	a := &sqlArgs{}
-	tasksQ := `
+	scope := projectScope(a, filter)
+	tasksQ := fmt.Sprintf(`
 		SELECT a.id AS agent_id, a.name AS agent_name, COUNT(t.id) AS completed
 		FROM agents a
 		JOIN tasks t ON t.assignee_id = a.id AND t.assignee_type = 'agent'
 		JOIN task_statuses ts ON ts.id = t.status_id AND ts.category = 'done'
 		JOIN projects p ON p.id = t.project_id
-		WHERE a.deleted_at IS NULL AND a.workspace_id = p.workspace_id AND ` + projectScope(a, filter) + `
+		WHERE a.deleted_at IS NULL AND a.workspace_id = p.workspace_id AND %s
+		  AND t.completed_at >= %s AND t.completed_at <= %s
 		GROUP BY a.id, a.name
 		ORDER BY completed DESC
-		LIMIT 20`
+		LIMIT 20`, scope, a.add(filter.From), a.add(filter.To))
 	var rows []agentTaskQueryRow
 	if err := s.db.SelectContext(ctx, &rows, tasksQ, a.vals...); err != nil {
 		return nil, err
