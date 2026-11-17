@@ -67,6 +67,13 @@ export interface DashboardEditorProps {
   renderWidget?: (item: LayoutItem, type: CatalogType | undefined) => import("react").ReactNode;
   /** Injected for tests and for P's own transport; defaults to the real API. */
   api?: LayoutApi;
+  /**
+   * The host asked to leave edit mode. The editor answers through `onLeave` once no save is in flight:
+   * "saved" when the writes it waited for went through (or there were none), "failed" when one of them failed
+   * or met a conflict — the editor then stays with its error or conflict notice instead of hiding it.
+   */
+  leaving?: boolean;
+  onLeave?: (outcome: "saved" | "failed") => void;
 }
 
 export interface LayoutApi {

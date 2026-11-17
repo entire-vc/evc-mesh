@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, Check, MoreHorizontal, Settings2, Users } from "lucide-react";
+import { ArrowLeft, Check, Loader2, MoreHorizontal, Settings2, Users } from "lucide-react";
 import { navIcon } from "@/core/icons/nav-icons";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { Button } from "@/components/ui/button";
@@ -61,7 +61,7 @@ export function DashboardEntry() {
   return <Navigate to={{ pathname: `/w/${wsSlug}/d/${home?.id ?? "default"}`, search: location.search }} replace />;
 }
 
-function Header({ doc, editing, canLayout, onToggleEdit, onCopy }: { doc: DashboardDoc; editing: boolean; canLayout: boolean; onToggleEdit: () => void; onCopy: () => void }) {
+function Header({ doc, editing, leaving, canLayout, onToggleEdit, onCopy }: { doc: DashboardDoc; editing: boolean; leaving: boolean; canLayout: boolean; onToggleEdit: () => void; onCopy: () => void }) {
   const { t } = useTranslation("notifications");
   return (
     <header className="mb-4 flex items-center gap-2">
@@ -86,14 +86,17 @@ function Header({ doc, editing, canLayout, onToggleEdit, onCopy }: { doc: Dashbo
             variant={editing ? "default" : "ghost"}
             size={editing ? "sm" : "icon"}
             aria-pressed={editing}
-            aria-label={editing ? t("dashboard.page.done") : t("dashboard.page.edit")}
-            title={editing ? t("dashboard.page.done") : t("dashboard.page.edit")}
+            // Done pressed while a save is in flight: the mode closes once the write has an answer.
+            aria-busy={leaving || undefined}
+            disabled={leaving}
+            aria-label={leaving ? t("dashboard.page.leaving") : editing ? t("dashboard.page.done") : t("dashboard.page.edit")}
+            title={leaving ? t("dashboard.page.leaving") : editing ? t("dashboard.page.done") : t("dashboard.page.edit")}
             onClick={onToggleEdit}
           >
             {editing ? (
               <>
-                <Check className="mr-1 h-4 w-4" aria-hidden />
-                {t("dashboard.page.done")}
+                {leaving ? <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden /> : <Check className="mr-1 h-4 w-4" aria-hidden />}
+                {leaving ? t("dashboard.page.leaving") : t("dashboard.page.done")}
               </>
             ) : (
               <Settings2 className="h-4 w-4" aria-hidden />
@@ -199,6 +202,12 @@ export function DashboardPage() {
   const sessionKey = `${wsId ?? ""}:${dashboardId}`;
   const [session, setSession] = useState<{ key: string; from: DashboardLayout; api: LayoutApi } | null>(null);
   useEffect(() => setSession((s) => (s && s.key !== sessionKey ? null : s)), [sessionKey]);
+  // Done asked to leave the session; the editor answers once its saves are through.
+  const [leaving, setLeaving] = useState(false);
+  // The re-read the last confirmed save started: the view is shown only after it succeeds, so it never shows the old
+  // layout. It clears itself on success; a failed one stays here so the next Done reads again.
+  const reread = useRef<Promise<boolean> | null>(null);
+  useEffect(() => setLeaving(false), [session]);
   const canLayout = useLayoutMajor() >= 2;
   const [actionError, setActionError] = useState<string | null>(null);
   useCols(); // keeps the page on the same breakpoints as the grid it hosts
@@ -223,6 +232,14 @@ export function DashboardPage() {
   const widgetParam = search.get("w");
   if (widgetParam) return <Expanded doc={doc} instanceId={widgetParam} backTo={base} />;
 
+  const rereadAfterSave = () => {
+    const mine = load.reload().then((ok) => {
+      if (ok && reread.current === mine) reread.current = null;
+      return ok;
+    });
+    reread.current = mine;
+    return mine;
+  };
   const removeWidget = (instanceId: string) => {
     setActionError(null);
     saveWidgets(wsId!, doc, doc.widgets.filter((w) => w.id !== instanceId))
@@ -241,14 +258,51 @@ export function DashboardPage() {
     <div className="p-4">
       {/* Paper for this page only: the 12-column grid needs a desktop-wide sheet, so print turns it sideways. */}
       <style media="print">{"@page { size: landscape; margin: 10mm; }"}</style>
-      <Header doc={doc} editing={editing} canLayout={canLayout} onToggleEdit={() => setSession(editing || !wsId ? null : { key: sessionKey, from: layoutFromDoc(doc), api: workspaceApi(wsId) })} onCopy={copyToMe} />
+      <Header
+        doc={doc}
+        editing={editing}
+        leaving={editing && leaving}
+        canLayout={canLayout}
+        onToggleEdit={() => {
+          if (editing) {
+            setActionError(null);
+            setLeaving(true);
+          }
+          else if (wsId) setSession({ key: sessionKey, from: layoutFromDoc(doc), api: workspaceApi(wsId) });
+        }}
+        onCopy={copyToMe}
+      />
       {actionError && (
         <p role="alert" className="mb-3 text-xs text-destructive">
           {actionError}
         </p>
       )}
       {editSession ? (
-        <DashboardEditor key={editSession.key} layout={editSession.from} api={editSession.api} canEdit onChange={() => load.reload()} />
+        <DashboardEditor
+          key={editSession.key}
+          layout={editSession.from}
+          api={editSession.api}
+          canEdit
+          onChange={() => void rereadAfterSave()}
+          leaving={leaving}
+          onLeave={(outcome) => {
+            // A failed or conflicting write keeps the editor: its notice is the result the user must see.
+            if (outcome === "failed") return setLeaving(false);
+            const ending = editSession;
+            const end = () => setSession((s) => (s === ending ? null : s));
+            const pending = reread.current;
+            if (!pending) return end();
+            // The write went through but the view could not be re-read: one more read, and if that fails too the
+            // editor (which shows the saved layout) stays with the notice instead of an outdated view.
+            void pending
+              .then((ok) => ok || rereadAfterSave())
+              .then((ok) => {
+                if (ok) return end();
+                setLeaving(false);
+                setActionError(t("dashboard.page.refreshFailed"));
+              });
+          }}
+        />
       ) : doc.widgets.length === 0 ? (
         <div data-testid="dashboard-empty" className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border py-16 text-center">
           <LayoutDashboard className="h-8 w-8 text-muted-foreground opacity-40" aria-hidden />
