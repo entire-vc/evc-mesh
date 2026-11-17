@@ -1,5 +1,5 @@
 // Edit mode of a dashboard (PRD §5.5-§5.7). Loaded lazily, only when the gear is pressed.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -44,10 +44,34 @@ function DefaultBody({ item }: { item: LayoutItem }) {
   return <Widget instance={{ id: item.id, type: item.type, x: item.x, y: item.y, w: item.w, h: item.h, settings }} />;
 }
 
-export function DashboardEditor({ layout, canEdit, onChange, onRefresh, renderWidget, api = realApi }: DashboardEditorProps) {
+/**
+ * Leaving edit mode waits for the saves in flight: the view must show what the server saved, and a
+ * write that fails after Done must not vanish with the editor. Only a failure met while waiting holds the editor;
+ * an error the user already saw before pressing Done does not.
+ */
+function useLeave(leaving: boolean, status: string, onLeave: ((outcome: "saved" | "failed") => void) | undefined) {
+  const waited = useRef(false);
+  const onLeaveRef = useRef(onLeave);
+  onLeaveRef.current = onLeave;
+  useEffect(() => {
+    if (!leaving) {
+      waited.current = false;
+      return;
+    }
+    if (status === "saving") {
+      waited.current = true;
+      return;
+    }
+    onLeaveRef.current?.(waited.current && (status === "error" || status === "stale") ? "failed" : "saved");
+    waited.current = false;
+  }, [leaving, status]);
+}
+
+export function DashboardEditor({ layout, canEdit, onChange, onRefresh, renderWidget, api = realApi, leaving = false, onLeave }: DashboardEditorProps) {
   const { t } = useTranslation("dashboardEdit");
   const ed = useLayoutEditor(layout, api, onChange);
   const mode = useMode();
+  useLeave(leaving, ed.status, onLeave);
 
   const [catalog, setCatalog] = useState<{ state: "loading" | "error" | "ready"; types: CatalogType[] }>({ state: "loading", types: [] });
   const [attempt, setAttempt] = useState(0);

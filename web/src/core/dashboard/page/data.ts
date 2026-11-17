@@ -9,7 +9,8 @@ export type Load<T> =
   | { state: "loading" }
   | { state: "error"; error: Error; retry: () => void }
   | { state: "missing" }
-  | { state: "ready"; value: T; refreshing: boolean; reload: () => void };
+  /** `reload` resolves to whether the newest read reached the screen (false: it failed and the old value stays). */
+  | { state: "ready"; value: T; refreshing: boolean; reload: () => Promise<boolean> };
 
 export const isMissing = (e: unknown) => e instanceof ApiRequestError && (e.status === 404 || e.status === 501);
 
@@ -21,38 +22,48 @@ function useReread<T>(key: string | null, read: () => Promise<T>, onLive?: (type
   const readRef = useRef(read);
   readRef.current = read;
   const seq = useRef(0);
+  const latest = useRef<Promise<boolean>>(Promise.resolve(true));
 
   const run = useCallback(
-    (silent: boolean) => {
-      if (key === null) return;
+    (silent: boolean): Promise<boolean> => {
+      if (key === null) return Promise.resolve(true);
       const mine = ++seq.current;
       if (silent) setRefreshing(true);
-      readRef
+      const p: Promise<boolean> = readRef
         .current()
-        .then((v) => mine === seq.current && setValue({ key, v }))
-        .catch((e) => {
-          if (mine !== seq.current) return;
-          // A failed silent re-read keeps what is on screen, unless the thing is gone (deleted in another
-          // tab: `dashboard.updated {id, deleted:true}` re-reads into a 404) — then the page says so.
-          if (isMissing(e)) return setValue({ key, err: "missing" });
-          if (silent) return;
-          setValue({ key, err: e instanceof Error ? e : new Error(String(e)) });
-        })
-        .finally(() => mine === seq.current && setRefreshing(false));
+        .then(
+          (v) => {
+            if (mine === seq.current) setValue({ key, v });
+            return true;
+          },
+          (e) => {
+            if (mine !== seq.current) return false;
+            // A failed silent re-read keeps what is on screen, unless the thing is gone (deleted in another
+            // tab: `dashboard.updated {id, deleted:true}` re-reads into a 404) — then the page says so.
+            if (isMissing(e)) setValue({ key, err: "missing" });
+            else if (!silent) setValue({ key, err: e instanceof Error ? e : new Error(String(e)) });
+            return false;
+          },
+        )
+        .finally(() => mine === seq.current && setRefreshing(false))
+        // A newer read replaced this one: its outcome is what reaches the screen (none after unmount).
+        .then((ok) => (mine === seq.current ? ok : latest.current === p ? false : latest.current));
+      latest.current = p;
+      return p;
     },
     [key],
   );
 
   useEffect(() => {
     setValue(null);
-    run(false);
+    void run(false);
     return () => {
       seq.current++;
     };
   }, [run, attempt]);
 
   useRealtime({ kind: "workspace" }, (e) => {
-    if (onLive?.(e.type, e.data)) run(true);
+    if (onLive?.(e.type, e.data)) void run(true);
   });
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);

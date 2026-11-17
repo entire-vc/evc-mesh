@@ -234,6 +234,8 @@
       "shared": "Shared dashboard",
       "edit": "Edit layout",
       "done": "Done",
+      "leaving": "Saving…",
+      "refreshFailed": "Saved, but the dashboard could not be refreshed. Press Done to try again.",
       "menu": "More",
       "print": "Print dashboard",
       "copyToMe": "Make a copy for me",

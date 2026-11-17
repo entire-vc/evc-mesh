@@ -668,3 +668,144 @@ describe("dashboard page: extension widgets (PRD §7.2)", () => {
     });
   });
 });
+
+// Done pressed while the settings save is still in flight. The view must end up on what the server
+// saved (no manual reload), and a failed or conflicting save must be shown, never left as a silent mismatch.
+describe("Done while a save is in flight", () => {
+  const CATALOG = { widgets: [{ id: "mentions", origin: "core", category: "comms", size: { default: { w: 6, h: 2 }, min: { w: 3, h: 2 }, max: { w: 12, h: 6 } } }] };
+  const START = [W("i1", "mentions", 0, 0, 6, 2, { title: "Old title" }), W("i2", "mentions", 6, 0, 6, 2, { title: "Control" })];
+
+  /** Serves the dashboard from `server`; the layout PUT waits until the test settles it. */
+  function serveDeferred() {
+    let server = doc(START);
+    const reads = { fail: 0 };
+    const puts: { body: { version: number; widgets: WidgetInstance[] }; resolve: () => void; reject: (e: Error) => void }[] = [];
+    vi.mocked(api).mockImplementation(async (url: string, opts?: unknown) => {
+      if (url === "/api/v1/workspaces/ws1/dashboard-widgets") return CATALOG;
+      if (url.endsWith("/layout")) {
+        const body = (opts as { body: { version: number; widgets: WidgetInstance[] } }).body;
+        return new Promise((res, rej) =>
+          puts.push({
+            body,
+            resolve: () => {
+              server = doc(body.widgets, { version: body.version + 1 });
+              res(server);
+            },
+            reject: rej,
+          }),
+        );
+      }
+      if (url === "/api/v1/workspaces/ws1/dashboards/d1") {
+        if (reads.fail > 0) {
+          reads.fail -= 1;
+          throw new ApiRequestError("down", "internal", 500);
+        }
+        return server;
+      }
+      if (url.endsWith("/dashboards")) return [];
+      if (url.endsWith("/team")) return { agents: [] };
+      return { items: [] };
+    });
+    return { puts, reads, server: () => server };
+  }
+
+  async function saveTitleThenDone(title: string) {
+    mount();
+    await screen.findByTestId("dashboard-grid");
+    fireEvent.click(screen.getByRole("button", { name: /Edit layout|Править раскладку/ }));
+    await screen.findByTestId("dash-editor");
+    fireEvent.click((await screen.findAllByRole("button", { name: /Settings: |Настройки: / }))[0]!);
+    const input = await screen.findByLabelText(/^(Title|Заголовок)/);
+    fireEvent.change(input, { target: { value: title } });
+    fireEvent.click(screen.getByRole("button", { name: /^(Save|Сохранить)$/ }));
+    await waitFor(() => expect(vi.mocked(api).mock.calls.some(([u]) => String(u).endsWith("/layout"))).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: /Done|Готово|Saving|Сохраняем/ }));
+  }
+
+  const viewTitles = () => [...screen.getByTestId("dashboard-grid").querySelectorAll("[data-widget-instance] h3")].map((h) => h.textContent?.trim());
+
+  it("success: the view shows the saved title without a manual reload; the control widget is unchanged", async () => {
+    const { puts } = serveDeferred();
+    await saveTitleThenDone("New title");
+    // Leaving waits for the write: the editor stays, the button says the save is under way.
+    expect(screen.getByTestId("dash-editor")).toBeTruthy();
+    const done = screen.getByRole("button", { name: /Saving|Сохраняем/ });
+    expect(done).toHaveAttribute("aria-busy", "true");
+    expect(done).toBeDisabled();
+    expect(puts).toHaveLength(1);
+    expect(puts[0]!.body.widgets.map((w) => w.settings?.title)).toEqual(["New title", "Control"]);
+    await act(async () => puts[0]!.resolve());
+    await screen.findByTestId("dashboard-grid");
+    expect(screen.queryByTestId("dash-editor")).toBeNull();
+    await waitFor(() => expect(viewTitles()).toEqual(["New title", "Control"]));
+  });
+
+  it("saved but the re-read fails: the editor stays with a notice, never an outdated view; the next Done reads again", async () => {
+    const { puts, reads } = serveDeferred();
+    await saveTitleThenDone("Saved title");
+    // the re-read after the save and the one retry on leaving both fail
+    reads.fail = 2;
+    await act(async () => puts[0]!.resolve());
+    expect(await screen.findByText(/could not be refreshed|не удалось обновить/)).toBeTruthy();
+    expect(screen.getByTestId("dash-editor")).toBeTruthy();
+    expect(screen.queryByTestId("dashboard-grid")).toBeNull();
+    expect(screen.getByRole("button", { name: /^(Done|Готово)$/ })).not.toBeDisabled();
+    // the server is back: Done reads again and the view shows what was saved
+    fireEvent.click(screen.getByRole("button", { name: /^(Done|Готово)$/ }));
+    await screen.findByTestId("dashboard-grid");
+    expect(screen.queryByText(/could not be refreshed|не удалось обновить/)).toBeNull();
+    expect(viewTitles()).toEqual(["Saved title", "Control"]);
+  });
+
+  it("a failed save keeps the editor open with the error and the view stays on the server copy", async () => {
+    const { puts } = serveDeferred();
+    await saveTitleThenDone("Lost title");
+    await act(async () => puts[0]!.reject(new ApiRequestError("boom", "internal", 500)));
+    expect(await screen.findByText(/Could not save the change|Не удалось сохранить/)).toBeTruthy();
+    expect(screen.getByTestId("dash-editor")).toBeTruthy();
+    expect(screen.queryByTestId("dashboard-grid")).toBeNull();
+    // Done is available again; leaving now shows exactly what the server holds.
+    fireEvent.click(screen.getByRole("button", { name: /^(Done|Готово)$/ }));
+    await screen.findByTestId("dashboard-grid");
+    expect(viewTitles()).toEqual(["Old title", "Control"]);
+  });
+
+  it("409: the conflict is shown in the editor, not swallowed by leaving", async () => {
+    const { puts } = serveDeferred();
+    await saveTitleThenDone("Conflicting title");
+    await act(async () => puts[0]!.reject(new ApiRequestError("stale", "conflict", 409, undefined, "stale_layout")));
+    expect(await screen.findByText(/changed in another tab|изменён в другой вкладке|изменили в другой вкладке/i)).toBeTruthy();
+    expect(screen.getByTestId("dash-editor")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^(Done|Готово)$/ }));
+    await screen.findByTestId("dashboard-grid");
+    expect(viewTitles()).toEqual(["Old title", "Control"]);
+  });
+
+  it("ordinary path: Save → Saved → Done leaves at once and shows the saved title", async () => {
+    const { puts } = serveDeferred();
+    mount();
+    await screen.findByTestId("dashboard-grid");
+    fireEvent.click(screen.getByRole("button", { name: /Edit layout|Править раскладку/ }));
+    await screen.findByTestId("dash-editor");
+    fireEvent.click((await screen.findAllByRole("button", { name: /Settings: |Настройки: / }))[0]!);
+    fireEvent.change(await screen.findByLabelText(/^(Title|Заголовок)/), { target: { value: "Calm title" } });
+    fireEvent.click(screen.getByRole("button", { name: /^(Save|Сохранить)$/ }));
+    await waitFor(() => expect(puts).toHaveLength(1));
+    await act(async () => puts[0]!.resolve());
+    expect(await screen.findByText(/^(Saved|Сохранено)$/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^(Done|Готово)$/ }));
+    expect(screen.queryByTestId("dash-editor")).toBeNull();
+    await waitFor(() => expect(viewTitles()).toEqual(["Calm title", "Control"]));
+  });
+
+  it("Done with nothing changed leaves at once", async () => {
+    serveDeferred();
+    mount();
+    await screen.findByTestId("dashboard-grid");
+    fireEvent.click(screen.getByRole("button", { name: /Edit layout|Править раскладку/ }));
+    await screen.findByTestId("dash-editor");
+    fireEvent.click(screen.getByRole("button", { name: /^(Done|Готово)$/ }));
+    expect(screen.queryByTestId("dash-editor")).toBeNull();
+    expect(viewTitles()).toEqual(["Old title", "Control"]);
+  });
+});
