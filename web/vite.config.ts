@@ -44,13 +44,18 @@ function swCacheVersion(): Plugin {
   };
 }
 
-/** The commit this build is made from: CI's own SHA first, local git second.
+/** The commit this build is made from: CI's own SHA first, local git second,
+ * MESH_BUILD_SHA third.
  * CI_COMMIT_SHA is trusted only in this repo's own pipeline. The deploy
  * pipeline (entire-vc/deploy) builds evc-mesh from a checkout of its own, so
  * there CI_COMMIT_SHA is the deploy repo's commit — the stamp must come from
  * the checkout being built. web/perf/check-bundle-budget.mjs applies the same
- * rule, so the two agree on what HEAD means. null = unknown, and then no
- * .build-sha is written — which the check treats as a failure, not a pass. */
+ * rule, so the two agree on what HEAD means.
+ * MESH_BUILD_SHA is for the Docker web stage, which has no .git: the image's
+ * source-sha stage reads HEAD of the evc-mesh build context
+ * (deploy/docker/mesh/resolve-source-sha.sh) and hands it over.
+ * Only a full 40-hex SHA counts. null = unknown, and then no .build-sha is
+ * written — which the check treats as a failure, not a pass. */
 function currentCommit(): string | null {
   if (process.env.CI_COMMIT_SHA && process.env.CI_PROJECT_PATH === "entire-vc/evc-mesh") {
     return process.env.CI_COMMIT_SHA.trim();
@@ -60,8 +65,10 @@ function currentCommit(): string | null {
       .toString()
       .trim();
   } catch {
-    return null;
+    // No git here (Docker web stage): fall through to the handed-over SHA.
   }
+  const handed = (process.env.MESH_BUILD_SHA ?? "").trim();
+  return /^[0-9a-f]{40}$/.test(handed) ? handed : null;
 }
 
 // Stamps the built output with the commit it came from (dist/.build-sha), so

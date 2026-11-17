@@ -43,6 +43,20 @@ RUN GIT_SHA=$(git rev-parse HEAD 2>/dev/null || echo dev) && \
       -X main.BuildEnv=prod" \
       -o /bin/mesh-api ./cmd/api
 
+# The evc-mesh commit this image is built from, for the bundle's stamp
+# (dist/.build-sha). The web stage below copies web/ only, so vite cannot ask
+# git; this stage reads HEAD of the build context the way go-builder does for
+# /api/version. A context without .git (a tarball) passes
+# --build-arg MESH_SOURCE_SHA=<40-hex>; unknown -> empty -> no stamp, and the
+# bundle budget check refuses that dist instead of trusting a guess.
+FROM alpine:3.20 AS source-sha
+RUN apk add --no-cache git
+ARG MESH_SOURCE_SHA=
+COPY deploy/docker/mesh/resolve-source-sha.sh /resolve-source-sha.sh
+COPY . /src
+RUN sh /resolve-source-sha.sh /src "$MESH_SOURCE_SHA" > /build-sha \
+    && echo "[source-sha] $(cat /build-sha || true)" && rm -rf /src
+
 # Stage 2: Build frontend
 FROM node:20-alpine AS web-builder
 RUN corepack enable
@@ -65,7 +79,8 @@ COPY internal/extensions/schema/manifest.v1.json /internal/extensions/schema/man
 # The My Runner tests build the resource forms from the real Runner manifest (same reason).
 COPY internal/extensions/runner/mesh-extension.json /internal/extensions/runner/mesh-extension.json
 COPY internal/extensions/team-relay/mesh-extension.json /internal/extensions/team-relay/mesh-extension.json
-RUN pnpm build
+COPY --from=source-sha /build-sha /tmp/mesh-build-sha
+RUN MESH_BUILD_SHA="$(cat /tmp/mesh-build-sha)" pnpm build
 
 # Stage 3: Production image
 FROM alpine:3.19
