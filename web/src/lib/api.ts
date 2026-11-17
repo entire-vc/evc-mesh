@@ -158,6 +158,10 @@ interface RequestOptions {
   // endpoints that set or must present the httpOnly refresh cookie (login,
   // register, invite-accept) while still not sending a Bearer token.
   withCredentials?: boolean;
+  // fetch's HTTP-cache mode. "no-cache" makes the browser revalidate even an
+  // entry it still holds as fresh — for reads a live event or a write just
+  // made stale (e.g. unseen mention counts after a mention frame or a seen).
+  cache?: RequestCache;
 }
 
 // api() always owns JSON-encoding the body. A caller that pre-stringifies (as
@@ -183,7 +187,7 @@ export async function api<T>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
-  const { method = "GET", body, params, noAuth = false, withCredentials = false, signal } = options;
+  const { method = "GET", body, params, noAuth = false, withCredentials = false, signal, cache } = options;
 
   let url = `${BASE_URL}${path}`;
   if (params) {
@@ -221,6 +225,7 @@ export async function api<T>(
 
   let res = await fetch(url, {
     ...(signal ? { signal } : {}),
+    ...(cache ? { cache } : {}),
     method,
     headers,
     body: serializeBody(body),
@@ -241,6 +246,7 @@ export async function api<T>(
       headers["Authorization"] = `Bearer ${newToken}`;
       res = await fetch(url, {
         ...(signal ? { signal } : {}),
+        ...(cache ? { cache } : {}),
         method,
         headers,
         body: serializeBody(body),

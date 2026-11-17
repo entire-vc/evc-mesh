@@ -93,7 +93,7 @@ func (h *DocumentMentionHandler) UnseenCount(c echo.Context) error {
 		return err
 	}
 
-	c.Response().Header().Set("Cache-Control", "max-age=10")
+	c.Response().Header().Set("Cache-Control", unseenCountCacheControl)
 	return c.JSON(http.StatusOK, map[string]int64{"count": count})
 }
 

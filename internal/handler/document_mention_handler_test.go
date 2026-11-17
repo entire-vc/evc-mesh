@@ -265,7 +265,7 @@ func TestDocumentMentionHandler_UnseenCount(t *testing.T) {
 	require.NoError(t, h.UnseenCount(c))
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "max-age=10", rec.Header().Get("Cache-Control"))
+	assert.Equal(t, "private, no-cache", rec.Header().Get("Cache-Control"))
 	assert.Equal(t, agentID, svc.gotID)
 	assert.Equal(t, "agent", svc.gotKind)
 	require.NotNil(t, svc.gotFilter.WorkspaceID)
