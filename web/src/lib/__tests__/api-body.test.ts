@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
 
-// Regression test for the double-JSON-serialization bug (Mesh task 501608d1):
+// Regression test for the double-JSON-serialization bug:
 // api() always JSON.stringify()s `body` itself. A caller that pre-stringifies
 // (as web/src/stores/notification.ts once did) got a JSON-encoded string of a
 // JSON string, which the Go handler's c.Bind() cannot parse — the request came
@@ -51,5 +51,17 @@ describe("api() body encoding", () => {
     // Sent as-is (single-encoded), not re-wrapped in another layer of quotes.
     expect(init.body).toBe(preStringified);
     expect(JSON.parse(init.body)).toEqual({ ids: ["a", "b"] });
+  });
+});
+
+describe("api() HTTP-cache mode", () => {
+  it("passes cache through to fetch only when the caller asks for it", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ ok: true })));
+    await api("/api/v1/me/mentions/unseen_count", { cache: "no-cache" });
+    await api("/api/v1/projects");
+
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    expect(fetchMock.mock.calls[0]?.[1]?.cache).toBe("no-cache");
+    expect(fetchMock.mock.calls[1]?.[1]).not.toHaveProperty("cache");
   });
 });

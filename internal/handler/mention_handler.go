@@ -66,7 +66,7 @@ func (h *MentionHandler) MarkSeen(c echo.Context) error {
 
 // UnseenCount returns the number of unseen mentions for the caller, scoped to
 // one workspace (required, same as List — see parseMentionFilter).
-// Response: {"count": N}  Cache-Control: max-age=10
+// Response: {"count": N}  Cache-Control: private, no-cache
 func (h *MentionHandler) UnseenCount(c echo.Context) error {
 	actorID, actorType := actorctx.FromContext(c.Request().Context())
 	if actorID == uuid.Nil {
@@ -84,9 +84,17 @@ func (h *MentionHandler) UnseenCount(c echo.Context) error {
 		return err
 	}
 
-	c.Response().Header().Set("Cache-Control", "max-age=10")
+	// no-cache, not max-age: the badge and the mentions_unseen tile re-read
+	// this count on each live mention frame and after POST .../seen; a
+	// max-age answer let the browser serve the old count for its whole TTL.
+	c.Response().Header().Set("Cache-Control", unseenCountCacheControl)
 	return c.JSON(http.StatusOK, map[string]int64{"count": count})
 }
+
+// unseenCountCacheControl is shared by both unseen_count handlers (task and
+// document mentions): the client sums them, so one stale side is enough to
+// show a wrong total.
+const unseenCountCacheControl = "private, no-cache"
 
 func mentionKind(t domain.ActorType) string {
 	if t == domain.ActorTypeAgent {

@@ -269,9 +269,11 @@ describe("fetchUnseenMentionCount", () => {
 
     expect(apiMock).toHaveBeenCalledWith("/api/v1/me/mentions/unseen_count", {
       params: { workspace_id: "ws-42" },
+      cache: "no-cache",
     });
     expect(apiMock).toHaveBeenCalledWith("/api/v1/me/document-mentions/unseen_count", {
       params: { workspace_id: "ws-42" },
+      cache: "no-cache",
     });
   });
 });

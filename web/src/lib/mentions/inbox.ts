@@ -191,9 +191,13 @@ export function mentionHref(
  * empty list next to a nonzero badge left over from wherever they were before.
  */
 export async function fetchUnseenMentionCount(workspaceId: string): Promise<number> {
+  // cache: "no-cache" — callers re-read the count right after a live mention
+  // frame or a seen; a browser-cache hit (the server once sent max-age=10)
+  // kept the old total on the tile for the whole TTL.
+  const opts = { params: { workspace_id: workspaceId }, cache: "no-cache" as const };
   const [tasks, documents] = await Promise.allSettled([
-    api<{ count: number }>(`${TASK_MENTIONS_PATH}/unseen_count`, { params: { workspace_id: workspaceId } }),
-    api<{ count: number }>(`${DOCUMENT_MENTIONS_PATH}/unseen_count`, { params: { workspace_id: workspaceId } }),
+    api<{ count: number }>(`${TASK_MENTIONS_PATH}/unseen_count`, opts),
+    api<{ count: number }>(`${DOCUMENT_MENTIONS_PATH}/unseen_count`, opts),
   ]);
   let total = 0;
   if (tasks.status === "fulfilled") total += tasks.value?.count ?? 0;
