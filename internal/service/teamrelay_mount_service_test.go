@@ -1101,22 +1101,109 @@ func TestSyncMount_MovedFilesArchiveOldCopies(t *testing.T) {
 	assert.Len(t, live, 2, "only the two new-path copies remain live")
 }
 
-// TestSyncMount_EmptyIndexArchivesNothing is the guard: a files-index that
-// comes back EMPTY must not read as "every file was deleted". No index, no
-// verdict — even though live copies exist that no entry represents.
-func TestSyncMount_EmptyIndexArchivesNothing(t *testing.T) {
+// TestSyncMount_EmptyIndexArchivesLastDeletedFile is the gap the empty-index
+// guard used to leave open (live on prod, 18.11): the share's last file was
+// deleted, so the index is legitimately empty — and the one copy it left
+// behind was never archived. A 404 on its download is the proof the guard
+// asks for; with that proof and a copy count within emptyIndexArchiveCap the
+// copy is archived like any other vanished one.
+func TestSyncMount_EmptyIndexArchivesLastDeletedFile(t *testing.T) {
 	f := setupMountFixture(t, "")
-	doc := f.seedCopy(t, "Notes/a.md", "body", "sha-a", frozenTime)
-	f.client.indexResult = nil // relay answered, with nothing
+	gone := f.seedCopy(t, "_acceptance/roundtrip.md", "body", "sha-a", frozenTime)
+	f.client.indexResult = nil // the share is empty now
+	f.client.downloadErr = teamrelay.ErrNotFound
 
 	result, err := f.svc.SyncMount(context.Background(), f.projectID)
 	require.NoError(t, err)
 	require.Equal(t, MountStatusOK, result.Status)
-	assert.Equal(t, 0, result.Archived, "an empty index must never archive")
+	assert.Equal(t, 1, result.Archived, "the last deleted file's copy is archived")
 
-	live, gerr := f.repo.GetByID(context.Background(), doc.ID)
-	require.NoError(t, gerr)
-	require.NotNil(t, live, "copy stays live despite representing no index entry")
+	stored, ok := f.repo.items[gone.ID]
+	require.True(t, ok, "archived copy must remain in storage — archive, not delete")
+	require.NotNil(t, stored.DeletedAt, "archived copy must carry deleted_at")
+
+	live, lerr := f.repo.ListLiveCopiesByShare(context.Background(), f.projectID, testRelayShareID)
+	require.NoError(t, lerr)
+	assert.Empty(t, live, "no live copy of the emptied share remains")
+}
+
+// TestSyncMount_EmptyIndexArchivesNothing is the guard: a files-index that
+// comes back EMPTY must not read as "every file was deleted". An empty index
+// is no verdict by itself — a copy is archived only on a 404 for its own
+// download, so a source that still answers with its body, or a relay that
+// cannot be asked (unreachable, rejected key), keeps every copy live.
+func TestSyncMount_EmptyIndexArchivesNothing(t *testing.T) {
+	cases := []struct {
+		name        string
+		downloadErr error // nil: the seeded source answers with its body
+	}{
+		{"source still answers with its body", nil},
+		{"relay unreachable", teamrelay.ErrUnreachable},
+		{"key expired", teamrelay.ErrKeyExpired},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setupMountFixture(t, "")
+			doc := f.seedCopy(t, "Notes/a.md", "body", "sha-a", frozenTime)
+			f.client.indexResult = nil // relay answered, with nothing
+			f.client.downloadErr = tc.downloadErr
+
+			result, err := f.svc.SyncMount(context.Background(), f.projectID)
+			require.NoError(t, err)
+			require.Equal(t, MountStatusOK, result.Status)
+			assert.Equal(t, 0, result.Archived, "an empty index without a 404 must never archive")
+			assert.Equal(t, 1, f.client.downloadCalls, "the copy's source was asked — the guard is the answer, not a skipped check")
+
+			live, gerr := f.repo.GetByID(context.Background(), doc.ID)
+			require.NoError(t, gerr)
+			require.NotNil(t, live, "copy stays live despite representing no index entry")
+		})
+	}
+}
+
+// TestSyncMount_EmptyIndexOverCapArchivesNothing is the blast-radius half of
+// the guard: an empty index with more than emptyIndexArchiveCap live copies
+// archives none of them, even when every download answers 404 — a wrong
+// share or key answers 404 to everything, and the whole subtree vanishing at
+// once is that, not a run of deletions.
+func TestSyncMount_EmptyIndexOverCapArchivesNothing(t *testing.T) {
+	f := setupMountFixture(t, "")
+	const copies = 4 // one over the cap of 3: a literal, so changing the cap cannot quietly retune this test
+	for i := 0; i < copies; i++ {
+		f.seedCopy(t, fmt.Sprintf("Notes/n-%d.md", i), "body", "sha-"+strconv.Itoa(i), frozenTime)
+	}
+	f.client.indexResult = nil
+	f.client.downloadErr = teamrelay.ErrNotFound
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusOK, result.Status)
+	assert.Equal(t, 0, result.Archived, "over the cap an empty index archives nothing, 404 or not")
+
+	live, lerr := f.repo.ListLiveCopiesByShare(context.Background(), f.projectID, testRelayShareID)
+	require.NoError(t, lerr)
+	assert.Len(t, live, copies, "every copy stays live")
+}
+
+// TestSyncMount_EmptyIndexAtCapArchivesProvenGone pins the cap's boundary:
+// exactly emptyIndexArchiveCap live copies, all 404, are all archived — the
+// share's last few files deleted at once.
+func TestSyncMount_EmptyIndexAtCapArchivesProvenGone(t *testing.T) {
+	f := setupMountFixture(t, "")
+	for i := 0; i < emptyIndexArchiveCap; i++ {
+		f.seedCopy(t, fmt.Sprintf("Notes/n-%d.md", i), "body", "sha-"+strconv.Itoa(i), frozenTime)
+	}
+	f.client.indexResult = nil
+	f.client.downloadErr = teamrelay.ErrNotFound
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusOK, result.Status)
+	assert.Equal(t, emptyIndexArchiveCap, result.Archived)
+
+	live, lerr := f.repo.ListLiveCopiesByShare(context.Background(), f.projectID, testRelayShareID)
+	require.NoError(t, lerr)
+	assert.Empty(t, live)
 }
 
 // TestSyncMount_IndexErrorArchivesNothing is the guard's other half: an
@@ -1166,7 +1253,7 @@ func TestSyncMount_ArchivesCopiesUnderNewlyExcludedFolder(t *testing.T) {
 
 // A share folder's placeholder that was filed into a canon folder (docs
 // layout) must be found again by its old path: the next sync used to leave a
-// new empty duplicate at the project's top level every time (card an internal ticket).
+// new empty duplicate at the project's top level every time.
 func TestSyncMount_FiledAwayFolderPlaceholderIsReusedNotRecreated(t *testing.T) {
 	f := setupMountFixture(t, "")
 	ctx := context.Background()

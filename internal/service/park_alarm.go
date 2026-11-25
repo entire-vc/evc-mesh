@@ -18,7 +18,7 @@ import (
 // drives a 422 — a hard refusal of a write a caller is trying to make — and widening
 // a refusal is the dangerous direction: every extra label here is a park somebody can
 // no longer perform. The wider vocabulary drives a *skip*, whose failure direction is
-// merely "stays in backlog". Audit 2026-09-07 (#559270cf) measured 34 of 56 cards
+// merely "stays in backlog". Audit 2026-09-07 measured 34 of 56 cards
 // carrying one of these two labels with no due_date at all — 11 of them already in the
 // "parked with no exit" bucket — which is the population this gate exists to stop
 // growing.

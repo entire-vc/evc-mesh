@@ -15,7 +15,7 @@ import (
 // setupTaskServiceWithVCSIntegrationResolver wires a taskService the same
 // way setupTaskServiceWithDoneGateAndGitHubChecker does, but with a dynamic
 // VCSIntegrationResolver instead of a static githubPRChecker/gitlabMRChecker
-// — proving the #33a4bb57 per-workspace path (§C1) end-to-end through the
+// — proving the per-workspace path (§C1) end-to-end through the
 // real done-evidence gate, not just the private resolve* helpers in
 // isolation. projectRepo comes from newTestTaskService's own default
 // (WithDefaultWorkspace(testDefaultWorkspaceID)), so every task's project
@@ -67,7 +67,7 @@ func TestResolveGitHubChecker_ResolverWired_TokenlessRow_NotUsable(t *testing.T)
 	repo := newFakeVCSIntegrationRepo()
 	// Row supplies ONLY a webhook_secret — legitimate for webhook validation
 	// but the live-check client construction still requires a token, mirroring
-	// the pre-#33a4bb57 `if cfg.Webhook.GitHubToken != ""` gate.
+	// the earlier `if cfg.Webhook.GitHubToken != ""` gate.
 	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderGitHub, IsActive: true, Config: githubCfg("", "webhook-secret-only")})
 	resolver := NewVCSIntegrationResolver(repo, VCSEnvFallback{})
 	svc, _, _, _, _ := setupTaskServiceWithVCSIntegrationResolver(resolver)

@@ -824,7 +824,8 @@
       "chat": "Chat",
       "timeline": "Dependencies",
       "updates": "Updates",
-      "extension": "Extension"
+      "extension": "Extension",
+      "stats": "Statistics"
     },
     "moreViews": "More views",
     "moreViewsActive": "{{name}} - more views",
@@ -857,6 +858,10 @@
       "makePrivate": "Make private",
       "shareWithTeam": "Share with team",
       "deleteView": "Delete view"
+    },
+    "stats": {
+      "title": "Agent work in this project",
+      "subtitle": "Tokens and ≈ $ at API prices spent on this project, and which agents spent them"
     }
   },
   "workspace": {

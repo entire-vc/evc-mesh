@@ -25,6 +25,7 @@
 internal/handler <- cmd/api/*.go internal/ws/handler.go docs/api/agent-runtime.example.json
 internal/middleware <- cmd/api/*.go internal/**/*.go
 internal/service <- internal/**/*.go cmd/**/*.go scripts/audit/task-transition.sql
+internal/reconciler <- internal/service/testdata/simhash_corpus_*.txt
 internal/repository/postgres <- **/*.go **/*.sql docs/api/agent-runtime.example.json
 internal/domain <- docs/api/agent-runtime.example.json web/src/locales/**/board.json
 internal/extensions <- internal/extensions/schema/**/*
@@ -44,3 +45,5 @@ internal/extensions/external <- examples/external-extension/mesh-extension.json
 internal/extensions/catalog <- internal/extensions/catalog/testdata/**/*
 examples/external-extension/refext <- web/board-e2e/refext-widget.html
 internal/extensions/conformance <- internal/extensions/schema/**/* packages/mesh-theme-sdk/schema/manifest.v1.json web/src/**/*.ts web/src/**/*.tsx internal/**/*.go cmd/**/*.go
+# cmd/api: gate_intake_cli_test.go reads the token file the CLI writes into t.TempDir().
+cmd/api <- cmd/api/*.go

@@ -72,6 +72,9 @@ func (m *activityMockRepo) GetAgentByID(_ context.Context, _ uuid.UUID) (*domain
 func (m *activityMockRepo) GetBySlug(_ context.Context, _ uuid.UUID, _ string) (*domain.Agent, error) {
 	return nil, nil
 }
+func (m *activityMockRepo) ListByNameFold(_ context.Context, _ uuid.UUID, _ string, _ int) ([]domain.Agent, error) {
+	return nil, nil
+}
 func (m *activityMockRepo) SearchByPrefix(_ context.Context, _ uuid.UUID, _ string, _ int) ([]domain.Agent, error) {
 	return nil, nil
 }

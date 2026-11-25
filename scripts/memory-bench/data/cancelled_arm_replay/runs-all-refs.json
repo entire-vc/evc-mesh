@@ -4,7 +4,7 @@
    "id": 30341443166,
    "event": "pull_request",
    "created_at": "2026-07-28T08:12:26Z",
-   "head_branch": "riker/pin-honours-negation-and-capture-stability",
+   "head_branch": "robin/pin-honours-negation-and-capture-stability",
    "head_sha": "c1c8b33071c7bb677432d91fa6d6bd63b2404a6f",
    "status": "in_progress",
    "conclusion": null
@@ -22,7 +22,7 @@
    "id": 30341157927,
    "event": "workflow_dispatch",
    "created_at": "2026-07-28T08:08:16Z",
-   "head_branch": "riker/pin-honours-negation-and-capture-stability",
+   "head_branch": "robin/pin-honours-negation-and-capture-stability",
    "head_sha": "cae6f125605c87c1e8717483f4efd65fe3aeee62",
    "status": "in_progress",
    "conclusion": null
@@ -31,7 +31,7 @@
    "id": 30341049070,
    "event": "pull_request",
    "created_at": "2026-07-28T08:06:43Z",
-   "head_branch": "riker/pin-honours-negation-and-capture-stability",
+   "head_branch": "robin/pin-honours-negation-and-capture-stability",
    "head_sha": "cae6f125605c87c1e8717483f4efd65fe3aeee62",
    "status": "in_progress",
    "conclusion": null
@@ -49,7 +49,7 @@
    "id": 30340015117,
    "event": "pull_request",
    "created_at": "2026-07-28T07:51:27Z",
-   "head_branch": "riker/proof-test-only-no-deploy",
+   "head_branch": "robin/proof-test-only-no-deploy",
    "head_sha": "3d99d25fc9de64ebc8f6d2d5786ccf83336de186",
    "status": "completed",
    "conclusion": "success"
@@ -58,7 +58,7 @@
    "id": 30339252379,
    "event": "pull_request",
    "created_at": "2026-07-28T07:39:35Z",
-   "head_branch": "riker/canary-not-evicted-by-sibling",
+   "head_branch": "robin/canary-not-evicted-by-sibling",
    "head_sha": "cf78747ef98d423173a734062fcaea4ee813970f",
    "status": "completed",
    "conclusion": "success"
@@ -67,7 +67,7 @@
    "id": 30339033810,
    "event": "workflow_dispatch",
    "created_at": "2026-07-28T07:36:01Z",
-   "head_branch": "riker/recall-gate-branch-baseline",
+   "head_branch": "robin/recall-gate-branch-baseline",
    "head_sha": "f723d89fc801cf04c86d0b1564f89b1cdff99b91",
    "status": "in_progress",
    "conclusion": null
@@ -76,7 +76,7 @@
    "id": 30338834953,
    "event": "pull_request",
    "created_at": "2026-07-28T07:32:53Z",
-   "head_branch": "riker/deploy-trigger-ignore-test-files",
+   "head_branch": "robin/deploy-trigger-ignore-test-files",
    "head_sha": "924c2111ba7afa4681356f6f415bdb504778551e",
    "status": "completed",
    "conclusion": "success"
@@ -85,7 +85,7 @@
    "id": 30338240640,
    "event": "pull_request",
    "created_at": "2026-07-28T07:23:36Z",
-   "head_branch": "linus/pin-chunked-embed-failure-counter",
+   "head_branch": "liam/pin-chunked-embed-failure-counter",
    "head_sha": "444bc883ee295e84903299eb4b1ed66d9808d6df",
    "status": "completed",
    "conclusion": "success"
@@ -94,7 +94,7 @@
    "id": 30337589061,
    "event": "pull_request",
    "created_at": "2026-07-28T07:13:20Z",
-   "head_branch": "riker/canary-not-evicted-by-sibling",
+   "head_branch": "robin/canary-not-evicted-by-sibling",
    "head_sha": "6935d94b53b918002fbfd4e210f6c118b9071ce6",
    "status": "completed",
    "conclusion": "success"
@@ -121,7 +121,7 @@
    "id": 30336247825,
    "event": "pull_request",
    "created_at": "2026-07-28T06:51:45Z",
-   "head_branch": "riker/canary-not-evicted-by-sibling",
+   "head_branch": "robin/canary-not-evicted-by-sibling",
    "head_sha": "c1875946b55301eac07b81d07a1173849afff013",
    "status": "completed",
    "conclusion": "success"
@@ -130,7 +130,7 @@
    "id": 30336009731,
    "event": "pull_request",
    "created_at": "2026-07-28T06:47:37Z",
-   "head_branch": "garfield/blindness-alert-resolve-symmetry",
+   "head_branch": "gary/blindness-alert-resolve-symmetry",
    "head_sha": "ccec728069c87922582dfc0b45f54217328300bb",
    "status": "completed",
    "conclusion": "success"
@@ -139,7 +139,7 @@
    "id": 30335936552,
    "event": "pull_request",
    "created_at": "2026-07-28T06:46:21Z",
-   "head_branch": "riker/canary-not-evicted-by-sibling",
+   "head_branch": "robin/canary-not-evicted-by-sibling",
    "head_sha": "e0914c33bd0ff5fe40b7e2b1019e84f99f9a05c9",
    "status": "completed",
    "conclusion": "success"
@@ -175,7 +175,7 @@
    "id": 30334480033,
    "event": "pull_request",
    "created_at": "2026-07-28T06:20:28Z",
-   "head_branch": "garfield/blindness-alert-resolve-symmetry",
+   "head_branch": "gary/blindness-alert-resolve-symmetry",
    "head_sha": "e5db4e1ec8d5ce1d55206fd80485fa7ef1aa4928",
    "status": "completed",
    "conclusion": "success"
@@ -202,7 +202,7 @@
    "id": 30333411871,
    "event": "pull_request",
    "created_at": "2026-07-28T06:01:05Z",
-   "head_branch": "linus/embed-batch-and-scaled-budget",
+   "head_branch": "liam/embed-batch-and-scaled-budget",
    "head_sha": "38e8324d9b34a613fa8f119de57a4eafabbfb613",
    "status": "completed",
    "conclusion": "success"
@@ -211,7 +211,7 @@
    "id": 30332996922,
    "event": "pull_request",
    "created_at": "2026-07-28T05:53:18Z",
-   "head_branch": "riker/storm-guard-scan-all-comments",
+   "head_branch": "robin/storm-guard-scan-all-comments",
    "head_sha": "03b0b36ddf1b3c43687095da175371ed2793e116",
    "status": "completed",
    "conclusion": "success"
@@ -220,7 +220,7 @@
    "id": 30332664586,
    "event": "pull_request",
    "created_at": "2026-07-28T05:46:46Z",
-   "head_branch": "linus/embed-batch-and-scaled-budget",
+   "head_branch": "liam/embed-batch-and-scaled-budget",
    "head_sha": "25d98c009b813ac6c0e6ba531a227addc1fc3591",
    "status": "completed",
    "conclusion": "success"
@@ -229,7 +229,7 @@
    "id": 30332398606,
    "event": "workflow_dispatch",
    "created_at": "2026-07-28T05:41:36Z",
-   "head_branch": "riker/bench-gate-version-pin",
+   "head_branch": "robin/bench-gate-version-pin",
    "head_sha": "adc073374d00ef99408f69b08e1947cf5b3d94fd",
    "status": "completed",
    "conclusion": "success"
@@ -238,7 +238,7 @@
    "id": 30332391160,
    "event": "pull_request",
    "created_at": "2026-07-28T05:41:27Z",
-   "head_branch": "riker/bench-gate-version-pin",
+   "head_branch": "robin/bench-gate-version-pin",
    "head_sha": "adc073374d00ef99408f69b08e1947cf5b3d94fd",
    "status": "completed",
    "conclusion": "success"
@@ -265,7 +265,7 @@
    "id": 30329649283,
    "event": "workflow_dispatch",
    "created_at": "2026-07-28T04:45:48Z",
-   "head_branch": "riker/bench-gate-version-pin",
+   "head_branch": "robin/bench-gate-version-pin",
    "head_sha": "40cb330c20ff4dd5d1ba8f8fc9c10b2ca2526fa2",
    "status": "completed",
    "conclusion": "success"
@@ -274,7 +274,7 @@
    "id": 30329359608,
    "event": "pull_request",
    "created_at": "2026-07-28T04:39:36Z",
-   "head_branch": "linus/pin-stopgap-embedding-column",
+   "head_branch": "liam/pin-stopgap-embedding-column",
    "head_sha": "c1281667e81ed804dee5a30d13e337bad147e030",
    "status": "completed",
    "conclusion": "success"
@@ -283,7 +283,7 @@
    "id": 30328826762,
    "event": "workflow_dispatch",
    "created_at": "2026-07-28T04:28:02Z",
-   "head_branch": "riker/bench-gate-version-pin",
+   "head_branch": "robin/bench-gate-version-pin",
    "head_sha": "7392b487c3955a6d5914aa09ce19115fb2efeed8",
    "status": "completed",
    "conclusion": "success"
@@ -292,7 +292,7 @@
    "id": 30328820759,
    "event": "workflow_dispatch",
    "created_at": "2026-07-28T04:27:54Z",
-   "head_branch": "riker/bench-gate-version-pin",
+   "head_branch": "robin/bench-gate-version-pin",
    "head_sha": "7392b487c3955a6d5914aa09ce19115fb2efeed8",
    "status": "completed",
    "conclusion": "success"
@@ -328,7 +328,7 @@
    "id": 30327801839,
    "event": "workflow_dispatch",
    "created_at": "2026-07-28T04:06:32Z",
-   "head_branch": "riker/proof-e3-prod-blind",
+   "head_branch": "robin/proof-e3-prod-blind",
    "head_sha": "fc5e4623356dd508fdb26f5771f3864a9d91fd5f",
    "status": "completed",
    "conclusion": "cancelled"
@@ -346,7 +346,7 @@
    "id": 30326531599,
    "event": "pull_request",
    "created_at": "2026-07-28T03:39:38Z",
-   "head_branch": "linus/list-needing-embedding-chunk-freshness",
+   "head_branch": "liam/list-needing-embedding-chunk-freshness",
    "head_sha": "697ca476a4cb4f33547448934d9a97c1c43f50f8",
    "status": "completed",
    "conclusion": "success"
@@ -355,7 +355,7 @@
    "id": 30326503498,
    "event": "workflow_dispatch",
    "created_at": "2026-07-28T03:39:01Z",
-   "head_branch": "riker/proof-e2-broken",
+   "head_branch": "robin/proof-e2-broken",
    "head_sha": "adfbf499b351de4d32f01e0bfe1680fa924fbeac",
    "status": "completed",
    "conclusion": "cancelled"
@@ -409,7 +409,7 @@
    "id": 30323425190,
    "event": "pull_request",
    "created_at": "2026-07-28T02:33:02Z",
-   "head_branch": "garfield/vector-search-max-over-chunks",
+   "head_branch": "gary/vector-search-max-over-chunks",
    "head_sha": "d06c49b86e33db86644e434270586f2a568c8d08",
    "status": "completed",
    "conclusion": "success"
@@ -427,7 +427,7 @@
    "id": 30322109389,
    "event": "workflow_dispatch",
    "created_at": "2026-07-28T02:05:12Z",
-   "head_branch": "riker/proof-e3-prod-blind",
+   "head_branch": "robin/proof-e3-prod-blind",
    "head_sha": "951e60e32e0e62c5a4efa5589f9b5df0a4e2cfc8",
    "status": "completed",
    "conclusion": "cancelled"
@@ -454,7 +454,7 @@
    "id": 30320697705,
    "event": "pull_request",
    "created_at": "2026-07-28T01:35:33Z",
-   "head_branch": "linus/embed-chunked-stopgap-write-embedding",
+   "head_branch": "liam/embed-chunked-stopgap-write-embedding",
    "head_sha": "16b5771675680b0acb88d6ac8ab18b1b8c63db1d",
    "status": "completed",
    "conclusion": "success"
@@ -463,7 +463,7 @@
    "id": 30320615520,
    "event": "workflow_dispatch",
    "created_at": "2026-07-28T01:33:53Z",
-   "head_branch": "riker/proof-e3-prod-blind",
+   "head_branch": "robin/proof-e3-prod-blind",
    "head_sha": "951e60e32e0e62c5a4efa5589f9b5df0a4e2cfc8",
    "status": "completed",
    "conclusion": "cancelled"
@@ -472,7 +472,7 @@
    "id": 30320610756,
    "event": "workflow_dispatch",
    "created_at": "2026-07-28T01:33:48Z",
-   "head_branch": "riker/proof-e2-broken",
+   "head_branch": "robin/proof-e2-broken",
    "head_sha": "adfbf499b351de4d32f01e0bfe1680fa924fbeac",
    "status": "completed",
    "conclusion": "failure"
@@ -481,7 +481,7 @@
    "id": 30320606002,
    "event": "workflow_dispatch",
    "created_at": "2026-07-28T01:33:41Z",
-   "head_branch": "riker/proof-e1-healthy",
+   "head_branch": "robin/proof-e1-healthy",
    "head_sha": "ded1f24850fda98f0f76a71720cf29dc967d6f7e",
    "status": "completed",
    "conclusion": "cancelled"
@@ -499,7 +499,7 @@
    "id": 30320099744,
    "event": "pull_request",
    "created_at": "2026-07-28T01:23:17Z",
-   "head_branch": "linus/embed-chunked-stopgap-write-embedding",
+   "head_branch": "liam/embed-chunked-stopgap-write-embedding",
    "head_sha": "38a3d23a6ff481bcfebcaf663c2c759d8e9a16ad",
    "status": "completed",
    "conclusion": "cancelled"
@@ -517,7 +517,7 @@
    "id": 30318786235,
    "event": "pull_request",
    "created_at": "2026-07-28T00:56:07Z",
-   "head_branch": "linus/embed-chunked-stopgap-write-embedding",
+   "head_branch": "liam/embed-chunked-stopgap-write-embedding",
    "head_sha": "2b0a06cce402d8519657587f48784a0003c3e093",
    "status": "completed",
    "conclusion": "success"
@@ -544,7 +544,7 @@
    "id": 30311854389,
    "event": "pull_request",
    "created_at": "2026-07-27T22:45:35Z",
-   "head_branch": "linus/embed-chunks-backfill",
+   "head_branch": "liam/embed-chunks-backfill",
    "head_sha": "21372c4593b247ec22542ec7f31175fdee4ab08d",
    "status": "completed",
    "conclusion": "success"
@@ -562,7 +562,7 @@
    "id": 30310213936,
    "event": "pull_request",
    "created_at": "2026-07-27T22:17:57Z",
-   "head_branch": "linus/embed-chunks-backfill",
+   "head_branch": "liam/embed-chunks-backfill",
    "head_sha": "bd41e879392949d05e6e0ee03b1c85d0adde6de3",
    "status": "completed",
    "conclusion": "success"
@@ -571,7 +571,7 @@
    "id": 30310009179,
    "event": "pull_request",
    "created_at": "2026-07-27T22:14:37Z",
-   "head_branch": "linus/embed-write-path",
+   "head_branch": "liam/embed-write-path",
    "head_sha": "0eb0cef2a96aed804f68985ebd70c8e7de3ce90c",
    "status": "completed",
    "conclusion": "success"
@@ -580,7 +580,7 @@
    "id": 30302443618,
    "event": "pull_request",
    "created_at": "2026-07-27T20:24:28Z",
-   "head_branch": "linus/embed-chunks-backfill",
+   "head_branch": "liam/embed-chunks-backfill",
    "head_sha": "0ab1b420eeaad3002b9367c213992b5019237098",
    "status": "completed",
    "conclusion": "success"
@@ -589,7 +589,7 @@
    "id": 30302391973,
    "event": "pull_request",
    "created_at": "2026-07-27T20:23:45Z",
-   "head_branch": "linus/embed-write-path",
+   "head_branch": "liam/embed-write-path",
    "head_sha": "789b014ae52177d36ee15d0f786a823de8b27c91",
    "status": "completed",
    "conclusion": "success"
@@ -598,7 +598,7 @@
    "id": 30302345052,
    "event": "pull_request",
    "created_at": "2026-07-27T20:23:05Z",
-   "head_branch": "linus/memory-chunks-schema",
+   "head_branch": "liam/memory-chunks-schema",
    "head_sha": "47d739f77d2d6fa1b7b41bc95619f5e3225e0bb0",
    "status": "completed",
    "conclusion": "success"
@@ -607,7 +607,7 @@
    "id": 30302275243,
    "event": "pull_request",
    "created_at": "2026-07-27T20:22:06Z",
-   "head_branch": "linus/memory-chunks-schema",
+   "head_branch": "liam/memory-chunks-schema",
    "head_sha": "441a4fd35daa9b397a7ffbd472364ee44cb6f1ba",
    "status": "completed",
    "conclusion": "success"
@@ -616,7 +616,7 @@
    "id": 30301144232,
    "event": "pull_request",
    "created_at": "2026-07-27T20:06:12Z",
-   "head_branch": "linus/embed-chunks-backfill",
+   "head_branch": "liam/embed-chunks-backfill",
    "head_sha": "c82a083532a7c847cf0b55fb980aa3c32536da60",
    "status": "completed",
    "conclusion": "success"
@@ -625,7 +625,7 @@
    "id": 30301051362,
    "event": "pull_request",
    "created_at": "2026-07-27T20:04:59Z",
-   "head_branch": "linus/embed-write-path",
+   "head_branch": "liam/embed-write-path",
    "head_sha": "43e50307c233fc5aa72523956761ffe6ab549ca7",
    "status": "completed",
    "conclusion": "success"
@@ -634,7 +634,7 @@
    "id": 30300967925,
    "event": "pull_request",
    "created_at": "2026-07-27T20:03:46Z",
-   "head_branch": "linus/memory-chunks-schema",
+   "head_branch": "liam/memory-chunks-schema",
    "head_sha": "677ec76705e6e26a5dd542aca8b3698cb076d8ba",
    "status": "completed",
    "conclusion": "success"
@@ -652,7 +652,7 @@
    "id": 30299217711,
    "event": "pull_request",
    "created_at": "2026-07-27T19:39:49Z",
-   "head_branch": "linus/registration-toggle",
+   "head_branch": "liam/registration-toggle",
    "head_sha": "8f12303115d5482fa29437f38da39d4044c6ed01",
    "status": "completed",
    "conclusion": "success"
@@ -661,7 +661,7 @@
    "id": 30298117301,
    "event": "pull_request",
    "created_at": "2026-07-27T19:24:41Z",
-   "head_branch": "linus/registration-toggle",
+   "head_branch": "liam/registration-toggle",
    "head_sha": "675eeaf819adbf8d7d29bfee6e7b1d2478ce2d88",
    "status": "completed",
    "conclusion": "success"
@@ -670,7 +670,7 @@
    "id": 30296950872,
    "event": "pull_request",
    "created_at": "2026-07-27T19:08:40Z",
-   "head_branch": "linus/memory-chunks-schema",
+   "head_branch": "liam/memory-chunks-schema",
    "head_sha": "cffea1741c4b6ce631859a3f6dfe6957d6697dfd",
    "status": "completed",
    "conclusion": "failure"
@@ -679,7 +679,7 @@
    "id": 30296948997,
    "event": "pull_request",
    "created_at": "2026-07-27T19:08:38Z",
-   "head_branch": "linus/embed-chunking",
+   "head_branch": "liam/embed-chunking",
    "head_sha": "76ea70a0b5905ea2f949626a7de4272c6c05ae2f",
    "status": "completed",
    "conclusion": "success"
@@ -688,7 +688,7 @@
    "id": 30296948065,
    "event": "pull_request",
    "created_at": "2026-07-27T19:08:38Z",
-   "head_branch": "garfield/embed-truncation-visible",
+   "head_branch": "gary/embed-truncation-visible",
    "head_sha": "d1cf4a4e467a344c29928a82cd67532a74268ad6",
    "status": "completed",
    "conclusion": "success"
@@ -697,7 +697,7 @@
    "id": 30296944325,
    "event": "pull_request",
    "created_at": "2026-07-27T19:08:35Z",
-   "head_branch": "garfield/recall-limit-last",
+   "head_branch": "gary/recall-limit-last",
    "head_sha": "5ae4f06e34ba37d0e527e9e595e117d6996c475b",
    "status": "completed",
    "conclusion": "success"
@@ -706,7 +706,7 @@
    "id": 30296941576,
    "event": "pull_request",
    "created_at": "2026-07-27T19:08:33Z",
-   "head_branch": "linus/registration-toggle",
+   "head_branch": "liam/registration-toggle",
    "head_sha": "ed70615157c3e6a6c4cd0af6327139f3c7d03492",
    "status": "completed",
    "conclusion": "success"
@@ -715,7 +715,7 @@
    "id": 30295771484,
    "event": "pull_request",
    "created_at": "2026-07-27T18:53:04Z",
-   "head_branch": "garfield/vectorsearch-max-over-chunks",
+   "head_branch": "gary/vectorsearch-max-over-chunks",
    "head_sha": "83868235909acd947056387d60166244109906f3",
    "status": "completed",
    "conclusion": "success"
@@ -724,7 +724,7 @@
    "id": 30295449175,
    "event": "pull_request",
    "created_at": "2026-07-27T18:48:46Z",
-   "head_branch": "linus/embed-chunks-backfill",
+   "head_branch": "liam/embed-chunks-backfill",
    "head_sha": "2ea12a7c79d83b1c32415f8d3054e2d24a931098",
    "status": "completed",
    "conclusion": "failure"
@@ -733,7 +733,7 @@
    "id": 30295094149,
    "event": "pull_request",
    "created_at": "2026-07-27T18:44:07Z",
-   "head_branch": "garfield/ci-diff-coverage",
+   "head_branch": "gary/ci-diff-coverage",
    "head_sha": "c7eb5e0f316a81d07a3830c0a18f1668f99175bd",
    "status": "completed",
    "conclusion": "success"
@@ -742,7 +742,7 @@
    "id": 30294782753,
    "event": "pull_request",
    "created_at": "2026-07-27T18:40:01Z",
-   "head_branch": "linus/embed-write-path",
+   "head_branch": "liam/embed-write-path",
    "head_sha": "76e13138299a9418fc51ffee721d16e6218234f0",
    "status": "completed",
    "conclusion": "failure"
@@ -751,7 +751,7 @@
    "id": 30294029257,
    "event": "pull_request",
    "created_at": "2026-07-27T18:30:02Z",
-   "head_branch": "linus/memory-chunks-schema",
+   "head_branch": "liam/memory-chunks-schema",
    "head_sha": "8bf2833373f1a230d44006b46b0a6746f54c439c",
    "status": "completed",
    "conclusion": "failure"
@@ -760,7 +760,7 @@
    "id": 30293667158,
    "event": "pull_request",
    "created_at": "2026-07-27T18:25:06Z",
-   "head_branch": "garfield/vectorsearch-max-over-chunks",
+   "head_branch": "gary/vectorsearch-max-over-chunks",
    "head_sha": "5ef72f94d51eb503e38b2d2dee96b3f3ffcc91d0",
    "status": "completed",
    "conclusion": "success"
@@ -769,7 +769,7 @@
    "id": 30293365493,
    "event": "pull_request",
    "created_at": "2026-07-27T18:21:07Z",
-   "head_branch": "garfield/vectorsearch-max-over-chunks",
+   "head_branch": "gary/vectorsearch-max-over-chunks",
    "head_sha": "771328dd98fdfe71eaf434ae97decfe3957eabea",
    "status": "completed",
    "conclusion": "failure"
@@ -778,7 +778,7 @@
    "id": 30292511651,
    "event": "pull_request",
    "created_at": "2026-07-27T18:09:34Z",
-   "head_branch": "linus/embed-chunking",
+   "head_branch": "liam/embed-chunking",
    "head_sha": "d8de32cfd594f2d705861375a19ef48bbf25b166",
    "status": "completed",
    "conclusion": "success"
@@ -787,7 +787,7 @@
    "id": 30284940676,
    "event": "pull_request",
    "created_at": "2026-07-27T16:29:28Z",
-   "head_branch": "garfield/embed-truncation-visible",
+   "head_branch": "gary/embed-truncation-visible",
    "head_sha": "ae0e8aa08c96ecb50231bb5fe8873454bedd5418",
    "status": "completed",
    "conclusion": "success"
@@ -796,7 +796,7 @@
    "id": 30283024967,
    "event": "pull_request",
    "created_at": "2026-07-27T16:04:29Z",
-   "head_branch": "linus/registration-toggle",
+   "head_branch": "liam/registration-toggle",
    "head_sha": "0e5ad263eab30df0a15df0818bf8a9edb666ea22",
    "status": "completed",
    "conclusion": "success"
@@ -805,7 +805,7 @@
    "id": 30282292244,
    "event": "pull_request",
    "created_at": "2026-07-27T15:55:26Z",
-   "head_branch": "garfield/recall-limit-last",
+   "head_branch": "gary/recall-limit-last",
    "head_sha": "5376ace9e49a2530a9df92c370ff124569eeb5c6",
    "status": "completed",
    "conclusion": "success"
@@ -814,7 +814,7 @@
    "id": 30282153812,
    "event": "pull_request",
    "created_at": "2026-07-27T15:53:43Z",
-   "head_branch": "linus/registration-toggle",
+   "head_branch": "liam/registration-toggle",
    "head_sha": "d40bc4ea2f275bbd9f73ffb2be603ced19ec0c84",
    "status": "completed",
    "conclusion": "success"
@@ -823,7 +823,7 @@
    "id": 30280709045,
    "event": "pull_request",
    "created_at": "2026-07-27T15:35:18Z",
-   "head_branch": "linus/registration-toggle",
+   "head_branch": "liam/registration-toggle",
    "head_sha": "52db77f46c531eb8f0ef876df7fe0692595400c8",
    "status": "completed",
    "conclusion": "success"
@@ -832,7 +832,7 @@
    "id": 30280259093,
    "event": "pull_request",
    "created_at": "2026-07-27T15:29:48Z",
-   "head_branch": "garfield/self-hosting-docs-structure",
+   "head_branch": "gary/self-hosting-docs-structure",
    "head_sha": "f7dcdd748279b8c304a012780f258fe42cd5dcc0",
    "status": "completed",
    "conclusion": "success"
@@ -841,7 +841,7 @@
    "id": 30278284083,
    "event": "pull_request",
    "created_at": "2026-07-27T15:05:24Z",
-   "head_branch": "garfield/oss-first-admin-bootstrap",
+   "head_branch": "gary/oss-first-admin-bootstrap",
    "head_sha": "d1ef9d11f24f93c9585b60e00e0d4e900e10d881",
    "status": "completed",
    "conclusion": "success"
@@ -850,7 +850,7 @@
    "id": 30277989599,
    "event": "pull_request",
    "created_at": "2026-07-27T15:01:57Z",
-   "head_branch": "garfield/oss-first-admin-bootstrap",
+   "head_branch": "gary/oss-first-admin-bootstrap",
    "head_sha": "f203191a68693fbb85d7bbb44a9d8e64dbbf5bff",
    "status": "completed",
    "conclusion": "success"
@@ -859,7 +859,7 @@
    "id": 30276885734,
    "event": "pull_request",
    "created_at": "2026-07-27T14:48:42Z",
-   "head_branch": "garfield/oss-first-admin-bootstrap",
+   "head_branch": "gary/oss-first-admin-bootstrap",
    "head_sha": "3137df4967e03c10a2f261b0f55f6fe3fc56dd31",
    "status": "completed",
    "conclusion": "success"
@@ -877,7 +877,7 @@
    "id": 30264558977,
    "event": "pull_request",
    "created_at": "2026-07-27T12:06:42Z",
-   "head_branch": "garfield/bench-gc-observability",
+   "head_branch": "gary/bench-gc-observability",
    "head_sha": "f9064e9e5966f185f69c9745431c71b81eeacbfc",
    "status": "completed",
    "conclusion": "success"
@@ -895,7 +895,7 @@
    "id": 30262993445,
    "event": "pull_request",
    "created_at": "2026-07-27T11:43:07Z",
-   "head_branch": "garfield/bench-orphan-gc-predicate",
+   "head_branch": "gary/bench-orphan-gc-predicate",
    "head_sha": "07ab20e00e5d9ed1e4e8b3c07e86c97f02ca8440",
    "status": "completed",
    "conclusion": "success"
@@ -931,7 +931,7 @@
    "id": 30259731434,
    "event": "pull_request",
    "created_at": "2026-07-27T10:52:21Z",
-   "head_branch": "garfield/bench-fixture-run-nonce",
+   "head_branch": "gary/bench-fixture-run-nonce",
    "head_sha": "2dd5ed073f97cc739dcb807f4e66e9887eb51d53",
    "status": "completed",
    "conclusion": "success"
@@ -1156,7 +1156,7 @@
    "id": 30208689694,
    "event": "pull_request",
    "created_at": "2026-07-26T15:40:04Z",
-   "head_branch": "riker/land-retrieval-baseline",
+   "head_branch": "robin/land-retrieval-baseline",
    "head_sha": "83b16ac5f45373af2d28409f5e1b75d7f05f0d2c",
    "status": "completed",
    "conclusion": "success"
@@ -1174,7 +1174,7 @@
    "id": 30206940734,
    "event": "pull_request",
    "created_at": "2026-07-26T14:50:54Z",
-   "head_branch": "riker/readme-70pct-citation",
+   "head_branch": "robin/readme-70pct-citation",
    "head_sha": "efece75cae11cc1c740f1cc0a6fa54d3e572bcb5",
    "status": "completed",
    "conclusion": "success"
@@ -1192,7 +1192,7 @@
    "id": 30205490462,
    "event": "workflow_dispatch",
    "created_at": "2026-07-26T14:09:13Z",
-   "head_branch": "riker/capture-retrieval-baseline",
+   "head_branch": "robin/capture-retrieval-baseline",
    "head_sha": "53f72f1aeaf0ed84ff1d3dbc5ecffb5c8cc057b5",
    "status": "completed",
    "conclusion": "success"
@@ -1201,7 +1201,7 @@
    "id": 30205276667,
    "event": "pull_request",
    "created_at": "2026-07-26T14:02:44Z",
-   "head_branch": "riker/bench-key-sanitize",
+   "head_branch": "robin/bench-key-sanitize",
    "head_sha": "8200c35fddaec8c1169bf8c0e9f952ccf4b3c842",
    "status": "completed",
    "conclusion": "success"
@@ -1228,7 +1228,7 @@
    "id": 30204433963,
    "event": "workflow_dispatch",
    "created_at": "2026-07-26T13:37:57Z",
-   "head_branch": "riker/resnap-retrieval-baseline",
+   "head_branch": "robin/resnap-retrieval-baseline",
    "head_sha": "4e8c1e8ed5ceda1d90c2b1ef1cd8786bfbd846fc",
    "status": "completed",
    "conclusion": "success"
@@ -1237,7 +1237,7 @@
    "id": 30203971938,
    "event": "pull_request",
    "created_at": "2026-07-26T13:24:23Z",
-   "head_branch": "riker/advisory-arm-mode-gate",
+   "head_branch": "robin/advisory-arm-mode-gate",
    "head_sha": "ee428ae4dc3d81bdf617433aac999ca2c5c80d3e",
    "status": "completed",
    "conclusion": "success"
@@ -1246,7 +1246,7 @@
    "id": 30203813135,
    "event": "pull_request",
    "created_at": "2026-07-26T13:19:37Z",
-   "head_branch": "riker/advisory-arm-mode-gate",
+   "head_branch": "robin/advisory-arm-mode-gate",
    "head_sha": "115f7964b593aceb6d07b176d912af7dedf16a2c",
    "status": "completed",
    "conclusion": "success"
@@ -1255,7 +1255,7 @@
    "id": 30203684990,
    "event": "pull_request",
    "created_at": "2026-07-26T13:15:33Z",
-   "head_branch": "riker/bench-key-sanitize",
+   "head_branch": "robin/bench-key-sanitize",
    "head_sha": "9263e650182844f77434ee3b53dca01065257634",
    "status": "completed",
    "conclusion": "success"
@@ -1273,7 +1273,7 @@
    "id": 30202780705,
    "event": "pull_request",
    "created_at": "2026-07-26T12:48:08Z",
-   "head_branch": "riker/advisory-arm-mode-gate",
+   "head_branch": "robin/advisory-arm-mode-gate",
    "head_sha": "1bab375f40ed4b8f467416395dd90465a0b7152c",
    "status": "completed",
    "conclusion": "success"
@@ -1282,7 +1282,7 @@
    "id": 30202732563,
    "event": "workflow_dispatch",
    "created_at": "2026-07-26T12:46:37Z",
-   "head_branch": "riker/advisory-arm-mode-gate",
+   "head_branch": "robin/advisory-arm-mode-gate",
    "head_sha": "1bab375f40ed4b8f467416395dd90465a0b7152c",
    "status": "completed",
    "conclusion": "success"
@@ -1291,7 +1291,7 @@
    "id": 30201975117,
    "event": "pull_request",
    "created_at": "2026-07-26T12:24:00Z",
-   "head_branch": "riker/recall-gate-per-category-sample",
+   "head_branch": "robin/recall-gate-per-category-sample",
    "head_sha": "c9b1796e06e35b20076d6d157f4904f673b3d261",
    "status": "completed",
    "conclusion": "success"
@@ -1336,7 +1336,7 @@
    "id": 30153530246,
    "event": "pull_request",
    "created_at": "2026-07-25T09:53:41Z",
-   "head_branch": "linus/backlog-monitor-due-date-promote",
+   "head_branch": "liam/backlog-monitor-due-date-promote",
    "head_sha": "6836677e6a3f9bde299a37a001db14847ca2da7e",
    "status": "completed",
    "conclusion": "success"
@@ -1489,7 +1489,7 @@
    "id": 29417916255,
    "event": "pull_request",
    "created_at": "2026-07-15T13:07:40Z",
-   "head_branch": "linus/resnap-recall-gate-baseline",
+   "head_branch": "liam/resnap-recall-gate-baseline",
    "head_sha": "ef125580f258fd62d5bb52b7acff8e763ce4f7dd",
    "status": "completed",
    "conclusion": "success"
@@ -1507,7 +1507,7 @@
    "id": 29414208424,
    "event": "pull_request",
    "created_at": "2026-07-15T12:10:01Z",
-   "head_branch": "garfield/fix-recall-gate-silent-tool-error",
+   "head_branch": "gary/fix-recall-gate-silent-tool-error",
    "head_sha": "4d3c2bf39339efa8c7e2a53fef6d764164bd91cd",
    "status": "completed",
    "conclusion": "success"
@@ -1597,7 +1597,7 @@
    "id": 29306252550,
    "event": "pull_request",
    "created_at": "2026-07-14T04:33:12Z",
-   "head_branch": "riker/recall-gate-blind-spots",
+   "head_branch": "robin/recall-gate-blind-spots",
    "head_sha": "9f5fafd43acdba815907e03f76092f0b43f81908",
    "status": "completed",
    "conclusion": "success"
@@ -1606,7 +1606,7 @@
    "id": 29270597785,
    "event": "pull_request",
    "created_at": "2026-07-13T17:28:56Z",
-   "head_branch": "linus/cost-tracking-dashboard",
+   "head_branch": "liam/cost-tracking-dashboard",
    "head_sha": "9e665d00b01f2d89b65b5cb59bbbf92a816838e0",
    "status": "completed",
    "conclusion": "success"
@@ -1930,7 +1930,7 @@
    "id": 29090063950,
    "event": "pull_request",
    "created_at": "2026-07-10T11:38:36Z",
-   "head_branch": "garfield/fix-subtask-status-inheritance",
+   "head_branch": "gary/fix-subtask-status-inheritance",
    "head_sha": "1e4c81c8b137ba18ad80e8fc4e2fc34a658aa8cf",
    "status": "completed",
    "conclusion": "failure"
@@ -1948,7 +1948,7 @@
    "id": 28958352709,
    "event": "pull_request",
    "created_at": "2026-07-08T16:22:30Z",
-   "head_branch": "daedalus/cas-move-precondition",
+   "head_branch": "dana/cas-move-precondition",
    "head_sha": "9b76ae13e97fabe53b607ef028af842100d96c0d",
    "status": "completed",
    "conclusion": "failure"
@@ -1975,7 +1975,7 @@
    "id": 28720713023,
    "event": "pull_request",
    "created_at": "2026-07-04T21:49:30Z",
-   "head_branch": "garfield/fix-bench-tolerance",
+   "head_branch": "gary/fix-bench-tolerance",
    "head_sha": "753094ccae113359e90c4f0071fdde0dc2b09b19",
    "status": "completed",
    "conclusion": "failure"
@@ -2011,7 +2011,7 @@
    "id": 28719908110,
    "event": "pull_request",
    "created_at": "2026-07-04T21:16:32Z",
-   "head_branch": "daedalus/memory-p3-ci-gate",
+   "head_branch": "dana/memory-p3-ci-gate",
    "head_sha": "a3dabb0452d9e11e7580a2e377a45d2c92ef4f93",
    "status": "completed",
    "conclusion": "failure"

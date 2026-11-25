@@ -13,11 +13,11 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Task #62560d6d — two independent, real, live-reproduced failures of gate
-// withdrawal, both on the SAME card (#68df3b62, 2026-08-23): an owner with
+// Two independent, real, live-reproduced failures of gate
+// withdrawal, both on the SAME card (2026-08-23): an owner with
 // clearable_by_owner=true tried to withdraw twice and no-opped silently both
 // times, for two different reasons. The bodies below reproduce the real
-// comments' exact shape (task #68df3b62, matching this file's convention for
+// comments' exact shape (matching this file's convention for
 // billLongStatusReportBody a few sections up) — paragraph structure, markdown,
 // negator position, trailing signature — not a paraphrase, since a paraphrase
 // can accidentally fix itself by not reproducing the exact shape that broke.
@@ -32,13 +32,13 @@ import (
 const english68df3b62RetractionBody = "Retracting the gate marker from my prior comment on this card — " +
 	"that was meant purely as cross-reference explaining why I'm not duplicating the ask, " +
 	"not as a second independent ask. The one live question about VM access " +
-	"lives on #bdd682a4 only. This subtask is parked (todo) waiting on that resolution, " +
+	"lives on #5eed000b only. This subtask is parked (todo) waiting on that resolution, " +
 	"nothing further needed here directly."
 
 // signedOff68df3b62WithdrawalBody is comment fb3ff606, 2026-08-23T20:09:31Z:
 // a real, well-formed Russian withdrawal ("...не требуется.") that sat in the
 // SECOND-to-last paragraph of a comment closing with a trailing "— Robert"
-// sign-off on its own line. Before the #62560d6d fix, lastParagraph returned
+// sign-off on its own line. Before the fix, lastParagraph returned
 // the signature (zero negators) and this exact body produced the
 // negator-outside-searched-scope system notice seen live on the card.
 const signedOff68df3b62WithdrawalBody = "Блокер по доступу снимаю: **ключи на эту VM раздавать не нужно, эта работа моя.**\n\n" +
@@ -60,7 +60,7 @@ const signedOff68df3b62WithdrawalBody = "Блокер по доступу сни
 	"— уже на нашей машине, рядом с исходниками и CI-токенами. Это не приближает поставку, " +
 	"а ухудшает исходную проблему.\n\n" +
 	"Поэтому карточку **не делаю сегодня** и не считаю заблокированной доступом: она ждёт " +
-	"рантайм-конфигурации фронтенда Spark. Порядок из `#c7110523`: сначала npm-половина " +
+	"рантайм-конфигурации фронтенда Spark. Порядок из `#5eed000c`: сначала npm-половина " +
 	"(её инфраструктура уже готова — пакетный реестр включён и отвечает), потом рантайм-конфиг " +
 	"Spark, реестр контейнеров последним.\n\n" +
 	"Забираю на себя. Гейт снят — вопрос про доступ отвечен, нового решения не требуется.\n\n" +
@@ -79,7 +79,7 @@ func TestHasNegatorInScope_SignedOffWithdrawal_RealBody68df3b62(t *testing.T) {
 }
 
 // TestReleaseHumanGateOnWithdrawal_EnglishRetraction_RealBody68df3b62 is the
-// end-to-end reproduction of the first #68df3b62 failure: same shape as
+// end-to-end reproduction of the first an internal ticket failure: same shape as
 // TestReleaseHumanGateOnWithdrawal_NegatorMovedToLastParagraph_Releases, but
 // English, and the exact live body rather than a constructed one.
 func TestReleaseHumanGateOnWithdrawal_EnglishRetraction_RealBody68df3b62(t *testing.T) {
@@ -101,7 +101,7 @@ func TestReleaseHumanGateOnWithdrawal_EnglishRetraction_RealBody68df3b62(t *test
 }
 
 // TestReleaseHumanGateOnWithdrawal_SignedOffWithdrawal_RealBody68df3b62 is the
-// end-to-end reproduction of the second #68df3b62 failure.
+// end-to-end reproduction of the second an internal ticket failure.
 func TestReleaseHumanGateOnWithdrawal_SignedOffWithdrawal_RealBody68df3b62(t *testing.T) {
 	env := setupTriageEnv(t, true)
 	taskID := env.seedGatedTask(env.inProgressID)
@@ -121,7 +121,7 @@ func TestReleaseHumanGateOnWithdrawal_SignedOffWithdrawal_RealBody68df3b62(t *te
 }
 
 // TestReleaseHumanGateOnWithdrawal_SignatureAloneAfterOpenBlocker_StillGated
-// is the negative control task #62560d6d's own AC3 demands: a comment that
+// is the negative control an internal ticket's own AC3 demands: a comment that
 // ends in a sign-off but asserts NO withdrawal anywhere must not release —
 // skipping a trailing signature must never turn an ordinary status update
 // (or the blocker-still-open case) into a withdrawal it never was.
@@ -151,7 +151,7 @@ func TestIsSignatureOnlyParagraph_Bilingual(t *testing.T) {
 		want bool
 	}{
 		{"em-dash Russian name", "— Robert", true},
-		{"hyphen Russian name", "- Howard", true},
+		{"hyphen Russian name", "- Harper", true},
 		{"em-dash English two-word", "— The Fleet", true},
 		{"no dash at all", "Robert", false},
 		{"dash bullet sentence", "- Fixed the bug and verified live", false},

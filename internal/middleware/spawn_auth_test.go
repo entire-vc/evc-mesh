@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// The shared spawn token this route accepted before an internal ticket, named here
+// The shared spawn token this route accepted before that fix, named here
 // only to prove it no longer opens anything.
 const (
 	legacySpawnTokenEnv    = "MESH_SPAWN_TOKEN"

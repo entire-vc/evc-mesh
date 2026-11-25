@@ -83,7 +83,7 @@ const { inkBoxSource, opticalSize } = await import(
 );
 
 /**
- * The fill as it shipped from `an internal ticket` through an internal ticket — the value that
+ * The fill as it shipped from `1a63877f` through an internal ticket — the value that
  * rendered the mark 18.55px wide in a column of 16px glyphs. Kept ONLY as the
  * negative control's input. It is deliberately a literal: this is the one
  * place a frozen copy is correct, because it must not follow the module when

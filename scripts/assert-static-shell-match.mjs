@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * "Static = live" gate for the index.html shell (perf·Б2, an internal ticket).
+ * "Static = live" gate for the index.html shell (perf·Б2).
  *
  * WHY THIS EXISTS
  * web/index.html paints a hand-written copy of React's first frame into

@@ -64,7 +64,7 @@ func newGraphService(mem *mockMemoryRepo, edge *testEdgeRepo) MemoryService {
 }
 
 // graphSeed builds a ScoredMemory suitable for use as a RecallGraph seed.
-// importance must be >= defaultMinImportance (0.3 since #a9752575) to survive the Recall filter.
+// importance must be >= defaultMinImportance (0.3 since that fix) to survive the Recall filter.
 func graphSeed(id uuid.UUID, importance float32) domain.ScoredMemory {
 	return domain.ScoredMemory{
 		Memory: domain.Memory{
@@ -311,7 +311,7 @@ func TestRecallGraph_LowImportanceSuppressed(t *testing.T) {
 
 // TestRecallGraph_LowImportanceAllowed_ForSeeds verifies that the graphMinImportance
 // filter (0.4) is NOT applied to seeds (ProvenanceRecall nodes). The Recall step has
-// its own defaultMinImportance filter (0.3 since #a9752575 — the two are no longer
+// its own defaultMinImportance filter (0.3 since that fix — the two are no longer
 // equal), so seeds at 0.4 pass both
 // checks. What matters is that seeds survive without going through GetByID + graphMinImportance.
 func TestRecallGraph_LowImportanceAllowed_ForSeeds(t *testing.T) {
@@ -438,7 +438,7 @@ func TestRecallGraph_SortedByCompositeScore(t *testing.T) {
 // TestRecallGraph_EqualCompositeOrderIsStable pins the order of graph neighbours
 // that tie on CompositeScore. Nodes are collected from a map, so without an ID
 // tie-break the order of equal-score neighbours changes from process to process
-// (#e0bbfdc5: positions 10/11 of one recall flipped between two passes).
+// (positions 10/11 of one recall flipped between two passes).
 func TestRecallGraph_EqualCompositeOrderIsStable(t *testing.T) {
 	seedID := uuid.New()
 	neighborIDs := make([]uuid.UUID, 8)
@@ -759,7 +759,7 @@ func TestRecallGraph_ForeignNeighborDropped(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestRecallGraph_ResultsCarryKeyScopeAndTags is the regression test for task
-// #37e9344c: RecallGraphResult carried no key/scope/tags at all, so a caller
+// RecallGraphResult carried no key/scope/tags at all, so a caller
 // receiving a graph-boosted row had no way to check for itself whether a
 // scope/tag filter it asked for was actually honoured — a row missing its
 // filter simply looked identical to a row that legitimately passed one. Both
@@ -780,7 +780,7 @@ func TestRecallGraph_ResultsCarryKeyScopeAndTags(t *testing.T) {
 						ID:              seedID,
 						Key:             "seed-key",
 						Scope:           domain.ScopeWorkspace,
-						Tags:            pq.StringArray{"kind:decision", "owner:linus"},
+						Tags:            pq.StringArray{"kind:decision", "owner:liam"},
 						Content:         "seed content",
 						ImportanceScore: 0.6,
 					},
@@ -822,7 +822,7 @@ func TestRecallGraph_ResultsCarryKeyScopeAndTags(t *testing.T) {
 	seed := byID[seedID]
 	assert.Equal(t, "seed-key", seed.Key, "seed result must carry its key")
 	assert.Equal(t, domain.ScopeWorkspace, seed.Scope, "seed result must carry its scope")
-	assert.ElementsMatch(t, []string{"kind:decision", "owner:linus"}, seed.Tags, "seed result must carry its tags")
+	assert.ElementsMatch(t, []string{"kind:decision", "owner:liam"}, seed.Tags, "seed result must carry its tags")
 
 	neighbor := byID[neighborID]
 	assert.Equal(t, "neighbor-key", neighbor.Key, "graph-expanded result must carry its key")

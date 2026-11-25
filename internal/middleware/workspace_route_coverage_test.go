@@ -228,6 +228,7 @@ func TestBodyTenantFieldsAreDeclared(t *testing.T) {
 // declaredBodyTenantFields is the reviewed verdict on every tenant-identifying id
 // that arrives in a request body. The key is "<file>:<struct>.<json field>".
 var declaredBodyTenantFields = map[string]string{
+	"project_reader_handler.go:issueProjectReaderRequest.project_id":      "checked: AgentRepo.CreateProjectReader requires a live project of :ws_id inside the issuing transaction (404 and nothing written otherwise); the route is rbac(PermManageMembers) + RequireUserAuth on :ws_id",
 	"existing_session_handler.go:existingSessionSendRequest.workspace_id": "checked: ExistingSessionRepo.Enqueue refuses a target workspace other than the key's workspace (403 existing_session_target_denied) before reading anything",
 	"existing_session_handler.go:existingSessionSendRequest.agent_id":     "checked: ExistingSessionRepo.Enqueue looks the receiver up by the key's workspace and answers an unknown or foreign agent, and a sender its receiver did not list, with the same 403",
 	"agent_chat_handler.go:createThreadBody.agent_id":                     "checked: AgentChatHandler.CreateThread requires the agent to be in the project's chat agent list (422 otherwise)",
@@ -266,17 +267,19 @@ var declaredBodyTenantFields = map[string]string{
 	// Scoped by something other than the id in the body: the row these end up on is
 	// already pinned to a tenant the guard checked, and the id is stored as an
 	// opaque reference that is never resolved across the boundary.
-	"event_handler.go:createEventRequest.task_id":                            "benign: a reference on an event already scoped to the guarded :proj_id",
-	"agent_handler.go:CreateAgentActivity.task_id":                           "benign: a reference on a log row whose workspace_id is the guarded :agent_id's own",
-	"agent_handler.go:reportSessionRequest.task_id":                          "benign: a reference on the calling agent's own session",
-	"rule_handler.go:createRuleRequest.agent_id":                             "benign: narrows who a rule applies to, inside the guarded :ws_id/:proj_id it is created in",
-	"project_integration_handler.go:teamRelayResponse.project_id":            "benign: a response struct, never bound from a request",
-	"workspace_secrets.go:secretResponse.project_id":                         "benign: a response struct, never bound from a request",
-	"workspace_secrets.go:secretResponse.agent_id":                           "benign: a response struct, never bound from a request",
-	"chat_runtime_handler.go:chatThreadRuntime.agent_id":                     "benign: a response struct, never bound from a request",
-	"chat_runtime_handler.go:chatRunnerAgentSnapshot.agent_id":               "benign: a response struct, never bound from a request",
-	"agent_workspace_grant_handler.go:inviteAgentGrantResponse.agent_id":     "benign: a response struct, never bound from a request",
-	"agent_workspace_grant_handler.go:inviteAgentGrantResponse.workspace_id": "response: a response struct, never bound from a request — see the workspace_id-specific test for why this needs its own prefix instead of benign:",
+	"event_handler.go:createEventRequest.task_id":                                "benign: a reference on an event already scoped to the guarded :proj_id",
+	"agent_handler.go:CreateAgentActivity.task_id":                               "benign: a reference on a log row whose workspace_id is the guarded :agent_id's own",
+	"agent_handler.go:reportSessionRequest.task_id":                              "benign: a reference on the calling agent's own session",
+	"rule_handler.go:createRuleRequest.agent_id":                                 "benign: narrows who a rule applies to, inside the guarded :ws_id/:proj_id it is created in",
+	"project_integration_handler.go:teamRelayResponse.project_id":                "benign: a response struct, never bound from a request",
+	"workspace_secrets.go:secretResponse.project_id":                             "benign: a response struct, never bound from a request",
+	"workspace_secrets.go:secretResponse.agent_id":                               "benign: a response struct, never bound from a request",
+	"dependent_evidence_handler.go:dependentEvidenceResponse.task_id":            "benign: a response struct, never bound from a request",
+	"dependent_evidence_handler.go:dependentEvidenceResponse.depends_on_task_id": "benign: a response struct, never bound from a request",
+	"chat_runtime_handler.go:chatThreadRuntime.agent_id":                         "benign: a response struct, never bound from a request",
+	"chat_runtime_handler.go:chatRunnerAgentSnapshot.agent_id":                   "benign: a response struct, never bound from a request",
+	"agent_workspace_grant_handler.go:inviteAgentGrantResponse.agent_id":         "benign: a response struct, never bound from a request",
+	"agent_workspace_grant_handler.go:inviteAgentGrantResponse.workspace_id":     "response: a response struct, never bound from a request — see the workspace_id-specific test for why this needs its own prefix instead of benign:",
 
 	// Deliberately UNRESTRICTED cross-tenant reference, unlike
 	// project_member_handler.go:addAgentMemberRequest.agent_id above (which

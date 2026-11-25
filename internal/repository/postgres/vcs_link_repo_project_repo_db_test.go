@@ -13,7 +13,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// an internal ticket: the webhook asks whether a repository is one the project works
+// The webhook asks whether a repository is one the project works
 // in. Only the project's own PR links count, mentions and review subjects do not, the match is the
 // exact repository (no subgroup, LIKE metacharacters literal), and an old link
 // is found however many newer ones the project has.

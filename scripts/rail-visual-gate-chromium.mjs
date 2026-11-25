@@ -1,5 +1,5 @@
 /**
- * Chromium loader shared by the rail visual gates (`#d8916572`).
+ * Chromium loader shared by the rail visual gates.
  *
  * WHY THIS EXISTS
  * `assert-rail-icon-contrast.mjs` learned two things the hard way: the

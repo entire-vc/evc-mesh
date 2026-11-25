@@ -9,7 +9,7 @@
 // wrong. This script repeats his exact measurement with 13 seeded projects,
 // both themes, AND grabs a mid-transition frame.
 //
-// UPDATE (`#13ff4803`): this script's own conclusion held — there is no
+// UPDATE: this script's own conclusion held — there is no
 // coordinate offset, at any capture point, in either theme. The size
 // asymmetry it flagged in (c) turned out to be the whole of the defect and is
 // fixed; the mark is now 16x16 like every neighbour. What this script cannot

@@ -322,7 +322,7 @@ class TestEveryInconclusiveArmCanPage(unittest.TestCase):
 
         NO EXEMPTIONS. `prod-arm-cancelled` held the last one, on the stated ground
         that it had no resolve half and so could not be folded in without first
-        deciding what recovery meant. #5e38c799 decided (the arm reaching a
+        deciding what recovery meant. an internal ticket decided (the arm reaching a
         conclusion, not producing a verdict) and wired both halves, so the
         exemption is deleted rather than left as a narrow `continue`. It has to be
         deleted: an exemption keyed on a job NAME goes on excusing that job after
@@ -573,7 +573,7 @@ class TestTheRequiredContextIsStillProduced(unittest.TestCase):
 class TestEverySelfCheckIsActuallyInvoked(unittest.TestCase):
     """A self-check that CI never runs is a guard in name only.
 
-    Found on #2a079432 by counting invocations rather than reading the tree:
+    Found on an internal ticket by counting invocations rather than reading the tree:
     `test_gate_dense_arm.py` and `test_check_captured_baseline.py` were both
     present, both passing, and both credited by the README as the pin for their
     failure mode — and **neither appeared in any workflow step**. They arrived
@@ -917,6 +917,15 @@ class _FakeSession:
         if self.dead:
             raise RuntimeError("Connection closed")
 
+    async def list_tools(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(tools=[SimpleNamespace(name="recall", inputSchema={
+            "properties": {k: {} for k in (
+                "query", "tags_any", "scope", "limit", "offset", "order_by",
+                "min_importance", "apply_recency_decay", "full",
+            )},
+        })])
+
     async def call_tool(self, name, args):
         if self.dead:
             raise RuntimeError("Connection closed")
@@ -969,7 +978,7 @@ class TestCleanupSurvivesTheConnectionDying(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         # This class drives the real `_run`, which now opens with
-        # assert_bench_workspace() (task #0104878c). No real key or secret is
+        # assert_bench_workspace(). No real key or secret is
         # needed — the fake resolves to the module's own BENCH_WORKSPACE_SLUG
         # default ("lme-bench"), so the guard passes and this class keeps
         # testing what it exists to test: retry/cleanup, not the guard itself
@@ -1102,7 +1111,7 @@ class TestSilentToolErrorIsSurfaced(unittest.TestCase):
         self.assertNotIn("text", payload, "the old silent-swallow shape must be gone")
 
     def test_non_json_body_preserves_the_cause_past_a_long_url(self):
-        # #352a0b11: a real recall/remember call builds a long query string
+        # A real recall/remember call builds a long query string
         # (workspace_id + query + tags_any=bench-<nonce>-<question_id> + ...),
         # and Go's url.Error puts the transport-layer CAUSE after the quoted
         # URL: `Get "http://...long-url...": dial tcp ...: connection
@@ -1212,7 +1221,7 @@ class TestEveryQuestionCanBeStored(unittest.TestCase):
         handle, so the id has to survive in it verbatim — an `_` folded to a `-`
         here would stop matching the rows this run itself just stored.
 
-        Both names now carry a run nonce (#eb1c5617), so this asserts the
+        Both names now carry a run nonce, so this asserts the
         PROPERTY — raw id in the tag, sanitized id in the key — rather than a
         literal, which would only re-encode today's format.
         """
@@ -1313,6 +1322,8 @@ class TestToolErrorSurvivesTheTransportTeardown(unittest.TestCase):
         rejecting = self
 
         class _Session:
+            list_tools = _FakeSession.list_tools
+
             async def __aenter__(self):
                 return self
 
@@ -1325,6 +1336,8 @@ class TestToolErrorSurvivesTheTransportTeardown(unittest.TestCase):
             async def call_tool(self, name, args):
                 if name == "remember":
                     return _ToolResult(text=rejecting.VALIDATION, is_error=True)
+                if name == "recall":
+                    return {"items": []}
                 return {}
 
         mcp_mod = types.ModuleType("mcp")
@@ -1669,7 +1682,7 @@ class _AlertHarness(unittest.TestCase):
 
 
 class TestEpisodeStatusOutput(_AlertHarness):
-    """`episode-status` (#352a0b11 AC5) is the signal a caller reads to decide
+    """`episode-status` (an internal ticket AC5) is the signal a caller reads to decide
     whether it may escalate: `new` on the first occurrence — quiet, exactly
     like before this output existed — `existing` when the SAME episode was
     already open, `closed`/`none` on resolve.
@@ -1743,7 +1756,7 @@ class TestEpisodeStatusOutput(_AlertHarness):
 
 
 class TestEscalationStepScoping(unittest.TestCase):
-    """The required arm's escalation step (#352a0b11 AC5, subtask 5/6): a
+    """The required arm's escalation step (an internal ticket AC5, subtask 5/6): a
     SECOND consecutive blind run fails the job, so the badge stops reporting
     green while the merge gate cannot enforce anything. Measured incident:
     #587 sat open across at least three straight nightlies (2026-08-17 to
@@ -1973,7 +1986,7 @@ class TestTheTrackingIssueIsLabelled(_AlertHarness):
     by remembered issue number turned up #367, a second advisory-arm episode. The
     five oldest (#333 #344 #352 #355 #362) do carry `mesh-tracked`, but that was
     applied in error by `oss-issue-steward.py` mistaking a bot issue for
-    community mail (fixed separately in #5658de4e) — not by this action, and not a
+    community mail (fixed separately) — not by this action, and not a
     handle anything looks episodes up by.
 
     The generalisation, which is why this is a test and not a one-line repair:
@@ -2397,7 +2410,7 @@ _BLIND = {
     "needs.recall-gate.result": "failure",
     "github.event_name": "push",
     "inputs.expect_commit": "",
-    # Which mesh-mcp CLIENT the run built (#faf92388). `main` is what every
+    # Which mesh-mcp CLIENT the run built. `main` is what every
     # non-dispatch trigger resolves to, so this keeps the fixture describing an
     # ordinary run; the client-drill guard's own discriminating cases live in
     # `test_mcp_ref.py`, which varies this path deliberately.
@@ -2762,7 +2775,7 @@ class TestTheCancellationAlertIsReArmable(_AlertHarness):
 
     The three assertions below are one episode's life cycle for the cancellation
     watchdog's own identity, read off the shipped workflow: raise, be correctly
-    quiet while it is live, and — the half that did not exist until #5e38c799 —
+    quiet while it is live, and — the half that did not exist until that fix —
     RAISE AGAIN once it has been cleared.
 
     The middle step is the one that shipped. It is correct on its own: a copy per
@@ -2818,7 +2831,7 @@ class TestTheCancellationAlertIsReArmable(_AlertHarness):
         self.assertIn("create", calls, calls)
 
     def test_4_a_second_pageable_kind_speaks_during_a_live_episode(self):
-        """The marker is kind-scoped as of #5e38c799, so `contended` (a foreign ref
+        """The marker is kind-scoped as of that fix, so `contended` (a foreign ref
         took the concurrency slot) is still reported while a `defect` episode is
         open. Under the bare marker the first of the two silenced the other for the
         whole episode, and they have different fixes."""
@@ -2842,7 +2855,7 @@ class TestTheCancellationAlertIsReArmable(_AlertHarness):
 
 
 class TestTheCancellationEpisodeClearsOnEvidence(unittest.TestCase):
-    """#5e38c799. The watchdog's recovery condition, pinned in both directions.
+    """The watchdog's recovery condition, pinned in both directions.
 
     This arm is scoped by JOB RESULTS, not by events — which is why
     `TestBlindnessAlertAndResolveAgreeOnEvents` passes on it with two empty sets
@@ -2924,7 +2937,7 @@ class TestTheCancellationEpisodeClearsOnEvidence(unittest.TestCase):
     def test_the_job_can_actually_start_on_a_recovery_run(self):
         """The resolve is only as real as the job's own `if:`.
 
-        Until #5e38c799 this job ran ONLY when an arm was cancelled, so a resolve
+        Until an internal ticket this job ran ONLY when an arm was cancelled, so a resolve
         step added to it could never have executed — a resolve that cannot run is
         the same blindness wearing a green check, which is what
         `test_and_recovery_on_the_right_arm_does_close_it` says about the harness
@@ -2940,7 +2953,7 @@ class TestTheCancellationEpisodeClearsOnEvidence(unittest.TestCase):
                 f"job {self.JOB!r} cannot start on a healthy run ({want!r} is not in "
                 f"its `if:`), so its resolve step can never execute and every episode "
                 f"it opens stays open — muting its own re-alerts via the dedup key, "
-                f"which is the defect #5e38c799 fixed.\n  if: {expr}",
+                f"which is the defect an internal ticket fixed.\n  if: {expr}",
             )
 
     def test_the_classifier_does_not_run_on_a_recovery_run(self):
@@ -2960,7 +2973,7 @@ class TestTheCancellationEpisodeClearsOnEvidence(unittest.TestCase):
 
         The migration hazard is real but one-shot: a marker shape change orphans the
         comments already on an OPEN issue. #411 was closed on its recovery evidence
-        before this landed, which is the same precondition #064eabca recorded when it
+        before this landed, which is the same precondition an internal ticket recorded when it
         renamed the prod canary's title.
         """
         halves = _blindness_calls().get(self.JOB, {})

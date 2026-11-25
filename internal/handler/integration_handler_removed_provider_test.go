@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The Slack integration was removed (#c9f9834f). A client still sending the
+// The Slack integration was removed. A client still sending the
 // old provider must get a 400 and nothing may be persisted.
 func TestIntegrationConfigure_RemovedProvider_Rejected(t *testing.T) {
 	svc := newFakeIntegrationService()

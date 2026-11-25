@@ -1,10 +1,10 @@
 -- +goose Up
--- Task #4545660b (audit-2026-09 §2.5, §2.4 п.10): "waiting on Pavel" was computed in 21
+-- (audit-2026-09 §2.5, §2.4 п.10): "waiting on Pavel" was computed in 21
 -- places across the fleet — 11 in human_gate.py, 5 in the dispatcher with its own marker
 -- dictionary, 2 in the verify-driver, and the digest with a third dictionary. Every one
 -- of them re-derived the answer by grepping comment TEXT, which is why class-C3 phantom
 -- gates existed at all: a driver printed the marker as instructional boilerplate and the
--- next driver read its own output back as a raised blocker (#84ab54fd).
+-- next driver read its own output back as a raised blocker.
 --
 -- The fix is not a better dictionary. It is that the server already owns the answer and
 -- must own the WHOLE answer, so a client's `is_human_gated` collapses to reading one
@@ -28,7 +28,7 @@ ALTER TABLE tasks ADD COLUMN gate_reason TEXT;
 
 -- WHAT HAPPENS IF NOBODY ANSWERS. Free text, not an enum: the space of "what I'll do by
 -- default" is not enumerable, and forcing it into one would push the real answer back
--- into prose. Consumed by task 1.4 (#060ccaae), which applies it after the deadline.
+-- into prose. Consumed by task 1.4, which applies it after the deadline.
 ALTER TABLE tasks ADD COLUMN recommended_default TEXT;
 
 -- WHEN the default applies. NULL means "no deadline set" — it does not mean "never", and

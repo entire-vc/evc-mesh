@@ -15,7 +15,7 @@ import (
 )
 
 // HumanGateDecisionHandler exposes the third human_gate exit — "decision
-// recorded" (task #c56339b1, docs/human-gate-decision-recorded.md) — over
+// recorded" (docs/human-gate-decision-recorded.md) — over
 // REST, so a gated task can be closed by an agent or the Telegram bridge
 // without a trip through the UI (acceptance criterion 1).
 type HumanGateDecisionHandler struct {
@@ -165,7 +165,7 @@ func mapHumanGateDecisionError(err error) error {
 	// failure — missing question_ref/canonical_key, unknown provenance/
 	// channel, missing quote. Without this, the error reaches handleError as
 	// a bare error, fails every *apierror.Error / typed-error check there,
-	// and falls to the generic 500 (the bug behind #62560d6d).
+	// and falls to the generic 500 (the bug behind an internal ticket).
 	var validationErr *service.HumanGateDecisionValidationError
 	if errors.As(err, &validationErr) {
 		return apierror.BadRequest(validationErr.Error())

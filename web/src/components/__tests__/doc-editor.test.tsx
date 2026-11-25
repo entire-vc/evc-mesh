@@ -701,7 +701,7 @@ describe("toolbar hover contrast", () => {
 const WITH_FRONTMATTER = `---
 created: 2026-10-01T17:50+03:00
 updated: 2026-10-01
-author: Garfield-Mesh
+author: Gary-Mesh
 status: review
 tags:
   - contenthub
@@ -722,7 +722,7 @@ describe("DocEditor frontmatter", () => {
 
     // The defect: the closing fence made the block one bold setext H2.
     expect(pm.textContent).not.toContain("created:");
-    expect(pm.textContent).not.toContain("Garfield-Mesh");
+    expect(pm.textContent).not.toContain("Gary-Mesh");
     expect(pm.querySelector("h1")?.textContent).toBe("PRD title");
     expect(pm.querySelector("h2")).toBeNull();
 
@@ -733,13 +733,13 @@ describe("DocEditor frontmatter", () => {
     // Collapsed: tags as chips, nothing else.
     expect(within(block).getAllByTestId("doc-property-chip").map((c) => c.textContent))
       .toEqual(["contenthub", "spec"]);
-    expect(block.textContent).not.toContain("Garfield-Mesh");
+    expect(block.textContent).not.toContain("Gary-Mesh");
 
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     const table = within(block).getByTestId("doc-properties-table");
     expect(within(table).getByText("author")).toBeInTheDocument();
-    expect(within(table).getByText("Garfield-Mesh")).toBeInTheDocument();
+    expect(within(table).getByText("Gary-Mesh")).toBeInTheDocument();
     // Dates as dates, with the source value kept on the element.
     expect(table.querySelector('time[datetime="2026-10-01"]')?.textContent).toBe("Oct 1, 2026");
     expect(table.querySelector('time[datetime="2026-10-01T17:50+03:00"]')).not.toBeNull();

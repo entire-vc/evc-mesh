@@ -73,7 +73,7 @@ func TestExtensionWorkspace_GitLabActivityWithoutConnection(t *testing.T) {
 	require.NotNil(t, list[0].Activity)
 	require.Equal(t, 1748, list[0].Activity.Links)
 	require.NotNil(t, list[0].Activity.LastEventAt)
-	// an internal ticket: the repositories behind the count ride along.
+	// The repositories behind the count ride along.
 	require.Len(t, list[0].Activity.Repos, 2)
 	require.Equal(t, service.ExtensionRepoView{Repo: "entire-vc/evc-mesh", Host: "gitlab.example.invalid", Links: 1747, LastEventAt: *list[0].Activity.LastEventAt}, list[0].Activity.Repos[0])
 

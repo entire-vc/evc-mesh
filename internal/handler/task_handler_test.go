@@ -1008,7 +1008,7 @@ func TestTaskHandler_Update_PartialLabels(t *testing.T) {
 // silently dropped the JSON key, task.ParentTaskID kept whatever GetByID fetched,
 // and the handler still answered 200 with the field unchanged. This is the
 // "detach a subtask from a cancelled-blocked parent" workaround from task
-// an internal ticket that got a false-success response.
+// That got a false-success response.
 
 // TestTaskHandler_Update_ParentTaskID_Reparent verifies PATCH with a new
 // parent_task_id actually reaches the service layer with the new value applied —
@@ -1065,7 +1065,7 @@ func TestTaskHandler_Update_ParentTaskID_Reparent(t *testing.T) {
 
 // TestTaskHandler_Update_ParentTaskID_DetachViaExplicitNull verifies that sending
 // parent_task_id:null actually detaches (clears) the parent — the exact workaround
-// attempted, and silently no-op'd, in the live incident an internal ticket.
+// attempted, and silently no-op'd, in the an internal ticket.
 func TestTaskHandler_Update_ParentTaskID_DetachViaExplicitNull(t *testing.T) {
 	taskID := uuid.New()
 	oldParentID := uuid.New()
@@ -1240,7 +1240,7 @@ func TestTaskHandler_Update_ParentTaskID_NonexistentParentErrors(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
-// --- start_after (an internal ticket, sub1 of an internal ticket) -------------------------------
+// --- start_after (sub1) -------------------------------
 //
 // start_after is written on the same three paths (Create, Update,
 // CreateSubtask) with due_date's wasSet semantics, but the handler no longer
@@ -1488,7 +1488,7 @@ func TestUpdate_HumanGate_AgentSetTrue(t *testing.T) {
 		return rec
 	}
 
-	// an internal ticket: an agent key cannot arm the gate with PATCH.
+	// An agent key cannot arm the gate with PATCH.
 	rec := patch(domain.ActorTypeAgent)
 	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
 	var resp map[string]any
@@ -1506,7 +1506,7 @@ func TestUpdate_HumanGate_AgentSetTrue(t *testing.T) {
 // TestUpdate_HumanGate_AgentSetTrue_PostsRawArmComment is an internal ticket: a raw
 // false→true PATCH (agent or user, either way — arming itself stays
 // unrestricted) must leave a trace, or releaseHumanGateOnWithdrawal's
-// soleMarkerAuthor fast path (comment_service.go, an internal ticket) cannot tell
+// soleMarkerAuthor fast path (comment_service.go) cannot tell
 // a genuine first marker apart from one fabricated onto an already-armed
 // gate. See hasRawArmMarker for the read side this comment feeds.
 func TestUpdate_HumanGate_AgentSetTrue_PostsRawArmComment(t *testing.T) {
@@ -2236,7 +2236,7 @@ func TestTaskHandler_MoveTask_HumanGateFrozen_DoneMessageDoesNotMentionBacklog(t
 
 // TestTaskHandler_MoveTask_HumanGateFrozen_BacklogMessageNamesAuthorship is the
 // mirror control: a refused backlog move must say the reason is authorship, not
-// "only a human" — a human is never the only door to backlog since an internal ticket.
+// "only a human" — a human is never the only door to backlog since that fix.
 func TestTaskHandler_MoveTask_HumanGateFrozen_BacklogMessageNamesAuthorship(t *testing.T) {
 	taskID := uuid.New()
 	statusID := uuid.New()
@@ -2375,7 +2375,7 @@ func TestTaskHandler_ListSubtasks_ServiceError(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
-// --- CreateSubtask field parity with Create (regression for an internal ticket) ---
+// --- CreateSubtask field parity with Create (regression) ---
 
 // TestTaskHandler_CreateSubtask_WithAssignee mirrors
 // TestTaskHandler_Create_WithAssignee: assignee_id/assignee_type must reach
@@ -2634,7 +2634,7 @@ func TestTaskHandler_AssignTask_ShortID(t *testing.T) {
 
 // AssignTask re-reads and returns the task after a successful assignment —
 // the one single-object path the first sweep of an internal ticket missed (caught by
-// independent review, a review): it serialized has_description at the zero
+// independent review, MR !1061): it serialized has_description at the zero
 // value exactly like the paths fixed before it.
 func TestTaskHandler_AssignTask_HasDescriptionConsistentWithBody(t *testing.T) {
 	for _, tc := range hasDescriptionCases {
@@ -2719,7 +2719,7 @@ func TestTaskHandler_MoveTask_InvalidID_Returns400(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
-// --- delegation_level default regression tests (fix an internal ticket / an internal ticket) ---
+// --- delegation_level default regression tests ---
 // The default must be "auto" so agents close tasks as done, not pile them
 // into review (which 72h auto-moves to triage → lands on Alex).
 
@@ -3374,7 +3374,7 @@ func TestTaskHandler_List_FreshRevision_EchoesListRevisionOnPage(t *testing.T) {
 // subtask row — a subtask with real description text reported
 // has_description:false and the card silently lost its glyph, even though this
 // endpoint never truncates the text itself. Caught auditing consumers of the
-// an internal ticket projection.
+// Projection.
 func TestTaskHandler_ListSubtasks_HasDescriptionAndURLAreDecorated(t *testing.T) {
 	parentID := uuid.New()
 	now := time.Now()
@@ -3412,7 +3412,7 @@ func TestTaskHandler_ListSubtasks_HasDescriptionAndURLAreDecorated(t *testing.T)
 
 // --- TestTaskHandler_UnknownField ---
 //
-// Generalizes the an internal ticket fix (status_id/status_slug/status hand-rejected
+// Generalizes the fix (status_id/status_slug/status hand-rejected
 // on Update) to any field name none of the three handlers declare: a
 // caller's typo or invented field must be a 400 naming it, never a 200/201
 // that quietly changed nothing it claimed to.

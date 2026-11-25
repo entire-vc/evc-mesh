@@ -68,7 +68,7 @@ type Agent struct {
 	// MentionWakes is a dedicated column, not a Capabilities key, because
 	// Capabilities already serves two incompatible shapes (an object for
 	// register_sub_agent/the mention gate, a plain string array for
-	// UpdateAgentProfile/workspace config import) — see #33b7d4b7. Only
+	// UpdateAgentProfile/workspace config import). Only
 	// comment_mention_handoff_gate.go reads this.
 	MentionWakes        bool            `json:"mention_wakes" db:"mention_wakes"`
 	Status              AgentStatus     `json:"status" db:"status"`
@@ -96,6 +96,12 @@ type Agent struct {
 	LastRotatedAt      *time.Time       `json:"last_rotated_at,omitempty" db:"last_rotated_at"`
 	CreatedAt          time.Time        `json:"created_at" db:"created_at"`
 	UpdatedAt          time.Time        `json:"updated_at" db:"updated_at"`
+	// ReaderProjectID marks a project reader (docs/project-reader.md): a service
+	// agent bound to this one project. ProjectReaderGuard admits it only to the
+	// allowlisted GET routes that address this project. Written only by the
+	// issuing INSERT (POST /workspaces/:ws_id/project-readers); no update path
+	// sets or clears it, and no request body is ever bound into this struct.
+	ReaderProjectID *uuid.UUID `json:"reader_project_id,omitempty" db:"reader_project_id"`
 	// WorkspaceRole is set by agentService.Authenticate from the
 	// AgentWorkspaceGrant that resolved this login (workspace_role enum:
 	// owner/admin/member/viewer) — NOT persisted on the agents row and not

@@ -1,5 +1,5 @@
 /**
- * Class-name recipes for the sidebar rail icon tiles (`#bb8f1092`).
+ * Class-name recipes for the sidebar rail icon tiles.
  *
  * These live in their own module, free of any import, for one reason: the
  * contrast guard (`scripts/assert-rail-icon-contrast.mjs`) imports THIS file
@@ -83,7 +83,7 @@ export const WORKSPACE_LOGO_ICON_FILL = "h-1/2 w-1/2";
  * is the foreground the design system defines for the first, and it is
  * theme-aware (white on teal in light, near-black on mint in dark). Splitting
  * the pair — keeping this fill but taking a foreground meant for a different
- * surface — is exactly the defect `#bb8f1092` shipped and this module now
+ * surface — is exactly the defect an internal ticket shipped and this module now
  * makes hard to reintroduce: the two names sit on one line, together.
  */
 export const WORKSPACE_LOGO_TINTED_BOX = "bg-sidebar-primary";
@@ -115,10 +115,10 @@ export function workspaceLogoContainerParts({
  *
  * Deliberately NOT `WORKSPACE_LOGO_TINTED_BOX` / `_FOREGROUND`. Reusing the
  * workspace logo's brand-teal pair here (via `workspaceLogoContainerParts`)
- * is the defect Pavel rejected on `#119078b0` (2026-09-08): with 13 real
+ * is the defect Pavel rejected on an internal ticket (2026-09-08): with 13 real
  * projects, every resting tile turned the same teal as the workspace mark
  * above them, and the mark stopped reading as an anchor — "было все ок"
- * pointed straight back at the pre-`#bb8f1092` look, where project tiles had
+ * pointed straight back at the pre-an internal ticket look, where project tiles had
  * no fill at rest at all.
  *
  * This pair is built from the sidebar's own neutral surfaces, not the brand
@@ -127,7 +127,7 @@ export function workspaceLogoContainerParts({
  * fill) is only ~1% lighter than the sidebar surface itself in light mode:
  * contrast-safe as a hover highlight (it's momentary, next to a page the eye
  * is already scanning), but a chip that faint at REST recreates the exact
- * defect `#bb8f1092` was filed over — a "container" no one can actually see.
+ * defect an internal ticket was filed over — a "container" no one can actually see.
  * `bg-sidebar-border` is the sidebar's next surface up in light mode (a real,
  * ~20-unit RGB step, confirmed in the rendered swatch) and stays a valid
  * pairing with `text-sidebar-foreground`; in dark mode that same token is
@@ -147,7 +147,7 @@ export const PROJECT_RAIL_ACTIVE_FOREGROUND = "text-sidebar-primary";
  *
  * Geometry matches every other rail item (`h-8 w-8 rounded-lg` — same as
  * Dashboard/Initiatives/Triage), which is the "container of the same size
- * and roundedness as the rest of the rail" `#bb8f1092` criterion #1 asked
+ * and roundedness as the rest of the rail" an internal ticket criterion #1 asked
  * for. The chip fill is constant across resting/hover/active — only the
  * letter's color moves, from the sidebar's own muted foreground to the
  * brand accent — so interaction state stays legible without the fill ever
@@ -169,7 +169,7 @@ export const PROJECT_RAIL_ICON_LABEL = "text-xs font-medium";
 
 /**
  * The collapsed rail's three shell boxes — the column, the header strip that
- * holds the workspace mark, and the navigation list under it (`#382ff590`).
+ * holds the workspace mark, and the navigation list under it.
  *
  * They live here, not inline in `sidebar.tsx`, for the same reason as every
  * recipe above: `scripts/assert-rail-header-geometry.mjs` renders THESE

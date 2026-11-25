@@ -450,3 +450,56 @@
     background-color: transparent;
   }
 }
+
+/* Table "+" strips (editor-table-affordances.tsx). The strip is the hit area;
+   what shows is a thin line along the table's edge and a round "+" in its
+   middle. The badge catches the eye; the line says which edge it extends. */
+.mesh-table-strip {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  outline: none;
+}
+.mesh-table-strip::before {
+  content: "";
+  position: absolute;
+  border-radius: 9999px;
+  background: hsl(var(--border));
+  transition: background-color 150ms;
+}
+.mesh-table-strip[data-table-handle="col"]::before {
+  top: 0;
+  bottom: 0;
+  left: calc(50% - 2px);
+  width: 4px;
+}
+.mesh-table-strip[data-table-handle="row"]::before {
+  left: 0;
+  right: 0;
+  top: calc(50% - 2px);
+  height: 4px;
+}
+.mesh-table-strip > span {
+  position: relative;
+  display: flex;
+  width: 1rem;
+  height: 1rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
+  box-shadow: 0 1px 2px hsl(var(--foreground) / 0.08);
+  transition: background-color 150ms, border-color 150ms, color 150ms;
+}
+.mesh-table-strip:hover::before {
+  background: hsl(var(--primary));
+}
+.mesh-table-strip:hover > span {
+  border-color: hsl(var(--primary));
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}

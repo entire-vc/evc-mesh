@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
 // MergeRequestState is the live state of a merge request as reported by the
@@ -257,6 +259,9 @@ type MergeRequestEvidence struct {
 	SHA          string // head commit of the MR (sha field)
 	WebURL       string // GitLab's canonical URL of this MR
 	HeadPipeline *HeadPipeline
+	// MergedAt is GitLab's merged_at in UTC; nil when GitLab does not report
+	// one (an MR that is not merged, or a value that does not parse).
+	MergedAt *time.Time
 }
 
 // MergeRequestEvidenceSource reads MergeRequestEvidence. Implemented by
@@ -291,6 +296,7 @@ func (c *Client) GetMergeRequestEvidence(ctx context.Context, projectPath string
 		State        string `json:"state"`
 		SHA          string `json:"sha"`
 		WebURL       string `json:"web_url"`
+		MergedAt     string `json:"merged_at"`
 		HeadPipeline *struct {
 			ID     int64  `json:"id"`
 			Status string `json:"status"`
@@ -303,7 +309,7 @@ func (c *Client) GetMergeRequestEvidence(ctx context.Context, projectPath string
 	if body.IID != iid {
 		return MergeRequestEvidence{}, fmt.Errorf("gitlab mr response %s!%d: iid mismatch (%d)", projectPath, iid, body.IID)
 	}
-	ev := MergeRequestEvidence{State: body.State, SHA: strings.TrimSpace(body.SHA), WebURL: body.WebURL}
+	ev := MergeRequestEvidence{State: body.State, SHA: strings.TrimSpace(body.SHA), WebURL: body.WebURL, MergedAt: domain.ParseVCSProviderTime(body.MergedAt)}
 	if hp := body.HeadPipeline; hp != nil && hp.ID != 0 && hp.Status != "" {
 		ev.HeadPipeline = &HeadPipeline{ID: hp.ID, Status: hp.Status, SHA: strings.TrimSpace(hp.SHA)}
 	}

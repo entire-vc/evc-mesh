@@ -1,6 +1,6 @@
 -- +goose Up
 
--- Task #c5b5fb48: the memory review-triage nightly job used a bare
+-- The memory review-triage nightly job used a bare
 -- time.NewTicker(24*time.Hour) keyed off process START, not wall-clock time.
 -- On a service that restarts often (measured: 70 restarts / 6 days on
 -- prod-host), the ticker almost never survives to fire — 2 real runs in 6 days

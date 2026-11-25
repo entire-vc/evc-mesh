@@ -188,7 +188,7 @@ func TestTaskDependencyService_Create(t *testing.T) {
 //
 // is_child_of is the one dependency type that must also set parent_task_id
 // on the child task, since that's what the Subtasks tab and subtask_count
-// actually read (see #5d670601: the "Child of" field recorded an edge
+// actually read (the "Child of" field recorded an edge
 // nothing else consumed).
 // ---------------------------------------------------------------------------
 

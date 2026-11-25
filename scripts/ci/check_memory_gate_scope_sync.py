@@ -3,7 +3,7 @@
 
     python3 scripts/ci/check_memory_gate_scope_sync.py [--selftest]
 
-`.gitlab-ci.yml` carries the memory-gate scope twice, in two syntaxes:
+`.gitlab/ci/data/memory-scope.yml` carries the memory-gate scope twice, in two syntaxes:
 
   * `variables: MEMORY_PATHS` - newline-separated path PREFIXES, read at run time
     by `scripts/memory-bench/scope_relevant.sh` (the guard inside the job);
@@ -23,7 +23,7 @@ import re
 import sys
 from pathlib import Path
 
-CI_FILE = Path(__file__).resolve().parents[2] / ".gitlab-ci.yml"
+CI_FILE = Path(__file__).resolve().parents[2] / ".gitlab/ci/data/memory-scope.yml"
 MARK_BEGIN = "# BEGIN derived-from-MEMORY_PATHS"
 MARK_END = "# END derived-from-MEMORY_PATHS"
 
@@ -31,7 +31,7 @@ MARK_END = "# END derived-from-MEMORY_PATHS"
 def memory_paths(text: str) -> list[str]:
     block = re.search(r"^  MEMORY_PATHS: \|\n((?:    .*\n)+)", text, re.M)
     if not block:
-        raise SystemExit("MEMORY_PATHS block not found in .gitlab-ci.yml")
+        raise SystemExit(f"MEMORY_PATHS block not found in {CI_FILE.name}")
     return [ln.strip() for ln in block.group(1).splitlines() if ln.strip()]
 
 
@@ -39,7 +39,7 @@ def scope_globs(text: str) -> list[str]:
     start = text.find(MARK_BEGIN)
     end = text.find(MARK_END)
     if start < 0 or end < start:
-        raise SystemExit(f"{MARK_BEGIN} / {MARK_END} markers not found in .gitlab-ci.yml")
+        raise SystemExit(f"{MARK_BEGIN} / {MARK_END} markers not found in {CI_FILE.name}")
     out = []
     for ln in text[start + len(MARK_BEGIN):end].splitlines():
         m = re.match(r'^\s*-\s+"?([^"\s]+)"?\s*$', ln)
@@ -87,7 +87,7 @@ def main() -> int:
     for p in problems:
         print(f"memory-gate scope drift: {p}")
     if problems:
-        print("Keep MEMORY_PATHS and the BEGIN/END block of .memory-gate-scope in .gitlab-ci.yml in step.")
+        print("Keep MEMORY_PATHS and the BEGIN/END block of .memory-gate-scope in .gitlab/ci/data/memory-scope.yml in step.")
         return 1
     print("memory-gate scope: MEMORY_PATHS and .memory-gate-scope agree")
     return 0

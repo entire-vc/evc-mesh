@@ -72,6 +72,11 @@ def setUpModule() -> None:
     global _RESULTS_TMP
     _RESULTS_TMP = tempfile.TemporaryDirectory(prefix="gate-results-")
     root = Path(_RESULTS_TMP.name)
+    # These verdict tests replace measurement at the MCP boundary. The real
+    # preflight is exercised against stdio/API by contract_proof.py.
+    patcher = mock.patch("mesh_client_stdio.MeshMemoryClient.preflight", new_callable=mock.AsyncMock)
+    patcher.start()
+    _RESULTS_PATCHERS.append(patcher)
     for attr, value in (
         ("RESULTS_DIR", root),
         ("RETRIEVAL_RESULTS_FILE", root / "recall_gate.json"),
@@ -327,6 +332,9 @@ class _ArmHarness(unittest.TestCase):
     CATEGORIES = ["knowledge-update", "multi-session"]
 
     def setUp(self):
+        preflight = mock.patch("mesh_client_stdio.MeshMemoryClient.preflight", new_callable=mock.AsyncMock)
+        preflight.start()
+        self.addCleanup(preflight.stop)
         self.tmp = Path(tempfile.mkdtemp())
         dataset = [
             {"question_id": f"q{i}", "question_type": cat}
@@ -1657,7 +1665,7 @@ class TestResultsArtifact(_ArmHarness):
 
 
 class TestTheRecordedSpreadIsNotRunToRunNoise(unittest.TestCase):
-    """#ee17a86f. The field is repeatability inside one capture, and the tolerance
+    """The field is repeatability inside one capture, and the tolerance
     floor — not the field — is what absorbs inter-run movement.
 
     The defect this class pins is not a wrong number, it is a wrong READING of a
@@ -1713,7 +1721,7 @@ class TestTheRecordedSpreadIsNotRunToRunNoise(unittest.TestCase):
 
 
 class TestTheToleranceFloor(unittest.TestCase):
-    """#ee17a86f AC2. `max(tolerance, spread)` is inert while spread is 0.000, so
+    """AC2. `max(tolerance, spread)` is inert while spread is 0.000, so
     `tolerance` is the only term standing between the gate and one-question noise.
     Nothing stopped it being lowered."""
 
@@ -1733,7 +1741,7 @@ class TestTheToleranceFloor(unittest.TestCase):
             "MIN_TOLERANCE moved. It is not a taste knob: it is the smallest "
             "tolerance the retrieval arm's MEASURED inter-run movement fits inside "
             "(0.250, one question on a 4q category). Lowering it re-arms the failure "
-            "#ee17a86f was filed for — a required check reddening on noise no PR "
+            "an internal ticket was filed for — a required check reddening on noise no PR "
             "author can clear. Raise or lower it only with a fresh pair of runs at "
             "one measurement-path SHA quoted on the card.",
         )

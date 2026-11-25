@@ -17,9 +17,9 @@ import { useRulesStore } from "@/stores/rules";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { Comment, CommentDeliveryOutcome, Project, Workspace } from "@/types";
 
-// #ed60c795 — a person's @-mention that reached nobody must be visible to
+// A person's @-mention that reached nobody must be visible to
 // them as a miss, with the one action that fixes it. Live case: Pavel wrote
-// "@howard" on Howard's own card parked in backlog; the UI showed only a
+// "@harper" on Harper's own card parked in backlog; the UI showed only a
 // yellow machine word, and he had to ask whether the agent got it.
 
 const PROJECT = { id: "proj-1", workspace_id: "ws-1", name: "Demo", slug: "demo", settings: {} } as unknown as Project;
@@ -28,8 +28,8 @@ const WORKSPACE = { id: "ws-1", name: "Acme", slug: "acme" } as unknown as Works
 function row(over: Partial<CommentDeliveryOutcome>): CommentDeliveryOutcome {
   return {
     comment_id: "c-1",
-    recipient_slug: "howard",
-    recipient_id: "agent-howard",
+    recipient_slug: "harper",
+    recipient_id: "agent-harper",
     recipient_kind: "agent",
     outcome: "skipped",
     reason: "status_not_fed",
@@ -50,7 +50,7 @@ function comment(delivery: CommentDeliveryOutcome[]): Comment {
     author_id: "pavel",
     author_type: "user",
     author_name: "Pavel",
-    body: "Дорабатывай программу @howard",
+    body: "Дорабатывай программу @harper",
     is_internal: false,
     created_at: "2026-09-23T21:04:00Z",
     updated_at: "2026-09-23T21:04:00Z",
@@ -101,7 +101,7 @@ describe("CommentList — delivery miss plate", () => {
     mount();
 
     const plate = await screen.findByTestId("delivery-miss-plate");
-    expect(plate).toHaveTextContent("@howard won't see this");
+    expect(plate).toHaveTextContent("@harper won't see this");
     expect(plate).toHaveTextContent("sits in backlog");
     expect(plate).not.toHaveTextContent("assign");
 
@@ -139,13 +139,13 @@ describe("CommentList — delivery miss plate", () => {
     );
     mount();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Assign to @howard" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Assign to @harper" }));
     await waitFor(() => {
       const patch = mockedApi.mock.calls.find(
         ([p, o]) => p === "/api/v1/tasks/task-1" && (o as { method?: string })?.method === "PATCH",
       );
       expect(patch).toBeDefined();
-      expect(patch![1]).toMatchObject({ body: { assignee_id: "agent-howard", assignee_type: "agent" } });
+      expect(patch![1]).toMatchObject({ body: { assignee_id: "agent-harper", assignee_type: "agent" } });
     });
   });
 
@@ -153,7 +153,7 @@ describe("CommentList — delivery miss plate", () => {
     serve(comment([row({ outcome: "delivered", reason: "task_queue", channel: "task_queue", hint: undefined })]));
     mount();
 
-    await screen.findByText("Дорабатывай программу @howard", { exact: false });
+    await screen.findByText("Дорабатывай программу @harper", { exact: false });
     expect(screen.queryByTestId("delivery-miss-plate")).not.toBeInTheDocument();
   });
 
@@ -177,7 +177,7 @@ describe("CommentList — delivery miss plate", () => {
 describe("missActionFor", () => {
   it("maps each reason to the single action that changes it", () => {
     expect(missActionFor(row({ reason: "status_not_fed", task_status_category: "backlog" }))).toBe("move_to_todo");
-    // #81ab35b3: active work is never offered a reset to todo.
+    // Active work is never offered a reset to todo.
     for (const c of ["in_progress", "review", "done", "triage", undefined]) {
       expect(missActionFor(row({ reason: "status_not_fed", task_status_category: c }))).toBeNull();
     }

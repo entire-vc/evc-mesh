@@ -107,7 +107,7 @@ func TestGetCanonicalUpdates_AgentFilter(t *testing.T) {
 	agentID := uuid.New()
 	workspaceID := uuid.New()
 	targetAgentID := uuid.New()
-	targetSlug := "linus"
+	targetSlug := "liam"
 
 	var capturedFilter domain.MemoryListFilter
 	ms := &MockMemoryService{
@@ -224,9 +224,9 @@ func TestGetCanonicalUpdates_ResponseShape(t *testing.T) {
 			"privacy:public",
 			"kind:canonical-decision",
 			"propagate_to:all",
-			"source:garfield",
+			"source:gary",
 			"ref:task-abc123",
-			"affects:linus",
+			"affects:liam",
 		},
 		CreatedAt: now,
 	}
@@ -256,11 +256,11 @@ func TestGetCanonicalUpdates_ResponseShape(t *testing.T) {
 
 	assert.Equal(t, memID.String(), item["id"])
 	assert.Equal(t, "canonical-decision", item["kind"])
-	assert.Equal(t, "garfield", item["source"])
+	assert.Equal(t, "gary", item["source"])
 	assert.Equal(t, "task-abc123", item["ref"])
 	assert.Equal(t, "API rate limit decision", item["summary"])
 	assert.Equal(t, "All external API calls capped at 100 req/min.", item["text"])
-	// affects should include linus (from affects: tag)
+	// affects should include liam (from affects: tag)
 	affects := item["affects"].([]interface{})
-	assert.Contains(t, affects, "linus")
+	assert.Contains(t, affects, "liam")
 }

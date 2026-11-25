@@ -18,7 +18,7 @@ import (
 // unit test proves only that the mock agrees with itself. Each one is exercised
 // here against a real Postgres with its own control row:
 //
-//	no lease at all      → returned      (the defect: an internal ticket, 245h idle in production)
+//	no lease at all      → returned      (the defect: an internal ticket, 245h idle on prod)
 //	live lease           → NOT returned  (must not rob an agent mid-work)
 //	expired lease        → NOT returned  (phase 1 owns that case; no double-move)
 //	idle < grace         → NOT returned  (a just-released card is not stolen)
@@ -173,7 +173,7 @@ func TestFindStaleUnleasedInProgress_GraceIsApplied(t *testing.T) {
 // way because phase 2 nulls the checkout_expires it keys on; phase 3 has no such
 // escape, so the exclusion has to live in the query.
 //
-// Measured in production 2026-09-06 before this fix: an internal ticket (human_gate armed 14:45)
+// Measured on prod 2026-09-06 before this fix: an internal ticket (human_gate armed 14:45)
 // failed to park 145 consecutive times and was the reaper's ONLY output.
 //
 // Both rows differ from the positive control in exactly one boolean, so a
@@ -233,7 +233,7 @@ func TestFindStaleUnleasedInProgress_SkipsUnmovableTasks(t *testing.T) {
 	require.True(t, found[movableID],
 		"the movable unleased idle task was NOT returned — the sweep has stopped doing its job entirely")
 	require.False(t, found[gatedID],
-		"a HUMAN-GATED task was returned — MoveTask will refuse it every tick, forever (prod an internal ticket, 145 failures)")
+		"a HUMAN-GATED task was returned — MoveTask will refuse it every tick, forever (145 failures)")
 	require.False(t, found[shippedID],
 		"a SHIPPED task was returned — MoveTask refuses any non-done move, so this retries forever")
 }

@@ -130,6 +130,7 @@ func newRuntimeHTTP(t *testing.T) *runtimeHTTP {
 	e.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/desired", h.Desired)
 	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/quota-observations", h.ReportQuota)
 	e.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/quota-observations", h.QuotaObservations)
+	e.GET("/workspaces/:ws_id/analytics/quota", h.QuotaAnalytics)
 	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/execution-instances", h.RegisterExecutionInstance)
 	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/execution-reports", h.ReportExecutions)
 	e.GET("/workspaces/:ws_id/agent-executions", h.AgentExecutions)

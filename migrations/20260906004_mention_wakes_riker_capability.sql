@@ -1,6 +1,6 @@
--- RENUMBERED 20260906003 -> 20260906004 before merge (Garfield, 2026-09-06).
+-- RENUMBERED 20260906003 -> 20260906004 before merge (2026-09-06).
 -- It collided with 20260906003_gate_predicate_log.sql on the sibling branch
--- garfield/gate-predicate (MR !868), open at the same time.
+-- for the gate-predicate change, open at the same time.
 --
 -- MEASURED, not assumed — I first wrote here that goose would silently skip the second
 -- migration, then tested it and was wrong. goose fails LOUD and fail-closed:
@@ -20,7 +20,7 @@
 -- be run over the UNION of the open branches, not per-branch.
 
 -- +goose Up
--- Task #9d8f7606 (audit §3.1) added a mention-handoff gate
+-- (audit §3.1) added a mention-handoff gate
 -- (internal/service/comment_mention_handoff_gate.go) that refuses an
 -- add_comment @-mentioning an agent lane with no queue path and no recent
 -- accompanying assign_task/create_subtask. The gate reads one escape hatch

@@ -348,7 +348,7 @@ func TestLeaseReaper_FutureCheckoutExpiry_NotSwept(t *testing.T) {
 // is invisible to it — and equally invisible to the agent feed, which polls
 // status_category=todo. Nothing returned such a task to circulation; measured on
 // prod 2026-08-27, 4 of 7 in_progress tasks were in this state, the oldest idle
-// 245h (#8e2e1c0e).
+// 245h.
 //
 // The negative control is the load-bearing half here: the fix must not rob a task
 // from an agent that is genuinely holding it. Without that case, a sweep that

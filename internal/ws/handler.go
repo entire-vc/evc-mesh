@@ -42,7 +42,10 @@ func parseWorkspaceSlugFromKey(key string) (string, error) {
 // Authentication is performed via:
 //   - Authorization header: "Bearer <JWT>"
 //   - Query parameter: "token=<JWT>"
-//   - Query parameter: "agent_key=<AgentKey>" (fallback for agent connections)
+//   - Header "X-Agent-Key: <AgentKey>" (agent connections; preferred, it stays
+//     out of every access log)
+//   - Query parameter: "agent_key=<AgentKey>" (fallback for clients that cannot
+//     set headers; the API's access log masks it, a proxy in front may not)
 //
 // The workspace slug can be provided via the "workspace" query parameter.
 //
@@ -70,7 +73,10 @@ func Handler(hub *Hub, authService *auth.Service, agentService service.AgentServ
 
 		// If no JWT token, try agent key authentication.
 		if tokenString == "" {
-			agentKey := c.QueryParam("agent_key")
+			agentKey := c.Request().Header.Get("X-Agent-Key")
+			if agentKey == "" {
+				agentKey = c.QueryParam("agent_key")
+			}
 			if agentKey != "" {
 				return handleAgentAuth(c, hub, agentService, agentKey, authz)
 			}
@@ -183,6 +189,15 @@ func handleAgentAuth(c echo.Context, hub *Hub, agentService service.AgentService
 		return c.JSON(http.StatusUnauthorized, map[string]string{
 			"error_code": "unauthorized",
 			"error":      "Invalid agent key",
+		})
+	}
+
+	// A project reader has no event stream: the agent connection subscribes to
+	// the whole workspace channel, which is exactly what its key must not see.
+	if agent.ReaderProjectID != nil {
+		return c.JSON(http.StatusForbidden, map[string]string{
+			"error_code": "forbidden",
+			"error":      "project reader keys have no event stream",
 		})
 	}
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Geometry guard for the collapsed rail's header strip (`#382ff590`).
+ * Geometry guard for the collapsed rail's header strip.
  *
  * WHY THIS EXISTS
  * The two older rail gates (`assert-rail-icon-contrast.mjs`,
@@ -55,7 +55,7 @@ const recipes = await import(
   path.join(WEB, "src/components/layout/rail-icon-classes.ts")
 );
 
-/** Shell as it shipped before `#382ff590` — negative-control input only. */
+/** Shell as it shipped before that fix — negative-control input only. */
 const PRE_FIX_SHELL = {
   aside:
     "flex h-full w-12 flex-col items-center border-r border-sidebar-border bg-sidebar",

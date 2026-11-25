@@ -278,7 +278,7 @@ func TestActorMayAccessWorkspace(t *testing.T) {
 		c, _ := bodyWSContext(`{}`, AuthTypeAgent, agentID)
 		c.Set(ContextKeyAgentAuthWorkspaceID, homeWS) // request authenticated via the HOME key
 		assert.False(t, ActorMayAccessWorkspace(c, sqlx.NewDb(db, "postgres"), guestWS),
-			"a grant existing elsewhere must not be reachable through an unrelated key (#7661fc5d)")
+			"a grant existing elsewhere must not be reachable through an unrelated key")
 	})
 
 	t.Run("workspace owner without a membership row", func(t *testing.T) {

@@ -203,7 +203,7 @@ func TestVCSIntegrationResolver_ResolveGitHub_NoRow_FallsToEnv(t *testing.T) {
 // A row that exists and explicitly says is_active=false must disable the
 // provider for this workspace OUTRIGHT — env is not consulted, even though
 // env has something usable. Falling through to env here is the exact
-// an internal ticket AC2 defect: a workspace turning its integration off would
+// AC2 defect: a workspace turning its integration off would
 // silently keep working off the instance-wide fallback. (This test used to
 // assert the opposite — "InactiveRow_FallsToEnv" — which locked the bug in
 // as expected behavior; corrected together with the fix.)
@@ -247,7 +247,7 @@ func TestVCSIntegrationResolver_ResolveGitHub_NeitherRowNorEnv_Disabled(t *testi
 	}
 }
 
-// A placeholder row identical in shape to the earlier row
+// A placeholder row identical in shape to the earlier prod row
 // (active=true, config={}) must not shadow a working env secret — this is
 // the exact regression AC6 of an internal ticket guards against.
 func TestVCSIntegrationResolver_ResolveGitHub_ActiveEmptyPlaceholderRow_FallsToEnv(t *testing.T) {

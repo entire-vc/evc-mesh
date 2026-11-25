@@ -56,7 +56,7 @@ describe("ArtifactList — Open in new tab", () => {
   });
 
   /**
-   * The reported bug (#eb6fde4e), pinned: an artifact carrying
+   * The reported bug, pinned: an artifact carrying
    * `metadata.tr_public_url` must open ITS OWN page in Mesh. The old code
    * window.open'd the Team Relay URL — which answers 401 on a private share
    * — before any other consideration. Asserting what window.open was NOT

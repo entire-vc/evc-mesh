@@ -1,7 +1,7 @@
 -- +goose Up
 
 -- keep_ref holds the ref Keep actually stores. 20261021001
--- allowed only keep:<uuid>, but the writer (a one-off migration tool via
+-- allowed only keep:<uuid>, but the writer (cmd/migrate-secrets-to-keep via
 -- HTTPKeepClient.PutValue) and the reader (secretstore.Open -> GetValue) both
 -- use Keep's ref alphabet, e.g.
 -- keep:mesh-secret.agent.<agent uuid>.<NAME>.<workspace uuid>, so every
@@ -24,7 +24,7 @@ COMMENT ON COLUMN secrets.keep_ref IS
 -- +goose Down
 
 -- The old shape comes back NOT VALID: rows already pointed at Keep keep their
--- ref (clearing it is the migration tool's rollback, not a schema
+-- ref (clearing it is cmd/migrate-secrets-to-keep --rollback, not a schema
 -- step), and only new writes are held to keep:<uuid> again.
 ALTER TABLE secrets DROP CONSTRAINT IF EXISTS chk_secrets_keep_ref_shape;
 

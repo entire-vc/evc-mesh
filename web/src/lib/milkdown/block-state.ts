@@ -6,6 +6,7 @@ import {
   deleteTable,
   isInTable,
   selectedRect,
+  TableMap,
 } from "@milkdown/kit/prose/tables";
 import { $prose } from "@milkdown/kit/utils";
 
@@ -227,6 +228,82 @@ export function deleteTableColumn(state: EditorState, dispatch?: Dispatch): bool
   const rect = selectedRect(state);
   if (rect.map.width - (rect.right - rect.left) < 1) return false;
   return deleteColumn(state, dispatch);
+}
+
+// ---------------------------------------------------------------------------
+// Pointing the selection at a cell, for actions started from the table itself
+// ---------------------------------------------------------------------------
+
+/**
+ * Where the table that contains `pos` starts, or null outside a table.
+ * `pos` is any position inside it — what `view.posAtDOM(cellElement, 0)` gives.
+ */
+export function tableStartAt(state: EditorState, pos: number): number | null {
+  return ancestorStart(state, pos, (role) => role === "table");
+}
+
+/** Start of the innermost node around `pos` whose table role passes `test`. */
+function ancestorStart(
+  state: EditorState,
+  pos: number,
+  test: (role: unknown) => boolean,
+): number | null {
+  if (pos < 0 || pos > state.doc.content.size) return null;
+  const $pos = state.doc.resolve(pos);
+  for (let d = $pos.depth; d > 0; d--) {
+    if (test($pos.node(d).type.spec.tableRole)) return $pos.before(d);
+  }
+  return null;
+}
+
+/**
+ * Put the cursor into the cell at (`row`, `col`) of the table at `tablePos`.
+ * Negative indices count from the end: -1 is the last row / column.
+ *
+ * The "+" handles use it to aim the existing add-row / add-column commands at
+ * the end of the table, whatever cell the cursor happened to be in, and then
+ * to land the cursor in the cell they just made.
+ */
+export function cursorToCell(
+  tablePos: number,
+  row: number,
+  col: number,
+): (state: EditorState, dispatch?: Dispatch) => boolean {
+  return (state, dispatch) => {
+    const table = state.doc.nodeAt(tablePos);
+    if (table?.type.spec.tableRole !== "table") return false;
+    const { width, height, map } = TableMap.get(table);
+    const r = row < 0 ? height + row : row;
+    const c = col < 0 ? width + col : col;
+    if (r < 0 || r >= height || c < 0 || c >= width) return false;
+    const at = tablePos + 2 + map[r * width + c]!;
+    dispatch?.(state.tr.setSelection(TextSelection.near(state.doc.resolve(at))));
+    return true;
+  };
+}
+
+/**
+ * Before a right-click menu opens on a cell: move the cursor into that cell,
+ * unless the cell is already part of the selection — a multi-cell selection
+ * made to delete two rows at once must survive the right-click on it.
+ *
+ * `pos` is a position inside the cell. Returns false when it is not in one.
+ */
+export function selectCellForMenu(
+  pos: number,
+): (state: EditorState, dispatch?: Dispatch) => boolean {
+  return (state, dispatch) => {
+    const cellPos = ancestorStart(state, pos, (r) => r === "cell" || r === "header_cell");
+    if (cellPos === null) return false;
+    // Already in the selection: a caret in this cell, or one of the cells of
+    // a multi-cell selection.
+    const end = cellPos + state.doc.nodeAt(cellPos)!.nodeSize;
+    if (state.selection.ranges.some((r) => r.$from.pos > cellPos && r.$to.pos < end)) return true;
+    if (dispatch) {
+      dispatch(state.tr.setSelection(TextSelection.near(state.doc.resolve(cellPos + 1))));
+    }
+    return true;
+  };
 }
 
 export function deleteWholeTable(state: EditorState, dispatch?: Dispatch): boolean {

@@ -24,7 +24,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/service"
 )
 
-// End-to-end coverage for the agent short_tag (Mesh card aa1b4845): an
+// End-to-end coverage for the agent short_tag (Mesh an internal ticket): an
 // optional human-authored role label, ≤24 chars, set/cleared through
 // PATCH /agents/:agent_id and read back from every list the UI feeds from.
 //

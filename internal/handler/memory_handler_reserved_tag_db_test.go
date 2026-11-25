@@ -22,7 +22,7 @@ import (
 // No //go:build integration tag — same convention as the *_db_test.go files
 // under internal/repository/postgres.
 //
-// These are the end-to-end acceptance controls for task #0104878c: the
+// These are the end-to-end acceptance controls: the
 // reserved-tag guard exercised through the ACTUAL production handler
 // (POST /api/v1/memories, wired to real Postgres repos), not through a mock
 // service. The unit tests in internal/service/memory_service_test.go pin the

@@ -7,7 +7,7 @@ import type { DocumentCommentAnchor } from "@/types";
  * The branch that decides whether a reader keeps their highlight.
  *
  * Context: the server now re-anchors every comment when a document body is
- * saved, so `start` MOVES and can become null (evc-mesh #90dd31f9). Before that
+ * saved, so `start` MOVES and can become null. Before that
  * it was written once and never touched, and this code short-circuited on a null
  * position — a branch that could not fire for a stored comment and now can.
  */

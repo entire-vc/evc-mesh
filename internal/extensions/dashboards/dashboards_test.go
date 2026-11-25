@@ -45,6 +45,7 @@ func TestTemplates_MatchPRDTable(t *testing.T) {
 			"cost-by-agent 6x4", "cost-top-tasks 6x4", "cost-by-day 6x4", "cost-by-project 6x4",
 		},
 		TemplateAnalytics: {
+			"agent-usage 12x6",
 			"metric 3x2", "metric 3x2", "metric 3x2", "metric 3x2",
 			"tasks-breakdown 6x4", "tasks-breakdown 6x4", "tasks-timeline 12x4",
 			"agent-leaderboard 6x4", "metric 3x2", "events-breakdown 6x4", "cost-by-project 6x4",

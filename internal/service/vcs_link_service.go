@@ -187,7 +187,7 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 	// explicitStatus (before defaulting) also decides Create vs Upsert below
 	// — track it here, not by re-checking input.Status later.
 	// An explicit add of a PR/MR the webhook stored as a relates_to mention
-	// binds it: the caller states this PR/MR is the card's own work.
+	// binds it: the caller states this PR/MR is the card's own work
 	// The repository merges metadata, so the mark is cleared by
 	// writing it empty; relation_bound records who bound it and when. Without
 	// a status the binding touches only metadata, so no live check runs.
@@ -258,7 +258,7 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 	if explicitStatus {
 		// A caller who explicitly states the status knows something the
 		// stored row might not — most commonly, linking a PR that was
-		// already merged before the link existed (an internal ticket: no webhook
+		// already merged before the link existed (no webhook
 		// will ever arrive for that after the fact) or correcting a link
 		// created before status tracking existed. Upsert so this succeeds
 		// whether or not the link already exists, instead of failing on
@@ -718,7 +718,7 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		// protection is untouched; without this a merged PR left its link open
 		// for ever whenever the body quoted a second task id.
 		synced, err := s.syncExistingLinksOnAmbiguousRef(ctx, ev.WorkspaceID, domain.VCSProviderGitHub,
-			strconv.Itoa(ev.PRNumber), ev.PRHTMLURL, candidates, githubLinkStatus(ev), []byte("{}"))
+			strconv.Itoa(ev.PRNumber), ev.PRHTMLURL, candidates, githubLinkStatus(ev), []byte("{}"), ev.PRMergedAt)
 		recordAmbiguousTaskRef(domain.VCSProviderGitHub, fmt.Sprintf("%s#%d", ev.Repository, ev.PRNumber), ev.PRHTMLURL, len(candidates), synced)
 		if err != nil {
 			return PRHandleResult{Reason: "ambiguous_task_ref"}, err
@@ -733,7 +733,7 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		// A PR number is a small, guessable integer with no workspace
 		// component — without this filter, a workspace B secret could
 		// silently reuse a stored link belonging to a task in workspace A
-		// just by naming the right number (an internal ticket, same class the
+		// just by naming the right number (same class the
 		// title/body/branch path is scoped against in lookupRef).
 		links = s.filterLinksInWorkspace(ctx, ev.WorkspaceID, filterLinksByURL(links, ev.PRHTMLURL))
 		switch {
@@ -762,7 +762,7 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 	// 2b. A mention from a repository the task's project does not use is a
 	//     reference, never the card's own deliverable (see vcs_link_foreign_repo.go).
 	//     Only a native mention goes on to the binding rule.
-	foreign := viaMention && s.isForeignRepoMention(ctx, taskID, ev.Repository, ev.PRHTMLURL)
+	foreign := viaMention && s.isForeignRepoMention(ctx, taskID, domain.VCSProviderGitHub, ev.Repository, ev.PRHTMLURL)
 	var bind prBinding
 	if !foreign {
 		bind = s.bindStrength(ctx, taskID, matched, ev.PRHTMLURL)
@@ -784,6 +784,7 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		Status:     linkStatus,
 		Metadata:   linkMeta,
 		CreatedAt:  time.Now(),
+		MergedAt:   ev.PRMergedAt,
 	}
 	if _, err := s.repo.Upsert(ctx, link); err != nil {
 		return PRHandleResult{TaskID: taskID}, fmt.Errorf("upsert vcs link: %w", err)
@@ -862,7 +863,7 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 		// stick to the wrong task irreversibly. It may only refresh the status
 		// of links that already name this exact MR on a mentioned task.
 		synced, err := s.syncExistingLinksOnAmbiguousRef(ctx, ev.WorkspaceID, domain.VCSProviderGitLab,
-			strconv.Itoa(ev.MRIID), ev.MRURL, candidates, gitlabLinkStatus(ev.MRState), gitLabLinkMetadata(ev.HeadSHA))
+			strconv.Itoa(ev.MRIID), ev.MRURL, candidates, gitlabLinkStatus(ev.MRState), gitLabLinkMetadata(ev.HeadSHA), nil)
 		recordAmbiguousTaskRef(domain.VCSProviderGitLab, fmt.Sprintf("%s!%d", ev.ProjectPath, ev.MRIID), ev.MRURL, len(candidates), synced)
 		if err != nil {
 			return PRHandleResult{Reason: "ambiguous_task_ref"}, err
@@ -907,7 +908,7 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 	// 2b. A mention from a repository the task's project does not use is a
 	//     reference, never the card's own deliverable (see vcs_link_foreign_repo.go).
 	//     Only a native mention goes on to the binding rule.
-	foreign := viaMention && s.isForeignRepoMention(ctx, taskID, ev.ProjectPath, ev.MRURL)
+	foreign := viaMention && s.isForeignRepoMention(ctx, taskID, domain.VCSProviderGitLab, ev.ProjectPath, ev.MRURL)
 	var bind prBinding
 	if !foreign {
 		bind = s.bindStrength(ctx, taskID, matched, ev.MRURL)
@@ -932,6 +933,14 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 	}
 	if _, err := s.repo.Upsert(ctx, link); err != nil {
 		return PRHandleResult{TaskID: taskID}, fmt.Errorf("upsert vcs link: %w", err)
+	}
+	// The Merge Request Hook carries no merge time; read GitLab's own
+	// merged_at for the link now. Best effort: an unread time stays NULL for
+	// the backfill sweeper, never the delivery time.
+	if linkStatus == domain.VCSLinkStatusMerged && link.MergedAt == nil {
+		if _, err := s.fillMergedAt(ctx, *link); err != nil {
+			log.Printf("[vcs-webhook] mr=%s!%d merged_at read failed: %v", ev.ProjectPath, ev.MRIID, err)
+		}
 	}
 
 	// 3b. Refresh the exact-MR evidence on the other cards' existing links. Runs
@@ -1117,7 +1126,7 @@ func recordAmbiguousTaskRef(provider domain.VCSProvider, ref, prURL string, cand
 // another project could not be told apart. It writes through Upsert on the
 // stored row itself, so it can neither create a link nor choose a task, and it
 // never reaches applyPRTransitionPolicy or closeReviewSubjects: no task moves.
-func (s *vcsLinkService) syncExistingLinksOnAmbiguousRef(ctx context.Context, workspaceID uuid.UUID, provider domain.VCSProvider, externalID, rawURL string, candidates []uuid.UUID, status domain.VCSLinkStatus, metadata []byte) (int, error) {
+func (s *vcsLinkService) syncExistingLinksOnAmbiguousRef(ctx context.Context, workspaceID uuid.UUID, provider domain.VCSProvider, externalID, rawURL string, candidates []uuid.UUID, status domain.VCSLinkStatus, metadata []byte, mergedAt *time.Time) (int, error) {
 	if rawURL == "" || len(candidates) == 0 {
 		return 0, nil
 	}
@@ -1138,6 +1147,9 @@ func (s *vcsLinkService) syncExistingLinksOnAmbiguousRef(ctx context.Context, wo
 		l := l
 		l.Status = status
 		l.Metadata = metadata
+		if l.MergedAt == nil {
+			l.MergedAt = mergedAt
+		}
 		if _, err := s.repo.Upsert(ctx, &l); err != nil {
 			return synced, fmt.Errorf("upsert vcs link: %w", err)
 		}
@@ -1233,7 +1245,7 @@ func (s *vcsLinkService) HandleGitLabPipelineEvent(ctx context.Context, ev GitLa
 // carrying role=review, see taskService.bindReviewSubject) once it reaches a
 // terminal state. The task the payload names is the work; a review of it is a
 // different card that no title, body or branch mentions, so without this the
-// webhook never reaches it (an internal ticket).
+// webhook never reaches it.
 //
 // Matching is by the normalised URL, not by external_id: an MR iid is only
 // unique within its project, so !19 of one repository must not settle a
@@ -1416,7 +1428,7 @@ func (s *vcsLinkService) applyPRTransitionPolicy(ctx context.Context, taskID uui
 		// waits for this very merge is woken by the merge and decides the status
 		// itself; moving the card to review first took it out of the lane's working
 		// statuses, the runner ended the attempt as "task left the agent while
-		// waiting" and started a second one.
+		// waiting" and started a second one (09.11).
 		if kind := controllerHolds(task); kind != "" {
 			body := fmt.Sprintf("🤖 Auto: %s merged (commit %#q). Task stays in %#q: its runner holds it (%s) and the assignee decides the next status.", refLabel, mergeRefLabel, currentStatus.Slug, kind)
 			if cerr := s.postSystemComment(ctx, taskID, body, source); cerr != nil {
@@ -1436,6 +1448,25 @@ func (s *vcsLinkService) applyPRTransitionPolicy(ctx context.Context, taskID uui
 				log.Printf("[vcs-webhook] post comment failed task=%s: %v", taskID, cerr)
 			}
 			return PRHandleResult{TaskID: taskID, OldStatus: currentStatus.Slug, Reason: reason}, nil
+		}
+		// The same two guards as in_progress. The merge gate runs while the card
+		// sits in review with its reviewer or author; a merge there is not the
+		// acceptance when the AC asks for a run after it, and a runner that holds
+		// the card is woken by the merge and closes it after that run. Closing it
+		// here put a card into done three times without acceptance.
+		if match := postMergeACMatch(task); match != "" {
+			body := fmt.Sprintf("🤖 Auto: %s merged (commit %#q). Task NOT moved to done: acceptance needs a post-merge check (%q), so it stays in %#q until the assignee runs it and closes the card.", refLabel, mergeRefLabel, match, currentStatus.Slug)
+			if cerr := s.postSystemComment(ctx, taskID, body, source); cerr != nil {
+				log.Printf("[vcs-webhook] post comment failed task=%s: %v", taskID, cerr)
+			}
+			return PRHandleResult{TaskID: taskID, OldStatus: currentStatus.Slug, Reason: "post_merge_ac_pending"}, nil
+		}
+		if kind := controllerHolds(task); kind != "" {
+			body := fmt.Sprintf("🤖 Auto: %s merged (commit %#q). Task NOT moved to done: it stays in %#q, held by controller (%s); the merge wakes its runner and the assignee decides the next status.", refLabel, mergeRefLabel, currentStatus.Slug, kind)
+			if cerr := s.postSystemComment(ctx, taskID, body, source); cerr != nil {
+				log.Printf("[vcs-webhook] post comment failed task=%s: %v", taskID, cerr)
+			}
+			return PRHandleResult{TaskID: taskID, OldStatus: currentStatus.Slug, Reason: "held_by_controller"}, nil
 		}
 		targetSlug = "done"
 	default:
@@ -1524,7 +1555,7 @@ func (b prBinding) metadata(base []byte) []byte {
 // add_vcs_link or an earlier bound delivery — or when the reference came from
 // the title or branch AND the repository is one the task's project works in,
 // i.e. some card of the project links a PR/MR of the same repository. Anything
-// else, notably an id quoted in the description, is a mention (an internal ticket: a
+// else, notably an id quoted in the description, is a mention (a
 // runner MR body naming another project's review card moved it to done).
 func (s *vcsLinkService) bindStrength(ctx context.Context, taskID uuid.UUID, ref TaskRef, rawURL string) prBinding {
 	var wasMention bool
@@ -1802,7 +1833,7 @@ func (s *vcsLinkService) lookupRef(ctx context.Context, workspaceID uuid.UUID, r
 // lookup error, or a missing project all return false, never true.
 // "Couldn't verify ownership" must never be silently treated as "verified"
 // — that is exactly how an internal ticket stayed open, and the same fail-open vs.
-// fail-closed distinction the team workflow guide §1q Правило 3 draws for the
+// fail-closed distinction CLAUDE-workflow.md §1q Правило 3 draws for the
 // merge train applies here.
 func (s *vcsLinkService) projectInWorkspace(ctx context.Context, projectID, workspaceID uuid.UUID) bool {
 	if workspaceID == uuid.Nil {

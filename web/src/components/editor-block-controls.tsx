@@ -120,7 +120,7 @@ export function BlockTypeSelect({ ns, store, runCommand }: EditorBlockControlsPr
 
 const VIEWPORT_MARGIN = 8;
 
-interface MenuEntry {
+export interface MenuEntry {
   id: string;
   label: string;
   icon: React.ReactNode;
@@ -131,88 +131,36 @@ interface MenuEntry {
   run: () => void;
 }
 
-export function TableMenu({ ns, store, runCommand, withView }: EditorBlockControlsProps) {
+
+/**
+ * The table actions, in menu order. One list for both menus that offer them —
+ * the toolbar dropdown and the right-click menu inside the table — so the two
+ * cannot drift. `done` runs after every action: the host closes its menu.
+ */
+export function useTableMenuGroups(
+  { ns, store, runCommand, withView }: EditorBlockControlsProps,
+  done: () => void,
+): MenuEntry[][] {
   const { t } = useTranslation(ns);
   const state = useSyncExternalStore(store.subscribe, store.get);
-  const [open, setOpen] = useState(false);
-  const [shift, setShift] = useState(0);
-  const [maxHeight, setMaxHeight] = useState<number | null>(null);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const menuId = useId();
-
-  // Leaving the table closes the menu: its actions would have nothing to act on.
-  useEffect(() => {
-    if (!state.inTable) setOpen(false);
-  }, [state.inTable]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    // Opened with the pointer, the menu never takes focus — the trigger keeps
-    // the editor's selection by refusing it — so Escape lands in the editor,
-    // not in the panel. Listened for on the document, in the capture phase, so
-    // it closes the menu wherever focus is and the editor does not also act
-    // on it.
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      e.stopPropagation();
-      const fromMenu = panelRef.current?.contains(document.activeElement);
-      setOpen(false);
-      if (fromMenu) triggerRef.current?.focus();
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey, true);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey, true);
-    };
-  }, [open]);
-
-  // Keep the panel on screen — at 393px the trigger sits near the right edge
-  // once the toolbar wraps.
-  useLayoutEffect(() => {
-    if (!open || !panelRef.current) return;
-    const rect = panelRef.current.getBoundingClientRect();
-    const vw = document.documentElement.clientWidth;
-    let dx = 0;
-    if (rect.right > vw - VIEWPORT_MARGIN) dx = vw - VIEWPORT_MARGIN - rect.right;
-    if (rect.left + dx < VIEWPORT_MARGIN) dx = VIEWPORT_MARGIN - rect.left;
-    setShift(dx);
-    // And keep its bottom on screen: on a phone every item is a 44px touch
-    // target and the ten of them outgrow the space under a toolbar that sits
-    // mid-page — the last one, "delete table", was cut off. The sticky
-    // toolbar cannot be scrolled away from to reveal it, so the panel scrolls
-    // itself instead.
-    const room = window.innerHeight - rect.top - VIEWPORT_MARGIN;
-    setMaxHeight(rect.height > room ? Math.max(160, room) : null);
-    return () => {
-      setShift(0);
-      setMaxHeight(null);
-    };
-  }, [open]);
 
   const apply = (fn: (view: EditorView) => void) => {
     withView((view) => {
       fn(view);
       view.focus();
     });
-    setOpen(false);
+    done();
   };
   const command = (key: Parameters<typeof callCommand>[0], payload?: unknown) => {
     runCommand(key, payload);
-    setOpen(false);
+    done();
   };
   const align = (a: Alignment) =>
     apply((view) => setColumnAlignment(a)(view.state, view.dispatch));
 
   const rowsLeft = state.rows - state.selectedRows;
   const colsLeft = state.cols - state.selectedCols;
-  const groups: MenuEntry[][] = [
+  return [
     [
       {
         id: "row-above",
@@ -279,20 +227,168 @@ export function TableMenu({ ns, store, runCommand, withView }: EditorBlockContro
       },
     ],
   ];
+}
 
-  const onMenuKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    const items = Array.from(
-      panelRef.current?.querySelectorAll<HTMLButtonElement>("[role^=menuitem]") ?? [],
-    );
+/**
+ * Up / Down walk the items, wrapping; Tab leaves the menu and closes it.
+ * Escape is the host's: it knows where focus goes back to.
+ */
+export function menuKeyHandler(
+  panel: React.RefObject<HTMLDivElement | null>,
+  close: () => void,
+) {
+  return (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const items = menuItems(panel.current);
     const at = items.indexOf(document.activeElement as HTMLButtonElement);
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       const step = e.key === "ArrowDown" ? 1 : -1;
-      items[(at + step + items.length) % items.length]?.focus();
+      const next = at < 0 ? (step > 0 ? 0 : items.length - 1) : at + step;
+      items[(next + items.length) % items.length]?.focus();
     } else if (e.key === "Tab") {
-      setOpen(false);
+      close();
     }
   };
+}
+
+export function menuItems(panel: HTMLElement | null): HTMLButtonElement[] {
+  return Array.from(panel?.querySelectorAll<HTMLButtonElement>("[role^=menuitem]") ?? []);
+}
+
+/**
+ * The items of a table menu, grouped and separated.
+ *
+ * An unavailable action stays in the list and says why in plain text under its
+ * label — a greyed-out item alone reads as "this editor cannot do that", which
+ * is how the feature came to be reported as missing. The reason is a sibling
+ * wired with aria-describedby, not part of the button, so the item's name stays
+ * its action.
+ */
+export function TableMenuItems({ groups }: { groups: MenuEntry[][] }) {
+  const baseId = useId();
+  return (
+    <>
+      {groups.map((group, gi) => (
+        <div key={gi} role="group">
+          {gi > 0 && <div role="separator" className="-mx-1 my-1 h-px bg-border" />}
+          {group.map((entry) => {
+            const disabled = !!entry.disabledReason;
+            const reasonId = `${baseId}-${entry.id}-reason`;
+            return (
+              <div key={entry.id}>
+                <button
+                  type="button"
+                  role={entry.checked === undefined ? "menuitem" : "menuitemradio"}
+                  aria-checked={entry.checked}
+                  aria-disabled={disabled || undefined}
+                  aria-describedby={disabled ? reasonId : undefined}
+                  data-action={entry.id}
+                  title={entry.disabledReason}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    if (!disabled) entry.run();
+                  }}
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs",
+                    entry.destructive ? "text-destructive" : "text-foreground",
+                    disabled
+                      ? "cursor-not-allowed opacity-50"
+                      : "hover:bg-secondary hover:text-secondary-foreground focus-visible:bg-secondary focus-visible:text-secondary-foreground focus:outline-none",
+                    entry.checked && "font-medium",
+                  )}
+                >
+                  {entry.icon}
+                  <span className="flex-1">{entry.label}</span>
+                  {entry.checked && <span aria-hidden="true">✓</span>}
+                </button>
+                {disabled && (
+                  <p
+                    id={reasonId}
+                    data-reason-for={entry.id}
+                    className="max-w-[16rem] px-2 pb-1.5 pl-[1.875rem] text-[11px] leading-snug text-muted-foreground"
+                  >
+                    {entry.disabledReason}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </>
+  );
+}
+
+/** Shared look of both table menus' panels. */
+export const MENU_PANEL_CLASS =
+  "w-max min-w-[13rem] max-w-[calc(100vw-1rem)] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md";
+
+export function TableMenu(props: EditorBlockControlsProps) {
+  const { ns, store } = props;
+  const { t } = useTranslation(ns);
+  const state = useSyncExternalStore(store.subscribe, store.get);
+  const [open, setOpen] = useState(false);
+  const [shift, setShift] = useState(0);
+  const [maxHeight, setMaxHeight] = useState<number | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const menuId = useId();
+  const groups = useTableMenuGroups(props, () => setOpen(false));
+
+  // Leaving the table closes the menu: its actions would have nothing to act on.
+  useEffect(() => {
+    if (!state.inTable) setOpen(false);
+  }, [state.inTable]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    // Opened with the pointer, the menu never takes focus — the trigger keeps
+    // the editor's selection by refusing it — so Escape lands in the editor,
+    // not in the panel. Listened for on the document, in the capture phase, so
+    // it closes the menu wherever focus is and the editor does not also act
+    // on it.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      const fromMenu = panelRef.current?.contains(document.activeElement);
+      setOpen(false);
+      if (fromMenu) triggerRef.current?.focus();
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [open]);
+
+  // Keep the panel on screen — at 393px the trigger sits near the right edge
+  // once the toolbar wraps.
+  useLayoutEffect(() => {
+    if (!open || !panelRef.current) return;
+    const rect = panelRef.current.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth;
+    let dx = 0;
+    if (rect.right > vw - VIEWPORT_MARGIN) dx = vw - VIEWPORT_MARGIN - rect.right;
+    if (rect.left + dx < VIEWPORT_MARGIN) dx = VIEWPORT_MARGIN - rect.left;
+    setShift(dx);
+    // And keep its bottom on screen: on a phone every item is a 44px touch
+    // target and the ten of them outgrow the space under a toolbar that sits
+    // mid-page — the last one, "delete table", was cut off. The sticky
+    // toolbar cannot be scrolled away from to reveal it, so the panel scrolls
+    // itself instead.
+    const room = window.innerHeight - rect.top - VIEWPORT_MARGIN;
+    setMaxHeight(rect.height > room ? Math.max(160, room) : null);
+    return () => {
+      setShift(0);
+      setMaxHeight(null);
+    };
+  }, [open]);
 
   const triggerTitle = state.inTable ? t("editor.tableMenu") : t("editor.tableMenuOutside");
   return (
@@ -313,9 +409,7 @@ export function TableMenu({ ns, store, runCommand, withView }: EditorBlockContro
           if (e.key === "ArrowDown" && state.inTable) {
             e.preventDefault();
             setOpen(true);
-            requestAnimationFrame(() =>
-              panelRef.current?.querySelector<HTMLButtonElement>("[role^=menuitem]")?.focus(),
-            );
+            requestAnimationFrame(() => menuItems(panelRef.current)[0]?.focus());
           }
         }}
         className={cn(
@@ -336,50 +430,16 @@ export function TableMenu({ ns, store, runCommand, withView }: EditorBlockContro
           id={menuId}
           role="menu"
           aria-label={t("editor.tableMenu")}
-          onKeyDown={onMenuKey}
+          onKeyDown={menuKeyHandler(panelRef, () => setOpen(false))}
           // Inline, not a class: this is a popup's own scroll, not a scrollport
           // around the prose (see the doc-editor test that forbids those).
           style={{
             ...(shift ? { transform: `translateX(${shift}px)` } : {}),
             ...(maxHeight !== null ? { maxHeight, overflowY: "auto" as const } : {}),
           }}
-          className="absolute left-0 top-full z-50 mt-1 w-max min-w-[13rem] max-w-[calc(100vw-1rem)] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
+          className={cn("absolute left-0 top-full z-50 mt-1", MENU_PANEL_CLASS)}
         >
-          {groups.map((group, gi) => (
-            <div key={gi} role="group">
-              {gi > 0 && <div role="separator" className="-mx-1 my-1 h-px bg-border" />}
-              {group.map((entry) => {
-                const disabled = !!entry.disabledReason;
-                return (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    role={entry.checked === undefined ? "menuitem" : "menuitemradio"}
-                    aria-checked={entry.checked}
-                    aria-disabled={disabled || undefined}
-                    data-action={entry.id}
-                    title={entry.disabledReason}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      if (!disabled) entry.run();
-                    }}
-                    className={cn(
-                      "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs",
-                      entry.destructive ? "text-destructive" : "text-foreground",
-                      disabled
-                        ? "cursor-not-allowed opacity-50"
-                        : "hover:bg-secondary hover:text-secondary-foreground focus-visible:bg-secondary focus-visible:text-secondary-foreground focus:outline-none",
-                      entry.checked && "font-medium",
-                    )}
-                  >
-                    {entry.icon}
-                    <span className="flex-1">{entry.label}</span>
-                    {entry.checked && <span aria-hidden="true">✓</span>}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
+          <TableMenuItems groups={groups} />
         </div>
       )}
     </div>

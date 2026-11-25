@@ -10,7 +10,7 @@ Background — why these fields exist at all. The gate recorded hit/miss and
 nothing else, so `hit@10 = 0` was the same artifact whether the gold session
 ranked 12th or was never retrieved. Those are different faults with different
 fixes (ranking vs indexing/candidate-pool), and telling them apart cost a live
-probe against prod instead of a five-minute read (#c6b1ecee, #1aff2b25).
+probe against prod instead of a five-minute read.
 
 The properties pinned here:
 
@@ -128,18 +128,18 @@ class TestTheClientKeepsTheListBeforeTruncating(unittest.TestCase):
 
         client = mesh_client_stdio.MeshMemoryClient(question_id="q")
         # Take the tag FROM the client rather than restating its shape here. The
-        # tag is now run-scoped (`bench-<nonce>-q`, #eb1c5617) and a literal copy
+        # tag is now run-scoped (`bench-<nonce>-q`) and a literal copy
         # of yesterday's format silently matches nothing — which in this test
         # reads as "rows_returned is broken" rather than "the fixture is stale".
         tag = tag or client.bench_tag
         items = [
-            {"key": f"{client.key_prefix}-s{i}",
+            {"id": f"memory-{i}", "key": f"{client.key_prefix}-s{i}",
              "tags": [f"session-{i}", tag], "content": "c"}
             for i in range(n_mine)
         ]
         # Rows belonging to another question's fixtures, which the tag filter
         # drops. They must not inflate rows_returned.
-        items += [{"key": "bench-other-s0", "tags": ["bench-other"], "content": "c"}]
+        items += [{"id": "other-memory", "key": "bench-other-s0", "tags": ["bench-other"], "content": "c"}]
         returned = asyncio.run(client._search(self._Session(items), "query", top_k))
         return client, returned
 
@@ -210,7 +210,7 @@ class TestRunSingleEmitsTheFields(unittest.TestCase):
         self.assertEqual(r["haystack_size"], 45)
 
     def test_a_miss_whose_gold_ranked_12th_says_so(self):
-        # This is #c6b1ecee's 118b2229 in miniature: retrieved, ranked just past
+        # This is an internal ticket's 118b2229 in miniature: retrieved, ranked just past
         # the cut. Previously indistinguishable from "never indexed".
         ranked = [_row(i) for i in range(20, 31)] + [_row(7)] + [_row(40)]
         r = self._run(ranked)
@@ -238,7 +238,7 @@ class TestRunSingleEmitsTheFields(unittest.TestCase):
                 self.assertEqual(r["correct"], rank is not None and rank <= 10)
 
     def test_rows_returned_exposes_pool_truncation(self):
-        # 32 of 45 fixtures survived: the post-filter signature from #2c087b2a.
+        # 32 of 45 fixtures survived: the post-filter signature from an internal ticket.
         # Read together, `rows_returned < haystack_size` is what stops `None`
         # from being misread as "not indexed".
         r = self._run([_row(i) for i in range(32)], entry=_entry(haystack=45))

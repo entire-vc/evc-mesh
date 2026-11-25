@@ -34,7 +34,7 @@ func NewCommentHandler(cs service.CommentService, ts taskIDResolver) *CommentHan
 // Metadata is a caller-supplied JSON object stored verbatim on the comment. It exists so
 // automation can label the comments it posts (`{"source":"pr-task-driver","auto":true}`)
 // and so staleness/stall detectors can tell an auto-nudge from genuine activity. Until
-// an internal ticket this field was absent from the struct, so `c.Bind` discarded it and the
+// This field was absent from the struct, so `c.Bind` discarded it and the
 // API answered 201 while losing it — every consumer filtering on `metadata.source` was
 // filtering on a value that could never be set. The shape is validated (see
 // validateCommentMetadata); it is never silently dropped.
@@ -97,6 +97,7 @@ func (h *CommentHandler) List(c echo.Context) error {
 	for i := range page.Items {
 		page.Items[i].URL = computeCommentURL(c.Request(), taskID, page.Items[i].ID)
 	}
+	setResponseCommentCount(c, len(page.Items))
 
 	return c.JSON(http.StatusOK, page)
 }

@@ -6,7 +6,7 @@ import "testing"
 //
 // Every row below was captured by executing apps/web-publish/src/lib/markdown.ts
 // (evc-team-relay@b54bce7, vitest, real node_modules) — not traced by eye. See
-// task #836ebffe for the full method and citations. Table numbering matches the
+// For the full method and citations. Table numbering matches the
 // source report so a row here can be looked up back to its trace.
 func TestParseEmbedTarget_MatchesTeamRelaysRealRenderer(t *testing.T) {
 	cases := []struct {

@@ -29,7 +29,7 @@ type markerGateReclassifier interface {
 
 // ReconcileMarkerGateClasses gives every live gate armed by a "❓ Blocking" marker
 // the class that marker gets under the current rule (markerGateClass, task
-// this change). Gates armed before the rule existed were armed hard for want of a
+// an internal ticket). Gates armed before the rule existed were armed hard for want of a
 // "[soft]" tag; this lets their stated default apply instead of leaving them open
 // for weeks. Only ever hard→soft: an arm already computes the hard verdict itself,
 // and a hard verdict is never weakened here.

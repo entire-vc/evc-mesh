@@ -671,7 +671,7 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 			},
 		}
 		effectiveRules := &domain.EffectiveAssignmentRules{
-			DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "garfield", Source: "project"},
+			DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "gary", Source: "project"},
 		}
 		svc, taskRepo, statusRepo, agentRepo, projRepo := setupTaskServiceWithWorkflow(wfResp, effectiveRules)
 
@@ -682,7 +682,7 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 		statusRepo.items[oldStatusID] = inProgressStatus(oldStatusID)
 		statusRepo.items[newStatusID] = reviewStatus(newStatusID)
 		projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
-		agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "garfield"}
+		agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "gary"}
 		// The builder must be a real in-workspace agent too: restorePreReviewAssignee
 		// re-checks the stashed principal before handing the card back, because a stash
 		// can outlive the agent it names.
@@ -702,7 +702,7 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 
 		task := taskRepo.items[taskID]
 		require.NotNil(t, task.AssigneeID)
-		assert.Equal(t, leadID, *task.AssigneeID, "should be assigned to lead (garfield)")
+		assert.Equal(t, leadID, *task.AssigneeID, "should be assigned to lead (gary)")
 		assert.Equal(t, domain.AssigneeTypeAgent, task.AssigneeType)
 	})
 
@@ -765,7 +765,7 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 			},
 		}
 		effectiveRules := &domain.EffectiveAssignmentRules{
-			DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "garfield", Source: "project"},
+			DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "gary", Source: "project"},
 		}
 		svc, taskRepo, statusRepo, agentRepo, projRepo := setupTaskServiceWithWorkflow(wfResp, effectiveRules)
 
@@ -778,7 +778,7 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 		statusRepo.items[reviewStatusID] = reviewStatus(reviewStatusID)
 		statusRepo.items[backToTodoStatusID] = &domain.TaskStatus{ID: backToTodoStatusID, ProjectID: projectID, Category: domain.StatusCategoryTodo, Name: "todo"}
 		projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
-		agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "garfield"}
+		agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "gary"}
 		// The builder must be a real in-workspace agent too: restorePreReviewAssignee
 		// re-checks the stashed principal before handing the card back, because a stash
 		// can outlive the agent it names.
@@ -825,7 +825,7 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 			},
 		}
 		effectiveRules := &domain.EffectiveAssignmentRules{
-			DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "garfield", Source: "project"},
+			DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "gary", Source: "project"},
 		}
 		svc, taskRepo, statusRepo, agentRepo, projRepo := setupTaskServiceWithWorkflow(wfResp, effectiveRules)
 
@@ -838,7 +838,7 @@ func TestTaskService_MoveTask_ReviewAssignee(t *testing.T) {
 		statusRepo.items[reviewStatusID] = reviewStatus(reviewStatusID)
 		statusRepo.items[backToTodoStatusID] = &domain.TaskStatus{ID: backToTodoStatusID, ProjectID: projectID, Category: domain.StatusCategoryTodo, Name: "todo"}
 		projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
-		agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "garfield"}
+		agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "gary"}
 		// The builder must be a real in-workspace agent too: restorePreReviewAssignee
 		// re-checks the stashed principal before handing the card back, because a stash
 		// can outlive the agent it names.
@@ -1064,7 +1064,7 @@ func TestTaskService_CreateSubtask(t *testing.T) {
 			},
 		},
 		{
-			// Regression test for an internal ticket: create_subtask used to silently
+			// Regression test: create_subtask used to silently
 			// drop assignee_id/assignee_type/labels/custom_fields/due_date/
 			// estimated_hours — the child was always born unassigned to the
 			// creator with empty labels regardless of what was passed. This
@@ -1211,7 +1211,7 @@ func TestTaskService_CreateSubtask(t *testing.T) {
 	}
 }
 
-// TestTaskService_CreateSubtask_PublishesEvent — an internal ticket. The an internal ticket
+// TestTaskService_CreateSubtask_PublishesEvent. The an internal ticket
 // atomicity fix replaced CreateSubtask's call to the old logActivity (which
 // wrote activity_log AND published to the event bus, see the doc comment on
 // publishTaskEvent) with a direct atomic activity_log write, and dropped the
@@ -1285,7 +1285,7 @@ func TestTaskService_CreateSubtask_BackgroundCtxActorTypeFallsBackToCreatedByTyp
 }
 
 // ---------------------------------------------------------------------------
-// TestTaskService_CreateSubtask_WorkspaceResolutionFailures — an internal ticket, the
+// TestTaskService_CreateSubtask_WorkspaceResolutionFailures, the
 // CreateSubtask mirror of TestTaskService_Create_WorkspaceResolutionFailures
 // above: the same three ways workspace_id resolution can fail before the
 // atomic taskRepo.Create(ctx, child, activityEntry) call.
@@ -1911,7 +1911,7 @@ func seedTestAgentWithCapabilities(t *testing.T, svc *taskService, id uuid.UUID,
 }
 
 // TestTaskService_applyAutoAssign_SkipsNoLaneCandidate is the negative
-// control for an internal ticket: a registry `capabilities.no_lane: true` marking
+// control: a registry `capabilities.no_lane: true` marking
 // (used for form-intake/webhook-receiver identities like Sage, CRM,
 // mesh-dispatcher-svc — see registry docs) is documentation until
 // applyAutoAssign itself refuses to assign onto it. Run this test against
@@ -3323,7 +3323,7 @@ func setupTaskServiceWithDoneGateAndGitHubChecker(checker githubapi.PullRequestC
 }
 
 // fakeGitLabMRChecker is gitlabapi.MergeRequestChecker's counterpart to
-// fakeGitHubPRChecker, for the done-evidence gate's GitLab live-check branch
+// fakeGitHubPRChecker, for the done-evidence gate's GitLab live-check branch.
 type fakeGitLabMRChecker struct {
 	mu              sync.Mutex
 	state           gitlabapi.MergeRequestState
@@ -3736,13 +3736,13 @@ func TestTaskService_MoveTask_DoneGate_BlockedWhenPROpen(t *testing.T) {
 	require.ErrorAs(t, err, &doneErr)
 	assert.Contains(t, doneErr.Error(), "feat: my feature")
 	assert.Contains(t, doneErr.Error(), "open")
-	// an internal ticket: this branch has no comment-based escape hatch — a
+	// This branch has no comment-based escape hatch — a
 	// justification comment is only consulted when VCSLinkCount == 0. The
 	// message must not promise one that doesn't exist on this path.
 	assert.NotContains(t, doneErr.Error(), "justification comment")
 }
 
-// an internal ticket: a GitLab-provider link with an unmerged cached status must NOT
+// A GitLab-provider link with an unmerged cached status must NOT
 // get the GitHub-specific "could not verify live against GitHub" message.
 // This test uses setupTaskServiceWithDoneGate() — no GitLab checker wired —
 // so isPRMergedLive dispatches to isMRMergedOnGitLab, which short-circuits
@@ -3789,7 +3789,7 @@ func TestTaskService_MoveTask_DoneGate_BlockedWhenGitLabPROpen_NamesGitLabNotGit
 	assert.NotContains(t, doneErr.Error(), "against GitHub")
 }
 
-// an internal ticket: an empty recorded status (a link created before status
+// An empty recorded status (a link created before status
 // tracking existed, or one add_vcs_link left blank) gets a message that
 // names the real cause — no webhook can ever arrive for a PR that was
 // merged before the link existed — instead of a generic "not merged" that
@@ -4361,7 +4361,7 @@ func TestTaskService_Update_RepoErrorPropagates(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestTaskService_SupersedeRecurringInstances — an internal ticket
+// TestTaskService_SupersedeRecurringInstances
 //
 // A rollover must not manufacture a false `done` on a zero-work instance
 // (schedule 18388503's bug: 130 identical automated nudge comments read as
@@ -4369,7 +4369,7 @@ func TestTaskService_Update_RepoErrorPropagates(t *testing.T) {
 // waiting for evidence that will never arrive either (schedule an internal ticket's
 // opposite bug: the done-evidence gate refuses it and the caller ignores the
 // refusal). Both are the same code path — see the acceptance table on
-// an internal ticket for the ПОЗИТИВНЫЙ/НЕГАТИВНЫЙ shape these tests mirror.
+// For the ПОЗИТИВНЫЙ/НЕГАТИВНЫЙ shape these tests mirror.
 // ---------------------------------------------------------------------------
 
 func setupSupersedeProject(statusRepo *MockTaskStatusRepository) (projectID, doneStatusID, cancelledStatusID, openStatusID uuid.UUID) {

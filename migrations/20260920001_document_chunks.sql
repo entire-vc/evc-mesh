@@ -1,5 +1,5 @@
 -- +goose Up
--- Recall index over Mesh Docs (#154450b1, audit §4.5). One row per chunk of a
+-- Recall index over Mesh Docs (audit §4.5). One row per chunk of a
 -- document, chunked by H2 section (long sections are split further by the same
 -- sliding window memories use). Purely additive: nothing reads this table until
 -- DOC_INDEX_RECALL is switched on, and nothing writes to it until

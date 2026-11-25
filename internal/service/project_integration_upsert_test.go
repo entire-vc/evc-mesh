@@ -153,7 +153,7 @@ func TestUpsertTeamRelay_SecondPatchChangesOnlyMountPath(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Card #4e97f465: mount exclusion + scheduled-sync settings on the upsert.
+// Mount exclusion + scheduled-sync settings on the upsert.
 // ---------------------------------------------------------------------------
 
 // TestUpsertTeamRelay_ExclusionEntryMustBeSingleSegment: the exclusion is

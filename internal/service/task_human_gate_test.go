@@ -177,7 +177,7 @@ func TestMoveTask_HumanGate_NonAuthorAgentStillBlockedOnBacklog(t *testing.T) {
 }
 
 // TestMoveTask_HumanGate_GateAuthorDoneMessageDoesNotMentionBacklog is the negative
-// control for #854b7b8d: the gate author's own-ask exception (#e1b4cffd) covers
+// control: the gate author's own-ask exception covers
 // backlog only, so the message on a refused done/cancelled move must not claim
 // backlog is human-only too — that claim is now false for exactly this actor.
 func TestMoveTask_HumanGate_GateAuthorDoneMessageDoesNotMentionBacklog(t *testing.T) {
@@ -203,7 +203,7 @@ func TestMoveTask_HumanGate_GateAuthorDoneMessageDoesNotMentionBacklog(t *testin
 // TestMoveTask_HumanGate_NonAuthorBacklogMessageNamesAuthorship is the mirror
 // control: a non-author agent refused on backlog must be told the reason is
 // authorship, not "only a human" — a human is never the only door to backlog
-// since #e1b4cffd, so that phrasing would be actively misleading here.
+// since that fix, so that phrasing would be actively misleading here.
 func TestMoveTask_HumanGate_NonAuthorBacklogMessageNamesAuthorship(t *testing.T) {
 	ts, taskID, cats := buildHumanGateEnv(t)
 

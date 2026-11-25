@@ -19,7 +19,7 @@ import (
 // a constant edited later would silently move the test with it.
 const (
 	legacyRawArmBody = "🔒 Auto: human_gate взведён напрямую (PATCH/UI), без маркерного коммента — actor: 7a307a5c-ee16-4d66-9686-9f47b436096f (user)"
-	// Comment 06f075ea on task #68df3b62, 2026-08-24, as stored in production.
+	// Comment 06f075ea, 2026-08-24, as stored in production.
 	legacyProdReleaseBody  = "🔓 Auto: human_gate снят — автор запроса отозвал его сам (blocker самоустранился)."
 	legacyEndpointHintBody = "🤖 Auto: human_gate поднят не маркером «❓ Blocking», а через API/кнопку — комментарий его не снимает: гейт снимается кнопкой «Снять гейт» в карточке (для агента — clear_human_gate / DELETE /tasks/{id}/human-gate). Ваш комментарий сохранён и виден исполнителю."
 	legacySoftTimeoutBody  = "⏳ Auto: human_gate снят по истечении мягкого таймаута (взведён 2026-09-01T10:00:00Z, класс: мягкий) — фиде разморожен, но вопрос НЕ отвечен: он остаётся открытым и ждёт Pavel'я в дайджесте."

@@ -606,6 +606,9 @@ func (h *MemoryHandler) search(c echo.Context, final bool) error {
 		if e != nil {
 			return handleError(c, e)
 		}
+		for i := range result.Items {
+			result.Items[i].Source = domain.ReadSourceOf(result.Items[i].SourceType, result.Items[i].Scope)
+		}
 		return c.JSON(http.StatusOK, map[string]any{
 			"final_recall_version": 1, "items": result.Items, "total": len(result.Items), "limit": opts.Limit, "offset": opts.Offset,
 			"candidate_limit": result.CandidateLimit, "graph_boost_count": result.GraphBoostCount,
@@ -615,6 +618,9 @@ func (h *MemoryHandler) search(c echo.Context, final bool) error {
 	results, stats, err := h.memoryService.RecallWithStats(c.Request().Context(), opts)
 	if err != nil {
 		return handleError(c, err)
+	}
+	for i := range results {
+		results[i].Source = domain.ReadSourceOf(results[i].SourceType, results[i].Scope)
 	}
 
 	// search_mode / degraded / dense_rows / sparse_rows are ADDITIVE —
@@ -712,6 +718,12 @@ func (h *MemoryHandler) GetByID(c echo.Context) error {
 		return handleError(c, apierror.NotFound("Memory"))
 	}
 
+	// Only this authorized, explicit read counts as access; the same lookup
+	// above is used by service reads and must remain free of side effects.
+	if access, ok := h.memoryService.(service.MemoryAccessService); ok {
+		access.TouchMemoryAccess(c.Request().Context(), []uuid.UUID{mem.ID})
+	}
+
 	return c.JSON(http.StatusOK, mem)
 }
 
@@ -725,7 +737,7 @@ func (h *MemoryHandler) GetByID(c echo.Context) error {
 // 20260821005), NOT off the live `memories` row via GetByID. The live row is
 // exactly what a `forget` removes, so a GetByID-based check 404s precisely for
 // the memories this endpoint exists to serve history for — the audit trail was
-// written and had no reader. Every revision row, past or future,
+// written and had no reader (b043153b). Every revision row, past or future,
 // carries the workspace it belongs to independently of whether the memory it
 // describes still exists.
 func (h *MemoryHandler) Revisions(c echo.Context) error {
@@ -998,6 +1010,8 @@ func (h *MemoryHandler) ByKey(c echo.Context) error {
 //   - offset int (default 0)
 //   - min_importance float64 (default 0) — workspace-tier filter only
 //   - tags_any string comma-separated — workspace-tier OR tag filter only
+//   - include_superseded bool (default false) — both tiers; when false, entries whose
+//     status is 'superseded' are left out so a lane prompt never carries a replaced decision
 func (h *MemoryHandler) GetProjectKnowledge(c echo.Context) error {
 	projIDStr := c.Param("proj_id")
 	projID, err := uuid.Parse(projIDStr)
@@ -1039,15 +1053,25 @@ func (h *MemoryHandler) GetProjectKnowledge(c echo.Context) error {
 		}
 	}
 
+	includeSuperseded := false
+	if _, present := c.QueryParams()["include_superseded"]; present {
+		v, parseErr := strconv.ParseBool(c.QueryParam("include_superseded"))
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid include_superseded"))
+		}
+		includeSuperseded = v
+	}
+
 	wsFilter := domain.MemoryListFilter{
-		Limit:         limit,
-		Offset:        offset,
-		MinImportance: minImportance,
-		TagsAny:       tagsAny,
+		Limit:             limit,
+		Offset:            offset,
+		MinImportance:     minImportance,
+		TagsAny:           tagsAny,
+		ExcludeSuperseded: !includeSuperseded,
 	}
 
 	// Project-scoped memories — same limit as workspace tier, no importance filter (they are curated).
-	projFilter := domain.MemoryListFilter{Limit: limit, Offset: offset}
+	projFilter := domain.MemoryListFilter{Limit: limit, Offset: offset, ExcludeSuperseded: !includeSuperseded}
 	projectMemories, projTotal, err := h.memoryService.GetProjectKnowledge(c.Request().Context(), wsID, &projID, projFilter)
 	if err != nil {
 		return handleError(c, err)

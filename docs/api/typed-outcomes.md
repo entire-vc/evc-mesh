@@ -174,7 +174,7 @@ revoked grant empties the list.
       "question": "Which schema version wins?",
       "state": "open",
       "created_at": "2026-11-11T09:30:00Z",
-      "from_agent": { "id": "uuid", "name": "Garfield", "slug": "garfield" },
+      "from_agent": { "id": "uuid", "name": "Gary", "slug": "gary" },
       "task": {
         "id": "uuid", "title": "Schema migration", "project_id": "uuid",
         "workspace_id": "uuid", "status_category": "in_progress"
@@ -297,6 +297,21 @@ How the target is confirmed:
   foreign key is nulled by a hard delete. A human without target access sees
   the dependency UUID without its title or status. The `server_observed` mode
   is server-owned and cannot be selected in the request body.
+  The target's owner records trusted edge evidence from the target's side,
+  with a key of the target's workspace:
+  `PATCH /api/v1/tasks/:target/dependents/:edge_id/evidence` (`:target` is the
+  blocker; find `:edge_id` and its `criterion` under `incoming` of
+  `GET /tasks/:target/dependencies`). The body takes evidence only —
+  `evidence_url` (required), `evidence_criterion` (equal to the edge
+  criterion), `attest` (`access_ready`/`contract_ready`/`artifact_published`),
+  `head_sha`/`environment` (`shipped`/`deployed`/`accepted`) and optional
+  `expected_generation`; `condition` or `criterion` in the body is `400`, as is
+  evidence that would be stored unverified. The caller must pass the target's
+  workspace and project guards (`MayAccessTask(target)`); across workspaces only
+  a `server_observed` edge (a typed card wait's) is reachable, anything else is
+  `404`. The response is the edge's id, endpoints, condition, criterion,
+  generation and evidence state, never the source card's title or status.
+  `POST`/`PATCH /tasks/:source/dependencies` keep the workspace boundary.
 - `mr` — live from the workspace's GitLab when it is configured, otherwise from
   a pr link of this card. Not found on either is `invalid_target`; merged or
   closed is `already_met`. A matching link of the card is recorded on the wait.

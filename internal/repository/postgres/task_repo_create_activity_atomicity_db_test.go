@@ -15,7 +15,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Regression test for #819e7b29: 314 of 3709 system-created tasks over a 30-day
+// Regression test: 314 of 3709 system-created tasks over a 30-day
 // window lost their task.created activity_log row to a fire-and-forget,
 // post-commit, non-retried write under concurrent recurring-tick load, with no
 // error surfaced anywhere. TaskRepo.Create now writes the task row and its
@@ -121,7 +121,7 @@ func TestTaskRepo_Create_NilActivitySkipsLogging(t *testing.T) {
 // control that actually proves atomicity rather than assuming it: an activity
 // entry with a workspace_id that violates activity_log's FK to workspaces(id)
 // makes the activity INSERT fail INSIDE the same transaction as the task
-// INSERT. If Create only "usually" wrote both (the #819e7b29 bug's shape —
+// INSERT. If Create only "usually" wrote both (the bug's shape —
 // task committed, activity fire-and-forget), the task would still exist here.
 // With a real single transaction, Create must return an error AND the task
 // must NOT exist — same contract as "a task created with a foreign assignee
@@ -145,6 +145,6 @@ func TestTaskRepo_Create_ActivityFailureRollsBackTheTaskToo(t *testing.T) {
 	require.NoError(t, gerr)
 	assert.Nil(t, got,
 		"a task whose creation event could not be recorded must not exist at all — "+
-			"same contract as the assignee-tenancy guard, and the whole point of #819e7b29's fix")
+			"same contract as the assignee-tenancy guard, and the whole point of an internal ticket's fix")
 	assert.Equal(t, 0, countActivityLogRows(t, f.db, task.ID, "task.created"))
 }

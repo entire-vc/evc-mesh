@@ -1060,7 +1060,7 @@ type ResyncConnectorMembershipsResult struct {
 // has, which IS an escalation relative to the human's current standing).
 // This closes both directions.
 //
-// Deliberately periodic (task cf226500's option "б"), not wired into
+// Deliberately periodic (design option "б"), not wired into
 // getOrCreateGrant's reuse path (option "а"): that path is only exercised
 // when the human goes through /oauth/authorize again, which — given the
 // 30-day refresh-token TTL — can be weeks after their access actually

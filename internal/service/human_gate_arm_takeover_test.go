@@ -12,7 +12,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Task #f933dc05 — the hole this card's own fix would otherwise open.
+// The hole this card's own fix would otherwise open.
 //
 // TaskRepo.ArmHumanGate's UPDATE writes gate_author unconditionally, re-arm included.
 // That was harmless while gate_author decided nothing. The moment the recorded author
@@ -108,7 +108,7 @@ func TestArmHumanGate_APIArmOnUngatedTask_Allowed(t *testing.T) {
 // TestArmHumanGate_MarkerReArmByAnotherAgent_Allowed — scoped deliberately. A marker
 // arm is a live ask arriving through a channel we do not control; refusing it is SILENT
 // to its author, who posts the question, believes it was handed over, and watches the
-// card keep being fed (#58a6f4ff, #f421ad57). It needs no guard anyway: a marker-armed
+// card keep being fed. It needs no guard anyway: a marker-armed
 // gate is released via the comment scan, which reads the thread, not gate_author.
 func TestArmHumanGate_MarkerReArmByAnotherAgent_Allowed(t *testing.T) {
 	svc, repo, taskID := newArmingTestService(t)

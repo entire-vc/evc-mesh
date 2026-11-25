@@ -9,7 +9,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// AC (#c9055b2c "hvost", from the #734ca49e / PR #721 review): criterion 1 of
+// AC (an internal ticket "hvost", from the / PR #721 review): criterion 1 of
 // that task required indistinguishability at the HTTP layer — status code,
 // body, AND headers. The suite only ever proved this at the SERVICE layer
 // (internal/auth.TestLogin_InactiveUser_WrongPassword_IndistinguishableFromNonexistent)
@@ -33,7 +33,7 @@ import (
 //     distinctBody) }` branch at the top of handleError in task_handler.go):
 //     stayed GREEN. Not a hole in this test — a fact about why it's safe:
 //     neither scenario compared here ever returns auth.ErrUserInactive.
-//     Login checks the password BEFORE IsActive (#734ca49e), so a WRONG
+//     Login checks the password BEFORE IsActive, so a WRONG
 //     password against a deactivated account returns
 //     auth.ErrInvalidCredentials — the literal same package-level error
 //     value returned for a nonexistent account. A handleError branch keyed
@@ -41,7 +41,7 @@ import (
 //     cannot turn this test red — verified, not assumed.
 //   - Mutation B, a real regression of the property this test exists to
 //     protect (temporarily reverting internal/auth/service.go's Login to
-//     the pre-#734ca49e ordering — IsActive checked before the password):
+//     the earlier ordering — IsActive checked before the password):
 //     went RED, exactly as expected — the deactivated-account body became
 //     `{"code":401,"message":"user account is inactive"}` while the
 //     nonexistent-account body stayed `{"code":401,"message":"invalid email

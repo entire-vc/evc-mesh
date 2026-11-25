@@ -77,8 +77,20 @@ describe("ExternalFrame", () => {
       body: { workspace_id: "ws-1", slot: "sidebar.item" },
     });
     expect(iframe.getAttribute("src")).toBe(`${ORIGIN}/mesh/ui/hello?token=jwt.value.here`);
-    expect(iframe.getAttribute("sandbox")).toBe("allow-scripts allow-forms allow-same-origin");
     expect(iframe.getAttribute("referrerpolicy")).toBe("no-referrer");
+  });
+
+  it("lets the screen open a new tab and write the clipboard, but never navigate Mesh, open modals or read the clipboard", async () => {
+    renderFrame();
+    const iframe = (await screen.findByTitle("Hello", {}, { timeout: 8000 })) as HTMLIFrameElement;
+    const sandbox = (iframe.getAttribute("sandbox") ?? "").split(/\s+/).filter(Boolean).sort();
+    expect(sandbox).toEqual(
+      ["allow-forms", "allow-popups", "allow-popups-to-escape-sandbox", "allow-same-origin", "allow-scripts"],
+    );
+    expect(sandbox.some((t) => t.includes("top-navigation"))).toBe(false);
+    expect(sandbox).not.toContain("allow-modals");
+    expect(iframe.getAttribute("allow")).toBe("clipboard-write");
+    expect(iframe.getAttribute("allow")).not.toContain("clipboard-read");
   });
 
   it("shows mesh.toast and follows mesh.navigate from the frame's origin", async () => {

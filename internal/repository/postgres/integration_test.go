@@ -450,7 +450,7 @@ func TestTaskRepo_Update_LabelsRoundTrip(t *testing.T) {
 }
 
 // TestTaskRepo_StartAfter_RoundTrip is the repository-level regression test for
-// start_after (an internal ticket, sub1 of an internal ticket): a field present in taskBaseColsNoAlias
+// start_after (sub1): a field present in taskBaseColsNoAlias
 // but missing from Create's INSERT or Update's SET clause would silently come back
 // nil, same failure class as TestTaskRepo_Update_LabelsRoundTrip above. Also pins
 // that due_date is untouched by writes to start_after and vice versa — the two

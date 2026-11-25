@@ -1,7 +1,7 @@
 -- +goose Up
 
--- Part 1/7 of #e9ce6b91 (task-splitter, critical path sub1→sub2→sub6→sub7),
--- source #7e6fea59: due_date currently serves two incompatible fleet
+-- Part 1/7 of an internal ticket (task-splitter, critical path sub1→sub2→sub6→sub7),
+-- source an internal ticket: due_date currently serves two incompatible fleet
 -- readings — a backlog wake-alarm (mesh-intake-sweep.py / monitor_promotion.go
 -- promote a backlog card once due_date has passed) and a "not-before" gate on
 -- todo/in_progress (fiddler.py / dispatcher skip feeding a card while

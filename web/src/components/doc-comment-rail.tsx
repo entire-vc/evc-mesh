@@ -802,8 +802,8 @@ export function DocCommentAffordance({
  * somewhere to render, then starts the draft.
  *
  * Icon-only for now: a visible label is copy under §1r.A review on
- * an internal ticket, and `web/**` deploys on merge in
- * between (see an internal ticket) — so the button ships with no visible text at
+ * And `web/**` deploys to prod on merge with no human step in
+ * between — so the button ships with no visible text at
  * all rather than an unapproved placeholder. `aria-label`/`title` are exempt
  * from that gate (they exist for crawlers and screen readers, not as
  * product copy) and carry the button's only description until the approved

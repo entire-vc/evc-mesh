@@ -40,12 +40,12 @@ type GitLabIntegrationConfig struct {
 //   - usable=false, disabled=true: the row EXISTS and says `is_active=false`
 //     — the provider is explicitly turned off for this row's scope. The
 //     caller MUST NOT fall through to env; doing so is the exact bug
-//     an internal ticket's AC2 exists to close (a workspace turning its GitHub/GitLab
+//     AC2 exists to close (a workspace turning its GitHub/GitLab
 //     integration off must actually turn it off, not silently keep working
 //     off the instance-wide fallback).
 //   - usable=false, disabled=false: nil row, wrong provider, unparseable
 //     config, or an ACTIVE row with neither a token nor a webhook secret
-//     (a placeholder row — e.g. the earlier row, active=true,
+//     (a placeholder row — e.g. the earlier prod row, active=true,
 //     config={} — carries no information, so treating it as "governs, with
 //     empty values" would let it silently shadow a working env secret). The
 //     caller falls through to env for all of these.
@@ -288,7 +288,7 @@ func (r *VCSIntegrationResolver) ResolveGitLab(ctx context.Context, workspaceID 
 // env fallback (source="env") — an instance-wide secret is not owned by any
 // one workspace, so a match against it deliberately does NOT scope task
 // resolution (see lookupRef's workspaceID==uuid.Nil branch). This carries
-// the fix for an internal ticket: before this type existed, the webhook receiver
+// the fix: before this type existed, the webhook receiver
 // authenticated a request against the UNION of every workspace's secret but
 // then threw away which one actually matched, so a validated request could
 // resolve and mutate a task in ANY workspace, not just the one whose secret

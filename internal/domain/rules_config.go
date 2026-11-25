@@ -347,7 +347,7 @@ type AgentProfileUpdate struct {
 	Capabilities json.RawMessage `json:"capabilities"`
 	// MentionWakes is a dedicated agents column (see domain.Agent), kept out of
 	// Capabilities so this PATCH can flip it without colliding with the
-	// blind-replace on Capabilities above — see an internal ticket.
+	// blind-replace on Capabilities above.
 	MentionWakes       *bool   `json:"mention_wakes,omitempty"`
 	ResponsibilityZone *string `json:"responsibility_zone,omitempty"`
 	// EscalationTo is a single name/handle (e.g. "Gary"), not a list —
@@ -394,7 +394,7 @@ type TeamDirectoryAgent struct {
 	LastSeenAt     *time.Time          `json:"last_seen_at,omitempty"`
 	// IsHome reports whether this workspace is the agent's HOME workspace
 	// (agents.workspace_id) rather than one it holds a guest connection into
-	// via agent_workspace_grants (task U3/an internal ticket). Without this the
+	// via agent_workspace_grants (task U3). Without this the
 	// directory cannot say which is which, and the caller has no way to tell
 	// a native member from an invited guest short of cross-referencing
 	// GET /agents separately.

@@ -53,7 +53,7 @@ CREATE TABLE memory_revisions (
     -- NULL is permitted ON PURPOSE and only for now. Requiring a reason is the
     -- point of this column, but the fleet's callers cannot send one yet: the
     -- `remember` MCP tool has no reason parameter, and the binary every agent
-    -- loads is built and installed by hand (see Mesh #3d448464). A NOT NULL
+    -- loads is built and installed by hand. A NOT NULL
     -- column here would reject every memory write in the fleet the moment this
     -- migration landed, and the repair would need a manual rebuild on the very
     -- host whose agents had just lost the ability to record anything.

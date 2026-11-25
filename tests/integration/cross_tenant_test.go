@@ -82,6 +82,7 @@ var wsScopedRoutes = []wsRoute{
 
 	{http.MethodGet, "/agent-grants", nil},
 	{http.MethodPost, "/agent-grants", map[string]string{"agent_id": dummyUUID, "role": "member"}},
+	{http.MethodPost, "/project-readers", map[string]string{"name": "pwned-reader", "project_id": dummyUUID}},
 	{http.MethodPatch, "/agent-grants/" + dummyUUID, map[string]string{"role": "member"}},
 	{http.MethodDelete, "/agent-grants/" + dummyUUID, nil},
 
@@ -139,6 +140,15 @@ var wsScopedRoutes = []wsRoute{
 
 	{http.MethodGet, "/analytics", nil},
 	{http.MethodGet, "/analytics/export", nil},
+	{http.MethodGet, "/analytics/quota", nil},
+	{http.MethodGet, "/analytics/usage", nil},
+	{http.MethodGet, "/analytics/memory", nil},
+	{http.MethodGet, "/analytics/memory/empty-queries", nil},
+	{http.MethodGet, "/analytics/memory/top-records", nil},
+	{http.MethodGet, "/analytics/memory/dead-records", nil},
+	{http.MethodGet, "/analytics/memory/duplicates", nil},
+	{http.MethodGet, "/analytics/memory/unknown-sources", nil},
+	{http.MethodGet, "/analytics/memory/export", nil},
 
 	{http.MethodGet, "/events", nil},
 
@@ -343,7 +353,7 @@ func TestCrossTenant_WorkspaceStillWorksForItsOwner(t *testing.T) {
 	wsID := firstWorkspaceID(t, owner)
 
 	// Read-only routes only: this asserts access, not side effects.
-	readable := []string{"", "/members", "/members/me", "/projects", "/agents", "/team", "/analytics", "/events", "/config/export", "/mentionables"}
+	readable := []string{"", "/members", "/members/me", "/projects", "/agents", "/team", "/analytics", "/analytics/quota", "/events", "/config/export", "/mentionables"}
 	for _, suffix := range readable {
 		t.Run("GET /workspaces/:ws_id"+suffix, func(t *testing.T) {
 			resp := owner.Get(t, fmt.Sprintf("/api/v1/workspaces/%s%s", wsID, suffix))

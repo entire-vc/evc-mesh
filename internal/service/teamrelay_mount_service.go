@@ -435,7 +435,7 @@ func syncTTL(settings domain.TeamRelaySettings) time.Duration {
 //  1. (mandatory) the call's own outcome is always recorded, distinguishing
 //     key_expired from a generic error rather than leaving §3.9's empty tree
 //     unexplained.
-//  2. (load-bearing, now that evc-team-relay#230/an internal ticket is live) a
+//  2. (load-bearing, now that evc-team-relay#230 is live) a
 //     successful call also asks the key's own self-describe endpoint for its
 //     real expires_at, so key_expiry_source="source" is a fact Team Relay
 //     reports — not a date typed into a form ("manual", still supported by
@@ -608,7 +608,7 @@ func (s *teamRelayMountService) RefreshIfStale(ctx context.Context, doc *domain.
 	}
 
 	remote, err := s.client.Download(ctx, rs.relayURL, *doc.SourceShare, *doc.SourcePath, rs.agentKey)
-	// an internal ticket AC4: every actual attempt to reach Team Relay — success or
+	// AC4: every actual attempt to reach Team Relay — success or
 	// failure — stamps the sync-check accounting columns, and a successful
 	// one also refreshes key_expires_at from the relay's own introspection
 	// endpoint. This is the ONLY place that used to make this exact call and
@@ -1000,6 +1000,13 @@ func (s *teamRelayMountService) syncMountLocked(ctx context.Context, projectID u
 	return result
 }
 
+// emptyIndexArchiveCap bounds the archive pass when the files-index is
+// empty: with more live copies than this nothing is archived (see
+// archiveVanishedCopies). Three covers deleting a share's last file or last
+// few at once; a wrong archive of up to three copies is reversible
+// (SoftDelete), a wrong archive of a whole subtree is an incident.
+const emptyIndexArchiveCap = 3
+
 // archiveVanishedCopies soft-deletes every live copy of this share whose
 // source file the files-index no longer represents — the file was deleted or
 // moved on the share, or its folder became excluded. This is the A2 half of
@@ -1013,12 +1020,19 @@ func (s *teamRelayMountService) syncMountLocked(ctx context.Context, projectID u
 // archive table — a copy that comes back should not arrive as a new document
 // with a broken history.
 //
-// The empty-index guard is load-bearing, not defensive noise: a share whose
-// files-index legitimately returns zero entries (an API change, a relay bug,
-// a wrong-but-200 response) must not read as "every file was deleted". No
-// index, no verdict — nothing is archived. FilesIndex errors never reach here
-// (SyncMount returns before this runs), which is the other half of the same
-// guard: an unreachable relay must not archive the project's Docs subtree.
+// The empty-index guard is load-bearing, not defensive noise. An empty
+// files-index is a legal answer — the share's last file was deleted — but it
+// is also what an API change, a relay bug, a wrong share or key, or a
+// wrong-but-200 response look like. So an empty index alone is never a
+// verdict: each copy still needs its own proof (a 404 on its download, the
+// same rule as below), and the whole pass is all-or-nothing on size. When
+// the index is empty and more than emptyIndexArchiveCap copies are live,
+// nothing is archived and the skip is logged: a whole subtree vanishing at
+// once points at the share or the key, not at deletions. Within the cap the
+// usual per-copy rule runs, so emptying a share of its last file or two
+// archives their copies. FilesIndex errors never reach here (SyncMount
+// returns before this runs), which is the other half of the same guard: an
+// unreachable relay must not archive the project's Docs subtree.
 func (s *teamRelayMountService) archiveVanishedCopies(
 	ctx context.Context,
 	projectID uuid.UUID,
@@ -1027,12 +1041,14 @@ func (s *teamRelayMountService) archiveVanishedCopies(
 	excluded []string,
 	result *MountResult,
 ) error {
-	if len(entries) == 0 {
-		return nil
-	}
 	live, err := s.documentRepo.ListLiveCopiesByShare(ctx, projectID, rs.settings.ShareID)
 	if err != nil {
 		return err
+	}
+	if len(entries) == 0 && len(live) > emptyIndexArchiveCap {
+		log.Printf("teamrelay: share %s files-index is empty but %d copies are live (cap %d): archiving none",
+			rs.settings.ShareID, len(live), emptyIndexArchiveCap)
+		return nil
 	}
 	indexed := make(map[string]struct{}, len(entries))
 	for _, e := range entries {

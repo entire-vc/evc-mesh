@@ -1,5 +1,5 @@
 -- +goose Up
--- Regression: archiving a memory by hand is a recorded change, not a silent flag
+-- Archiving a memory by hand is a recorded change, not a silent flag
 -- flip. POST /memories/:id/archive and /unarchive bump the memory's version and write a
 -- revision row carrying the reason, so the history answers "who took this out of recall
 -- and why". The action CHECK from 20260821002 only knew created/updated/forgotten, and

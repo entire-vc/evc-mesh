@@ -57,7 +57,7 @@ func (e *HumanGateDecisionValidationError) Error() string { return e.Msg }
 // is currently live, releases it as a CONSEQUENCE of the write (contract
 // docs/human-gate-decision-recorded.md §3, P1: "гейт снимается следствием
 // записи и никогда сам по себе"). This is the third human_gate exit: unlike
-// releaseHumanGate (Alex commented) and releaseHumanGateOnWithdrawal (the
+// releaseHumanGate (a user commented) and releaseHumanGateOnWithdrawal (the
 // asker retracted), this records that the question WAS answered, through
 // whatever channel, without pretending the question never existed.
 func (s *commentService) RecordHumanGateDecision(ctx context.Context, input domain.RecordHumanGateDecisionInput) (*domain.HumanGateDecision, error) {
@@ -72,7 +72,7 @@ func (s *commentService) RecordHumanGateDecision(ctx context.Context, input doma
 	}
 	if input.QuestionRef == nil {
 		// A decision without question_ref never covers any marker (contract §6
-		// matches by comment id), so the gate would stay open — an internal ticket.
+		// matches by comment id), so the gate would stay open.
 		ref, err := s.resolveQuestionRef(ctx, input.TaskID)
 		if err != nil {
 			return nil, err
@@ -112,9 +112,9 @@ func (s *commentService) RecordHumanGateDecision(ctx context.Context, input doma
 	}
 
 	// default_applied gets its own wording: the generic template below
-	// reads as "someone answered" (recorderLabel defaults an absent RecordedBy to "Alex
-	// directly", which would be an outright lie here), and the task's own acceptance
-	// criterion names this exact phrase so a reader — human or the alex-digest.py
+	// reads as "someone answered" (recorderLabel defaults an absent RecordedBy to a
+	// direct-reply label, which would be an outright lie here), and the task's own
+	// acceptance criterion names this exact phrase so a reader — human or the digest
 	// counter — can find it without parsing provenance out of the ledger row.
 	var body, code string
 	params := map[string]any{"decision": d.ID.String(), "provenance": string(input.Provenance)}
@@ -168,7 +168,7 @@ func (s *commentService) RecordHumanGateDecision(ctx context.Context, input doma
 }
 
 // RevokeHumanGateDecision appends a revocation row for an existing decision
-// and re-freezes the task's gate — contract §3/P3: Alex can always revoke
+// and re-freezes the task's gate — contract §3/P3: a human user can always revoke
 // an attested (or any) decision, and the card freezes back so the dispute is
 // recorded rather than silently resolved either way.
 //

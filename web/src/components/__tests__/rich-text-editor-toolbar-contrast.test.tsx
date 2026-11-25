@@ -76,8 +76,8 @@ describe("RichTextEditor toolbar hover", () => {
 /**
  * The `[[` document menu rendered by this same file (doc-link-menu.tsx)
  * carried the identical pair on its selected-scope chip and its
- * keyboard-highlighted row. Flagged by Garfield while fixing the toolbar
- * above (task #6f73a105) rather than split into a third card, since both
+ * keyboard-highlighted row. Flagged by Gary while fixing the toolbar
+ * above rather than split into a third card, since both
  * defects sit in the file this card already touches.
  */
 describe("DocLinkMenu selection contrast", () => {

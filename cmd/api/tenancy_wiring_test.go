@@ -104,7 +104,7 @@ func TestTaskServiceWiresTheAssigneeTenancyGuard(t *testing.T) {
 }
 
 // TestTaskServiceWiresTheAgentWorkspaceGrantGuard is the AGENT-half sibling of
-// TestTaskServiceWiresTheAssigneeTenancyGuard (task U3/an internal ticket).
+// TestTaskServiceWiresTheAssigneeTenancyGuard (task U3).
 //
 // assertAssigneeInProjectWorkspace's agent branch reads s.agentGrantRepo to
 // admit a GUEST agent — home workspace elsewhere, reached into this one via
@@ -124,7 +124,7 @@ func TestTaskServiceWiresTheAgentWorkspaceGrantGuard(t *testing.T) {
 		"The agent half of the assignee tenancy guard (assertAssigneeInProjectWorkspace) "+
 			"reads s.agentGrantRepo to admit a GUEST agent — one whose home workspace is "+
 			"elsewhere but holds an active agent_workspace_grants connection into this one "+
-			"(task U3/#71627c5a). Unwired, every guest-workspace task assignment refuses "+
+			"(task U3). Unwired, every guest-workspace task assignment refuses "+
 			"with \"agent belongs to a different workspace\", even for a correctly invited, "+
 			"actively-granted agent. The service-package tests cannot catch this: they wire "+
 			"their own reader, so they stay green either way.")

@@ -52,7 +52,7 @@ describe("ViewTabBar", () => {
     localStorage.clear();
   });
 
-  it("shows all six built-in tabs in the strip", () => {
+  it("shows all seven built-in tabs in the strip", () => {
     renderBar("board");
     const strip = screen.getByRole("button", { name: "Board" }).parentElement!;
     const labels = within(strip)
@@ -66,6 +66,7 @@ describe("ViewTabBar", () => {
       "Calendar",
       "Docs",
       "Updates",
+      "Statistics",
       "",
     ]);
   });
@@ -186,13 +187,13 @@ describe("ViewTabBar", () => {
         .map((b) => b.textContent?.trim());
 
     it("shows every built-in tab when they all fit", () => {
-      room = 6 * 80 + 44;
+      room = 7 * 80 + 44;
       renderBar("board");
-      expect(stripLabels()).toEqual(["Board", "List", "Dependencies", "Calendar", "Docs", "Updates"]);
+      expect(stripLabels()).toEqual(["Board", "List", "Dependencies", "Calendar", "Docs", "Updates", "Statistics"]);
     });
 
     it("remembers the split for this width, and a stale one is corrected by the measurement", () => {
-      room = 5 * 80 + 44;
+      room = 6 * 80 + 44;
       const { unmount } = renderBar("board");
       const stored = JSON.parse(localStorage.getItem("mesh.projectTabs.split")!);
       expect(stored[1]).toEqual(["calendar"]);
@@ -201,29 +202,29 @@ describe("ViewTabBar", () => {
 
       // Same width, but a viewport that now fits everything: the seed renders
       // first, the measurement then puts Calendar back.
-      room = 6 * 80 + 44;
+      room = 7 * 80 + 44;
       renderBar("board");
       expect(stripLabels()).toContain("Calendar");
     });
 
     it("moves Calendar into the menu first when the strip is short", () => {
-      room = 5 * 80 + 44;
+      room = 6 * 80 + 44;
       renderBar("board", "project-1");
-      expect(stripLabels()).toEqual(["Board", "List", "Dependencies", "Docs", "Updates"]);
+      expect(stripLabels()).toEqual(["Board", "List", "Dependencies", "Docs", "Updates", "Statistics"]);
       fireEvent.click(screen.getByRole("button", { name: /more views/i }));
       fireEvent.click(screen.getByRole("menuitem", { name: /calendar/i }));
       expect(navigate).toHaveBeenCalledWith("/w/acme/p/mesh/calendar");
     });
 
     it("reserves the measured trigger width, not a fixed 44px", () => {
-      // 5 tabs + 44px would fit; with a 53px trigger the next tab must move out.
+      // 6 tabs + 44px would fit; with a 53px trigger the next tab must move out.
       kebab = 49;
-      room = 5 * 80 + 44;
+      room = 6 * 80 + 44;
       renderBar("board");
-      expect(stripLabels()).toEqual(["Board", "List", "Dependencies", "Docs"]);
+      expect(stripLabels()).toEqual(["Board", "List", "Dependencies", "Docs", "Updates"]);
     });
 
-    it("drops Calendar, Updates, Docs, Dependencies, then List as the strip narrows", () => {
+    it("drops Calendar, Statistics, Updates, Docs, Dependencies, then List as the strip narrows", () => {
       room = 2 * 80 + 44;
       renderBar("board");
       expect(stripLabels()).toEqual(["Board", "List"]);
@@ -270,7 +271,7 @@ describe("ViewTabBar", () => {
           />
         </MemoryRouter>,
       );
-      expect(stripLabels()).toHaveLength(7);
+      expect(stripLabels()).toHaveLength(8);
     });
   });
 

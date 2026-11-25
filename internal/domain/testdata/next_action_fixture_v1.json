@@ -1,7 +1,7 @@
 {
   "version": 1,
   "task_id": "00000000-0000-0000-0000-000000000003",
-  "generation": "v1:df60aa92da2e8390",
+  "generation": "v1:ddb1042b7cc4aa93",
   "stages": [
     {
       "stage": "prep",
@@ -19,7 +19,7 @@
             "final_acceptance"
           ],
           "released": false,
-          "owner": "Developer One"
+          "owner": "Robin"
         }
       ]
     }
@@ -35,7 +35,7 @@
         "final_acceptance"
       ],
       "released": true,
-      "owner": "Lead"
+      "owner": "Gary"
     },
     {
       "edge_id": "00000000-0000-0000-0000-000000000002",
@@ -45,7 +45,7 @@
         "final_acceptance"
       ],
       "released": false,
-      "owner": "Developer One"
+      "owner": "Robin"
     }
   ],
   "produces": [

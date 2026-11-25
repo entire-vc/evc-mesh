@@ -13,7 +13,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// HumanGateSoftTimeoutService tests (task #b1d5c742, contract
+// HumanGateSoftTimeoutService tests (contract
 // docs/human-gate-decision-recorded.md §5).
 //
 // The DB-level structural proof that a hard gate can never be selected lives in

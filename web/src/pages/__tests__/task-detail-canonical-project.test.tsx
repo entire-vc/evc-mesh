@@ -1,6 +1,6 @@
 /**
  * A task's URL names a project slug that is never checked against the task's
- * actual project_id (#b2be54e8) — so a task from "team-relay" opened under
+ * actual project_id — so a task from "team-relay" opened under
  * `/p/local-sync/t/<id>` rendered identically instead of the URL correcting
  * itself. This pins the fix: once the task and this workspace's projects have
  * both loaded, a mismatched slug is replaced with the task's real one via a

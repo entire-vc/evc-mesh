@@ -283,7 +283,7 @@ func TestSyncDownload_ReadsCyrillicPathAndBody(t *testing.T) {
 func TestRequestFileToken_UsesAPlaceholderHashWhenNoneIsKnown(t *testing.T) {
 	// The load-bearing finding this codifies: sha256/content_length are
 	// required by the request SCHEMA but not verified server-side on read
-	// (shares.py:297-327, measured live on an internal ticket). An attachment resolved
+	// (shares.py:297-327, measured live). An attachment resolved
 	// through an embed link never has a known hash ahead of the request — this
 	// asserts the placeholder path actually works end to end, not just that it
 	// compiles.
@@ -320,7 +320,7 @@ func TestRequestFileToken_ReturnsTheServersBaseURLVerbatim(t *testing.T) {
 
 // --- Deliberate asymmetry vs Team Relay's browser-facing embed path --------
 //
-// Verified live (an internal ticket, real Chromium against a request-line-logging
+// Verified live (real Chromium against a request-line-logging
 // server): a browser requesting `<img src="/{slug}/_assets/pic#1.png">`
 // truncates everything from '#' onward BEFORE the request is sent — the
 // server never sees it — and a target containing '?' loses everything from
@@ -469,7 +469,7 @@ func TestFetchAttachment_NonexistentAttachmentIsErrNotFound(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // This test used to be pinned to a specific upstream bug (ё/Ё rejected by
-// Team Relay's file-path regex, an internal ticket) and framed as a drift guard:
+// Team Relay's file-path regex) and framed as a drift guard:
 // "currently RED on purpose, goes green the day upstream ships a fix." That
 // premise was stale before the test even merged — evc-team-relay#213 (ё/Ё
 // added to the allowed pattern) deployed ~2s before evc-mesh#671 merged the
@@ -478,7 +478,7 @@ func TestFetchAttachment_NonexistentAttachmentIsErrNotFound(t *testing.T) {
 // way: it runs entirely against its own httptest mock, never against real
 // Team Relay, so nothing about TR's live regex is observable from it.
 // Verified live 2026-08-20: a path containing ё/Ё is accepted (200) by real
-// Team Relay today, not rejected — an internal ticket.
+// Team Relay today, not rejected.
 //
 // What the test correctly verified all along — our client surfaces a 400
 // from the relay rather than swallowing it — has nothing to do with ё. That

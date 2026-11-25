@@ -8,7 +8,7 @@ export default async function globalSetup() {
   mkdirSync(OUT_DIR, { recursive: true });
   const missing = missingEnv();
   if (missing.length > 0) {
-    throw new SetupFail(`missing CI variables: ${missing.join(", ")} (isolated pilot receiver and QA user: an internal ticket)`);
+    throw new SetupFail(`missing CI variables: ${missing.join(", ")} (isolated pilot receiver and QA user)`);
   }
   const c = cfg();
   const anon = await request.newContext({ baseURL: c.baseURL });

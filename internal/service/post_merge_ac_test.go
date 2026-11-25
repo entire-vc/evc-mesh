@@ -19,7 +19,7 @@ func TestPostMergeACMatch(t *testing.T) {
 		{"nil task", nil, false},
 		{"plain code AC", &domain.Task{Description: "Приёмка: 1) DB-тест handler = 201; без объекта = 422."}, false},
 		{"merge alone is not post-merge", &domain.Task{Description: "Open an MR and merge it after review."}, false},
-		// AC2 of an internal ticket, the card this rule was moved three times on.
+		// AC2, the card this rule was moved three times on.
 		{"live run ru", &domain.Task{Description: "2) Живой прогон agent-chat-e2e S03 и P01–P07 (seed) зелёные."}, true},
 		{"after deploy ru", &domain.Task{Description: "Проверить на проде после деплоя: /version = merge SHA."}, true},
 		{"after merge ru yo", &domain.Task{Description: "Пайплайн на main после мёржа зелёный."}, true},
@@ -77,17 +77,40 @@ func TestHandlePR_MergedFromInProgress_PostMergeLabel_StaysInProgress(t *testing
 	assert.Empty(t, h.taskSvc.moveCalls)
 }
 
-// The rule only guards in_progress → review: a card already in review with a
-// post-merge AC keeps the existing review → done path.
-func TestHandleMR_MergedFromReview_PostMergeAC_StillDone(t *testing.T) {
-	h := newHarness(t)
-	task := h.makeTask(t, domain.StatusCategoryReview)
-	task.Description = "Live run on prod after deploy."
+// A card in review whose acceptance needs a run after the merge is not closed
+// by the merge either: three merges closed a Subrose card in review this way
+// while its deploy-and-run AC was unmet (21.11).
+func TestHandleMR_MergedFromReview_PostMergeAC_NotDone(t *testing.T) {
+	cases := map[string]func(*domain.Task){
+		"description": func(tk *domain.Task) { tk.Description = "Live run on prod after deploy." },
+		"label":       func(tk *domain.Task) { tk.Labels = []string{"backend", LabelPostMergeAC} },
+	}
+	for name, arm := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			task := h.makeTask(t, domain.StatusCategoryReview)
+			arm(task)
 
-	res, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), mergedMREvent(8, task.ID, "MESH-"+task.ID.String()))
-	require.NoError(t, err)
-	assert.True(t, res.Transitioned)
-	assert.Equal(t, "done", res.NewStatus)
+			res, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), mergedMREvent(8, task.ID, "MESH-"+task.ID.String()))
+			require.NoError(t, err)
+			assert.False(t, res.Transitioned)
+			assert.Equal(t, "post_merge_ac_pending", res.Reason)
+			assert.Equal(t, "review", res.OldStatus)
+			assert.Equal(t, h.statusIDs[domain.StatusCategoryReview], h.taskRepo.tasks[task.ID].StatusID)
+			assert.Empty(t, h.taskSvc.moveCalls, "MoveTask must not be called")
+
+			require.Len(t, h.commentSvc.created, 1)
+			body := h.commentSvc.created[0].Body
+			assert.Contains(t, body, "MR !8 merged")
+			assert.Contains(t, body, "NOT moved to done")
+			assert.Contains(t, body, "post-merge check")
+			assert.NotContains(t, body, "moved to done.")
+
+			links, _ := h.repo.ListByTask(context.Background(), task.ID)
+			require.Len(t, links, 1)
+			assert.Equal(t, domain.VCSLinkStatusMerged, links[0].Status)
+		})
+	}
 }
 
 // A card whose runner reports it as held is left in place by the merge: the
@@ -140,14 +163,52 @@ func TestHandleMR_MergedFromInProgress_NotHeld_MovesToReview(t *testing.T) {
 	}
 }
 
-// The guard is for in_progress only: a card in review still closes on merge.
-func TestHandleMR_MergedFromReview_HeldByController_StillDone(t *testing.T) {
-	h := newHarness(t)
-	task := h.makeTask(t, domain.StatusCategoryReview)
-	task.RuntimeState = &domain.RuntimeState{Kind: domain.RuntimeKindWaiting}
+// A card in review that a runner holds (the reviewer's or the author's lane
+// waiting on the merge gate) stays where it is: the merge wakes that lane and
+// the assignee closes the card after the post-merge acceptance.
+func TestHandleMR_MergedFromReview_HeldByController_StaysInReview(t *testing.T) {
+	for _, kind := range []domain.RuntimeKind{domain.RuntimeKindWaiting, domain.RuntimeKindWorking, domain.RuntimeKindQueued} {
+		t.Run(string(kind), func(t *testing.T) {
+			h := newHarness(t)
+			task := h.makeTask(t, domain.StatusCategoryReview)
+			task.RuntimeState = &domain.RuntimeState{Kind: kind, Source: domain.RuntimeStateSourceExplicit}
 
-	res, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), mergedMREvent(448, task.ID, "MESH-"+task.ID.String()))
-	require.NoError(t, err)
-	assert.True(t, res.Transitioned)
-	assert.Equal(t, "done", res.NewStatus)
+			res, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), mergedMREvent(448, task.ID, "MESH-"+task.ID.String()))
+			require.NoError(t, err)
+			assert.False(t, res.Transitioned)
+			assert.Equal(t, "held_by_controller", res.Reason)
+			assert.Equal(t, "review", res.OldStatus)
+			assert.Equal(t, h.statusIDs[domain.StatusCategoryReview], h.taskRepo.tasks[task.ID].StatusID)
+			assert.Empty(t, h.taskSvc.moveCalls, "MoveTask must not be called")
+
+			require.Len(t, h.commentSvc.created, 1)
+			body := h.commentSvc.created[0].Body
+			assert.Contains(t, body, "MR !448 merged")
+			assert.Contains(t, body, "NOT moved to done")
+			assert.Contains(t, body, "stays in `review`, held by controller ("+string(kind)+")")
+		})
+	}
+}
+
+// Nobody live claims a review card and its AC needs no post-merge run: the
+// merge still closes it, as before.
+func TestHandleMR_MergedFromReview_NotHeldNoPostMergeAC_Done(t *testing.T) {
+	cases := map[string]*domain.RuntimeState{
+		"no runtime state": nil,
+		"stale state":      {Kind: domain.RuntimeKindWaiting, Stale: true},
+		"stopped":          {Kind: domain.RuntimeKindStopped},
+	}
+	for name, rs := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			task := h.makeTask(t, domain.StatusCategoryReview)
+			task.Description = "Приёмка: 1) юнит-тест в CI зелёный."
+			task.RuntimeState = rs
+
+			res, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), mergedMREvent(449, task.ID, "MESH-"+task.ID.String()))
+			require.NoError(t, err)
+			assert.True(t, res.Transitioned)
+			assert.Equal(t, "done", res.NewStatus)
+		})
+	}
 }

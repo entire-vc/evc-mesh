@@ -111,6 +111,12 @@ type VCSLink struct {
 	// Upsert). Nil means the status has never been confirmed — for an open
 	// PR link that is "we do not know whether it is still open".
 	StatusSyncedAt *time.Time `json:"status_synced_at" db:"status_synced_at"`
+	// MergedAt is when the VCS provider merged the PR/MR, as the provider
+	// reports it, in UTC. Nil means unknown: it is never filled from
+	// StatusSyncedAt, CreatedAt, the card's completion or a deploy. Set once
+	// and kept by later status writes; cleared only when the link's status
+	// is corrected away from merged.
+	MergedAt *time.Time `json:"merged_at" db:"merged_at"`
 	// PipelineStatus is the state of the latest GitLab pipeline of this MR
 	// link (see NormalizePipelineStatus for the vocabulary); nil when no
 	// pipeline has been reported, which is every GitHub link.
@@ -118,6 +124,23 @@ type VCSLink struct {
 	PipelineUpdatedAt *time.Time `json:"pipeline_updated_at" db:"pipeline_updated_at"`
 	// PipelineID orders pipeline deliveries; it is storage detail, not API.
 	PipelineID *int64 `json:"-" db:"pipeline_id"`
+}
+
+// ParseVCSProviderTime reads a VCS provider timestamp (RFC 3339, with or
+// without fractional seconds, any offset) into UTC. Empty, unparseable or zero
+// input is nil: an unknown merge time stays unknown rather than becoming
+// 0001-01-01 or the time of the read.
+func ParseVCSProviderTime(raw string) *time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil || t.IsZero() {
+		return nil
+	}
+	t = t.UTC()
+	return &t
 }
 
 // pipelineStatuses is the vocabulary a GitLab pipeline webhook can report.
@@ -141,7 +164,7 @@ func NormalizePipelineStatus(raw string) (string, bool) {
 // case, http vs https, and a trailing slash — into one comparable string, so
 // two calls that name the SAME PR/MR/commit are recognised as the same
 // object even when they spell its URL slightly differently. This is what
-// lets a re-link with a corrected provider (an internal ticket: a self-hosted GitLab
+// lets a re-link with a corrected provider (a self-hosted GitLab
 // URL first mis-recorded as provider=github) find the existing row by what
 // the URL actually names, instead of by (provider, external_id) — the pair
 // that changes across exactly the correction being made, which is why
@@ -223,7 +246,7 @@ func (l VCSLink) IsRelatesTo() bool {
 
 // Metadata keys the transition gate reads for the author_if_merged_shipped
 // pattern. head_sha is written by Mesh when it syncs the MR; ship_sha by the
-// fleet tool that signs an independent SHIP (code review / glab-merge).
+// fleet tool that signs an independent SHIP (codex-review / glab-merge).
 const (
 	VCSLinkMetaHeadSHA = "head_sha"
 	VCSLinkMetaShipSHA = "ship_sha"
@@ -314,7 +337,7 @@ type VCSDelivery struct {
 	Acceptance        *VCSAcceptance `json:"acceptance,omitempty"`
 	IsShipped         bool           `json:"is_shipped"`
 	// States separates the four delivery facts a consumer must not conflate:
-	// merged, independently reviewed, installed in production, accepted.
+	// merged, independently reviewed, installed on prod, accepted.
 	States VCSDeliveryStates `json:"states"`
 }
 
@@ -375,7 +398,7 @@ func (l VCSLink) DeliveryStates() VCSDeliveryStates {
 	if d := l.Deployed(); d != nil {
 		switch {
 		case d.Environment != VCSEnvProd:
-			// recorded only outside prod: not installed in production, not stale
+			// recorded only outside prod: not installed on prod, not stale
 			st.Installed = DeliveryStateNo
 		case merged == "":
 			// a prod deploy with no merged sha to compare it with
@@ -441,7 +464,7 @@ func (l VCSLink) CIVerdict() *VCSCIVerdict {
 	return &v
 }
 
-// IsShipped reports whether the change is installed in production: deployed.sha equal
+// IsShipped reports whether the change is installed on prod: deployed.sha equal
 // to merged_sha with environment prod. Merge, an independent SHIP and a green
 // pipeline are separate facts (see DeliveryStates) and never make a link
 // shipped: a link without install evidence reads false, not "delivered".

@@ -8,8 +8,8 @@ import (
 
 // hardGateDisposableLabels are the labels that mark a task as throwaway/probe —
 // created once to exercise something (a test fixture, a one-off repro, a sweep
-// artifact) and never revisited by a human afterward. Task #318de303: 3 of the 27
-// human-gate cards Riker's 07.09 triage found sitting on Pavel's queue were exactly
+// artifact) and never revisited by a human afterward. an internal ticket: 3 of the 27
+// human-gate cards Robin's 07.09 triage found sitting on Pavel's queue were exactly
 // this shape — a disposable card armed a HARD gate that then waited forever, because
 // nobody was ever coming back to answer it.
 var hardGateDisposableLabels = map[string]struct{}{
@@ -20,7 +20,7 @@ var hardGateDisposableLabels = map[string]struct{}{
 
 // hardGateFixtureTitleMarker is the literal marker (matched case-insensitively,
 // since task titles are freeform prose) that names a task as a test-harness
-// fixture rather than real work — the form task #318de303's description names
+// fixture rather than real work — the form an internal ticket's description names
 // explicitly ("HARNESS FIXTURE в заголовке").
 const hardGateFixtureTitleMarker = "HARNESS FIXTURE"
 

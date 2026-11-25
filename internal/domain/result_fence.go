@@ -9,8 +9,8 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
-// Error codes of a refused fenced write (
-// docs/extensions/agents-me-contract.md "Fencing a stale worker").
+// Error codes of a refused fenced write
+// (docs/extensions/agents-me-contract.md "Fencing a stale worker").
 const (
 	// CodeCheckoutPreconditionFailed: the caller does not hold the named lock
 	// (another generation, expired, released, force-released).

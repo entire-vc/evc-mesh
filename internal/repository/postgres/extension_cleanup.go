@@ -10,10 +10,10 @@ import (
 )
 
 // QAExtensionIDPattern is the ONLY extension id the cleanup may touch: the
-// throwaway extension registered by the acceptance run. It is
-// anchored on both ends, so "hello", "qa-e2e-hello-", "qa-e2e-hello-1x"
-// and "xqa-e2e-hello-1" are all refused.
-var QAExtensionIDPattern = regexp.MustCompile(`^qa-e2e-hello-\d{1,6}$`)
+// throwaway extension registered by the W2 acceptance run. It is
+// anchored on both ends, so "hello", "qa-2e5c60ff-hello-", "qa-2e5c60ff-hello-1x"
+// and "xqa-2e5c60ff-hello-1" are all refused.
+var QAExtensionIDPattern = regexp.MustCompile(`^qa-2e5c60ff-hello-\d{1,6}$`)
 
 // ErrExtensionCleanupRefused is returned for any id outside QAExtensionIDPattern.
 var ErrExtensionCleanupRefused = errors.New("extension id does not match the QA cleanup pattern")

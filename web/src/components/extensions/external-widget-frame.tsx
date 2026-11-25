@@ -441,9 +441,9 @@ export function ExternalWidgetFrame({
           ref={iframeRef}
           title={frameCtx.title || name}
           src={frameSrc(frameCtx.frame_url, frameCtx.token)}
-          sandbox="allow-scripts allow-forms allow-popups allow-same-origin"
+          sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox"
           referrerPolicy="no-referrer"
-          allow=""
+          allow="clipboard-write"
           className={state.kind === "ready" ? "h-full w-full flex-1 border-0 bg-transparent" : "hidden"}
           aria-hidden={state.kind === "ready" ? undefined : true}
           tabIndex={state.kind === "ready" ? undefined : -1}

@@ -301,7 +301,7 @@ func TestAuthHandler_Login_LockoutResetError_LoginStillSucceeds(t *testing.T) {
 	assert.NotEmpty(t, respBody["tokens"])
 }
 
-// AC (#734ca49e): reordering auth.Service.Login to check the password
+// AC: reordering auth.Service.Login to check the password
 // BEFORE IsActive has a side effect that must be explicit, not discovered
 // later — a WRONG password against a DEACTIVATED account now returns
 // auth.ErrInvalidCredentials (it used to return auth.ErrUserInactive,
@@ -314,7 +314,7 @@ func TestAuthHandler_Login_LockoutResetError_LoginStillSucceeds(t *testing.T) {
 // brute-force attempt, and no code change to auth_handler.go was needed to
 // get this: it already gated on error TYPE, not on account state.
 //
-// Before the #734ca49e fix, this test would have failed to lock: the
+// Before the fix, this test would have failed to lock: the
 // deactivated account's wrong-password attempts returned ErrUserInactive,
 // which the `errors.Is(err, auth.ErrInvalidCredentials)` guard in
 // AuthHandler.Login does not match, so RecordFailure was never called and

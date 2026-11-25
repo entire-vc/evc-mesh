@@ -167,6 +167,52 @@ func TestListMemoriesByKey(t *testing.T) {
 	require.ErrorContains(t, err, "boom")
 }
 
+// The exact-key read records access for exactly the rows it returns, and an
+// empty or failed lookup records nothing.
+func TestListMemoriesByKey_TouchesOnlyReturnedRows(t *testing.T) {
+	a, b := uuid.New(), uuid.New()
+	var touchCalls [][]uuid.UUID
+	repo := &mockMemoryRepo{
+		listByKeyFn: func(context.Context, domain.MemoryKeyLookup) ([]domain.Memory, error) {
+			return []domain.Memory{{ID: a}, {ID: b}}, nil
+		},
+		touchAccessedFn: func(_ context.Context, ids []uuid.UUID) error {
+			touchCalls = append(touchCalls, append([]uuid.UUID(nil), ids...))
+			return errors.New("touch failed")
+		},
+	}
+	svc := NewMemoryService(repo, &mockMemoryEdgeRepo{}, nil).(MemoryArchiveService)
+	ctx := context.Background()
+
+	rows, err := svc.ListMemoriesByKey(ctx, domain.MemoryKeyLookup{Key: "k", IncludeArchived: true})
+	require.NoError(t, err, "a failed access touch must not fail a successful read")
+	require.Len(t, rows, 2)
+	require.Equal(t, [][]uuid.UUID{{a, b}}, touchCalls)
+
+	touchCalls = nil
+	repo.listByKeyFn = func(context.Context, domain.MemoryKeyLookup) ([]domain.Memory, error) { return nil, nil }
+	_, err = svc.ListMemoriesByKey(ctx, domain.MemoryKeyLookup{Key: "k"})
+	require.NoError(t, err)
+	require.Empty(t, touchCalls, "an empty result touches nothing")
+
+	repo.listByKeyFn = func(context.Context, domain.MemoryKeyLookup) ([]domain.Memory, error) { return nil, errors.New("boom") }
+	_, err = svc.ListMemoriesByKey(ctx, domain.MemoryKeyLookup{Key: "k"})
+	require.Error(t, err)
+	require.Empty(t, touchCalls, "a failed lookup touches nothing")
+}
+
+func TestTouchMemoryAccess_PassesIDsAndSwallowsError(t *testing.T) {
+	id := uuid.New()
+	var got []uuid.UUID
+	repo := &mockMemoryRepo{touchAccessedFn: func(_ context.Context, ids []uuid.UUID) error {
+		got = ids
+		return errors.New("db down")
+	}}
+	svc := NewMemoryService(repo, &mockMemoryEdgeRepo{}, nil).(MemoryAccessService)
+	svc.TouchMemoryAccess(context.Background(), []uuid.UUID{id})
+	require.Equal(t, []uuid.UUID{id}, got)
+}
+
 // A remember on a hand-archived key updates that row and keeps it archived,
 // with a hint naming the way back; it never creates a live duplicate.
 func TestRemember_HandArchivedKeyStaysArchived(t *testing.T) {

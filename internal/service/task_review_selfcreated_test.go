@@ -13,7 +13,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Task #8f191cf7 (rule 3, #994e02f4 / #d81f8b30): a card the executor filed for
+// (rule 3): a card the executor filed for
 // itself, moved to review with no set_reviewer configured, used to sit in review
 // on the executor — a review nobody was asked to do. It goes to the project lead.
 func TestMoveToReview_SelfCreatedCardGoesToLead(t *testing.T) {
@@ -33,7 +33,7 @@ func TestMoveToReview_SelfCreatedCardGoesToLead(t *testing.T) {
 				Transitions: map[string]domain.TransitionRule{"in_progress": {Allowed: []string{"review"}}},
 			}}
 			rules := &domain.EffectiveAssignmentRules{
-				DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "garfield", Source: "project"},
+				DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "gary", Source: "project"},
 			}
 			svc, taskRepo, statusRepo, agentRepo, projRepo := setupTaskServiceWithWorkflow(wf, rules)
 
@@ -44,7 +44,7 @@ func TestMoveToReview_SelfCreatedCardGoesToLead(t *testing.T) {
 			statusRepo.items[newID] = &domain.TaskStatus{ID: newID, ProjectID: projectID, Category: domain.StatusCategoryReview, Name: "review"}
 			projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
 			agentRepo.items[builderID] = &domain.Agent{ID: builderID, WorkspaceID: workspaceID, Slug: "builder"}
-			agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "garfield"}
+			agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "gary"}
 			if tc.leadIsSelf {
 				rules.DefaultAssignee.Value = "builder"
 			}
@@ -71,7 +71,7 @@ func TestMoveToReview_SelfCreatedCardGoesToLead(t *testing.T) {
 // the lead fallback must not fire on it.
 func TestMoveToReview_WorkflowLookupErrorSkipsLeadFallback(t *testing.T) {
 	rules := &domain.EffectiveAssignmentRules{
-		DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "garfield", Source: "project"},
+		DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "gary", Source: "project"},
 	}
 	svc, taskRepo, statusRepo, agentRepo, projRepo := setupTaskServiceWithWorkflow(nil, rules)
 	svc.rulesConfigSvc.(*MockRulesService).workflowErr = errors.New("db down")
@@ -83,7 +83,7 @@ func TestMoveToReview_WorkflowLookupErrorSkipsLeadFallback(t *testing.T) {
 	statusRepo.items[newID] = &domain.TaskStatus{ID: newID, ProjectID: projectID, Category: domain.StatusCategoryReview, Name: "review"}
 	projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
 	agentRepo.items[builderID] = &domain.Agent{ID: builderID, WorkspaceID: workspaceID, Slug: "builder"}
-	agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "garfield"}
+	agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "gary"}
 	taskRepo.items[taskID] = &domain.Task{
 		ID: taskID, ProjectID: projectID, StatusID: oldID,
 		AssigneeID: &builderID, AssigneeType: domain.AssigneeTypeAgent,
@@ -97,7 +97,7 @@ func TestMoveToReview_WorkflowLookupErrorSkipsLeadFallback(t *testing.T) {
 
 // default_assignee is stored as "agent:<uuid>" by the rules API. The lead fallback
 // used to look that string up as a slug, miss, and leave the card on the builder
-// (found by the live check of #8f191cf7 on the mesh project).
+// (found by the live check of an internal ticket on the mesh project).
 func TestMoveToReview_SelfCreatedLeadByAgentIDForms(t *testing.T) {
 	for _, form := range []string{"agent:%s", "%s"} {
 		t.Run(form, func(t *testing.T) {
@@ -115,7 +115,7 @@ func TestMoveToReview_SelfCreatedLeadByAgentIDForms(t *testing.T) {
 			statusRepo.items[newID] = &domain.TaskStatus{ID: newID, ProjectID: projectID, Category: domain.StatusCategoryReview, Name: "review"}
 			projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
 			agentRepo.items[builderID] = &domain.Agent{ID: builderID, WorkspaceID: workspaceID, Slug: "builder"}
-			agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "garfield"}
+			agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "gary"}
 			taskRepo.items[taskID] = &domain.Task{
 				ID: taskID, ProjectID: projectID, StatusID: oldID,
 				AssigneeID: &builderID, AssigneeType: domain.AssigneeTypeAgent,

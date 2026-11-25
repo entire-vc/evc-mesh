@@ -30,6 +30,11 @@ trap 'python3 -c "import shutil,sys; shutil.rmtree(sys.argv[1])" "$coverage_tmp"
 profiles=()
 exclusions=()
 FAILED=0
+module=$(go list -m -f '{{.Path}}')
+if [ -z "$module" ] || [[ "$module" == *[[:space:]]* ]]; then
+  echo "ERROR: could not resolve a single module for coverage" >&2
+  exit 1
+fi
 while IFS= read -r pkg; do
   [ -z "$pkg" ] && continue
   metadata=$(go list -race -f '{{.Name}} {{.Dir}} {{join .GoFiles " "}} {{join .CgoFiles " "}}' "$pkg")
@@ -61,7 +66,7 @@ while IFS= read -r pkg; do
   fi
   profile="$coverage_tmp/cover_${#profiles[@]}.out"
   profiles+=("$profile")
-  go test -race -covermode=atomic -coverprofile="$profile" "$pkg" 2>&1 || {
+  go test -race "-coverpkg=$module/..." -covermode=atomic -coverprofile="$profile" "$pkg" 2>&1 || {
     FAILED=1
     echo "FAIL: $pkg"
   }

@@ -9,7 +9,7 @@ beforeEach(() => {
 });
 
 describe("comments rail default", () => {
-  // Pavel's call on #a4a8db69: with the thread tree under the document, an
+  // Pavel's call: with the thread tree under the document, an
   // open-by-default rail showed the same discussion twice on a wide screen.
   // The default is a product decision, so it gets an assert rather than living
   // only in a `return` that a later refactor can flip back without noticing.

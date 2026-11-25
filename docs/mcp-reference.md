@@ -40,7 +40,7 @@ Tools are organized into 14 categories:
 > module [github.com/entire-vc/evc-mesh-mcp](https://github.com/entire-vc/evc-mesh-mcp),
 > and every snippet below uses its paths. This repo carried a duplicate copy
 > under `./cmd/mcp` until 2026-08; it had drifted 12 tools behind and was
-> removed (Mesh an internal ticket), so a snippet naming `./cmd/mcp` is stale, not an
+> removed, so a snippet naming `./cmd/mcp` is stale, not an
 > alternative.
 
 > **Auto-transition rules are not MCP tools.** Four of them
@@ -1039,6 +1039,124 @@ anchor: it is still shown, and it is not pointing anywhere.
 
 ---
 
+### Uploading files (5 tools)
+
+Files go into a task as artifacts and into a document as attachments. Which
+way to send the bytes depends on the transport the agent talks to the MCP
+server over, and on the size of the file:
+
+| Way | stdio | SSE / Streamable HTTP | Use for |
+|-----|-------|-----------------------|---------|
+| `file_path` argument | yes | **no** (the server cannot read the agent's disk) | any file on the machine the MCP server runs on |
+| inline `content` (text or base64) | yes | yes | text and small files: base64 adds a third, and the whole call travels through the model's context |
+| two-step upload (`create_*_upload` → PUT → `confirm_upload`) | yes | yes | images, PDFs, archives, anything large: the bytes go straight to object storage, never through the tool call |
+
+**Limits.** A document attachment is at most 25 MiB. An artifact is at most
+the server's `ARTIFACT_MAX_BYTES`, and the task's artifact quota must have
+room for it. A declaration over a limit is refused at once with
+`422 file_too_large` and `context.limit_bytes`.
+
+**Links in documents.** Put the stable `download_path` (or the ready
+`markdown`) from the confirm into a document body, never the presigned URL a
+download returns: that URL expires after an hour. `download_path` answers
+`{"url": "<presigned>"}` to an authenticated GET.
+
+**What renders inline.** PNG, JPEG, GIF, WebP and PDF are served inline:
+`markdown` for the four image types is `![name](download_path)` and shows the
+image, a PDF is `[name](download_path)` and opens in the browser. Every other
+type (including SVG, HTML and plain text) downloads as an attachment;
+`renders_inline` in the confirm says which case applies.
+
+#### `create_doc_attachment_upload` / `create_artifact_upload`
+
+Declare a file. REST: `POST /api/v1/documents/:doc_id/attachments/uploads`
+and `POST /api/v1/tasks/:task_id/artifacts/uploads`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `doc_id` / `task_id` | string | **Yes** | Target document or task |
+| `name` | string | **Yes** | File name, 1–255 characters, no line breaks |
+| `mime_type` | string | **Yes** | Declared type, e.g. `image/png` |
+| `size_bytes` | integer | **Yes** | Exact size in bytes |
+| `sha256` | string | **Yes** | Hex SHA-256 of the file (64 characters) |
+| `artifact_type` | string | No (artifacts only) | As in `upload_artifact`; default `file` |
+
+Answers `201`:
+```json
+{
+  "upload_id": "9f1c…",
+  "upload_url": "https://mesh.example.com/s3/mesh-artifacts/uploads/…?X-Amz-…",
+  "upload_method": "PUT",
+  "upload_headers": {},
+  "expires_at": "2026-11-24T17:21:13Z",
+  "max_bytes": 26214400
+}
+```
+
+Then PUT the raw bytes to `upload_url` within 15 minutes: no `Authorization`,
+no agent key, no extra headers (the URL is signed for exactly
+`size_bytes`; a body of another length is refused by storage).
+```sh
+curl -sS -X PUT --data-binary @diagram.png "$upload_url"
+```
+
+#### `confirm_upload`
+
+`POST /api/v1/uploads/:upload_id/confirm`. Checks the uploaded bytes against
+the declaration and turns them into the attachment or artifact. Only the agent
+or user that declared the upload sees it; for anyone else the id does not
+exist (404). An artifact confirm takes the same checkout fence headers as
+`upload_artifact` (`X-Mesh-Checkout-Token`, …). The `upload_id` is the
+idempotency key: a repeated confirm answers `200` with the same result.
+
+Answers `201` (repeat: `200`):
+```json
+{
+  "kind": "document_attachment",
+  "attachment_id": "3b7e…",
+  "document_id": "a1b2…",
+  "name": "diagram.png",
+  "mime_type": "image/png",
+  "size_bytes": 500000,
+  "sha256": "e3b0…",
+  "download_path": "/api/v1/document-attachments/3b7e…/download?disposition=inline",
+  "markdown": "![diagram.png](/api/v1/document-attachments/3b7e…/download?disposition=inline)",
+  "renders_inline": true
+}
+```
+An artifact answers `"kind": "artifact"` with `artifact_id`, `task_id` and
+`/api/v1/artifacts/<id>/download?disposition=inline`.
+
+| Answer | Code | Meaning, what to do |
+|--------|------|---------------------|
+| 404 | `upload_not_found` | unknown, foreign or another member's upload |
+| 403 | `forbidden` | the declaring actor has since lost access to the task's or document's project (or, for a user, the upload role): confirm and replay are refused, nothing is written |
+| 409 | `conflict` | another confirm of the same upload is running: retry when it finishes |
+| 409 | `upload_not_received` | nothing was PUT yet: PUT, then confirm again |
+| 422 | `size_mismatch` | `context.declared` ≠ `context.received`; the staged file is removed, PUT again |
+| 422 | `checksum_mismatch` | the bytes do not hash to the declared `sha256`; the staged file is removed, the upload stays open until `expires_at`: PUT again and confirm |
+| 422 | `mime_mismatch` | declared PNG/JPEG/GIF/WebP/PDF, but the file does not start like one |
+| 410 | `upload_expired` | past `expires_at`: declare a new upload |
+
+A confirm is safe to repeat: the result's id is fixed by the first confirm,
+so a repeat (or a retry after a timeout) answers 200 with the same
+`attachment_id` / `artifact_id` and never writes a second file.
+
+Uploads never confirmed, and their staged bytes, are removed by the API's
+periodic sweep a few minutes after they expire.
+
+#### `list_doc_attachments`
+
+`GET /api/v1/documents/:doc_id/attachments`: the document's attachments
+(id, name, mime_type, size_bytes, created_at).
+
+#### `delete_doc_attachment`
+
+`DELETE /api/v1/document-attachments/:att_id`: removes an attachment. A
+document body that links to it keeps a dead link: edit the body too.
+
+---
+
 ### Memory & Knowledge (10 tools)
 
 #### 27. `remember`
@@ -1322,7 +1440,7 @@ failure there is reported in the result but does not undo the canonical write.
 |-----------|------|----------|---------|-------------|
 | `text` | string | **Yes** | -- | Full text of the decision/directive |
 | `summary` | string | **Yes** | -- | One-line summary, used as the UPSERT key (dedupes the same decision on the same day) |
-| `propagate_to` | array\<string\> | No | -- | Agent slugs, e.g. `["liam","beth"]`. Use `["all"]` for a workspace-wide broadcast |
+| `propagate_to` | array\<string\> | No | -- | Agent slugs, e.g. `["liam","bea"]`. Use `["all"]` for a workspace-wide broadcast |
 | `scope` | string | No | -- | Project UUID. Omit for workspace-level decisions |
 | `privacy` | string | No | `public` | `public` (visible in the change feed) or `private` (recorded but hidden) |
 | `task_id` | string | No | -- | Task UUID this decision answers. Also records a `human_gate` decision on that task |

@@ -23,7 +23,7 @@ func (f *midPipelineFixture) setRuntimeState(t *testing.T, taskID uuid.UUID, kin
 		"kind":       kind,
 		"since":      now.Add(-72 * time.Hour).Format(time.RFC3339Nano),
 		"updated_at": now.Add(-refreshed).Format(time.RFC3339Nano),
-		"lane":       "Developer",
+		"lane":       "Liam",
 	}
 	if ref != "" {
 		state["ref"] = ref
@@ -61,17 +61,17 @@ func TestFindStaleUnleasedInProgress_LiveRuntimeStateIsAuthoritative(t *testing.
 		swept bool
 	}{
 		// ── held: the controller says so, and its statement is live ──────────
-		{"runtime wait replay: waiting, then an FYI comment from another lane becomes the latest", func(id uuid.UUID) {
-			f.insertCommentAs(t, id, "agent", "готово к ревью\n⏳ WAIT card:#00000000", 30*time.Hour)
+		{"b7fe7322 replay: waiting, then an FYI comment from another lane becomes the latest", func(id uuid.UUID) {
+			f.insertCommentAs(t, id, "agent", "готово к ревью\n⏳ WAIT card:#5eed0006", 30*time.Hour)
 			f.insertCommentAs(t, id, "agent", fyi, 3*time.Hour)
-			f.setRuntimeState(t, id, "waiting", "card:#00000000", fresh, nil)
+			f.setRuntimeState(t, id, "waiting", "card:#5eed0006", fresh, nil)
 		}, false},
 		{"waiting for longer than the old 48h marker cap", func(id uuid.UUID) {
-			f.insertCommentAs(t, id, "agent", "⏳ WAIT mr:example/product!42", 72*time.Hour)
-			f.setRuntimeState(t, id, "waiting", "mr:example/product!42", fresh, nil)
+			f.insertCommentAs(t, id, "agent", "⏳ WAIT mr:entire-vc/evc-mesh!1187", 72*time.Hour)
+			f.setRuntimeState(t, id, "waiting", "mr:entire-vc/evc-mesh!1187", fresh, nil)
 		}, false},
 		{"waiting with no comment at all", func(id uuid.UUID) {
-			f.setRuntimeState(t, id, "waiting", "card:#00000000", fresh, nil)
+			f.setRuntimeState(t, id, "waiting", "card:#5eed0006", fresh, nil)
 		}, false},
 		{"queued: wake condition met, waits for a slot", func(id uuid.UUID) {
 			f.insertCommentAs(t, id, "agent", fyi, 3*time.Hour)
@@ -93,7 +93,7 @@ func TestFindStaleUnleasedInProgress_LiveRuntimeStateIsAuthoritative(t *testing.
 		}, true},
 		{"waiting, but the controller stopped refreshing it (runner gone)", func(id uuid.UUID) {
 			f.insertCommentAs(t, id, "agent", fyi, 3*time.Hour)
-			f.setRuntimeState(t, id, "waiting", "card:#00000000", old, nil)
+			f.setRuntimeState(t, id, "waiting", "card:#5eed0006", old, nil)
 		}, true},
 		{"waiting past its own until", func(id uuid.UUID) {
 			f.setRuntimeState(t, id, "waiting", "time", fresh, &past)
@@ -106,17 +106,17 @@ func TestFindStaleUnleasedInProgress_LiveRuntimeStateIsAuthoritative(t *testing.
 		}, true},
 		{"waiting without a server stamp claims nothing", func(id uuid.UUID) {
 			_, err := f.db.ExecContext(context.Background(),
-				`UPDATE tasks SET runtime_state = '{"kind":"waiting","ref":"card:#00000000"}' WHERE id = $1`, id)
+				`UPDATE tasks SET runtime_state = '{"kind":"waiting","ref":"card:#5eed0006"}' WHERE id = $1`, id)
 			require.NoError(t, err)
 		}, true},
 
 		// ── comment text is not a controller: no text fallback ───
 		{"no runtime state, fresh marker in the latest comment", func(id uuid.UUID) {
-			f.insertCommentAs(t, id, "agent", "⏳ WAIT card:#00000000", 3*time.Hour)
+			f.insertCommentAs(t, id, "agent", "⏳ WAIT card:#5eed0006", 3*time.Hour)
 		}, true},
 		{"stale runtime state, fresh marker in the latest comment", func(id uuid.UUID) {
-			f.insertCommentAs(t, id, "agent", "⏳ WAIT card:#00000000", 3*time.Hour)
-			f.setRuntimeState(t, id, "waiting", "card:#00000000", old, nil)
+			f.insertCommentAs(t, id, "agent", "⏳ WAIT card:#5eed0006", 3*time.Hour)
+			f.setRuntimeState(t, id, "waiting", "card:#5eed0006", old, nil)
 		}, true},
 	}
 

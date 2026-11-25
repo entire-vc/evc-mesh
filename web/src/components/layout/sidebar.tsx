@@ -57,7 +57,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const navigationPending = workspacesLoading || projectsLoading;
   // The store keeps archived projects so ids still resolve to names elsewhere;
   // the sidebar lists only live ones and tucks the rest under "Archived"
-  // (an internal ticket — an archived project used to stay in the list as if nothing
+  // (an archived project used to stay in the list as if nothing
   // had happened).
   const projects = allProjects.filter((p) => !p.is_archived);
   const archivedProjects = allProjects.filter((p) => p.is_archived);
@@ -207,6 +207,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   // Initiatives, Triage, Activity, Sessions, Analytics and Events are dashboard templates now (PRD §5.4, §5.9):
   // the mention counter sits on the first dashboard with a «Mentions» widget and on the bell.
   core("team", "tools", "Bot", t("nav.team"), wsHref("org-chart"), path.endsWith("/org-chart"));
+  // The statistics page (agent-usage): its own item, not a dashboard template — the setup lives in its URL.
+  core("stats", "tools", "BarChart2", t("nav.agentStats"), wsHref("stats"), path.endsWith("/stats"));
   core("memory", "tools", "Brain", t("nav.memory"), wsHref("memories"), path.endsWith("/memories"));
   // Workspace integration decides when it exists; otherwise the instance flag.
   if (sparkVisible) core("spark", "tools", "Sparkles", t("nav.spark"), wsHref("spark"), path.endsWith("/spark"));
@@ -218,7 +220,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       items.push({
         id: `ext:${item.extensionId}`,
         group: "tools",
-        icon: "Puzzle",
+        icon: item.icon || "Puzzle",
         label: item.title,
         href,
         // A section of the screen (/x/<ext>/memory) keeps its item lit.

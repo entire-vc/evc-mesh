@@ -249,7 +249,7 @@ describe("DocCommentTree — resolved threads", () => {
 
 describe("DocCommentTree — the surface itself", () => {
   it("still renders the section — with its composer — on a page with no comments", () => {
-    // an internal ticket: the section used to return null here. It can't any more —
+    // The section used to return null here. It can't any more —
     // the composer that lives under the document needs somewhere to render
     // before the first comment exists, not only after.
     renderTree(makeController({ threads: [] }));

@@ -46,14 +46,14 @@ export function analyticsParams(q: AnalyticsQuery, now = new Date()): Record<str
   return out;
 }
 
-const keyOf = (viewerId: string, wsId: string, params: Record<string, string>) =>
-  `${viewerId}@${wsId}?${Object.keys(params)
+const keyOf = (viewerId: string, wsId: string, params: Record<string, string>, path: string) =>
+  `${viewerId}@${wsId}${path}?${Object.keys(params)
     .sort()
     .map((k) => `${k}=${params[k]}`)
     .join("&")}`;
 
 interface Entry {
-  promise: Promise<AnalyticsMetrics>;
+  promise: Promise<unknown>;
   at: number;
 }
 const cache = new Map<string, Entry>();
@@ -69,17 +69,15 @@ useAuthStore.subscribe((state, prev) => {
   if (state.user?.id !== prev.user?.id) clearAnalyticsCache();
 });
 
-/** One request per viewer and key while it is in flight or younger than CACHE_MS; a failure is not kept. */
-export function fetchAnalytics(
-  viewerId: string,
-  wsId: string,
-  params: Record<string, string>,
-  now = Date.now(),
-): Promise<AnalyticsMetrics> {
-  const key = keyOf(viewerId, wsId, params);
+/**
+ * One GET per viewer, path and parameters while it is in flight or younger than CACHE_MS; a failure is not kept.
+ * `path` is relative to the workspace (`/analytics`, `/analytics/memory`).
+ */
+export function fetchCached<T>(viewerId: string, wsId: string, path: string, params: Record<string, string>, now = Date.now()): Promise<T> {
+  const key = keyOf(viewerId, wsId, params, path);
   const hit = cache.get(key);
-  if (hit && now - hit.at < CACHE_MS) return hit.promise;
-  const promise = api<AnalyticsMetrics>(`/api/v1/workspaces/${wsId}/analytics`, { params });
+  if (hit && now - hit.at < CACHE_MS) return hit.promise as Promise<T>;
+  const promise = api<T>(`/api/v1/workspaces/${wsId}${path}`, { params });
   const entry = { promise, at: now };
   cache.set(key, entry);
   promise.catch(() => {
@@ -88,33 +86,50 @@ export function fetchAnalytics(
   return promise;
 }
 
+/** One request per viewer and key while it is in flight or younger than CACHE_MS; a failure is not kept. */
+export function fetchAnalytics(
+  viewerId: string,
+  wsId: string,
+  params: Record<string, string>,
+  now = Date.now(),
+): Promise<AnalyticsMetrics> {
+  return fetchCached<AnalyticsMetrics>(viewerId, wsId, "/analytics", params, now);
+}
+
 /** Path and parameters of the CSV export for the same filter as the widget. */
 export function analyticsExportRequest(wsId: string, q: AnalyticsQuery): { path: string; params: Record<string, string> } {
   return { path: `/api/v1/workspaces/${wsId}/analytics/export`, params: { ...analyticsParams(q), format: "csv" } };
 }
 
-export function useAnalytics(q: AnalyticsQuery): Async<AnalyticsMetrics> {
+/**
+ * A cached workspace GET as an Async: loading until the answer for these parameters arrives, an error with its
+ * retry, or the value. `path` null = nothing to ask yet (stays loading).
+ */
+export function useCachedGet<T>(path: string | null, params: Record<string, string>): Async<T> {
   const wsId = useWorkspaceStore((s) => s.currentWorkspace?.id);
   const viewerId = useAuthStore((s) => s.user?.id);
-  const params = analyticsParams(q);
-  const key = wsId && viewerId ? keyOf(viewerId, wsId, params) : "";
-  const [loaded, setLoaded] = useState<{ key: string; value: AnalyticsMetrics } | { key: string; error: Error } | null>(null);
+  const key = wsId && viewerId && path ? keyOf(viewerId, wsId, params, path) : "";
+  const [loaded, setLoaded] = useState<{ key: string; value: T } | { key: string; error: Error } | null>(null);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    if (!wsId || !viewerId) return;
+    if (!wsId || !viewerId || !path) return;
     let live = true;
-    fetchAnalytics(viewerId, wsId, params)
+    fetchCached<T>(viewerId, wsId, path, params)
       .then((value) => live && setLoaded({ key, value }))
       .catch((e) => live && setLoaded({ key, error: e instanceof Error ? e : new Error(String(e)) }));
     return () => {
       live = false;
     };
-    // wsId, viewerId and params are derived from key; attempt re-runs a failed load.
+    // wsId, viewerId, path and params are derived from key; attempt re-runs a failed load.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, attempt]);
-  return useMemo<Async<AnalyticsMetrics>>(() => {
+  return useMemo<Async<T>>(() => {
     if (!loaded || loaded.key !== key) return { state: "loading" };
     if ("error" in loaded) return { state: "error", error: loaded.error, retry: () => setAttempt((n) => n + 1) };
     return { state: "ready", value: loaded.value };
   }, [loaded, key]);
+}
+
+export function useAnalytics(q: AnalyticsQuery): Async<AnalyticsMetrics> {
+  return useCachedGet<AnalyticsMetrics>("/analytics", analyticsParams(q));
 }

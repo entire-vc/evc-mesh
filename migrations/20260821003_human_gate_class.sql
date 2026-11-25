@@ -1,5 +1,5 @@
 -- +goose Up
--- gate_class mechanism (task #b1d5c742, contract docs/human-gate-decision-recorded.md §5).
+-- gate_class mechanism (contract docs/human-gate-decision-recorded.md §5).
 -- human_gate_class classifies an ARMED gate as 'hard' (never released by timeout — money,
 -- irreversible actions, external comms) or 'soft' (auto-released by timeout, but the
 -- release does NOT answer the question — see SweepExpiredSoftGates in the service layer).

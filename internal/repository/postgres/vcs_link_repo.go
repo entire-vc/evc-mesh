@@ -33,6 +33,8 @@ type vcsLinkRow struct {
 	// StatusSyncedAt is nullable: rows that predate the column, and rows
 	// written by Create (no status stated), read NULL = never confirmed.
 	StatusSyncedAt *time.Time `db:"status_synced_at"`
+	// MergedAt is nullable: NULL = the provider's merge time is not known.
+	MergedAt *time.Time `db:"merged_at"`
 	// Pipeline columns are nullable: NULL = no pipeline reported yet.
 	PipelineID        *int64     `db:"pipeline_id"`
 	PipelineStatus    *string    `db:"pipeline_status"`
@@ -57,6 +59,7 @@ func (r *vcsLinkRow) toDomain() domain.VCSLink {
 		CreatedAt:  r.CreatedAt,
 
 		StatusSyncedAt: r.StatusSyncedAt,
+		MergedAt:       utcTimePtr(r.MergedAt),
 
 		PipelineID:        r.PipelineID,
 		PipelineStatus:    r.PipelineStatus,
@@ -64,11 +67,31 @@ func (r *vcsLinkRow) toDomain() domain.VCSLink {
 	}
 }
 
+// utcTimePtr returns t in UTC, so the API always renders merged_at with a Z
+// offset whatever the session time zone of the connection was.
+func utcTimePtr(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	u := t.UTC()
+	return &u
+}
+
+// mergedAtForStatus is the merged_at an Upsert may write: the caller's
+// provider time only for a merged link, nil otherwise. A zero time is
+// unknown, never 0001-01-01.
+func mergedAtForStatus(link *domain.VCSLink) *time.Time {
+	if link.Status != domain.VCSLinkStatusMerged || link.MergedAt == nil || link.MergedAt.IsZero() {
+		return nil
+	}
+	return utcTimePtr(link.MergedAt)
+}
+
 // vcsLinkSelectCols is every column vcsLinkRow scans, listed explicitly —
 // see agentSelectCols in agent_repo.go for why `SELECT *` is unsafe: sqlx
 // refuses to scan a column with no matching struct field, so an additive
 // migration to this table breaks every read until redeployed.
-const vcsLinkSelectCols = `id, task_id, provider, link_type, external_id, url, title, status, metadata, created_at, status_synced_at, pipeline_id, pipeline_status, pipeline_updated_at`
+const vcsLinkSelectCols = `id, task_id, provider, link_type, external_id, url, title, status, metadata, created_at, status_synced_at, merged_at, pipeline_id, pipeline_status, pipeline_updated_at`
 
 // VCSLinkRepo implements repository.VCSLinkRepository with PostgreSQL.
 type VCSLinkRepo struct {
@@ -228,14 +251,14 @@ func (r *VCSLinkRepo) ListByTask(ctx context.Context, taskID uuid.UUID) ([]domai
 // the GitHub webhook orchestrator so subsequent deliveries for the same PR
 // (opened → synchronize → closed) update the same row rather than failing
 // the unique index, and by the manual re-link path (add_vcs_link ...
-// status=merged) so correcting a wrongly-inferred provider (an internal ticket: a
+// status=merged) so correcting a wrongly-inferred provider (a
 // self-hosted GitLab URL that was first recorded as provider=github) fixes
 // the existing row instead of inserting a second one the done-evidence gate
 // never looks at.
 //
 // Matching by url, not by (task_id, link_type, external_id), is deliberate:
 // external_id is not a stable identity across a provider correction (a
-// GitHub a PR and a GitLab a review share the string "14" but are different
+// GitHub PR #14 and a GitLab MR !14 share the string "14" but are different
 // objects — an internal ticket defect 2), while the url is. Every link of the
 // task is locked and compared by url, with no external_id prefilter.
 //
@@ -256,7 +279,7 @@ func (r *VCSLinkRepo) ListByTask(ctx context.Context, taskID uuid.UUID) ([]domai
 // The UPDATE branch never fabricates id/created_at — the caller always ends
 // up holding the row that is actually on disk, never the id/created_at it
 // happened to generate before finding out the row already existed
-// (an internal ticket: the caller-supplied values used to be echoed back verbatim,
+// (the caller-supplied values used to be echoed back verbatim,
 // making an update look like a freshly created duplicate).
 //
 // Both branches stamp status_synced_at = now() (database clock, so every
@@ -299,18 +322,19 @@ func (r *VCSLinkRepo) Upsert(ctx context.Context, link *domain.VCSLink) (bool, e
 		const insertQ = `
 			INSERT INTO vcs_links (
 				id, task_id, provider, link_type, external_id,
-				url, title, status, metadata, created_at, status_synced_at
+				url, title, status, metadata, created_at, status_synced_at, merged_at
 			) VALUES (
 				$1, $2, $3, $4, $5,
-				$6, $7, $8, $9, $10, now()
+				$6, $7, $8, $9, $10, now(), $11
 			)
-			RETURNING status_synced_at
+			RETURNING status_synced_at, merged_at
 		`
 		var syncedAt time.Time
+		var mergedAt *time.Time
 		if execErr := tx.QueryRowxContext(ctx, insertQ,
 			link.ID, link.TaskID, string(link.Provider), string(link.LinkType), link.ExternalID,
-			link.URL, link.Title, string(link.Status), metadata, link.CreatedAt,
-		).Scan(&syncedAt); execErr != nil {
+			link.URL, link.Title, string(link.Status), metadata, link.CreatedAt, mergedAtForStatus(link),
+		).Scan(&syncedAt, &mergedAt); execErr != nil {
 			if isVCSLinkUniqueViolation(execErr) {
 				return false, apierror.Conflict(fmt.Sprintf(
 					"a %s %s link with external_id %q already exists on this task under a different url — "+
@@ -324,6 +348,7 @@ func (r *VCSLinkRepo) Upsert(ctx context.Context, link *domain.VCSLink) (bool, e
 			return false, commitErr
 		}
 		link.StatusSyncedAt = &syncedAt
+		link.MergedAt = utcTimePtr(mergedAt)
 		return true, nil
 	}
 
@@ -336,17 +361,24 @@ func (r *VCSLinkRepo) Upsert(ctx context.Context, link *domain.VCSLink) (bool, e
 		}
 	}
 
+	// merged_at: a known provider time is kept (a re-read of the status never
+	// moves it to the time of the re-read); an unknown one takes the caller's
+	// provider time, if any. A status corrected away from merged clears it, so
+	// a non-null merged_at always belongs to a merged link.
 	const updateQ = `
 		UPDATE vcs_links
 		SET provider = $1, external_id = $2, status = $3, title = $4, metadata = metadata || $5::jsonb, url = $6,
-		    status_synced_at = now()
+		    status_synced_at = now(),
+		    merged_at = CASE WHEN $9::boolean THEN COALESCE(merged_at, $8::timestamptz) ELSE NULL END
 		WHERE id = $7
-		RETURNING status_synced_at
+		RETURNING status_synced_at, merged_at
 	`
 	var syncedAt time.Time
+	var mergedAt *time.Time
 	if execErr := tx.QueryRowxContext(ctx, updateQ,
 		string(link.Provider), link.ExternalID, string(link.Status), link.Title, metadata, link.URL, primary.ID,
-	).Scan(&syncedAt); execErr != nil {
+		mergedAtForStatus(link), link.Status == domain.VCSLinkStatusMerged,
+	).Scan(&syncedAt, &mergedAt); execErr != nil {
 		if isVCSLinkUniqueViolation(execErr) {
 			return false, apierror.Conflict(fmt.Sprintf(
 				"cannot update this link to provider=%s external_id=%q — a different link on this task "+
@@ -359,6 +391,7 @@ func (r *VCSLinkRepo) Upsert(ctx context.Context, link *domain.VCSLink) (bool, e
 	link.ID = primary.ID
 	link.CreatedAt = primary.CreatedAt
 	link.StatusSyncedAt = &syncedAt
+	link.MergedAt = utcTimePtr(mergedAt)
 	if commitErr := tx.Commit(); commitErr != nil {
 		return false, commitErr
 	}
@@ -484,6 +517,74 @@ func (r *VCSLinkRepo) SetPipelineStatus(ctx context.Context, id uuid.UUID, pipel
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// ConfirmGitLabMR updates the requested row, without Upsert's URL deduplication.
+// The metadata patch is applied to the stored JSON so concurrent verdict writes
+// survive. Only provider-confirmed fields are changed; link identity stays put.
+func (r *VCSLinkRepo) ConfirmGitLabMR(ctx context.Context, taskID, id uuid.UUID, status domain.VCSLinkStatus, headSHA string, mergedAt *time.Time) (*domain.VCSLink, error) {
+	const q = `
+		UPDATE vcs_links
+		SET status = $3::varchar, status_synced_at = now(),
+		    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('head_sha', $4::text),
+		    merged_at = CASE WHEN $3::varchar = 'merged' THEN COALESCE(merged_at, $5::timestamptz) ELSE NULL END
+		WHERE task_id = $1 AND id = $2 AND provider = 'gitlab' AND link_type = 'pr'
+		RETURNING ` + vcsLinkSelectCols
+	var row vcsLinkRow
+	if err := r.db.GetContext(ctx, &row, q, taskID, id, string(status), strings.TrimSpace(headSHA), utcTimePtr(mergedAt)); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	link := row.toDomain()
+	return &link, nil
+}
+
+// SetMergedAt stores the provider's merge time on a merged link whose time is
+// still unknown. A known time is never replaced and a link that is not merged
+// is never stamped, so a repeat is a no-op. Returns true when written.
+func (r *VCSLinkRepo) SetMergedAt(ctx context.Context, id uuid.UUID, mergedAt time.Time) (bool, error) {
+	if mergedAt.IsZero() {
+		return false, nil
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE vcs_links SET merged_at = $2
+		WHERE id = $1 AND merged_at IS NULL AND status = 'merged'
+	`, id, mergedAt.UTC())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// ListMergedPRLinksWithoutMergedAt returns merged pr links whose provider
+// merge time is unknown, ordered by id after afterID, at most limit rows.
+// Keyset paging lets the backfill walk the table once without revisiting a
+// row the provider could not resolve.
+func (r *VCSLinkRepo) ListMergedPRLinksWithoutMergedAt(ctx context.Context, afterID uuid.UUID, limit int) ([]domain.VCSLink, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	// title is nullable on rows written before it was always set; this
+	// table-wide read must not fail on one of them.
+	q := `SELECT ` + strings.Replace(vcsLinkSelectCols, "title,", "COALESCE(title, '') AS title,", 1) + ` FROM vcs_links
+		WHERE link_type = 'pr' AND status = 'merged' AND merged_at IS NULL AND id > $1
+		ORDER BY id ASC
+		LIMIT $2`
+	var rows []vcsLinkRow
+	if err := r.db.SelectContext(ctx, &rows, q, afterID, limit); err != nil {
+		return nil, err
+	}
+	out := make([]domain.VCSLink, len(rows))
+	for i := range rows {
+		out[i] = rows[i].toDomain()
+	}
+	return out, nil
 }
 
 // MergeMetadata merges patch into metadata with jsonb ||, so keys the patch

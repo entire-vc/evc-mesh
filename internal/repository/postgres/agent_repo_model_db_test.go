@@ -13,7 +13,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
-// Covers agents.model (#5548367d). The hazard is the same one the readers test
+// Covers agents.model. The hazard is the same one the readers test
 // describes: every reader names its columns, and Update writes the whole row, so
 // a reader that forgets `model` hands Update a nil and silently wipes the value.
 // Each reader is therefore asserted on the VALUE, not on a row count.

@@ -254,6 +254,46 @@ func TestFinalRerank_ThreeSharedKeyTokensEarnATier(t *testing.T) {
 	assert.Equal(t, shared.ID, out[0].ID)
 }
 
+func TestFinalRerank_RequestedDecayPreservesOtherSlots(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		opts  domain.RecallOpts
+		decay bool
+	}{
+		{name: "off"},
+		{name: "apply", opts: domain.RecallOpts{ApplyDecay: true}, decay: true},
+		{name: "order-desc", opts: domain.RecallOpts{OrderBy: "decayed_relevance:desc"}, decay: true},
+		{name: "order-bare", opts: domain.RecallOpts{OrderBy: "decayed_relevance"}, decay: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := uuid.New()
+			old := finalRow(ws, uuid.New(), "aaa", "x", 0.001)
+			fresh := finalRow(ws, uuid.New(), "bbb", "x", 0.02)
+			oldDense, freshDense := 0.9, 0.8
+			old.DenseScore, fresh.DenseScore = &oldDense, &freshDense
+			old.RecencyScore, fresh.RecencyScore = 0.015625, 1
+			sparse := finalRow(ws, uuid.New(), "ccc", "x", 0.01)
+			doc := finalRow(ws, uuid.New(), "ddd", "x", 0.03)
+			doc.SourceType, doc.DenseScore = domain.SourceDoc, &oldDense
+			pin := finalRow(ws, uuid.New(), "eee", "x", pinnedSentinelScore)
+			pin.DenseScore = &oldDense
+			tc.opts.Query = "unrelated"
+			out := finalRerank([]domain.ScoredMemory{old, fresh, sparse, doc, pin}, tc.opts)
+			require.Equal(t, pin.ID, out[0].ID)
+			require.Equal(t, doc.ID, out[1].ID)
+			require.Equal(t, sparse.ID, out[3].ID)
+			if tc.decay {
+				require.Equal(t, fresh.ID, out[2].ID)
+				require.Equal(t, old.ID, out[4].ID)
+			} else {
+				require.Equal(t, old.ID, out[2].ID)
+				require.Equal(t, fresh.ID, out[4].ID)
+			}
+			require.Equal(t, 0.9, *old.DenseScore, "raw diagnostics must not be overwritten")
+		})
+	}
+}
+
 func TestFinalQueryOverlap_TokenRules(t *testing.T) {
 	ws := uuid.New()
 	row := finalRow(ws, uuid.New(), "deploy-notes", "Prometheus scrape", 1)
@@ -263,4 +303,33 @@ func TestFinalQueryOverlap_TokenRules(t *testing.T) {
 	assert.True(t, finalQueryOverlap("observability", []domain.ScoredMemory{row}), "tags count as evidence")
 	assert.False(t, finalQueryOverlap("kubernetes", []domain.ScoredMemory{row}))
 	assert.False(t, finalQueryOverlap("kubernetes", nil))
+}
+
+func TestFinalGraphQueryOverlap_TranscriptEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name, query, content, key string
+		tags                      []string
+		want                      bool
+	}{
+		{name: "user-role-only", query: "user", content: "User: cobalt\nAssistant: noted"},
+		{name: "assistant-role-only", query: "assistant", content: "User: cobalt\nAssistant: noted"},
+		{name: "indented-crlf-role", query: "user", content: " \tUser: cobalt\r\nAssistant: noted"},
+		{name: "body-user", query: "user", content: "User: the user chose cobalt", want: true},
+		{name: "body-token", query: "cobalt", content: "User: cobalt", want: true},
+		{name: "continuation", query: "user", content: "User: cobalt\nthe user chose it", want: true},
+		{name: "inline-label", query: "user", content: "Ticket from User: cobalt", want: true},
+		{name: "unknown-label", query: "customer", content: "Customer: cobalt", want: true},
+		{name: "key-evidence", query: "user", content: "User: cobalt", key: "user-notes", want: true},
+		{name: "tag-evidence", query: "user", content: "User: cobalt", tags: []string{"user"}, want: true},
+		{name: "short-query", query: "a b", content: "User: cobalt", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := finalRow(uuid.New(), uuid.New(), tc.key, tc.content, 0)
+			row.Tags = tc.tags
+			assert.Equal(t, tc.want, finalGraphQueryOverlap(tc.query, row))
+			assert.Equal(t, tc.content, row.Content, "evidence cleanup must not rewrite stored content")
+		})
+	}
+	row := finalRow(uuid.New(), uuid.New(), "opaque", "User: cobalt", 0)
+	assert.True(t, finalQueryOverlap("user", []domain.ScoredMemory{row}), "base recall keeps its existing matcher")
 }

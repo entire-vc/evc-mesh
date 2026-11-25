@@ -22,7 +22,7 @@ import (
 // so in production deps.taskStatusRepo was always nil, allow_cancelled was silently
 // a no-op, and any parent task with even one cancelled subtask could never reach
 // done/review — no matter how the rule was configured. Live incident: task
-// an internal ticket, workspace rule "Require subtasks done before close" had
+// Workspace rule "Require subtasks done before close" had
 // allow_cancelled:true the whole time and it was never honored.
 //
 // internal/service tests cannot catch this: they construct evaluatorDeps directly
@@ -88,7 +88,7 @@ func TestRuleServiceWiresTaskStatusRepoForAllowCancelled(t *testing.T) {
 			"transition_gate.require_subtasks_done's allow_cancelled option "+
 			"(evalRequireSubtasksDone) reads deps.taskStatusRepo. Unwired, it is silently "+
 			"skipped, and a parent task with even one cancelled subtask can never reach "+
-			"done/review regardless of how the rule is configured (live incident #815f703b). "+
+			"done/review regardless of how the rule is configured. "+
 			"The service-package tests cannot catch this: they wire their own status repo, "+
 			"so they stay green either way.", option, constructor)
 	}

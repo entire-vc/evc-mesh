@@ -7,6 +7,7 @@
   "nav": {
     "dashboard": "Dashboard",
     "team": "Team",
+    "agentStats": "Agent statistics",
     "memory": "Memory",
     "spark": "Spark Catalog",
     "workspaceSettings": "Workspace Settings",

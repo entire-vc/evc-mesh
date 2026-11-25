@@ -18,7 +18,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
-// an internal ticket, AC "API-тест на арм/снятие".
+// AC "API-тест на арм/снятие".
 //
 // Two properties are load-bearing here and are asserted separately on purpose:
 //
@@ -184,7 +184,7 @@ func TestClearHumanGateEndpoint_AgentRefusedWithNamedExit(t *testing.T) {
 	assert.True(t, clearCalled, "a human on the same route does clear it")
 }
 
-// an internal ticket: an agent key reached an armed gate through set_human_gate without the
+// An agent key reached an armed gate through set_human_gate without the
 // two checks the marker path runs (human addressee, no repeat of an answered ask). Each
 // refusal below has a positive control on the same handler: the identical request from a
 // user, or with the check passing, is accepted.

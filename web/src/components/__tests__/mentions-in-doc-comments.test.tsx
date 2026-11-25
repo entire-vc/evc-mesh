@@ -35,10 +35,10 @@ const ME = "11111111-1111-1111-1111-111111111111";
 const WORKSPACE = { id: "ws-1", name: "Acme", slug: "acme" } as unknown as Workspace;
 
 const PAVEL = { id: "u1", slug: "pavel", display_name: "Pavel", kind: "user" };
-const DAEDALUS = {
+const DANA = {
   id: "a1",
-  slug: "daedalus",
-  display_name: "Daedalus",
+  slug: "dana",
+  display_name: "Dana",
   kind: "agent",
 };
 
@@ -129,7 +129,7 @@ beforeEach(() => {
   useWorkspaceStore.setState({ currentWorkspace: WORKSPACE });
   useRulesStore.setState({
     teamDirectory: {
-      agents: [{ slug: "daedalus" }],
+      agents: [{ slug: "dana" }],
       humans: [{ username: "pavel" }],
     } as never,
   });
@@ -149,24 +149,24 @@ describe("document comments — the @ picker", () => {
   });
 
   it("offers an agent as well as a person — both actor types, one menu", async () => {
-    mockedMentionables.mockResolvedValue([DAEDALUS, PAVEL]);
+    mockedMentionables.mockResolvedValue([DANA, PAVEL]);
     renderRail(makeController());
 
     fireEvent.change(composer(), { target: { value: "@", selectionStart: 1 } });
 
-    expect(await screen.findByRole("option", { name: /Daedalus/ })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: /Dana/ })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /Pavel/ })).toBeInTheDocument();
   });
 
   it("inserts the slug the server will resolve, with a trailing space", async () => {
-    mockedMentionables.mockResolvedValue([DAEDALUS]);
+    mockedMentionables.mockResolvedValue([DANA]);
     renderRail(makeController());
     const el = composer();
     fireEvent.change(el, { target: { value: "ping @dae", selectionStart: 9 } });
 
-    fireEvent.mouseDown(await screen.findByRole("option", { name: /Daedalus/ }));
+    fireEvent.mouseDown(await screen.findByRole("option", { name: /Dana/ }));
 
-    await waitFor(() => expect(el.value).toBe("ping @daedalus "));
+    await waitFor(() => expect(el.value).toBe("ping @dana "));
   });
 
   it("picks with Enter rather than submitting the comment", async () => {
@@ -184,11 +184,11 @@ describe("document comments — the @ picker", () => {
   });
 
   it("moves the selection with the arrow keys", async () => {
-    mockedMentionables.mockResolvedValue([DAEDALUS, PAVEL]);
+    mockedMentionables.mockResolvedValue([DANA, PAVEL]);
     renderRail(makeController());
     const el = composer();
     fireEvent.change(el, { target: { value: "@", selectionStart: 1 } });
-    await screen.findByRole("option", { name: /Daedalus/ });
+    await screen.findByRole("option", { name: /Dana/ });
 
     fireEvent.keyDown(el, { key: "ArrowDown" });
     fireEvent.keyDown(el, { key: "Enter" });
@@ -250,12 +250,12 @@ describe("document comments — how a mention reads afterwards", () => {
   it("links a mention that names somebody", () => {
     renderRail(
       makeController({
-        threads: [makeThread(makeComment({ body: "over to you @daedalus" }))],
+        threads: [makeThread(makeComment({ body: "over to you @dana" }))],
       }),
     );
 
-    const link = screen.getByRole("link", { name: /@daedalus/ });
-    expect(link).toHaveAttribute("href", "/w/acme/team/agent/daedalus");
+    const link = screen.getByRole("link", { name: /@dana/ });
+    expect(link).toHaveAttribute("href", "/w/acme/team/agent/dana");
   });
 
   it("links a mentioned person as a person, not as an agent", () => {

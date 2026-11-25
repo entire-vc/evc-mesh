@@ -205,7 +205,7 @@ func TestAnalyticsService_GetMetrics_CostMetrics_ProjectFilter(t *testing.T) {
 }
 
 // TestAnalyticsService_GetMetrics_CostMetrics_ReportedCoverage is the regression test for
-// session_count (every agent_sessions row touched, including unreported
+// Session_count (every agent_sessions row touched, including unreported
 // tool-breakdown-tracker stubs) must stay distinct from reported_session_count (rows that
 // actually carry a model_used from a real session_report) — the two must NOT be conflated
 // into a single "Total spend" / "Avg per session" figure.

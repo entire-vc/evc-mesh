@@ -13,7 +13,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// INTAKE brakes of the backlog→todo advisory rule (an internal ticket, from an internal ticket).
+// INTAKE brakes of the backlog→todo advisory rule.
 // Source of truth for the semantics: scripts/fleet-balancer.py intake_team +
 // fleet_intake.evaluate + human_gate.dep_freeze_reason. Each brake has a red case
 // (held, reason checked) and a green control (same card without the brake promotes).

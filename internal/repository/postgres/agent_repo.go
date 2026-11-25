@@ -60,6 +60,7 @@ type agentRow struct {
 	CreatedAt           time.Time          `db:"created_at"`
 	UpdatedAt           time.Time          `db:"updated_at"`
 	DeletedAt           *time.Time         `db:"deleted_at"`
+	ReaderProjectID     *uuid.UUID         `db:"reader_project_id"`
 }
 
 // agentSelectCols is every column agentRow scans, listed explicitly.
@@ -82,7 +83,7 @@ const agentSelectCols = `
 	max_concurrent_tasks, working_hours, profile_description,
 	callback_url, expires_at, last_rotated_at,
 	model, short_tag,
-	created_at, updated_at, deleted_at`
+	created_at, updated_at, deleted_at, reader_project_id`
 
 // nullIfEmpty is derefString's inverse on the write side: the domain spells
 // "not populated" as "", the column spells it as NULL, and the partial unique
@@ -116,6 +117,7 @@ func (r *agentRow) toDomain() domain.Agent {
 		AgentType:           r.AgentType,
 		Model:               r.Model,
 		ShortTag:            r.ShortTag,
+		ReaderProjectID:     r.ReaderProjectID,
 		APIKeyHash:          r.APIKeyHash,
 		APIKeySHA256:        derefString(r.APIKeySHA256),
 		APIKeyPrefix:        r.APIKeyPrefix,
@@ -176,7 +178,8 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 			callback_url,
 			expires_at, last_rotated_at,
 			created_at, updated_at,
-			api_key_sha256, mention_wakes, model, short_tag
+			api_key_sha256, mention_wakes, model, short_tag,
+			reader_project_id
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9, $10, $11,
@@ -187,7 +190,8 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 			$24,
 			$25, $26,
 			$27, $28,
-			$29, $30, $31, $32
+			$29, $30, $31, $32,
+			$33
 		)
 	`
 	capabilities := agent.Capabilities
@@ -215,6 +219,7 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 		// NULL rather than "" so the partial unique index treats un-populated
 		// rows as distinct instead of colliding on the empty string.
 		nullIfEmpty(agent.APIKeySHA256), agent.MentionWakes, agent.Model, agent.ShortTag,
+		agent.ReaderProjectID,
 	)
 	return err
 }
@@ -235,7 +240,8 @@ func createAgentTx(ctx context.Context, tx *sqlx.Tx, agent *domain.Agent) error 
 			callback_url,
 			expires_at, last_rotated_at,
 			created_at, updated_at,
-			api_key_sha256, mention_wakes, model, short_tag
+			api_key_sha256, mention_wakes, model, short_tag,
+			reader_project_id
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9, $10, $11,
@@ -246,7 +252,8 @@ func createAgentTx(ctx context.Context, tx *sqlx.Tx, agent *domain.Agent) error 
 			$24,
 			$25, $26,
 			$27, $28,
-			$29, $30, $31, $32
+			$29, $30, $31, $32,
+			$33
 		)
 	`
 	capabilities := agent.Capabilities
@@ -272,6 +279,7 @@ func createAgentTx(ctx context.Context, tx *sqlx.Tx, agent *domain.Agent) error 
 		agent.ExpiresAt, agent.LastRotatedAt,
 		agent.CreatedAt, agent.UpdatedAt,
 		nullIfEmpty(agent.APIKeySHA256), agent.MentionWakes, agent.Model, agent.ShortTag,
+		agent.ReaderProjectID,
 	)
 	return err
 }
@@ -695,6 +703,23 @@ func (r *AgentRepo) GetBySlug(ctx context.Context, workspaceID uuid.UUID, slug s
 	}
 	a := row.toDomain()
 	return &a, nil
+}
+
+// ListByNameFold returns up to limit live agents homed in the workspace whose
+// name equals name case-insensitively, oldest first.
+func (r *AgentRepo) ListByNameFold(ctx context.Context, workspaceID uuid.UUID, name string, limit int) ([]domain.Agent, error) {
+	const q = `SELECT ` + agentSelectCols + ` FROM agents
+		WHERE workspace_id = $1 AND lower(name) = lower($2) AND deleted_at IS NULL
+		ORDER BY created_at, id LIMIT $3`
+	var rows []agentRow
+	if err := r.db.SelectContext(ctx, &rows, q, workspaceID, name, limit); err != nil {
+		return nil, err
+	}
+	out := make([]domain.Agent, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.toDomain())
+	}
+	return out, nil
 }
 
 // ListWithProjects returns all agents in a workspace, each annotated with the

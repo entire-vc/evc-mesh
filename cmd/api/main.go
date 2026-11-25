@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -28,7 +29,7 @@ var (
 
 // reviewTriageInitialWait computes how long a freshly-started process should wait before its
 // FIRST review-triage run, given the persisted last-run watermark (nil if the job has never
-// run on this workspace) and the current time. This is the fix for an internal ticket: a bare
+// run on this workspace) and the current time. This is the fix: a bare
 // time.NewTicker(interval) always waits a fresh full interval from process start, so a service
 // that restarts more often than the interval elapses almost never reaches a tick. Here, a
 // restart occurring after lastRun+interval has already passed waits ~0 (catches up on the
@@ -61,6 +62,14 @@ func oauthRateLimits(cfg *config.Config, ipTrusted bool, redisClient *redis.Clie
 }
 
 func main() {
+	// Operator subcommand: runs instead of the server (docs/gate-intake.md).
+	if len(os.Args) > 1 && os.Args[1] == "gate-intake" {
+		os.Exit(runGateIntakeMain(os.Args[2:]))
+	}
+	// Operator subcommand: runs instead of the server (docs/lead-accept-context.md).
+	if len(os.Args) > 1 && os.Args[1] == "lead-accept" {
+		os.Exit(runLeadAcceptMain(os.Args[2:]))
+	}
 	deps := &apiDeps{}
 	defer deps.runAtExit()
 	for _, register := range apiModules {
@@ -153,7 +162,9 @@ func serve(deps *apiDeps) {
 
 	// Flush tool-breakdown tracker and cancel its background loop.
 	toolBreakdownCancel()
+	<-deps.memoryReadDone
 	toolBreakdownTracker.Flush(shutdownCtx)
+	deps.memoryReadLog.Flush(shutdownCtx)
 
 	// Shared Redis (also used by the rate limiter) — the WS hub was stopped before e.Shutdown.
 	if err := sharedRedis.Close(); err != nil {
@@ -191,6 +202,42 @@ func serve(deps *apiDeps) {
 // Only the public top-level route is redacted. The admin route
 // /api/v1/workspaces/:ws_id/invites/:invite_id carries a database id, not a
 // secret, and stays readable.
+// redactRequestURI is what every request log line prints instead of the raw
+// URI: the invite token in the path and credential query parameters
+// (agent_key, token: the /ws fallbacks) are masked, everything else stays
+// readable.
+func redactRequestURI(uri string) string {
+	return redactCredentialQuery(redactInviteToken(uri))
+}
+
+// credentialQueryParams are query parameters whose value is a credential.
+var credentialQueryParams = map[string]bool{"agent_key": true, "token": true}
+
+// redactCredentialQuery masks the values of credentialQueryParams in the query
+// string of uri, keeping the order and the other parameters byte for byte.
+func redactCredentialQuery(uri string) string {
+	path, query, ok := strings.Cut(uri, "?")
+	if !ok || query == "" {
+		return uri
+	}
+	pairs := strings.Split(query, "&")
+	changed := false
+	for i, pair := range pairs {
+		name, _, hasValue := strings.Cut(pair, "=")
+		if decoded, err := url.QueryUnescape(name); err == nil {
+			name = decoded
+		}
+		if hasValue && credentialQueryParams[strings.ToLower(name)] {
+			pairs[i] = pair[:strings.Index(pair, "=")+1] + "<redacted>"
+			changed = true
+		}
+	}
+	if !changed {
+		return uri
+	}
+	return path + "?" + strings.Join(pairs, "&")
+}
+
 func redactInviteToken(uri string) string {
 	const prefix = "/api/v1/invites/"
 	if !strings.HasPrefix(uri, prefix) {
@@ -241,7 +288,7 @@ func documentWatchQuietWindow() time.Duration {
 
 // humanGateSoftTimeoutWindow reads HUMAN_GATE_SOFT_TIMEOUT, the arm-age past which a
 // soft-classified human_gate is eligible for the 15-minute sweeper's release (contract
-// docs/human-gate-decision-recorded.md §5, an internal ticket).
+// docs/human-gate-decision-recorded.md §5).
 //
 // It exists as a knob for the same reason DefaultHumanGateSoftTimeout (24h) was a
 // hardcoded constant until now: proving the sweeper actually releases a gate at prod

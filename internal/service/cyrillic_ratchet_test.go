@@ -34,6 +34,7 @@ var cyrillicLiteralAllowlist = map[string]string{
 	"comment_service_human_gate_arming.go:recommendedDefaultRegex": "marker regexp",
 	"secret_rotation_gate.go:secretRotationNoiseTokens":            "secret-rotation dictionary",
 	"comment_closed_task_followup.go:driverCommentPrefixes":        "service-comment recognition",
+	"memory_analytics_service.go:memoryDimLabelsRU":                "memory widget display labels served to U6 (pinned by its vitest)",
 	"human_gate_soft_timeout.go:legacyReleaseSoftTimeoutMark":      "reads release comments written before system_code",
 	"task_service.go:legacyRepeatCommentPrefix":                    "reads repeat comments written before system_code",
 	"comment_service.go:completionKeywords":                        "completion-report dictionary",
@@ -46,7 +47,7 @@ var cyrillicLiteralAllowlist = map[string]string{
 	"post_merge_ac.go:postMergeACPattern":                          "post-merge acceptance recognition regexp",
 	"human_gate_ask_class.go:hardAskPatterns":                      "hard-ask recognition dictionary (mirrors the Runner's asks.py)",
 	"human_gate_ask_class.go:inlineDefaultRegex":                   "inline default recognition regexp (default keywords of recommendedDefaultRegex)",
-	// Two handler messages still Russian; they belong to the L3.3 error-code work.
+	// Two handler messages still Russian; they belong to the L3.3 error-code work (MR !1206).
 	"task_handler.go:handleError":      "mention-handoff error text (L3.3)",
 	"task_handler.go:gateClearRefusal": "lists the Russian withdrawal words the marker accepts (L3.3)",
 	// Error hints of the task handler belong to L3.3.

@@ -53,6 +53,11 @@ type UpdateDependencyConditionInput struct {
 	ActorAuthorized bool
 	// ExpectedGeneration is the edge generation the caller read (CAS).
 	ExpectedGeneration *int64
+	// RequireVerifiable refuses evidence that would be stored as a bare link
+	// (unverified: no criterion named, no attestation). The blocker side of an
+	// edge writes only evidence Mesh can check; overwriting a trusted receipt
+	// with a link would re-arm the waiter's card.
+	RequireVerifiable bool
 }
 
 // WithDependencyResolver wires the auto-transition hook into a service built by
@@ -135,7 +140,7 @@ func (s *taskDependencyService) Create(ctx context.Context, dep *domain.TaskDepe
 	// The boundary is the WORKSPACE, not the project. It was written as same-project
 	// because that is trivially inside the same workspace and no cross-project case had
 	// been asked for; the guard was never about projects. The cost of the stricter
-	// version was real and measured on 2026-09-07 (an internal ticket, Robin): three refusals in
+	// version was real and measured on 2026-09-07 (Robin): three refusals in
 	// a single triage pass, on blockers that genuinely cross projects — Billing waiting
 	// on a Team Relay site rollout, Spark ↔ Lab, Spark ↔ Argus. With no cross-project
 	// `blocks` edge available, the only way left to park such a card is a due_date,
@@ -345,6 +350,9 @@ func (s *taskDependencyService) UpdateCondition(ctx context.Context, id uuid.UUI
 		ev := domain.VerifyDependencyEvidence(next, claim, links, in.ActorAuthorized)
 		if ev.Status == domain.EvidenceInvalid {
 			return nil, apierror.BadRequest("evidence invalid: " + ev.Reason)
+		}
+		if in.RequireVerifiable && ev.Status == domain.EvidenceUnverified {
+			return nil, apierror.BadRequest("evidence unverified: " + ev.Reason)
 		}
 		ev.ActorID = in.ActorID
 		if ev.Status == domain.EvidenceTrusted {

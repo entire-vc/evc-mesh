@@ -39,7 +39,7 @@ func (g *gateConsents) set(c *domain.ExtensionConsent) {
 	g.c = c
 }
 
-// The hole of an internal ticket: after an instance update adds an event, the handshake
+// The hole: after an instance update adds an event, the handshake
 // (or an API call) leaves a subscription to it, but the workspace never agreed
 // to it. Delivery must follow consent, not the subscription table: nothing is
 // sent before the consent, the event is sent after it. The event the

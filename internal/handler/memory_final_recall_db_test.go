@@ -59,7 +59,7 @@ func newFinalRecallDBEnv(t *testing.T) *finalRecallDBEnv {
 		env.ids = append(env.ids, memory.ID)
 	}
 	// Neither neighbour is in the strict-AND retrieval arm or the dense arm.
-	// Graph must hydrate without GetByID (which itself counts as a read).
+	// Only neighbours in the final response may count as access.
 	for _, allowed := range []bool{true, false} {
 		tag := "allowed"
 		if !allowed {

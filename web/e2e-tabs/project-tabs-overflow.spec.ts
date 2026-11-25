@@ -6,7 +6,7 @@ import { mkdirSync } from "node:fs";
 // is in the menu and opens from there. Screenshots of the strip from this branch
 // and from the merge-request base go to e2e-tabs/shots/ for the review.
 
-const TABS = ["Board", "List", "Dependencies", "Calendar", "Docs", "Updates"];
+const TABS = ["Board", "List", "Dependencies", "Calendar", "Docs", "Updates", "Statistics"];
 // TABS_IMPL=before runs the two behaviour tests against the base strip: the red run.
 const IMPL = process.env.TABS_IMPL ?? "after";
 const SHOTS = "e2e-tabs/shots";

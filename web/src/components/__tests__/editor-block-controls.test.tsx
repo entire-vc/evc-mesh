@@ -312,3 +312,265 @@ describe.each<[string, Host]>([
     });
   });
 });
+
+/**
+ * The same actions offered from the table itself — a right-click menu and "+"
+ * strips on hover — for people who never find the toolbar button. Run against
+ * both hosts for the same reason as the toolbar cases above.
+ */
+describe.each<[string, Host]>([
+  ["Docs editor", "doc"],
+  ["task description editor", "task"],
+])("%s: table actions from the table itself", (_name, host) => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const body = (pm: HTMLElement) => pm.closest<HTMLElement>(".mesh-doc-editor-body")!;
+  const addRow = () => screen.queryByRole("button", { name: "Add a row at the end" });
+  const addCol = () => screen.queryByRole("button", { name: "Add a column at the end" });
+  const contextMenu = () => screen.getByRole("menu", { name: "Table options" });
+
+  it("shows the + strips only while the pointer is over the table", async () => {
+    const { container } = renderHost(host, `Intro\n\n${TABLE_3x3}`, vi.fn());
+    const pm = await mounted(container);
+    await waitFor(() => expect(blockSelect()).toBeEnabled());
+
+    expect(addRow()).toBeNull();
+    expect(addCol()).toBeNull();
+
+    fireEvent.mouseOver(container.querySelectorAll("td")[4]!);
+    expect(addRow()).toBeInTheDocument();
+    expect(addCol()).toBeInTheDocument();
+
+    // Onto the strip itself: still there, or it could never be clicked.
+    fireEvent.mouseOver(addRow()!);
+    expect(addRow()).toBeInTheDocument();
+
+    // Over text outside the table, then out of the editor: gone.
+    fireEvent.mouseOver(pm.querySelector("p")!);
+    expect(addRow()).toBeNull();
+    fireEvent.mouseOver(container.querySelectorAll("td")[0]!);
+    expect(addRow()).toBeInTheDocument();
+    fireEvent.mouseLeave(body(pm));
+    expect(addRow()).toBeNull();
+    expect(addCol()).toBeNull();
+  });
+
+  it("+ at the bottom appends a row after the last one, wherever the cursor is", async () => {
+    const onChange = vi.fn();
+    const { container } = renderHost(host, TABLE_3x3, onChange);
+    await mounted(container);
+    // The cursor starts in the header row; the row still goes to the end.
+    await waitFor(() => expect(tableTrigger()).toBeEnabled());
+
+    fireEvent.mouseOver(container.querySelectorAll("td")[0]!);
+    fireEvent.click(addRow()!);
+
+    const md = await savedMarkdown(onChange, (m) => tableRows(m).length === 4);
+    const rows = tableRows(md);
+    expect(rows.slice(0, 3)).toEqual([
+      ["A", "B", "C"],
+      ["a1", "b1", "c1"],
+      ["a2", "b2", "c2"],
+    ]);
+    expect(rows[3]!.every((c) => /^(|<br \/>)$/.test(c))).toBe(true);
+    expect(container.querySelectorAll("table tr")).toHaveLength(4);
+  });
+
+  it("+ on the right appends a column after the last one", async () => {
+    const onChange = vi.fn();
+    const { container } = renderHost(host, TABLE_3x3, onChange);
+    await mounted(container);
+    await waitFor(() => expect(tableTrigger()).toBeEnabled());
+
+    fireEvent.mouseOver(container.querySelectorAll("td")[0]!);
+    fireEvent.click(addCol()!);
+
+    const md = await savedMarkdown(onChange, (m) => tableRows(m)[0]?.length === 4);
+    const rows = tableRows(md);
+    expect(rows.map((r) => r.slice(0, 3))).toEqual([
+      ["A", "B", "C"],
+      ["a1", "b1", "c1"],
+      ["a2", "b2", "c2"],
+    ]);
+    expect(rows.every((r) => /^(|<br \/>)$/.test(r[3]!))).toBe(true);
+  });
+
+  it("right-click on a body cell opens the table menu for THAT row: delete removes it", async () => {
+    const onChange = vi.fn();
+    const { container } = renderHost(host, TABLE_3x3, onChange);
+    await mounted(container);
+    await waitFor(() => expect(tableTrigger()).toBeEnabled());
+
+    // Cells: a1 b1 c1 a2 b2 c2 — a2 is in the last row; the cursor is in the header.
+    const notPrevented = fireEvent.contextMenu(container.querySelectorAll("td")[3]!, {
+      clientX: 40,
+      clientY: 60,
+    });
+    expect(notPrevented).toBe(false);
+    fireEvent.click(within(contextMenu()).getByRole("menuitem", { name: "Delete row" }));
+
+    const md = await savedMarkdown(onChange, (m) => tableRows(m).length === 2);
+    expect(tableRows(md)).toEqual([
+      ["A", "B", "C"],
+      ["a1", "b1", "c1"],
+    ]);
+    expect(screen.queryByRole("menu", { name: "Table options" })).toBeNull();
+  });
+
+  it("right-click: delete column, and the refusal explained in visible text", async () => {
+    const onChange = vi.fn();
+    const { container } = renderHost(host, "| A | B |\n| - | - |\n| a | b |\n", onChange);
+    await mounted(container);
+    await waitFor(() => expect(tableTrigger()).toBeEnabled());
+
+    fireEvent.contextMenu(container.querySelectorAll("td")[1]!);
+    const menu = contextMenu();
+    const delRow = within(menu).getByRole("menuitem", { name: "Delete row" });
+    expect(delRow).toHaveAttribute("aria-disabled", "true");
+    const reason = within(menu).getByText(/A table keeps its header and at least one row/);
+    expect(reason).toBeVisible();
+    expect(delRow).toHaveAttribute("aria-describedby", reason.id);
+    fireEvent.click(delRow);
+    expect(container.querySelectorAll("table tr")).toHaveLength(2);
+
+    fireEvent.click(within(contextMenu()).getByRole("menuitem", { name: "Delete column" }));
+    const md = await savedMarkdown(onChange, (m) => tableRows(m)[0]?.length === 1);
+    expect(tableRows(md)).toEqual([["A"], ["a"]]);
+
+    // One column left: the refusal is spelled out there too.
+    fireEvent.contextMenu(container.querySelector("td")!);
+    expect(
+      within(contextMenu()).getByText("This is the only column — delete the table instead"),
+    ).toBeVisible();
+  });
+
+  it("right-click: adds a row and a column next to the clicked cell", async () => {
+    const onChange = vi.fn();
+    const { container } = renderHost(host, TABLE_3x3, onChange);
+    await mounted(container);
+    await waitFor(() => expect(tableTrigger()).toBeEnabled());
+
+    fireEvent.contextMenu(container.querySelectorAll("td")[0]!); // a1
+    fireEvent.click(within(contextMenu()).getByRole("menuitem", { name: "Insert row above" }));
+    const md = await savedMarkdown(onChange, (m) => tableRows(m).length === 4);
+    expect(tableRows(md)[2]).toEqual(["a1", "b1", "c1"]);
+
+    fireEvent.contextMenu(container.querySelectorAll("td")[3]!);
+    fireEvent.click(within(contextMenu()).getByRole("menuitem", { name: "Insert column left" }));
+    const md2 = await savedMarkdown(onChange, (m) => tableRows(m)[0]?.length === 4);
+    const header = tableRows(md2)[0]!;
+    expect(header.slice(1)).toEqual(["A", "B", "C"]);
+    expect(header[0]).toMatch(/^(|<br \/>)$/);
+  });
+
+  it("Escape closes the right-click menu; the arrow keys walk it", async () => {
+    const { container } = renderHost(host, TABLE_3x3, vi.fn());
+    const pm = await mounted(container);
+    await waitFor(() => expect(tableTrigger()).toBeEnabled());
+
+    fireEvent.contextMenu(container.querySelectorAll("td")[0]!);
+    const menu = contextMenu();
+    fireEvent.keyDown(pm, { key: "ArrowDown" });
+    const items = Array.from(menu.querySelectorAll<HTMLElement>("[role^=menuitem]"));
+    expect(items[0]).toHaveFocus();
+    fireEvent.keyDown(items[0]!, { key: "ArrowDown" });
+    expect(items[1]).toHaveFocus();
+
+    fireEvent.keyDown(items[1]!, { key: "Escape" });
+    expect(screen.queryByRole("menu", { name: "Table options" })).toBeNull();
+    expect(pm).toHaveFocus();
+  });
+
+  it("the keyboard's menu key (contextmenu on the editor root) opens it at the caret in a table", async () => {
+    const onChange = vi.fn();
+    const { container } = renderHost(host, TABLE_3x3, onChange);
+    const pm = await mounted(container);
+    // The caret starts in the header row's first cell.
+    await waitFor(() => expect(tableTrigger()).toBeEnabled());
+
+    expect(fireEvent.contextMenu(pm)).toBe(false);
+    fireEvent.click(within(contextMenu()).getByRole("menuitem", { name: "Delete column" }));
+    const md = await savedMarkdown(onChange, (m) => tableRows(m)[0]?.length === 2);
+    expect(tableRows(md)[0]).toEqual(["B", "C"]);
+  });
+
+  it("the menu key with the caret outside a table leaves the browser menu alone", async () => {
+    const { container } = renderHost(host, `Intro\n\n${TABLE_3x3}`, vi.fn());
+    const pm = await mounted(container);
+    await waitFor(() => expect(blockSelect()).toBeEnabled());
+
+    expect(fireEvent.contextMenu(pm)).toBe(true);
+    expect(screen.queryByRole("menu", { name: "Table options" })).toBeNull();
+  });
+
+  it("a touch long-press keeps the browser menu (select / paste on phones)", async () => {
+    const { container } = renderHost(host, TABLE_3x3, vi.fn());
+    await mounted(container);
+    await waitFor(() => expect(tableTrigger()).toBeEnabled());
+
+    const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, "pointerType", { value: "touch" });
+    expect(container.querySelectorAll("td")[0]!.dispatchEvent(ev)).toBe(true);
+    expect(screen.queryByRole("menu", { name: "Table options" })).toBeNull();
+  });
+
+  it("outside a table, and on a link in a cell, the browser keeps its own menu", async () => {
+    const { container } = renderHost(
+      host,
+      "Intro\n\n| A | B |\n| - | - |\n| [site](https://example.com) | b |\n",
+      vi.fn(),
+    );
+    const pm = await mounted(container);
+    await waitFor(() => expect(blockSelect()).toBeEnabled());
+
+    expect(fireEvent.contextMenu(pm.querySelector("p")!)).toBe(true);
+    expect(fireEvent.contextMenu(pm.querySelector("td a")!)).toBe(true);
+    expect(screen.queryByRole("menu", { name: "Table options" })).toBeNull();
+  });
+
+  it("listens for no mousemove anywhere: hovering costs boundary events only", async () => {
+    const docAdd = vi.spyOn(document, "addEventListener");
+    const winAdd = vi.spyOn(window, "addEventListener");
+    const elAdd = vi.spyOn(HTMLElement.prototype, "addEventListener");
+    try {
+      const { container } = renderHost(host, TABLE_3x3, vi.fn());
+      await mounted(container);
+      await waitFor(() => expect(tableTrigger()).toBeEnabled());
+      fireEvent.mouseOver(container.querySelectorAll("td")[0]!);
+      fireEvent.contextMenu(container.querySelectorAll("td")[0]!);
+      expect(addRow()).toBeInTheDocument();
+
+      // React's own root delegation registers every event type once, at
+      // createRoot, whether anything uses it or not; those are not ours.
+      const moves = [...docAdd.mock.calls, ...winAdd.mock.calls, ...elAdd.mock.calls].filter(
+        ([type, listener]) =>
+          (type === "mousemove" || type === "pointermove") &&
+          !/^bound dispatch/.test((listener as { name?: string } | null)?.name ?? ""),
+      );
+      expect(moves).toEqual([]);
+    } finally {
+      docAdd.mockRestore();
+      winAdd.mockRestore();
+      elAdd.mockRestore();
+    }
+  });
+});
+
+describe("read-only document: nothing from the table", () => {
+  it("shows no strips and keeps the browser's menu", async () => {
+    const { container } = render(
+      <MemoryRouter>
+        <DocEditor value={TABLE_3x3} onChange={vi.fn()} readOnly />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(container.querySelector("table td")).not.toBeNull());
+    const cell = container.querySelectorAll("td")[0]!;
+
+    fireEvent.mouseOver(cell);
+    expect(screen.queryByRole("button", { name: "Add a row at the end" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add a column at the end" })).toBeNull();
+    expect(fireEvent.contextMenu(cell)).toBe(true);
+    expect(screen.queryByRole("menu", { name: "Table options" })).toBeNull();
+    expect(container.querySelector("[data-table-handles]")).toBeNull();
+  });
+});

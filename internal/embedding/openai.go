@@ -76,7 +76,7 @@ const maxClientBatchSize = 32
 // Input is []string, not string: the API accepts both, and the array form is what
 // makes EmbedBatch a single round trip. Chunked memories embed 2-24 pieces each, and
 // sending those one at a time is what exhausted the request budget mid-document under
-// concurrent load (#67f4e0d9).
+// concurrent load.
 type openAIEmbedRequest struct {
 	Model string   `json:"model"`
 	Input []string `json:"input"`
@@ -140,7 +140,7 @@ func (o *openAIEmbedder) Embed(ctx context.Context, text string) ([]float32, err
 // EmbedBatch embeds every text, using ONE HTTP request per maxClientBatchSize texts
 // rather than one per text. For a chunked memory this collapses up to 24 sequential
 // round trips into a single call — which is both the latency fix and a ~20x reduction
-// in load on the shared embedder instance (#67f4e0d9).
+// in load on the shared embedder instance.
 func (o *openAIEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	if len(texts) == 0 {
 		return nil, nil

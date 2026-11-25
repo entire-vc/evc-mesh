@@ -175,7 +175,7 @@ func TestUpdatePreferences_ForeignWorkspaceIsRefusedForAgentKey(t *testing.T) {
 }
 
 // TestUpdatePreferences_AgentGrantElsewhereDoesNotGrantAccess is the direct
-// regression test for #7661fc5d on this route: an agent that genuinely holds
+// regression test for an internal ticket on this route: an agent that genuinely holds
 // an active grant in victimWS must still be refused when the key PRESENTED on
 // this particular request authenticated into a different workspace.
 //

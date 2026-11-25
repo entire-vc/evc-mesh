@@ -18,6 +18,10 @@ and answers the repeat with the write that happened.
 Without the header every route behaves as it does without idempotency: each
 request runs and writes.
 
+`POST /api/v1/gate-intake` is not on this list: it is idempotent by its
+`approval_id`, with a receipt written in the card's transaction and no expiry,
+and does not use the answer store. See [gate-intake.md](gate-intake.md).
+
 ## Two layers
 
 **The receipt** (the four routes with a receipt route). The key is recorded

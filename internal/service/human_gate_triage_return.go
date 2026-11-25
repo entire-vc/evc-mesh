@@ -22,7 +22,7 @@ func (s *taskService) afterGateClear(ctx context.Context, prev *domain.Task) {
 // handBackToGateAuthor: a card whose assignee is a person (the ask was parked on
 // Pavel) must not stay on that person once they have answered — "проверяйте и
 // закрывайте" was addressed to an agent, and nobody checked for 7-10 days
-// (#346bd658, #d7c420c1; task #8f191cf7). The agent that armed the gate takes it
+// The agent that armed the gate takes it
 // back. Left alone: agent-held cards, cards of a gate with no agent author (raw
 // PATCH/UI arm), terminal cards, and a card somebody checked out in the meantime (also when that checkout
 // lands after the check: AssignTask compares the snapshot's updated_at).

@@ -43,7 +43,7 @@ func TestEmbedHTTPTimeoutDefaultsTo30s(t *testing.T) {
 	}
 }
 
-// TestOpenAIEmbedder_EmbedBatch_SendsOneRequestPerBatch pins the fix for #67f4e0d9:
+// TestOpenAIEmbedder_EmbedBatch_SendsOneRequestPerBatch pins the fix:
 // EmbedBatch must issue ONE HTTP request per maxClientBatchSize texts, not one per text.
 // The pre-fix implementation looped over Embed, which is what multiplied load on the
 // shared TEI instance by the chunk count and made long documents fail under concurrency.

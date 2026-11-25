@@ -7,7 +7,7 @@
 -- detection) never gets this set. That distinction is what lets a later
 -- replay of an already-revoked token be told apart as "died in an ordinary
 -- rotation" vs "died because the whole session was declared compromised" —
--- see internal/auth/service.go, RefreshTokens / handleTokenReuse (#cfb14ad6).
+-- see internal/auth/service.go, RefreshTokens / handleTokenReuse.
 ALTER TABLE refresh_tokens ADD COLUMN replaced_by_hash VARCHAR(128);
 
 -- +goose Down

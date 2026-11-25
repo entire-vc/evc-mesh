@@ -9,8 +9,8 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/service"
 )
 
-// configureOIDC switches on Mesh as an OpenID Connect provider (card
-// an internal ticket) when MESH_OIDC_SIGNING_KEY_FILE is set. A configured but unusable
+// configureOIDC switches on Mesh as an OpenID Connect provider
+// when MESH_OIDC_SIGNING_KEY_FILE is set. A configured but unusable
 // key or client list stops the start: turning the provider off silently would
 // leave every client's sign-in broken with nothing in the log saying why.
 func configureOIDC(cfg *config.Config, oauthService service.OAuthService) {

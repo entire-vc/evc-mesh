@@ -55,7 +55,7 @@ func serveProjectRepos(h *ExtensionProjectHandler, path string) (int, []projectR
 	return rec.Code, out.Repos
 }
 
-// an internal ticket: GET .../repos joins the repositories of the project's links with
+// GET .../repos joins the repositories of the project's links with
 // the one its binding names, and says which side each is known from.
 func TestExtensionProjectHandler_ReposSources(t *testing.T) {
 	at := time.Date(2026, 10, 26, 10, 0, 0, 0, time.UTC)

@@ -20,7 +20,7 @@ import (
 // runs these against a migrated DATABASE_URL and skip()s rather than fails
 // when no database is reachable.
 //
-// Regression test for #b73171fa: on the update branch (explicit status onto
+// Regression test: on the update branch (explicit status onto
 // an existing (task_id, provider, link_type, external_id)), Upsert's SQL
 // never touches id/created_at — real Postgres, not a fake, is what proves the
 // RETURNING (xmax = 0) trick actually distinguishes insert from update and
@@ -176,7 +176,7 @@ func TestVCSLinkRepo_Upsert_UpdateBranchReturnsActualPersistedRow(t *testing.T) 
 		"Upsert must mutate the caller's link back to the row's REAL created_at")
 
 	// Equality against a fresh, independent GET — not just against what
-	// Upsert echoed back — is the actual acceptance bar (#b73171fa AC1).
+	// Upsert echoed back — is the actual acceptance bar (an internal ticket AC1).
 	stored, err := repo.GetByID(ctx, second.ID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
@@ -188,7 +188,7 @@ func TestVCSLinkRepo_Upsert_UpdateBranchReturnsActualPersistedRow(t *testing.T) 
 	require.Len(t, all, 1, "no second row may exist under the same natural key")
 }
 
-// #0fbed572: re-linking with a CORRECTED provider (the fix path for a URL
+// Re-linking with a CORRECTED provider (the fix path for a URL
 // whose provider was originally mis-inferred, e.g. a self-hosted GitLab URL
 // first recorded as github) must update the existing row in place, not
 // insert a second one — the unique index is keyed on provider too, so the
@@ -231,7 +231,7 @@ func TestVCSLinkRepo_Upsert_ProviderCorrectionUpdatesInPlace(t *testing.T) {
 }
 
 // seedVCSLink inserts a row directly via SQL, bypassing repo Create/Upsert.
-// Used to reproduce pre-existing corruption (#0fbed572 defect 1) that the
+// Used to reproduce pre-existing corruption (an internal ticket defect 1) that the
 // FIXED repo methods can no longer produce on their own.
 func seedVCSLink(t *testing.T, db *sqlx.DB, id, taskID uuid.UUID, provider domain.VCSProvider, linkType domain.VCSLinkType, externalID, url string, status domain.VCSLinkStatus, createdAt time.Time) {
 	t.Helper()
@@ -242,12 +242,12 @@ func seedVCSLink(t *testing.T, db *sqlx.DB, id, taskID uuid.UUID, provider domai
 	require.NoError(t, err)
 }
 
-// #0fbed572 defect 1 (found by Daedalus's independent review of the first
+// 1 (found by Dana's independent review of the first
 // attempt at this fix): a task already carrying TWO rows for the same MR —
 // exactly the shape left behind by the OLD (task_id, provider, link_type,
 // external_id)-only matching, which could never see across a provider
 // correction — must be healed by the next Upsert, not rejected with a raw
-// unique-constraint error. This is the live state #d742efd4 was actually in
+// unique-constraint error. This is the live state an internal ticket was actually in
 // the day the bug was caught; seeded here via seedVCSLink because the fixed
 // repo methods can no longer produce it on their own.
 func TestVCSLinkRepo_Upsert_HealsPreexistingDuplicateSameURL(t *testing.T) {
@@ -285,7 +285,7 @@ func TestVCSLinkRepo_Upsert_HealsPreexistingDuplicateSameURL(t *testing.T) {
 	assert.Equal(t, domain.VCSLinkStatusMerged, all[0].Status)
 }
 
-// #0fbed572 defect 2: a GitHub PR and a GitLab MR that happen to share the
+// 2: a GitHub PR and a GitLab MR that happen to share the
 // same external_id NUMBER are different objects — matching by url must
 // never collapse them into one row. Regression guard for the shape of fix
 // that matched by (task_id, link_type, external_id) alone: the second
@@ -326,7 +326,7 @@ func TestVCSLinkRepo_Upsert_DifferentProvidersSameExternalIDStayDistinct(t *test
 	assert.Equal(t, domain.VCSLinkStatusOpen, stillGithub.Status, "and must not have been silently overwritten")
 }
 
-// #0fbed572 defect 3: after a corrected provider inference, a plain
+// 3: after a corrected provider inference, a plain
 // add_vcs_link with no status (repo.Create, not Upsert) must refuse — not
 // silently insert a second row — when a link for the same url already
 // exists under a different provider. Before this fix the unique index
@@ -408,7 +408,7 @@ func TestVCSLinkRepo_Upsert_MergesMetadata(t *testing.T) {
 	assert.False(t, got.IsMergedShippedGreen())
 }
 
-// #16c1dd76: an MR iid is unique only inside its project, so group/a!88 and
+// An MR iid is unique only inside its project, so group/a!88 and
 // group/b!88 must coexist on one task and each be updated on its own. Before
 // the unique index included the url, the second Upsert answered 409.
 func TestVCSLinkRepo_Upsert_SameIIDDifferentProjectCoexist(t *testing.T) {

@@ -7,7 +7,7 @@ BIN_DIR := bin
 API_BINARY := $(BIN_DIR)/mesh-api
 # No MCP_BINARY here on purpose: the MCP server lives in its own repository
 # (entire-vc/evc-mesh-mcp). This repo's copy (cmd/mcp + internal/mcp) was a
-# duplicate that had drifted 12 tools behind and was deleted — Mesh an internal ticket.
+# duplicate that had drifted 12 tools behind and was deleted.
 
 # Database connection (matches docker-compose defaults)
 DB_DSN ?= postgres://mesh:mesh@localhost:5437/mesh?sslmode=disable
@@ -262,7 +262,7 @@ ci-test: ci-services-up
 		go test ./... -v -race -timeout $(GO_TEST_TIMEOUT) $(GO_TEST_P_FLAG) -coverprofile=coverage.out -covermode=atomic && \
 	echo "── Tests OK ✓"
 
-# ── Before every push: affected packages only ────────────────────────────────
+# ── Before every push: affected packages only ────────────────────
 # `make lint-affected test-affected` checks what the diff against origin/main
 # reaches, with the same package selection as the CI `test` job
 # (scripts/ci/go_affected_packages.py). The full suite, e2e and shards stay in
@@ -295,6 +295,9 @@ endef
 ## checkouts can draw the same ports; a port docker hands out cannot be taken.
 ## compose is called directly (not via ci-services-up) so ci-project-env never
 ## writes these zero ports into the checkout's .env.
+## GNU make may forward a second termination signal after the group signal;
+## ignore further signals before exiting the signal handler as well as during
+## cleanup, so a second handler cannot interrupt entry into the EXIT trap.
 TEST_PKG_PORTS   := DB_PORT=0 REDIS_PORT=0 NATS_PORT=0 NATS_MONITOR_PORT=0
 TEST_PKG_COMPOSE := COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) $(TEST_PKG_PORTS) \
 	docker compose -f $(DEPLOY_COMPOSE)
@@ -302,9 +305,9 @@ test-pkg: ci-install-tools
 	@if [ -z "$(strip $(PKG))" ]; then \
 		echo 'usage: make test-pkg PKG="./internal/foo/... ./internal/bar"' >&2; exit 2; \
 	fi
-	@trap '$(TEST_PKG_COMPOSE) down -v; rm -f $(DEPLOY_DIR)/.ci-active-pid' EXIT; \
-	trap 'exit 130' INT; \
-	trap 'exit 143' TERM HUP; \
+	@trap 'trap "" INT TERM HUP; $(TEST_PKG_COMPOSE) down -v; rm -f $(DEPLOY_DIR)/.ci-active-pid' EXIT; \
+	trap 'trap "" INT TERM HUP; exit 130' INT; \
+	trap 'trap "" INT TERM HUP; exit 143' TERM HUP; \
 	printf '%s\n%s\n' "$$$$" "$$(ps -o lstart= -p $$$$)" > $(DEPLOY_DIR)/.ci-active-pid; \
 	python3 $(CURDIR)/scripts/ci/reap_stale_ci_containers.py || true; \
 	echo "── Starting $(COMPOSE_PROJECT_NAME) (postgres redis nats) ──────" && \
@@ -337,11 +340,14 @@ test-affected:
 	if [ -z "$$sel" ]; then echo "No Go package affected — nothing to test."; exit 0; fi; \
 	$(MAKE) --no-print-directory test-pkg PKG="$$(echo $$sel)"
 
-## lint-affected: golangci-lint (pinned, see ci-install-tools) on the same
+## lint-affected: fast migration, memory-scope and test-file dependency gates,
+## then golangci-lint (pinned, see ci-install-tools) on the same
 ## packages. A package's lint result depends only on that package and what it
 ## imports, so linting the selection gives the CI `lint` verdict for the diff
 ## (CI lints ./..., and main is lint-clean). ALL -> the whole module, as CI.
-lint-affected: ci-install-tools
+lint-affected:
+	@python3 scripts/ci/lint_affected_gates.py --base "$(AFFECTED_BASE)"
+	@$(MAKE) --no-print-directory ci-install-tools
 	@$(go_affected_select); \
 	if [ "$$sel" = ALL ]; then \
 		echo "── Lint (golangci-lint $(GOLANGCI_LINT_VERSION)) ./... — selector answered ALL"; \

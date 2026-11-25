@@ -7,7 +7,7 @@ import (
 )
 
 // ClosedFollowUpPending is one undelivered closed-card follow-up finding
-// (#db1c6c7a): the comment exists, the delivery (root search, claim, card
+// the comment exists, the delivery (root search, claim, card
 // create or reopen) could not be completed and did NOT silently fail open —
 // the finding is parked here for the reconcile job to re-deliver, with a
 // visible system comment on the source card saying so.
@@ -32,7 +32,7 @@ import (
 // stamps are set: retiring on EscalatedAt alone stranded a park notice that
 // never landed (codex-review P1, round 5).
 //
-// ClaimedUntil is the reconcile lease (#a2368528, from the R7 finding on
+// ClaimedUntil is the reconcile lease (from the R7 finding on
 // !1083): while it is in the future, one pass owns the row and every other
 // pass — a second replica's, or an overlapping inline delivery — must skip
 // it, because ListDue carries no lock of its own. NULL (or past) means

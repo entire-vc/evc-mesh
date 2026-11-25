@@ -425,7 +425,7 @@ func TestRateLimit_Redis_NameRequired(t *testing.T) {
 }
 
 // TestRateLimit_Redis_NamespacesDoNotShareCounter is the regression test for
-// `an internal ticket`: /auth/login (5 RPM) and /auth/refresh (60 RPM) both keyed by
+// /auth/login (5 RPM) and /auth/refresh (60 RPM) both keyed by
 // client IP shared one Redis counter because the key carried no per-limiter
 // identity, so refresh traffic alone could exhaust login's budget. With Name
 // set, flooding the high-RPM limiter (simulating the agent fleet hammering

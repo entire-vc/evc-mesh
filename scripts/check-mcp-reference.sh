@@ -2,7 +2,7 @@
 # docs/mcp-reference.md is the public catalogue of the MCP tools, but the tools live in a
 # DIFFERENT repository (evc-mesh-mcp). Nothing in this repo's CI can notice when a tool is
 # added there, so the page drifted to 20 undocumented tools plus 4 documented tools the
-# server never registered (Mesh an internal ticket).
+# server never registered.
 #
 # This compares both directions:
 #   1. every "#### N. `name`" heading in the page names a tool the server registers
@@ -17,7 +17,7 @@
 # CI_JOB_TOKEN; evc-mesh is in that project's job-token allowlist. It is NOT read from the
 # GitHub showcase: the showcase is a reviewed public export (draft PR twice a day, merged by
 # hand), so it trails canon by a day or more by design, and a tool added to canon went red
-# on every evc-mesh MR until the next export was merged (a review, Mesh an internal ticket).
+# on every evc-mesh MR until the next export was merged (!1486).
 #
 # Set MCP_SERVER_GO to a local checkout's internal/mcp/server.go to run offline.
 # Set MCP_REF_SOURCE_OUT=<dir> to keep the server source read and the registered tool list

@@ -3,7 +3,7 @@ import { test, expect, type Page } from "@playwright/test";
 // This suite writes only to scripts/local-stack.sh's disposable database.
 // Regression for the page jumping to the top when "comment" is pressed on a
 // selection deep in a long document, plus the scroll-to-mark behaviour of
-// an internal ticket that the fix must leave alone.
+// That the fix must leave alone.
 const WORDS = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor";
 
 

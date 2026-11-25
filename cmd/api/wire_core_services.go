@@ -102,7 +102,7 @@ func wireCoreServices(deps *apiDeps) {
 	// allow_cancelled option: without it, evalRequireSubtasksDone silently skips the
 	// cancelled-subtask check (deps.taskStatusRepo == nil), so a parent with even one
 	// legitimately-cancelled subtask can never reach done/review no matter how the
-	// rule is configured (an internal ticket, live incident an internal ticket).
+	// rule is configured.
 	ruleService := service.NewRuleService(ruleRepo, activityLogRepo,
 		service.WithRuleCommentRepo(commentRepo),
 		service.WithRuleTaskRepo(taskRepo),
@@ -299,7 +299,7 @@ func wireCoreServices(deps *apiDeps) {
 		service.WithRulesRuleRepo(ruleRepo),
 		service.WithRulesStatusRepo(taskStatusRepo),
 		// Enables GET /workspaces/:ws_id/team to list guest agents (task
-		// U3/an internal ticket) alongside home ones, each tagged is_home. Without
+		// U3) alongside home ones, each tagged is_home. Without
 		// this, the endpoint reverts to home-only — see GetTeamDirectory.
 		service.WithRulesAgentGrantRepo(agentWorkspaceGrantRepo),
 	)
@@ -371,13 +371,13 @@ func wireCoreServices(deps *apiDeps) {
 	notificationService := service.NewNotificationService(notificationRepo, notificationOpts...)
 
 	// vcsIntegrationResolver replaces the process-start-only githubClient/
-	// gitlabClient construction that used to live here (an internal ticket, §C1 of
+	// gitlabClient construction that used to live here (§C1 of
 	// specsintegration-provider-contract): it resolves a GitHub/GitLab
 	// connection fresh on EVERY call — the done-evidence gate's live
 	// re-check, and the webhook receiver's signature validation — honoring
 	// a workspace's own active integration row over these env values, per
 	// §4's resolution order. The env values below are what governs when no
-	// workspace has configured its own connection (the pre
+	// workspace has configured its own connection (the earlier
 	// single-instance behavior, unchanged) — logged explicitly here because
 	// that is the one thing genuinely fixed at process start; a workspace
 	// row can flip the effective state on the next request without a
@@ -482,7 +482,7 @@ func wireCoreServices(deps *apiDeps) {
 		// TestTaskServiceWiresTheAssigneeTenancyGuard reads it back out of this file.
 		service.WithWorkspaceMembershipReader(postgres.NewWorkspaceMembershipReader(db)),
 		// Agent half of the same guard for the multi-workspace case (task
-		// U3/an internal ticket): without it, a guest agent (home workspace is
+		// U3): without it, a guest agent (home workspace is
 		// elsewhere, reached here via an active agent_workspace_grants
 		// connection) can never pass assertAssigneeInProjectWorkspace's agent
 		// branch, and every guest-workspace assignment refuses.

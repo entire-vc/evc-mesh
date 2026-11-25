@@ -31,6 +31,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 SELECTOR = HERE / 'go_affected_packages.py'
 sys.path.insert(0, str(HERE))
+import ci_config  # noqa: E402
 import go_affected_packages as selector  # noqa: E402
 
 MODULE = 'example.test/m'
@@ -68,6 +69,7 @@ BASE_FILES = {
     'web/locales/board.json': '{}\n',
     'migrations/001_init.sql': 'select 1;\n',
     '.gitlab-ci.yml': 'stages: [test]\n',
+    '.gitlab/ci/go.yml': 'test:\n  script: [true]\n',
 }
 DEPS = ('internal/scanner <- internal/handler/*.go\ntests/integration <- cmd/api/main.go\n'
         'internal/model <- web/locales/*.json\n')
@@ -124,6 +126,8 @@ CASES = [
      {'migrations/002_more.sql': 'select 2;\n'}, [], 'ALL', 'migration'),
     ('a CI file changed: everything',
      {'.gitlab-ci.yml': 'stages: [build, test]\n'}, [], 'ALL', 'CI file'),
+    ('the Go CI area file changed: everything',
+     {'.gitlab/ci/go.yml': 'test:\n  script: [go test]\n'}, [], 'ALL', 'CI file'),
     ('a shared test helper changed: everything',
      {'internal/testutil/testutil.go': 'package testutil\n\nfunc Helper() { _ = 1 }\n'}, [], 'ALL', 'shared test helper'),
     ('a Go file excluded by build tags leaves an empty selection: everything, never nothing',
@@ -437,15 +441,15 @@ class SelectionCases(unittest.TestCase):
 
 class RepositoryChecks(unittest.TestCase):
     def test_ci_rules_changes_list_is_the_selectors_own(self):
-        ci = (REPO / '.gitlab-ci.yml').read_text(encoding='utf-8')
+        ci = ci_config.text(REPO)
         begin, end = ci.index('# BEGIN go-test-scope'), ci.index('# END go-test-scope')
         in_ci = re.findall(r'^\s*-\s+"([^"]+)"\s*$', ci[begin:end], re.M)
         self.assertEqual(in_ci, selector.scope_globs(),
-                         'rules:changes in .gitlab-ci.yml (.go-test-scope) differs from the selector: '
+                         'rules:changes in .gitlab/ci/go.yml (.go-test-scope) differs from the selector: '
                          'regenerate it with `python3 scripts/ci/go_affected_packages.py --print-scope-globs`')
 
     def test_ci_jobs_use_the_scope_and_the_selection(self):
-        ci = (REPO / '.gitlab-ci.yml').read_text(encoding='utf-8')
+        ci = ci_config.text(REPO)
 
         def job(name: str) -> str:
             m = re.search(rf'^{re.escape(name)}:\n((?:[ \t].*\n|\n)+)', ci, re.M)

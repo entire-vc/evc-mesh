@@ -17,7 +17,7 @@ go test ./internal/handler -run Contract
 | `GET /agents/me/tasks` | `tasks`, `count`, `total_count`, `has_more`; filters `status_category`, `project_id`, `limit`/`page_size`; empty feed is `[]`; 400 bad filter, 401, 403 |
 | `GET /agents/me/tasks/poll` | same body plus `changed`; `false` on timeout; bad filter answers 400 before the wait |
 | `GET /agents/me/events/stream` | SSE frames `id:` / `event:` / `data:`; event types `task.assigned`, `task.updated`, `comment.created`; replay in order via `Last-Event-ID`; 410 `cursor_expired` (keys `error`, `error_code`, `code`, `message`), 400 malformed cursor, 401 |
-| `POST /agents/me/sessions/report` | `session_id`, `totals.{tokens_in,tokens_out,estimated_cost,model_used}` plus `totals.{tokens_in,tokens_out,estimated_cost}_incomplete`; additive per task; request field `unknown`; `Idempotency-Key` accepted; 400, 401, 501 |
+| `POST /agents/me/sessions/report` | `session_id`, `totals.{tokens_in,tokens_out,estimated_cost,model_used}` plus `totals.{tokens_in,tokens_out,estimated_cost}_incomplete`, `turn.{id,repeat}`; additive per task; request fields `unknown` and the optional turn fields `turn_id, started_at, ended_at, provider, account_ref, billing_mode, cache_read, cache_write, cache_write_1h`; a repeated `turn_id` adds nothing; `Idempotency-Key` accepted; 400, 401, 501 |
 
 Retried writes: `POST /tasks/:id/comments`, `/tasks/:id/artifacts`,
 `/tasks/:id/finish`, `/tasks/:id/move` and `POST /agents/me/sessions/report` accept an `Idempotency-Key` header; a repeat returns the

@@ -131,6 +131,7 @@ func TestAgentKeyRotateAPI_Contract(t *testing.T) {
 
 	f := newRotateFixture(t)
 	f.e.Logger.SetOutput(&logs)
+	testStart := time.Now().Add(-time.Second)
 	base := "/api/v1/agents/" + f.agent.Agent.ID.String() + "/keys"
 	oldKey := f.agent.APIKey
 	require.NoError(t, f.auth(oldKey))
@@ -205,9 +206,27 @@ func TestAgentKeyRotateAPI_Contract(t *testing.T) {
 	assert.NoError(t, f.auth(newKey))
 
 	// Audit: one entry per operation (issue, revoke), none for the refusals.
-	var audited []string
-	require.NoError(t, f.db.Select(&audited, `SELECT action FROM activity_log WHERE entity_id = $1 AND action LIKE 'key_%' ORDER BY created_at`, f.agent.Agent.ID))
-	assert.Equal(t, []string{"key_issued", "key_revoked"}, audited)
+	// Each entry is re-read with its stored time: a real moment of this test,
+	// issue strictly before revoke. Ordering by id would hide a lost timestamp,
+	// so the order comes from created_at alone.
+	var audited []struct {
+		Action    string    `db:"action"`
+		CreatedAt time.Time `db:"created_at"`
+		Changes   string    `db:"changes"`
+	}
+	require.NoError(t, f.db.Select(&audited, `SELECT action, created_at, changes::text AS changes FROM activity_log WHERE entity_id = $1 AND action LIKE 'key_%' ORDER BY created_at`, f.agent.Agent.ID))
+	require.Len(t, audited, 2, "issue and revoke only; the 409/403 refusals write nothing")
+	testEnd := time.Now().Add(time.Second)
+	assert.Equal(t, "key_issued", audited[0].Action)
+	assert.Equal(t, "key_revoked", audited[1].Action)
+	for _, a := range audited {
+		assert.False(t, a.CreatedAt.IsZero(), "%s stored without a time", a.Action)
+		assert.True(t, a.CreatedAt.After(testStart) && a.CreatedAt.Before(testEnd),
+			"%s created_at %s outside the test window [%s, %s]", a.Action, a.CreatedAt, testStart, testEnd)
+		assert.NotContains(t, a.Changes, newKey)
+		assert.NotContains(t, a.Changes, oldKey)
+	}
+	assert.True(t, audited[0].CreatedAt.Before(audited[1].CreatedAt), "issue must precede revoke")
 
 	// At rest: only digests. In logs: no values.
 	var n int

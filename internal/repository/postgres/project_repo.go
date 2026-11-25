@@ -183,7 +183,7 @@ const projectDeletedSlugMaxLen = 100 - 26
 // from "a live project already has it". The suffix is the row's own id, so two
 // projects deleted from the same slug on the same day cannot collide.
 //
-// an internal ticket: before this, DELETE /projects/:id was wired to Archive and
+// Before this, DELETE /projects/:id was wired to Archive and
 // this method was never called.
 func (r *ProjectRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	tx, err := r.db.BeginTxx(ctx, nil)

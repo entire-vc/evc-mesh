@@ -31,8 +31,8 @@ func NewTrMountHandler(mountService service.TeamRelayMountService) *TrMountHandl
 // ForeignShare are the one deliberate exception to "same shape" meaning "same
 // code": both are 403 (mirroring Team Relay's own wire protocol, see
 // teamrelay.ErrKeyExpired's doc comment), distinguished by the "status" field
-// in the body rather than by the HTTP code — #4d4ae33a, wired up here after
-// #218d5847's AC-4 shipped without it, which is exactly the "collapses into a
+// in the body rather than by the HTTP code, wired up here after
+// AC-4 shipped without it, which is exactly the "collapses into a
 // generic error" defect this map exists to prevent.
 var trMountStatusHTTP = map[service.MountStatus]int{
 	service.MountStatusOK:            http.StatusOK,

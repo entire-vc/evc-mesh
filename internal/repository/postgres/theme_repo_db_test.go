@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -138,27 +139,57 @@ func TestThemeRepo_DeleteTheme(t *testing.T) {
 	require.False(t, ok, "already gone")
 }
 
+// themeCountIsolatedDB is a connection whose search_path is a fresh schema with
+// its own copies of the tables CountActiveConnections reads, plus the plain
+// connection to the shared schema. The count is global by design (every
+// workspace, the singleton instance default), and go test runs packages in
+// parallel against one database: other packages create workspaces and
+// internal/themes/themestest moves the instance default. Only a private schema
+// keeps exact counts exact. LIKE ... INCLUDING ALL keeps the primary keys the
+// upserts rely on; foreign keys and triggers are not copied and not needed here.
+func themeCountIsolatedDB(t *testing.T) (isolated, shared *sqlx.DB) {
+	t.Helper()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set DATABASE_URL to run PostgreSQL theme controls")
+	}
+	shared, err := sqlx.Connect("postgres", dsn)
+	require.NoError(t, err, "configured PostgreSQL controls must not silently skip")
+	t.Cleanup(func() { _ = shared.Close() })
+	schema := "themecount_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	_, err = shared.Exec("CREATE SCHEMA " + schema)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = shared.Exec("DROP SCHEMA " + schema + " CASCADE") })
+	for _, table := range []string{"workspaces", "workspace_theme", "instance_theme", "integration_configs", "installed_extensions"} {
+		_, err = shared.Exec("CREATE TABLE " + schema + "." + table + " (LIKE public." + table + " INCLUDING ALL)")
+		require.NoError(t, err, table)
+	}
+	isolated, err = sqlx.Connect("postgres", dsnWithSearchPath(t, dsn, schema))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = isolated.Close() })
+	return isolated, shared
+}
+
 // A theme in effect in a workspace counts as used there, whether the workspace
 // chose it or inherits the instance default; an explicit choice beats the default
 // and a soft-deleted workspace is not counted.
 func TestInstalledExtensionRepo_CountActiveConnectionsThemes(t *testing.T) {
-	repo, db, wsA := themeFixture(t)
-	counter := NewInstalledExtensionRepo(db)
+	db, shared := themeCountIsolatedDB(t)
+	repo, counter := NewThemeRepo(db), NewInstalledExtensionRepo(db)
 	ctx, by := context.Background(), uuid.New()
-	chosen, inherited := "tcount-"+uuid.NewString()[:8], "tcount-"+uuid.NewString()[:8]
+	chosen, inherited := "tcount-chosen", "tcount-inherited"
 	for _, id := range []string{chosen, inherited} {
 		_, err := db.Exec(`INSERT INTO installed_extensions(extension_id,version,manifest,source,trust_level) VALUES($1,'1.0.0','{"kind":"theme"}','repo','custom')`, id)
 		require.NoError(t, err)
-		t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM installed_extensions WHERE extension_id=$1`, id) })
 	}
-	before, err := repo.GetInstance(ctx)
-	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = repo.SetInstance(ctx, before.ThemeID, before.Settings, by, nil) })
-
-	gone := uuid.New()
-	_, err = db.Exec(`INSERT INTO workspaces(id,name,slug,owner_id,deleted_at) VALUES($1,'theme fixture gone',$2,$3,now())`, gone, gone.String(), uuid.New())
-	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = db.Exec("DELETE FROM workspaces WHERE id=$1", gone) })
+	// wsA chooses a theme, wsB never does, gone chose one and is soft-deleted.
+	wsA, wsB, gone := uuid.New(), uuid.New(), uuid.New()
+	owner := uuid.New()
+	for ws, deleted := range map[uuid.UUID]bool{wsA: false, wsB: false, gone: true} {
+		_, err := db.Exec(`INSERT INTO workspaces(id,name,slug,owner_id,deleted_at) VALUES($1,'theme count',$2,$3,CASE WHEN $4 THEN now() END)`, ws, ws.String(), owner, deleted)
+		require.NoError(t, err)
+	}
+	var err error
 	for _, ws := range []uuid.UUID{wsA, gone} {
 		_, err = repo.SetWorkspace(ctx, ws, &chosen, nil, by, nil)
 		require.NoError(t, err)
@@ -176,12 +207,19 @@ func TestInstalledExtensionRepo_CountActiveConnectionsThemes(t *testing.T) {
 	withDefault, err := counter.CountActiveConnections(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, withDefault[chosen], "the explicit choice beats the instance default")
-	require.Positive(t, withDefault[inherited], "workspaces with no choice inherit the instance default")
+	require.Equal(t, 1, withDefault[inherited], "the workspace with no choice inherits the instance default")
+
+	// Control: a workspace another package creates in the shared schema between
+	// two measurements (the race behind pipeline 38164) must not reach the count.
+	foreign := uuid.New()
+	_, err = shared.Exec(`INSERT INTO public.workspaces(id,name,slug,owner_id) VALUES($1,'theme count foreign',$2,$3)`, foreign, foreign.String(), uuid.New())
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = shared.Exec(`DELETE FROM public.workspaces WHERE id=$1`, foreign) })
 
 	_, err = repo.SetWorkspace(ctx, wsA, nil, nil, by, nil)
 	require.NoError(t, err)
 	asInstance, err := counter.CountActiveConnections(ctx)
 	require.NoError(t, err)
 	require.Zero(t, asInstance[chosen])
-	require.Equal(t, withDefault[inherited]+1, asInstance[inherited], "\"as the instance\" moves the workspace to the default")
+	require.Equal(t, 2, asInstance[inherited], "\"as the instance\" moves the workspace to the default")
 }

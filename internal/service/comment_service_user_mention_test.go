@@ -134,14 +134,14 @@ func TestNotifyMentions_UserSelfMentionProducesNoNotification(t *testing.T) {
 func TestNotifyMentions_AgentMentionDoesNotFireNotificationServiceEvent(t *testing.T) {
 	env := setupCommentServiceWithUserMentions()
 
-	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "garfield"}
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "gary"}
 	env.agentSvc.AddAgent(env.wsID, agent)
 
 	taskID := uuid.New()
 	env.taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: env.projID}
 	task := env.taskRepo.items[taskID]
 
-	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "@garfield please check"}
+	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "@gary please check"}
 
 	env.svc.notifyMentions(context.Background(), comment, task, "", env.wsID)
 
@@ -201,7 +201,7 @@ func TestNotifyUserMention_BodyTruncatedTo200Chars(t *testing.T) {
 	longBody := strings.Repeat("a", 250)
 	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: longBody}
 
-	env.svc.notifyUserMention(context.Background(), comment, task, env.wsID, uuid.New(), "Garfield")
+	env.svc.notifyUserMention(context.Background(), comment, task, env.wsID, uuid.New(), "Gary")
 
 	calls := env.notifySvc.Calls()
 	require.Len(t, calls, 1)
@@ -241,15 +241,15 @@ func TestNotifyUserMention_TitleIncludesActorNameWhenPresent(t *testing.T) {
 
 	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "ping"}
 
-	env.svc.notifyUserMention(context.Background(), comment, task, env.wsID, uuid.New(), "Garfield")
+	env.svc.notifyUserMention(context.Background(), comment, task, env.wsID, uuid.New(), "Gary")
 
 	calls := env.notifySvc.Calls()
 	require.Len(t, calls, 1)
-	assert.Equal(t, "Garfield mentioned you on: Ship the thing", calls[0].Title)
+	assert.Equal(t, "Gary mentioned you on: Ship the thing", calls[0].Title)
 }
 
 // ---------------------------------------------------------------------------
-// HasSubscription must consider the event a comment ACTUALLY carries (#4e1d249f)
+// HasSubscription must consider the event a comment ACTUALLY carries
 //
 // Found by an independent verifier 2026-09-06: the per-comment delivery
 // outcome — the field agents actually check to tell whether a mention landed

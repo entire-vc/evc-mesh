@@ -322,7 +322,7 @@ func TestMemoryArchiveDB_Permissions(t *testing.T) {
 
 // TestMemoryExpiredDB_ReadableUntilCleanup: include_expired must return an entry
 // whose expires_at has passed, on get_memory's path as on recall's, until the
-// background cleanup removes it after the grace period. Before this change the
+// background cleanup removes it after the grace period. Before an internal ticket the
 // legacy search dropped the flag and CleanExpired deleted at expiry.
 func TestMemoryExpiredDB_ReadableUntilCleanup(t *testing.T) {
 	env := newMemoryArchiveDBEnv(t)

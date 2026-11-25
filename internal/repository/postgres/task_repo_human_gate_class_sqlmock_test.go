@@ -198,7 +198,7 @@ func TestTaskRepo_FindSoftTimedOutGates_DBError_Propagates(t *testing.T) {
 }
 
 // TestTaskRepo_FindSoftTimedOutGates_QueryPinsDeadlineExclusion is the sqlmock half of
-// the handoff to FindExpiredDefaultGates (task #060ccaae): a gate with gate_deadline set
+// the handoff to FindExpiredDefaultGates: a gate with gate_deadline set
 // must be structurally excluded from THIS query's text, the same literal-predicate style
 // used for the class exclusion above. The real-Postgres proof that this actually
 // excludes a live row lives in task_repo_default_timeout_db_test.go.
@@ -216,7 +216,7 @@ func TestTaskRepo_FindSoftTimedOutGates_QueryPinsDeadlineExclusion(t *testing.T)
 }
 
 // ---------------------------------------------------------------------------
-// TaskRepo.FindExpiredDefaultGates (task #060ccaae)
+// TaskRepo.FindExpiredDefaultGates
 // ---------------------------------------------------------------------------
 
 // TestTaskRepo_FindExpiredDefaultGates_QueryPinsStructuralLiterals is the sqlmock half

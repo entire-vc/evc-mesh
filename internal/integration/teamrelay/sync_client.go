@@ -34,7 +34,7 @@ var (
 	// relay does not recognize (401 — missing header or unknown key hash).
 	ErrKeyRejected = errors.New("teamrelay: agent key rejected")
 	// ErrForeignShare means the key is real but is not valid for the share ID
-	// requested (403 — measured live on this exact protocol, an internal ticket).
+	// requested (403 — measured live on this exact protocol).
 	ErrForeignShare = errors.New("teamrelay: agent key not valid for this share")
 	// ErrKeyExpired means the key was once valid for this share but its TTL has
 	// passed (403, body detail "Agent key has expired" — verified against the

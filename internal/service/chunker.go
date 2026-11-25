@@ -13,7 +13,7 @@ type Chunk struct {
 
 const (
 	// defaultChunkSize and defaultChunkOverlap are sized from the live
-	// measurement in #e8063a65: the prod embedder (TEI, multilingual-e5-small)
+	// measurement: the prod embedder (TEI, multilingual-e5-small)
 	// silently truncates at 512 tokens (~2000 chars). ~1500 chars stays safely
 	// under that window; ~300 chars of overlap is what the measurement used to
 	// keep a fact sitting on a chunk boundary from being dropped out of both
@@ -41,7 +41,7 @@ var turnMarkers = []string{"User:", "Assistant:"}
 //
 // Chunks always overlap by exactly `overlap` runes (except the first) so a
 // fact sitting on a boundary in the original text is never dropped entirely
-// — see the rank-35-vs-rank-1 measurement in #e8063a65.
+// — see the rank-35-vs-rank-1 measurement in an internal ticket.
 func chunkText(text string, chunkSize, overlap int) []Chunk {
 	if chunkSize <= 0 {
 		chunkSize = defaultChunkSize

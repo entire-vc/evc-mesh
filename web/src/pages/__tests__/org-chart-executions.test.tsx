@@ -15,8 +15,8 @@ import { AGENT_1, attempt, envelope, FIXTURES, PROJ_A, PROJ_B, view, WS } from "
 
 const agent = {
   id: AGENT_1,
-  name: "Taylor",
-  slug: "taylor",
+  name: "Vera",
+  slug: "vera",
   status: "online",
   agent_type: "claude_code",
   model: "opus",

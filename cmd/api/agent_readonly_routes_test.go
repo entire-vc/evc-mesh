@@ -18,7 +18,7 @@ import (
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 )
 
-// an internal ticket: a read-only agent credential (grant role viewer) must be
+// A read-only agent credential (grant role viewer) must be
 // refused on EVERY state-changing route of the authenticated group, not on one
 // sampled POST. The routes are read from main.go by parseAuditRoutes (the same
 // AST walk the RBAC audit uses), each is registered on a test group that runs

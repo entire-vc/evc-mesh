@@ -13,7 +13,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/repository"
 )
 
-// an internal ticket: the repositories a workspace's and a project's links point into,
+// The repositories a workspace's and a project's links point into,
 // read from vcs_links.url in one aggregate per provider.
 func TestVCSLinkRepo_ProviderRepos(t *testing.T) {
 	db := selectStarCoverageTestDB(t)

@@ -18,10 +18,10 @@ own `__file__`, so copying it into a synthesized repo points every git call at
 that repo. Nothing here depends on evc-mesh's own history, which keeps the test
 honest on a shallow clone or a fork.
 
-WHY THIS EXISTS (#e8570874 AC3). The defect was a gate that measured whatever
+WHY THIS EXISTS (an internal ticket AC3). The defect was a gate that measured whatever
 binary happened to be serving. The fix must do two separable things — refuse a
 deploy that never lands, and *resume* one that does — and a guard that only
-refuses is the failure this card's sibling (#3ce651a0) recorded: fail-closed is
+refuses is the failure this card's sibling recorded: fail-closed is
 not the safe direction.
 
 WHY THE ASSERTIONS ARE NOT JUST `rc`. Mutating `classify()` to accept anything

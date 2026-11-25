@@ -15,7 +15,7 @@ import { cn } from "@/lib/cn";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { Async } from "../../types";
 import { useWidgetTitle } from "../../config";
-import { downloadAnalyticsCsv } from "./filters";
+import { downloadAnalyticsCsv, downloadCsv } from "./filters";
 import type { AnalyticsQuery } from "./use-analytics";
 
 // -- copy ---------------------------------------------------------------------------------------------
@@ -47,8 +47,9 @@ export const statusColor = (category: string) => `var(--status-${category.replac
 export const priorityColor = (p: string) => (p === "none" ? NEUTRAL : `var(--priority-${p}, ${NEUTRAL})`);
 
 export function formatCost(cost: number): string {
-  if (cost > 0 && cost < 0.01) return "<$0.01";
-  return `$${fmt.formatNumber(cost, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (cost > 0 && cost < 0.01) return "≈<$0.01";
+  // An API list-price equivalent, not money spent (the fleet runs on subscriptions).
+  return `≈$${fmt.formatNumber(cost, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 export function formatTokens(n: number): string {
   if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
@@ -103,16 +104,33 @@ function periodLabel(at: AT, q: AnalyticsQuery): string {
 
 /** Card of one widget: title, period, the "⋯" menu with the CSV export of the instance's filter. */
 /** `query` absent: a live workspace count that no period or project narrows, so no period label and no CSV. */
-export function WidgetFrame({ title: typeTitle, query, children }: { title: string; query?: AnalyticsQuery; children: ReactNode }) {
+/**
+ * `toolbar`: the widget's own controls, drawn in the header after the title (they wrap under it in a narrow cell).
+ * `exportRequest`: the CSV of a widget that is not a plain analytics query; with it the CSV is a visible button.
+ */
+export function WidgetFrame({
+  title: typeTitle,
+  query,
+  toolbar,
+  exportRequest,
+  children,
+}: {
+  title: string;
+  query?: AnalyticsQuery;
+  toolbar?: ReactNode;
+  exportRequest?: (wsId: string) => { path: string; params: Record<string, string> };
+  children: ReactNode;
+}) {
   const at = useAT();
   const title = useWidgetTitle(typeTitle);
   const wsId = useWorkspaceStore((s) => s.currentWorkspace?.id);
   const [busy, setBusy] = useState(false);
   const download = async () => {
-    if (!wsId || busy || !query) return;
+    if (!wsId || busy || (!query && !exportRequest)) return;
     setBusy(true);
     try {
-      await downloadAnalyticsCsv(wsId, query);
+      if (exportRequest) await downloadCsv(exportRequest(wsId), "memory");
+      else await downloadAnalyticsCsv(wsId, query!);
     } catch (e) {
       toast.error(apiErrorMessage(e, at("csvFailed", "CSV export failed")));
     } finally {
@@ -122,13 +140,25 @@ export function WidgetFrame({ title: typeTitle, query, children }: { title: stri
   return (
     <Card className="h-full min-w-0 @container">
       <CardContent className="flex h-full min-w-0 flex-col gap-3 pt-4">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className={cn("flex min-w-0 items-center gap-2", toolbar && "flex-wrap")}>
           {/* On paper there is no hover title to read the rest from: the heading wraps instead of ending in "…". */}
-          <h3 className="min-w-0 flex-1 truncate text-sm font-semibold print:overflow-visible print:whitespace-normal" title={title}>
+          <h3 className={cn("min-w-0 flex-1 truncate text-sm font-semibold print:overflow-visible print:whitespace-normal", toolbar && "basis-full @3xl:basis-0")} title={title}>
             {title}
           </h3>
-          {query && <span className="shrink-0 text-[11px] text-muted-foreground">{periodLabel(at, query)}</span>}
-          {query && (
+          {query && !toolbar && <span className="shrink-0 text-[11px] text-muted-foreground">{periodLabel(at, query)}</span>}
+          {toolbar}
+          {exportRequest && (
+            <button
+              type="button"
+              disabled={!wsId || busy}
+              onClick={() => void download()}
+              className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-muted/40 px-2.5 py-1 text-xs hover:bg-muted disabled:opacity-50 print:hidden"
+            >
+              <Download className="h-3.5 w-3.5" />
+              {busy ? at("csvBusy", "Downloading…") : "CSV"}
+            </button>
+          )}
+          {query && !exportRequest && (
           <DropdownMenu>
             <DropdownMenuTrigger
               aria-label={at("menu", "Widget menu")}

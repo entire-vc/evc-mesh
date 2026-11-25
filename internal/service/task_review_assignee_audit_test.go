@@ -129,7 +129,7 @@ func findActivityByReason(t *testing.T, repo *MockActivityLogRepository, taskID 
 }
 
 // TestApplyReviewAssignee_RecordsRealOldAndPostsComment pins DoD #1/#2 from task
-// an internal ticket for the set_reviewer review-transition bounce: before the fix, the
+// f06ebeb7 for the set_reviewer review-transition bounce: before the fix, the
 // activity entry always recorded "old": nil regardless of who held the card, and
 // no comment was posted at all — an agent reading the thread had no way to tell
 // the card had moved out from under them.

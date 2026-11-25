@@ -257,7 +257,7 @@ func (h *AgentWorkspaceGrantHandler) ListAgentWorkspaces(c echo.Context) error {
 // workspace — which is the right bar for looking up someone ELSE's
 // connections, but wrong here: this is always "about me", the same
 // reasoning that put the other five /agents/me/* routes ahead of
-// /agents/:agent_id in the route table (task #80dfb336).
+// /agents/:agent_id in the route table.
 func (h *AgentWorkspaceGrantHandler) ListMyWorkspaces(c echo.Context) error {
 	agentIDVal := c.Get("agent_id")
 	if agentIDVal == nil {

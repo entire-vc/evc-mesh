@@ -47,28 +47,36 @@ func mrRepoName(repoField, rawURL string) string {
 // Order of evidence:
 //  1. The card already holds a link to this exact MR: a "pr" link is an
 //     established association (explicit add_vcs_link, or an earlier delivery
-//     that passed this check); a "reference" link stays a reference.
+//     that passed this check); only in the absence of a matching PR does a
+//     "reference" link keep the mention a reference, regardless of row order.
 //  2. The repository against the repositories of the project's other PR links.
 //     Unknown repository, no project association, or any lookup failure all
 //     read as "not foreign": the guard must not invent a refusal it cannot
 //     justify, the card-state guards cover that case.
-func (s *vcsLinkService) isForeignRepoMention(ctx context.Context, taskID uuid.UUID, repoField, rawURL string) bool {
+func (s *vcsLinkService) isForeignRepoMention(ctx context.Context, taskID uuid.UUID, provider domain.VCSProvider, repoField, rawURL string) bool {
 	if s.taskRepo == nil {
 		return false
 	}
 	if rawURL != "" {
 		if links, err := s.repo.ListByTask(ctx, taskID); err == nil {
 			want := domain.NormalizeVCSURL(rawURL)
+			sameRepo := repoField == "" || mrRepoName(repoField, "") == RepoFromVCSURL(rawURL)
+			hasReference := false
 			for _, l := range links {
-				if domain.NormalizeVCSURL(l.URL) != want {
+				if l.Provider != provider || domain.NormalizeVCSURL(l.URL) != want {
 					continue
 				}
 				switch l.LinkType {
 				case domain.VCSLinkTypePR:
-					return false
+					if sameRepo {
+						return false
+					}
 				case domain.VCSLinkTypeReference:
-					return true
+					hasReference = true
 				}
+			}
+			if hasReference {
+				return true
 			}
 		}
 	}

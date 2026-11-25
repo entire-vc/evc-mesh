@@ -17,7 +17,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
-// AC2 of task #f78232c4: the sanitizer's refusal must reach the CALLER, not
+// AC2: the sanitizer's refusal must reach the CALLER, not
 // only a server log. The service returns *apierror.Error; this pins the rest of
 // that chain — that handleError serialises the `validation` map into the 400
 // body, which is the field evc-mesh-mcp's rest_client.apiErrorMessage flattens

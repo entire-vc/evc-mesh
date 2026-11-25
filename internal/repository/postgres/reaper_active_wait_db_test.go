@@ -163,7 +163,7 @@ func TestFindStaleUnleasedInProgress_ActiveWaitIsAuthoritative(t *testing.T) {
 }
 
 // The read path reports the same thing the sweep decides: a waiting card with an
-// active wait is not stale because its lane tick is late (criterion 4 of an internal ticket:
+// active wait is not stale because its lane tick is late (criterion 4:
 // list_tasks runtime_kind=waiting shows such a card with stale=false).
 func TestRuntimeState_ActiveWaitIsNotStale(t *testing.T) {
 	f := newMidPipelineFixture(t)

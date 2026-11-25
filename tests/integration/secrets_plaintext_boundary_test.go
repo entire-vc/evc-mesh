@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestSecretsPlaintextNeverCrossesTheBoundary is S6 (an internal ticket, epic
+// TestSecretsPlaintextNeverCrossesTheBoundary is S6 (epic
 // an internal ticket): a CI-gated negative test that walks EVERY surface a value
 // could leak through separately, rather than "wrote it, read it back
 // through the same layer" — which the parent task explicitly warns proves

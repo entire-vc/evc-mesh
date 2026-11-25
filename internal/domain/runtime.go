@@ -114,6 +114,27 @@ type RuntimePoolObservation struct {
 	Verified     bool      `json:"verified"`
 	EvidenceKind string    `json:"evidence_kind,omitempty"`
 	ThresholdRef string    `json:"threshold_ref,omitempty"`
+	// ErrorKind says why an unresolved window is unresolved. Only "" and
+	// RuntimePoolErrorCredentialStale are accepted. A fresh state=unknown,
+	// verified=false fact with credential_stale means the reporting credential
+	// carrier expired: it says nothing about the pool's quota.
+	ErrorKind string `json:"error_kind,omitempty"`
+}
+
+// RuntimePoolErrorCredentialStale marks an observation whose credential
+// carrier is stale (expired login), as opposed to a rejected credential.
+const RuntimePoolErrorCredentialStale = "credential_stale"
+
+// ValidRuntimePoolErrorKind reports whether a controller may send this kind.
+func ValidRuntimePoolErrorKind(value string) bool {
+	return value == "" || value == RuntimePoolErrorCredentialStale
+}
+
+// CredentialStale reports whether this fact is a confirmed stale carrier:
+// state unknown, unverified, error_kind credential_stale. Freshness is the
+// reader's check.
+func (o RuntimePoolObservation) CredentialStale() bool {
+	return o.State == "unknown" && !o.Verified && o.ErrorKind == RuntimePoolErrorCredentialStale
 }
 
 type RuntimeModelObservation struct {

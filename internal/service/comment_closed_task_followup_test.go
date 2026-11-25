@@ -17,7 +17,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Closed-card follow-up (an internal ticket, audit 1.14).
+// Closed-card follow-up (audit 1.14).
 //
 // The task names four branches, and they are the four this file leads with:
 //
@@ -483,10 +483,10 @@ func TestClosedFollowUp_DifferentFindingOpensItsOwnRoot(t *testing.T) {
 }
 
 // RED test, written and run against the pre-fix code BEFORE implementing the
-// an internal ticket contract (P5 step 1). A repeat of the SAME finding after its root
+// Contract (P5 step 1). A repeat of the SAME finding after its root
 // was closed must reopen THAT root — the same card back in todo, not a second
 // card. Against the pre-fix code this fails with createdTasks=2, which is the
-// measured defect (an internal ticket repro: an internal ticket closed → same text → an internal ticket).
+// measured defect (an internal ticket repro: f0d4539b closed → same text → 06b275a8).
 func TestClosedFollowUp_ClosedRepeatReopensTheSameRoot(t *testing.T) {
 	env := setupFollowUpEnv(t)
 	env.comment(t, "Шапка не sticky.")
@@ -1285,7 +1285,7 @@ func TestClosedFollowUp_UnreadableActivityLogStillRoutes(t *testing.T) {
 		"could-not-look must not read as could-not-find — this guard fails open by design")
 }
 
-// --- The informational-flag branch (an internal ticket, audit follow-up to
+// --- The informational-flag branch (audit follow-up to
 // an internal ticket) --------------------------------------------------------------
 //
 // The task names three branches and all three are here, including the red

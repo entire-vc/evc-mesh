@@ -1,5 +1,5 @@
 /**
- * Ink measurement for rail glyphs — the one definition, shared (`#13ff4803`).
+ * Ink measurement for rail glyphs — the one definition, shared.
  *
  * Two callers need this: `scripts/assert-rail-icon-size.mjs` (the guard that
  * refuses a mark sized unlike its neighbours) and

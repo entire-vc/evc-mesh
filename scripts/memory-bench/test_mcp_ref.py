@@ -1,4 +1,4 @@
-"""#faf92388 — which mesh-mcp CLIENT the bench measured.
+"""Which mesh-mcp CLIENT the bench measured.
 
 All three arms used to check `entire-vc/evc-mesh-mcp` out with no `ref:`, so every
 arm always built the default branch and no client pull request was measurable by
@@ -78,7 +78,7 @@ class TestEveryClientCheckoutIsPinnable(unittest.TestCase):
                 "ref: ${{ inputs.mcp_ref }}", step,
                 "a checkout of the client without `ref:` always builds the "
                 "default branch, which makes client PRs unmeasurable and says "
-                "nothing about it in the output (#faf92388). Step:\n" + step[:400],
+                "nothing about it in the output. Step:\n" + step[:400],
             )
 
     def test_every_client_checkout_is_followed_by_the_resolve_step(self):
@@ -136,8 +136,8 @@ class TestRunStatesWhichClientItMeasured(unittest.TestCase):
         self.assertEqual(MCP_REF_UNSTATED_AS, resolve_mcp_ref())
 
     def test_a_set_ref_is_reported_verbatim(self):
-        os.environ["MCP_REF"] = "linus/some-branch"
-        self.assertEqual("linus/some-branch", resolve_mcp_ref())
+        os.environ["MCP_REF"] = "liam/some-branch"
+        self.assertEqual("liam/some-branch", resolve_mcp_ref())
 
     def test_whitespace_only_is_not_a_ref(self):
         os.environ["MCP_REF"] = "   "
@@ -344,7 +344,7 @@ class TestTheBinaryAnswersForItself(unittest.TestCase):
 class TestADeliberateClientABDoesNotPageAnIncident(unittest.TestCase):
     """The first real use of `mcp_ref` opened two blindness episodes.
 
-    Run 31321344020 dispatched the branch with `mcp_ref=garfield/…`, both arms
+    Run 31321344020 dispatched the branch with `mcp_ref=gary/…`, both arms
     correctly returned INCONCLUSIVE naming `mcp-ref-mismatch` — and both then
     raised an episode, #543 claiming the MERGE GATE was blind and #541 claiming
     nothing was watching prod. Neither was true: a dispatch gates no merge, and

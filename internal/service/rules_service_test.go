@@ -161,7 +161,7 @@ func TestComputeAgentPermissions_NoTransitionsNoStatusesKnown(t *testing.T) {
 }
 
 // TestComputeAgentPermissions_EmptyConfigAllowsAll is the primary regression test
-// for an internal ticket: a project with no workflow_rules row must report can_transition
+// a project with no workflow_rules row must report can_transition
 // populated true for every real status, not an empty map that reads as "blocked
 // from everywhere" — evaluateTransitionGate already treats this config as allow-all,
 // my_permissions must not contradict it.
@@ -328,7 +328,7 @@ func TestUpdateAgentProfile_AllFieldsSetAppliesEverything(t *testing.T) {
 }
 
 // TestUpdateAgentProfile_MentionWakesSurvivesCapabilitiesArrayWrite is the
-// regression test for an internal ticket: agents.capabilities is written by two
+// regression test: agents.capabilities is written by two
 // incompatible consumers (an object for the mention-handoff gate, a plain
 // string array for UpdateAgentProfile/config import), and UpdateAgentProfile
 // blind-replaces Capabilities rather than merging it. Before this fix,
@@ -344,8 +344,8 @@ func TestUpdateAgentProfile_MentionWakesSurvivesCapabilitiesArrayWrite(t *testin
 	agentID := uuid.New()
 	require.NoError(t, agentRepo.Create(context.Background(), &domain.Agent{
 		ID:           agentID,
-		Name:         "riker",
-		Slug:         "riker",
+		Name:         "robin",
+		Slug:         "robin",
 		MentionWakes: true,
 	}))
 
@@ -364,7 +364,7 @@ func TestUpdateAgentProfile_MentionWakesSurvivesCapabilitiesArrayWrite(t *testin
 }
 
 // TestEscalationTo_SurvivesUpdateAndExportRoundTrip is the regression test
-// for a real bug found in code review of an internal ticket: EscalationTo is a
+// for a real bug found in code review: EscalationTo is a
 // single name (matches the MCP tool's mcpsdk.ParseString and
 // TeamAgentConfig.EscalationTo, both plain strings), NOT a list. Before this
 // fix, AgentProfileUpdate.EscalationTo was json.RawMessage and the new UI
@@ -391,18 +391,18 @@ func TestEscalationTo_SurvivesUpdateAndExportRoundTrip(t *testing.T) {
 	}))
 
 	err := svc.UpdateAgentProfile(context.Background(), agentID, domain.AgentProfileUpdate{
-		EscalationTo: strPtr("the product lead"),
+		EscalationTo: strPtr("Gary"),
 	})
 	require.NoError(t, err)
 
 	got, err := agentRepo.GetByID(context.Background(), agentID)
 	require.NoError(t, err)
 	require.NotNil(t, got.EscalationTo, "UpdateAgentProfile must actually store the value")
-	assert.JSONEq(t, `"the product lead"`, string(*got.EscalationTo))
+	assert.JSONEq(t, `"Gary"`, string(*got.EscalationTo))
 
 	yamlBytes, err := svc.ExportConfig(context.Background(), ws.ID)
 	require.NoError(t, err)
-	assert.Contains(t, string(yamlBytes), "escalation_to: the product lead",
+	assert.Contains(t, string(yamlBytes), "escalation_to: Gary",
 		"export must not silently drop escalation_to for an agent configured through the UI")
 }
 

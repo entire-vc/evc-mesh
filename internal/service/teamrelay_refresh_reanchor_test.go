@@ -13,11 +13,11 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// R4 (#669122e6): a Team Relay copy's body can be rewritten out from under its
-// comments by RefreshIfStale (R3, #d5aedf36) — an edit the comment's author
+// R4: a Team Relay copy's body can be rewritten out from under its
+// comments by RefreshIfStale (R3) — an edit the comment's author
 // never made and never saw. Without re-anchoring on that path, every anchored
 // comment on an actively-edited mounted page goes stale the moment the
-// freshness check catches up, same defect class as #90dd31f9 (own-document
+// freshness check catches up, same defect class as an internal ticket (own-document
 // PATCH), different trigger.
 
 // fakeTRRefresher stands in for teamRelayMountService.RefreshIfStale's two
@@ -76,7 +76,7 @@ func seedTeamRelayCopy(t *testing.T, f *documentFixture, body string) *domain.Do
 // its own words — proved by slicing the stored offsets, not by trusting the
 // response, same discipline as requireAnchorHonest everywhere else in this
 // file. Cyrillic body per AC4: on ASCII this would pass under either byte or
-// rune offsets, which is exactly the ambiguity #90dd31f9 was about.
+// rune offsets, which is exactly the ambiguity an internal ticket was about.
 func TestGetByIDInWorkspace_TeamRelayRefreshReanchorsAroundEdit(t *testing.T) {
 	f := setupDocumentService(t)
 	refresher := &fakeTRRefresher{storage: f.storage}

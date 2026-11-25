@@ -480,6 +480,38 @@ func TestServiceDB_VirtualDefaultBesideAuthoredShared(t *testing.T) {
 	require.Equal(t, "Home", menu[0].Name)
 }
 
+func TestServiceDB_AgentUsageSettings(t *testing.T) {
+	e := newSvcEnv(t, nil)
+	ctx := context.Background()
+	settings := json.RawMessage(`{"m":"quota","g":"account","p":"2026-11-01..2026-11-18","w":"month","f.account":["pool/team"],"f.project":["p1"]}`)
+	layout := []Widget{{WidgetType: "agent-usage", W: 12, H: 6, Settings: settings}}
+	d, err := e.s.PutLayout(ctx, e.alice, DefaultID, LayoutInput{Version: ptr(0), Widgets: layout})
+	require.NoError(t, err)
+	got, err := e.s.Get(ctx, e.alice, DefaultID)
+	require.NoError(t, err)
+	require.Len(t, got.Widgets, 1)
+	require.Equal(t, "agent-usage", got.Widgets[0].WidgetType)
+	require.JSONEq(t, string(settings), string(got.Widgets[0].Settings))
+
+	settings = json.RawMessage(`{"m":"tokens","g":"workspace","f.workspace":["ws-1"]}`)
+	layout[0].Settings = settings
+	d, err = e.s.PutLayout(ctx, e.alice, d.ID, LayoutInput{Version: ptr(d.Version), Widgets: layout})
+	require.NoError(t, err)
+	got, err = e.s.Get(ctx, e.alice, DefaultID)
+	require.NoError(t, err)
+	require.JSONEq(t, string(settings), string(got.Widgets[0].Settings))
+
+	for _, bad := range []string{`{"m":"spend"}`, `{"w":"year"}`, `{"n":21}`, `{"p":"yesterday"}`} {
+		layout[0].Settings = json.RawMessage(bad)
+		_, err = e.s.PutLayout(ctx, e.alice, d.ID, LayoutInput{Version: ptr(d.Version), Widgets: layout})
+		requireCode(t, err, 422, "layout_invalid")
+		got, err = e.s.Get(ctx, e.alice, DefaultID)
+		require.NoError(t, err)
+		require.Equal(t, d.Version, got.Version, "a rejected edit leaves the saved slice intact")
+		require.JSONEq(t, string(settings), string(got.Widgets[0].Settings))
+	}
+}
+
 // WidgetInstance backs the signed context of an external widget: it answers
 // only for an instance of a dashboard the user reads, else 404 (or 403 for a
 // non-member), so nobody gets a token for an instance they cannot see.

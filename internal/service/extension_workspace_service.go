@@ -362,7 +362,7 @@ func (s *ExtensionWorkspaceService) List(ctx context.Context, ws uuid.UUID) ([]W
 			return nil, err
 		default:
 			// One extension the secret store cannot open must not fail the
-			// whole list (an internal ticket: Keep 502 turned GET /extensions into 500).
+			// whole list (Keep 502 turned GET /extensions into 500).
 			// Provider and secret store errors carry no credential-free
 			// guarantee, so only a fixed class goes to the log.
 			log.Printf("WARN extensions list: workspace %s: extension %q: %s", ws, m.ID, statusErrorClass(err))

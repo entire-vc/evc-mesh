@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,9 +23,17 @@ import {
 } from "@/lib/agent-runtime";
 import type { Agent } from "@/types";
 
-type TabId = "profile" | "route" | "access" | "execution" | "state";
+export type AgentTabId = "profile" | "route" | "access" | "execution" | "state" | "stats";
+type TabId = AgentTabId;
 
-const TABS: { id: TabId }[] = [{ id: "profile" }, { id: "route" }, { id: "access" }, { id: "execution" }, { id: "state" }];
+const TABS: { id: TabId }[] = [{ id: "profile" }, { id: "route" }, { id: "access" }, { id: "execution" }, { id: "state" }, { id: "stats" }];
+
+/** A tab id from a URL (`?tab=`); anything else opens the profile. */
+export const parseAgentTab = (v: string | null | undefined): AgentTabId | undefined =>
+  TABS.some((x) => x.id === v) ? (v as AgentTabId) : undefined;
+
+// The statistics widget is a chunk of its own: the dialog opens without it.
+const PinnedAgentUsage = lazy(() => import("@/core/agent-usage/pinned").then((m) => ({ default: m.PinnedAgentUsage })));
 
 interface AgentRuntimeTabsProps {
   /** Only the id is read: a foreign (invited) agent has no home profile here. */
@@ -37,11 +45,16 @@ interface AgentRuntimeTabsProps {
   access: ReactNode;
   /** false: the viewer's role cannot read the catalog, so no request is made (it would 403 into the console); null: role still loading. */
   canReadRuntime?: boolean | null;
+  /** The tab to open with (the agent page's `?tab=`); the profile otherwise. */
+  initialTab?: AgentTabId;
+  /** The «Statistics» tab: a home agent's page only (an invited agent's work is its own workspace's). */
+  showStats?: boolean;
 }
 
-export function AgentRuntimeTabs({ agent, workspaceId, profile, access, canReadRuntime = true }: AgentRuntimeTabsProps) {
+export function AgentRuntimeTabs({ agent, workspaceId, profile, access, canReadRuntime = true, initialTab, showStats = false }: AgentRuntimeTabsProps) {
   const { t } = useTranslation("integrations");
-  const [tab, setTab] = useState<TabId>("profile");
+  const tabs = showStats ? TABS : TABS.filter((x) => x.id !== "stats");
+  const [tab, setTab] = useState<TabId>(initialTab && tabs.some((x) => x.id === initialTab) ? initialTab : "profile");
   const [load, setLoad] = useState<RuntimeLoad | "loading">("loading");
   const requestId = useRef(0);
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
@@ -76,12 +89,12 @@ export function AgentRuntimeTabs({ agent, workspaceId, profile, access, canReadR
   }, [reload, agent.id]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    const i = TABS.findIndex((x) => x.id === tab);
+    const i = tabs.findIndex((x) => x.id === tab);
     let next = i;
-    if (e.key === "ArrowRight") next = (i + 1) % TABS.length;
-    else if (e.key === "ArrowLeft") next = (i - 1 + TABS.length) % TABS.length;
+    if (e.key === "ArrowRight") next = (i + 1) % tabs.length;
+    else if (e.key === "ArrowLeft") next = (i - 1 + tabs.length) % tabs.length;
     else return;
-    const target = TABS[next];
+    const target = tabs[next];
     if (!target) return;
     e.preventDefault();
     setTab(target.id);
@@ -96,7 +109,7 @@ export function AgentRuntimeTabs({ agent, workspaceId, profile, access, canReadR
         onKeyDown={onKeyDown}
         className="flex flex-wrap gap-x-1 border-b border-border"
       >
-        {TABS.map((tb) => (
+        {tabs.map((tb) => (
           <button
             key={tb.id}
             ref={(el) => {
@@ -153,6 +166,11 @@ export function AgentRuntimeTabs({ agent, workspaceId, profile, access, canReadR
           <RuntimeSection load={load} onRetry={() => reload()} agent={agent} workspaceId={workspaceId}>
             {(state) => <StateBlock state={state} />}
           </RuntimeSection>
+        )}
+        {tab === "stats" && showStats && (
+          <Suspense fallback={<Skeleton className="h-40 w-full" />}>
+            <PinnedAgentUsage key={agent.id} pin={{ kind: "agent", id: agent.id }} title={t("runtimeTabs.statsTitle")} />
+          </Suspense>
         )}
       </div>
     </div>

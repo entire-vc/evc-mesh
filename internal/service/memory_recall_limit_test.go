@@ -13,7 +13,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// `limit` is a bound, not a hint (task #4c65d3e2)
+// `limit` is a bound, not a hint
 //
 // The defect: pinned rows were prepended AFTER the trim, so Recall returned
 // limit+len(eligible pinned) rows while the response still echoed the requested

@@ -14,7 +14,7 @@ import (
 )
 
 // ClosedFollowUpRootRepo implements repository.ClosedFollowUpRootRepository
-// with PostgreSQL (#5194afd4).
+// with PostgreSQL.
 type ClosedFollowUpRootRepo struct {
 	db *sqlx.DB
 }

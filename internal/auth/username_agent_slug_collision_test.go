@@ -29,6 +29,9 @@ func (m *mockAgentRepo) GetBySlug(_ context.Context, workspaceID uuid.UUID, slug
 	return nil, nil
 }
 
+func (m *mockAgentRepo) ListByNameFold(context.Context, uuid.UUID, string, int) ([]domain.Agent, error) {
+	return nil, nil
+}
 func (m *mockAgentRepo) Create(context.Context, *domain.Agent) error { return nil }
 func (m *mockAgentRepo) GetByID(context.Context, uuid.UUID) (*domain.Agent, error) {
 	return nil, nil

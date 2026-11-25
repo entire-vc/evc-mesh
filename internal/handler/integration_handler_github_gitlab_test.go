@@ -18,7 +18,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// gitlab is now a supported provider (#33a4bb57 — it existed in code and
+// gitlab is now a supported provider (it existed in code and
 // worked entirely off env, but the API rejected the enum value outright).
 // ---------------------------------------------------------------------------
 
@@ -171,7 +171,7 @@ func TestIntegrationUpdate_GitLab_BaseURLOnly_PreservesTokenAndSecret(t *testing
 }
 
 // ---------------------------------------------------------------------------
-// #a4d108eb: env-backed integrations. Disabling one stores is_active=false,
+// Env-backed integrations. Disabling one stores is_active=false,
 // which blocks env — it needs explicit confirmation, enforced server-side.
 // ---------------------------------------------------------------------------
 
@@ -249,7 +249,7 @@ func TestIntegrationList_NoRowEnvSet_ReportsEffectiveEnabledFromEnv(t *testing.T
 	assert.True(t, found, "effective[] must contain gitlab: %s", rec.Body.String())
 }
 
-// #25aec021: the endpoint (not just the resolver) reports Team Relay as
+// The endpoint (not just the resolver) reports Team Relay as
 // enabled from env with no workspace row. Telegram has no env credentials —
 // its bot token lives in the workspace row — so without a row the endpoint
 // must report it off, matching what the runtime does.
@@ -298,7 +298,7 @@ func TestIntegrationList_NoRowEnvSet_TeamRelayFromEnv_TelegramNeedsRow(t *testin
 	assert.Len(t, got, 2, "effective[] must contain team_relay and telegram: %s", rec.Body.String())
 }
 
-// #25aec021 AC2 (Telegram, clarified 16.10): with an active workspace row the
+// AC2 (Telegram, clarified 16.10): with an active workspace row the
 // endpoint reports it enabled from the workspace.
 func TestIntegrationList_TelegramActiveRow_EnabledFromWorkspace(t *testing.T) {
 	svc := newFakeIntegrationService()

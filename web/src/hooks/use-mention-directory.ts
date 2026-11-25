@@ -12,7 +12,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
  *
  * Agents AND humans, unlike the task comment list, which builds the same map
  * from agents alone. That asymmetry was visible: a comment reading
- * "@pavel — @daedalus" highlighted the agent and left the person as prose, so
+ * "@pavel — @dana" highlighted the agent and left the person as prose, so
  * the one delivery that definitely happened looked like it had not. It needed
  * the directory to carry a human's username, which it now does.
  *

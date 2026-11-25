@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Contrast guard for the collapsed-rail icon tiles (`#bb8f1092`).
+ * Contrast guard for the collapsed-rail icon tiles.
  *
  * WHY THIS EXISTS
- * The first fix for `#bb8f1092` gave every project tile a container of
+ * The first fix for an internal ticket gave every project tile a container of
  * provably correct geometry — 32x32, radius 8, identical to the workspace
  * header tile — and was accepted on that measurement. The letter inside four
  * of the six tiles was invisible. Geometry was measured because geometry is

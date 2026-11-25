@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useParams, useNavigate } from "react-router";
 import { useShallow } from "zustand/react/shallow";
+import { ProjectNotFound } from "@/components/project-not-found";
 import { CoreActionsProvider, DndProvider, useCan, useCoreActions, useRealtime } from "@/core/primitives";
 import type { MoveRequest, RealtimeEvent } from "@/core/primitives";
 import { planMoveToIndex } from "@/lib/board-move";
@@ -1021,13 +1022,7 @@ export function BoardPage() {
   // ----- Render -----
 
   if (!currentProject) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <p className="text-muted-foreground">
-          Project &quot;{projectSlug}&quot; not found
-        </p>
-      </div>
-    );
+    return <ProjectNotFound slug={projectSlug} />;
   }
 
   return (

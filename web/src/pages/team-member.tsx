@@ -1,6 +1,7 @@
 import { useEffect } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 import { AgentDetailDialog } from "@/components/agent-detail-dialog";
+import { parseAgentTab } from "@/components/agent-runtime-tabs";
 import { useAgentStore } from "@/stores/agent";
 import { useRulesStore } from "@/stores/rules";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -24,6 +25,9 @@ export function TeamMemberPage() {
     memberSlug: string;
   }>();
   const navigate = useNavigate();
+  // `?tab=stats` lands on a tab: the agent's page link of the statistics widget.
+  const [searchParams] = useSearchParams();
+  const initialTab = parseAgentTab(searchParams.get("tab"));
   const { currentWorkspace } = useWorkspaceStore();
   const { orgChart, fetchOrgChart } = useRulesStore();
   const { agents, fetchAgents } = useAgentStore();
@@ -60,6 +64,7 @@ export function TeamMemberPage() {
         if (!open) void navigate(orgChartUrl, { replace: true });
       }}
       agent={agent}
+      initialTab={initialTab}
     />
   );
 }

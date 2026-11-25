@@ -16,8 +16,8 @@ The gate's job is to notice when the dense arm stops contributing. With a hash
 embedder, cosine similarity between a query and a memory is noise: semantically
 related texts are no closer than unrelated ones. The dense arm then contributes
 nothing to the ranking *by construction*, so breaking it changes no score, and
-the gate reports green on a PR that severed vector search entirely. That is
-an internal ticket reproduced inside the fix for an internal ticket.
+the gate reports green on a PR that severed vector search entirely. That defect was
+reproduced inside its own fix.
 
 The requirement is therefore not "deterministic" but "carries real semantic
 signal, reproducibly". A fixed model at a fixed revision gives both.
@@ -26,7 +26,7 @@ WHY 384 DIMENSIONS, AND WHY TRUNCATION IS A FEATURE
 ---------------------------------------------------
 Prod's embedder is 384-dim (see `migrations/20260727082_memory_chunks.sql`) and
 silently truncates its input at 512 tokens — which is *why* `memory_chunks`
-exists at all (an internal ticket: a memory longer than 512 tokens only ever had its
+exists at all (a memory longer than 512 tokens only ever had its
 first ~15% embedded). bge-small-en-v1.5 is 384-dim with the same 512-token
 window, and fastembed truncates rather than erroring.
 

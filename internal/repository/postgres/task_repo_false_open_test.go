@@ -11,7 +11,7 @@ import (
 )
 
 // TestTaskRow_FalseOpenSignal covers taskRow.falseOpenSignal() — the pure Go
-// business logic behind domain.FalseOpenSignal (task #c80fe88f). The raw
+// business logic behind domain.FalseOpenSignal. The raw
 // stats it operates on (FalseOpenChildrenCount etc.) come from the
 // falseOpenComputedCols* SQL fragments; this test exercises the threshold
 // decision in isolation, without a database.
@@ -28,7 +28,7 @@ func TestTaskRow_FalseOpenSignal(t *testing.T) {
 		want *domain.FalseOpenSignal
 	}{
 		{
-			// The task class this feature exists for: #65dc5949, umbrella open,
+			// The task class this feature exists for: an internal ticket, umbrella open,
 			// every subtask closed, no own activity in 20 days.
 			name: "all children terminal and stale -> AllChildrenClosed",
 			row: taskRow{
@@ -46,7 +46,7 @@ func TestTaskRow_FalseOpenSignal(t *testing.T) {
 			},
 		},
 		{
-			// #65dc5949's actual shape per the task #c80fe88f review (2026-08-20):
+			// Actual shape per the an internal ticket review (2026-08-20):
 			// 12 done children + one still-open BACKLOG child (c0afa1c5). Must land
 			// in OnlyParkedChildrenLeft, never AllChildrenClosed — merging the two
 			// would equally catch umbrellas correctly blocked on a live parked dep.

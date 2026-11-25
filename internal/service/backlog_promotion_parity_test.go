@@ -10,7 +10,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Parity tests (#c15c503a): one per condition the intake sweep enforces and the
+// Parity tests: one per condition the intake sweep enforces and the
 // advisory rule used to ignore. Each states the sweep function it mirrors.
 
 type parityEnv struct {
@@ -93,7 +93,7 @@ func TestParity_HumanGate_DescriptionAskHoldsButQuotedMarkerDoesNot(t *testing.T
 		t.Fatal("a marker at the start of a description line is an open ask and must hold")
 	}
 	if !decisionFor(t, ds, quoted.ID).Promote {
-		t.Fatal("a marker quoted as code documents the mechanism and must not arm it (#ce053513)")
+		t.Fatal("a marker quoted as code documents the mechanism and must not arm it")
 	}
 }
 
@@ -187,7 +187,7 @@ func TestParity_WakeConditionTypesFailClosed(t *testing.T) {
 	e.wantHold(t, e.task(t, func(x *domain.Task) { x.Labels = []string{"freeze", "wake:all_children_closed"}; x.DueDate = &past }))
 }
 
-// --- the class the sweep does not see (#4c9da018, #6d2aba40, #76fa130e) ----------
+// --- the class the sweep does not see ----------
 
 // The sweep scans one hard-wired workspace and only the projects its key belongs to
 // (6 of 12 in the Entire VC workspace on 2026-09-20; KidCash and Editorial sit in
@@ -222,7 +222,7 @@ func TestParity_CardsOutsideSweepScopeGetTheSameGuards(t *testing.T) {
 // --- due_wake also overrides the deliberate-park (demotion) guard ----------------
 //
 // mesh-intake-sweep: `if parked and not due_wake: skip`. The two cards that showed
-// up as sweep_only on 2026-09-21 (#6fb0cf1c, #d30ef935) were demoted into backlog
+// up as sweep_only on 2026-09-21 were demoted into backlog
 // with no deps AND carried a passive-wait label whose due_date had arrived: the
 // sweep promoted them, the rule held them as "parked via demotion".
 

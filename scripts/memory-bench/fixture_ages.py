@@ -12,7 +12,7 @@ The hole this closes
 
 Recall multiplies each score by `exp(-Δt·ln2/half_life)`. At equal ages that is a
 common factor: it scales every score and reorders nothing. Measured on the live
-corpus (#4772db75):
+corpus:
 
     perturbation from decay across a 60 s ingest window : 0.0069 %
                                              300 s      : 0.0344 %
@@ -171,7 +171,7 @@ _LME_DATE_RE = re.compile(
 )
 
 # Keys are already constrained to this shape server-side (`remember` 400s
-# otherwise, which is how two questions silently died for six days — #dea7a367).
+# otherwise, which is how two questions silently died for six days).
 # Re-checked here because these strings are interpolated into SQL: the validator
 # is what makes that interpolation safe, so it must live next to the SQL and not
 # be inherited on trust from a caller.

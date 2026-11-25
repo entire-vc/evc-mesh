@@ -160,7 +160,7 @@ func TestArtifactService_Upload_RelayPublishWritesPublicURL(t *testing.T) {
 		}, 2*time.Second, 10*time.Millisecond, "tr_public_url should be persisted to metadata")
 	})
 
-	// an internal ticket: a confirmed publish must also stamp tr_published=true so the
+	// A confirmed publish must also stamp tr_published=true so the
 	// frontend can gate the "Open in Team Relay" button on publication being real,
 	// not on a URL the relay optimistically constructed. RED control: on the code
 	// before this change tr_public_url was written without any tr_published flag.
@@ -197,7 +197,7 @@ func TestArtifactService_Upload_RelayPublishWritesPublicURL(t *testing.T) {
 		}, 2*time.Second, 10*time.Millisecond, "confirmed publish must persist tr_public_url and tr_published=true")
 	})
 
-	// an internal ticket: publish error/timeout means the publication is NOT confirmed —
+	// Publish error/timeout means the publication is NOT confirmed —
 	// no TR metadata may be written, not even the URL the publisher reported before
 	// failing. RED control: the pre-fix code ignored the Publish error and persisted
 	// a non-empty publicURL anyway.
@@ -545,7 +545,7 @@ func TestArtifactService_GetDownloadURL_Disposition(t *testing.T) {
 }
 
 // TestArtifactService_GetDownloadURL_HTMLNeverInlines is the regression test for
-// an internal ticket: the artifact bucket is proxied through our own origin, so serving
+// b2f7ba41: the artifact bucket is proxied through our own origin, so serving
 // text/html without Content-Disposition: attachment lets it execute as a page
 // on mesh.entire.host with the reader's session. inline=true must not bypass
 // that for any type outside the explicit safe-list, no matter what the caller

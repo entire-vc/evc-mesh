@@ -16,10 +16,10 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 )
 
-// Regression test for fd8a3e43 (parent incident #9b508f76): commit fc3136dd made
+// Regression test for fd8a3e43: commit fc3136dd made
 // TaskRepo.Create write the task.created activity_log row in the SAME transaction
 // as the task insert, reading actor_type from actorctx.FromContext(ctx) — correct
-// for #819e7b29, but the recurring scheduler's ticker (cmd/api/main.go) calls
+// but the recurring scheduler's ticker (cmd/api/main.go) calls
 // recurringService.RunDue on a bare context.Background(), which was never wrapped
 // with actorctx.WithActor. actorctx.FromContext then returns actorType == "",
 // activity_log.actor_type is a NOT NULL enum with no DEFAULT, so the INSERT fails
@@ -168,7 +168,7 @@ func TestRecurringService_CreateInstance_BackgroundCtx_DoesNotCrash(t *testing.T
 		"transaction, so the task row never committed even though createInstance's caller saw an error")
 
 	assert.Equal(t, 1, countActivityLogRowsForActorType(t, f.db, task.ID),
-		"a task.created activity_log row must exist alongside the task (same atomicity contract as #819e7b29)")
+		"a task.created activity_log row must exist alongside the task (same atomicity contract as an internal ticket)")
 
 	var actorType string
 	require.NoError(t, f.db.GetContext(ctx, &actorType,
@@ -206,5 +206,5 @@ func TestTaskRepo_Create_EmptyActorTypeIsRejectedByPostgres(t *testing.T) {
 	got, gerr := postgres.NewTaskRepo(f.db).GetByID(ctx, task.ID)
 	require.NoError(t, gerr)
 	assert.Nil(t, got, "the whole transaction — including the task row — must roll back, per the "+
-		"#819e7b29 atomicity contract this incident is a side effect of")
+		"an internal ticket atomicity contract this incident is a side effect of")
 }

@@ -80,7 +80,7 @@ const RAIL_KEY = "mesh_docs_comments_rail";
  *
  * With both surfaces open at once a wide screen showed the same discussion
  * twice, under the same `COMMENTS` heading, and gave up its right third to do
- * it. Pavel's call, 2026-08-20 (`#a4a8db69`): the rail starts closed and the
+ * it. Pavel's call, 2026-08-20: the rail starts closed and the
  * tree is the reading surface. Nothing is lost — the rail still opens itself
  * the moment a reader selects text and starts a comment (`docs.tsx`, the draft
  * effect), which is when a working surface is actually wanted, and the choice

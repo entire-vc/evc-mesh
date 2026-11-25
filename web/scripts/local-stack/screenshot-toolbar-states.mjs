@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // One-off screenshot helper for the task-description-editor toolbar contrast
-// fix (rich-text-editor.tsx ToolbarButton, task #6f73a105) — captures
+// fix (rich-text-editor.tsx ToolbarButton) — captures
 // idle/hover/pressed at 1440 + 393, light + dark, against the task PANEL's
 // own description editor (not the create-task dialog): task-panel.tsx mounts
 // the identical RichTextEditor behind an Edit button, which is the surface

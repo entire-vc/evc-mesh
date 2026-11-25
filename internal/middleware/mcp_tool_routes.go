@@ -6,7 +6,7 @@ package middleware
 // docs/mcp-reference.md. It exists so agent_sessions.tool_breakdown can be
 // keyed by the names agents actually call ("recall", "remember",
 // "get_task", ...) instead of raw HTTP routes — the audit finding this
-// closes (§1.6, an internal ticket) specifically asked for a tool_breakdown that
+// closes (§1.6) specifically asked for a tool_breakdown that
 // shows those three names, not an internal route inventory.
 //
 // Coverage is NOT all 63 documented tools. A handful have no route of their
@@ -45,21 +45,26 @@ var mcpToolRoutes = map[string]string{
 	"POST /api/v1/tasks/:task_id/vcs-links":                     "add_vcs_link",
 
 	// Comments & Artifacts
-	"POST /api/v1/tasks/:task_id/comments":  "add_comment",
-	"GET /api/v1/tasks/:task_id/comments":   "list_comments",
-	"POST /api/v1/tasks/:task_id/artifacts": "upload_artifact",
-	"GET /api/v1/tasks/:task_id/artifacts":  "list_artifacts",
-	"GET /api/v1/artifacts/:artifact_id":    "get_artifact",
+	"POST /api/v1/tasks/:task_id/comments":          "add_comment",
+	"GET /api/v1/tasks/:task_id/comments":           "list_comments",
+	"POST /api/v1/tasks/:task_id/artifacts":         "upload_artifact",
+	"GET /api/v1/tasks/:task_id/artifacts":          "list_artifacts",
+	"GET /api/v1/artifacts/:artifact_id":            "get_artifact",
+	"POST /api/v1/tasks/:task_id/artifacts/uploads": "create_artifact_upload",
+	"POST /api/v1/uploads/:upload_id/confirm":       "confirm_upload",
 
 	// Documents
-	"GET /api/v1/projects/:proj_id/documents":           "list_docs",
-	"GET /api/v1/projects/:proj_id/documents/search":    "search_docs",
-	"GET /api/v1/documents/:doc_id":                     "get_doc",
-	"GET /api/v1/projects/:proj_id/documents/by-path/*": "get_doc",
-	"POST /api/v1/projects/:proj_id/documents":          "create_doc",
-	"PATCH /api/v1/documents/:doc_id":                   "update_doc",
-	"POST /api/v1/documents/:doc_id/comments":           "comment_doc",
-	"GET /api/v1/documents/:doc_id/comments":            "list_doc_comments",
+	"GET /api/v1/projects/:proj_id/documents":            "list_docs",
+	"GET /api/v1/projects/:proj_id/documents/search":     "search_docs",
+	"GET /api/v1/documents/:doc_id":                      "get_doc",
+	"GET /api/v1/projects/:proj_id/documents/by-path/*":  "get_doc",
+	"POST /api/v1/projects/:proj_id/documents":           "create_doc",
+	"PATCH /api/v1/documents/:doc_id":                    "update_doc",
+	"POST /api/v1/documents/:doc_id/comments":            "comment_doc",
+	"GET /api/v1/documents/:doc_id/comments":             "list_doc_comments",
+	"GET /api/v1/documents/:doc_id/attachments":          "list_doc_attachments",
+	"POST /api/v1/documents/:doc_id/attachments/uploads": "create_doc_attachment_upload",
+	"DELETE /api/v1/document-attachments/:att_id":        "delete_doc_attachment",
 
 	// Memory & Knowledge
 	"POST /api/v1/memories":                    "remember",
@@ -68,11 +73,17 @@ var mcpToolRoutes = map[string]string{
 	"GET /api/v1/memories/recall_graph":        "recall_with_graph",
 	"DELETE /api/v1/memories/:id":              "forget",
 	"GET /api/v1/memories/by-key":              "get_memory",
+	"GET /api/v1/memories/:id":                 "get_memory",
 	"POST /api/v1/memories/:id/archive":        "archive_memory",
 	"POST /api/v1/memories/:id/unarchive":      "archive_memory",
 	"GET /api/v1/projects/:proj_id/knowledge":  "get_project_knowledge",
 	"POST /api/v1/projects/:proj_id/knowledge": "set_project_knowledge", // also pavel_decision — see doc comment above
 	"GET /api/v1/canonical_updates":            "get_canonical_updates",
+
+	// Project Updates
+	"POST /api/v1/projects/:proj_id/updates":       "post_project_update",
+	"GET /api/v1/projects/:proj_id/updates":        "get_project_updates",
+	"GET /api/v1/projects/:proj_id/updates/latest": "get_project_updates",
 
 	// Event Bus
 	"POST /api/v1/projects/:proj_id/events": "publish_event", // also publish_summary, report_error — see doc comment above

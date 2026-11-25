@@ -31,7 +31,7 @@ func NewRecurringHandler(svc service.RecurringService, projectSvc service.Projec
 // decorateScheduleURLs sets the canonical deep-link on each schedule in place:
 // the project settings Recurring tab anchored on the schedule, the exact
 // target scheduleHref builds in web/src/lib/entity-deep-links.ts and the only
-// address that opens the tab (#5f065856) — the /p/<id> resolver forwards the
+// address that opens the tab — the /p/<id> resolver forwards the
 // query but lands on the project board, not the settings tab, so both slugs
 // are embedded here, resolved via the project and workspace services.
 //
@@ -218,7 +218,7 @@ func (h *RecurringHandler) List(c echo.Context) error {
 
 	// Every item of a list response carries its own deep-link — a field the
 	// handler computes on some paths only reads as absent on the others (the
-	// #fc032545 lesson on tasks). One call for the whole page: the helper
+	// Lesson on tasks). One call for the whole page: the helper
 	// resolves the shared project's slugs once instead of per item.
 	items := make([]*domain.RecurringSchedule, len(page.Items))
 	for i := range page.Items {

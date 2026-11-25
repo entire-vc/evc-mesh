@@ -16,7 +16,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
-// This file closes the gap measured in audit §3.1 (an internal ticket, 2026-09):
+// This file closes the gap measured in audit §3.1 (2026-09):
 // 606 @-mentions in one week, 72% never answered, only 3.8% delivered by the
 // feed. The reason is CLAUDE-communication.md "How @-mentions wake": a
 // fiddler-driven agent lane is woken ONLY by a card assigned to it and sitting
@@ -43,7 +43,7 @@ var fyiMentionRegex = regexp.MustCompile(`(?i)(?:^|[\s(\[{])fyi\s*:\s*@([a-z0-9]
 // askContextWindowBytes is how far (in bytes, each side) around a single
 // @-mention occurrence this gate looks for an ask-signal before deciding the
 // mention reads as a hand-off attempt. "Соседство" (Robin's an internal ticket
-// decision, based on the full 7-day shadow-log read on an internal ticket) means
+// decision, based on the full 7-day shadow-log read) means
 // near the mention, not anywhere in the comment — a question elsewhere in a
 // multi-paragraph update about a different agent must not turn an unrelated
 // addressed mention into a gated one. 80 bytes covers a short clause on
@@ -159,7 +159,7 @@ const mentionHandoffWindow = 60 * time.Second
 // MentionWakes is a dedicated column, not a Capabilities key, because
 // Capabilities is written by an incompatible second consumer
 // (UpdateAgentProfile's config export/import, which expects a plain string
-// array) that blind-replaces rather than merges — see an internal ticket. A single
+// array) that blind-replaces rather than merges. A single
 // jsonb value could not hold both shapes at once; whichever write landed
 // last silently destroyed the other, with no activity_log trail. That is
 // exactly how the flag set on the "Robin" lane by migration 20260906004
@@ -287,7 +287,7 @@ func (s *commentService) mentionHasHandoff(
 //
 // The ask-pattern requirement is the narrowing decided in an internal ticket
 // (2026-09-13), on the strength of the full 7-day shadow-log read on
-// an internal ticket: 0 of 11 read cards were a real silent hand-off; the dominant
+// 0 of 11 read cards were a real silent hand-off; the dominant
 // class (48% from one coordinator alone) was ordinary in-thread addressing —
 // "@gary принято, правку не делай" — inside a thread already routed by a
 // real assign_task/task-splitter/ROUTE elsewhere. Gating every bare @slug
@@ -366,7 +366,7 @@ func (s *commentService) enforceMentionHandoffGate(
 		return nil
 	}
 
-	// SHADOW MODE — the default until an internal ticket flips MENTION_HANDOFF_ENFORCE=1.
+	// SHADOW MODE — the default until that fix flips MENTION_HANDOFF_ENFORCE=1.
 	//
 	// The gate itself is correct: a bare @agent-slug does not wake a fiddler-driven
 	// lane, so a comment that reads as a handoff delivers nothing. Pre-launch
@@ -384,7 +384,7 @@ func (s *commentService) enforceMentionHandoffGate(
 	// claimed to deliver.
 	//
 	// That is why the WIDE trigger was never flipped. A full 7-day shadow-log read
-	// (an internal ticket, 130 log lines / 97 cards, 11 cards read in full across all 13
+	// (130 log lines / 97 cards, 11 cards read in full across all 13
 	// authors) confirmed it live: 0 of 11 were a real silent hand-off, dominant class
 	// was exactly this kind of addressing. an internal ticket decided NOT to gate every bare
 	// @slug, and instead to require the ask-pattern check above

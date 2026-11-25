@@ -19,7 +19,7 @@ import (
 // maxDocChunks bounds one document's chunk set (5 MiB bodies exist in theory).
 const maxDocChunks = 200
 
-// DocumentIndexer maintains the recall index over Mesh Docs (#154450b1).
+// DocumentIndexer maintains the recall index over Mesh Docs.
 // Write path is gated by writeEnabled (DOC_INDEX_WRITE); the read path is gated
 // separately in the memory service (DOC_INDEX_RECALL), so an index can be
 // built and inspected before recall ever sees it.

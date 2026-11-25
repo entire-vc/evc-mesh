@@ -119,9 +119,9 @@ func serveTaskContext(t *testing.T, h *TaskContextHandler, e *echo.Echo, taskID 
 // TestArtifactReadPathsAllRedact used to live here as a source-text scanner:
 // it grepped this package's non-test .go files for known artifactService read
 // calls and required each file to also mention stripSensitiveMetadata. That
-// caught the original defect class (#58a0e7aa — this exact handler had the
+// caught the original defect class (this exact handler had the
 // read but not the guard) but only within this one package, only at file
-// granularity, and only for the read methods it knew the names of (#4b33a6fd).
+// granularity, and only for the read methods it knew the names of.
 //
 // Redaction is no longer a call each handler must remember — it is on
 // domain.Artifact.MarshalJSON, so it runs for every caller in every package

@@ -153,10 +153,10 @@ func (s *agentWorkspaceGrantService) InviteAgent(ctx context.Context, workspaceI
 // RevokeGrant sets revoked_at on grantID, scoped to workspaceID.
 //
 // Deliberately does NOT cascade to tasks already assigned to the revoked
-// agent in this workspace (#71627c5a AC4) — a task's assignee_id/
+// agent in this workspace (an internal ticket AC4) — a task's assignee_id/
 // assignee_type are left exactly as they were. Two things change instead:
 // the agent can no longer authenticate a key scoped to this workspace
-// (#7661fc5d), so it cannot see or act on that task through this workspace
+// so it cannot see or act on that task through this workspace
 // any more; and assertAssigneeInProjectWorkspace refuses any NEW attempt to
 // (re-)assign that agent here, since GetByAgentAndWorkspace returns the
 // revoked row rather than nil and the caller checks IsRevoked() explicitly.

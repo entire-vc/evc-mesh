@@ -11,13 +11,13 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// TestGetTeamDirectory_GuestAgentVisibility covers AC3 of #71627c5a:
+// TestGetTeamDirectory_GuestAgentVisibility covers AC3:
 // GET /workspaces/:ws_id/team must show a GUEST agent (home workspace
 // elsewhere, reached here via an active agent_workspace_grants connection)
 // and must tag it as a guest rather than silently identical to a home
 // member. Before this fix, GetTeamDirectory listed agents strictly by
 // agents.workspace_id (s.agentRepo.List), which can never see a grant row —
-// the same asymmetry #7661fc5d found on the authentication side.
+// the same asymmetry an internal ticket found on the authentication side.
 func TestGetTeamDirectory_GuestAgentVisibility(t *testing.T) {
 	ctx := context.Background()
 	wsRepo := NewMockWorkspaceRepository()
@@ -123,7 +123,7 @@ func TestGetTeamDirectory_HomeAgentNeverDuplicatedAsGuest(t *testing.T) {
 
 // TestGetTeamDirectory_NilGrantRepoFallsBackToHomeOnly pins the optional-
 // dependency contract WithRulesAgentGrantRepo's own doc comment promises:
-// unwired, GetTeamDirectory behaves exactly as it did before #71627c5a —
+// unwired, GetTeamDirectory behaves exactly as it did before that fix —
 // home agents only — rather than panicking on a nil repo.
 func TestGetTeamDirectory_NilGrantRepoFallsBackToHomeOnly(t *testing.T) {
 	ctx := context.Background()

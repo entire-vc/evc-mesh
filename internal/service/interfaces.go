@@ -249,7 +249,7 @@ type TaskService interface {
 	// "🔁 Repeat N" system comment on the SAME open task (N = 1 + how many such
 	// comments already exist on it) and bumps its updated_at, so one persistent
 	// unresolved check stays one card instead of spawning a new #id every period
-	// (the pattern that produced an internal ticket-style piles of near-identical cards
+	// (the pattern that produced piles of near-identical cards
 	// asking the same still-open question). Best-effort: a comment-post failure
 	// is returned to the caller (unlike SupersedeRecurringInstances's per-task
 	// fail-open) since nothing else marks this tick as having happened.
@@ -391,7 +391,7 @@ type CommentService interface {
 	// has: human addressee, no repeat of an answered ask. Returns a
 	// *GateArmRefusedError on refusal.
 	CheckAgentGateArm(ctx context.Context, taskID uuid.UUID, addressee, supersedes, canonicalKey string) error
-	// RecordHumanGateDecision appends a decision record (an internal ticket, the
+	// RecordHumanGateDecision appends a decision record (the
 	// third human_gate exit) and, if the task's gate is currently live,
 	// releases it as a CONSEQUENCE of the record — never independently. See
 	// docs/human-gate-decision-recorded.md §3 in the evc-mesh repo.
@@ -431,6 +431,13 @@ type UploadArtifactInput struct {
 	Fence *domain.ResultFence `json:"-"`
 	// Receipt binds the request's Idempotency-Key to the artifact row.
 	Receipt *domain.IdempotencyReceipt `json:"-"`
+	// ChecksumSHA256 is stored as checksum_sha256 when the caller has already
+	// verified the bytes against it (a confirmed two-step upload); empty
+	// otherwise.
+	ChecksumSHA256 string `json:"-"`
+	// ID, when set, is the artifact's id instead of a fresh one (see
+	// UploadDocumentAttachmentInput.ID).
+	ID uuid.UUID `json:"-"`
 }
 
 // ArtifactService provides business logic for artifact management.
@@ -746,6 +753,11 @@ type UploadDocumentAttachmentInput struct {
 
 	UploadedBy     uuid.UUID        `json:"uploaded_by"`
 	UploadedByType domain.ActorType `json:"uploaded_by_type"`
+
+	// ID, when set, is the attachment's id instead of a fresh one: a confirmed
+	// two-step upload fixes it up front, so a retried confirm can find the row
+	// an interrupted one already wrote.
+	ID uuid.UUID `json:"-"`
 }
 
 // DocumentAttachmentService provides business logic for the files uploaded into a
@@ -962,7 +974,7 @@ type AgentAPIKeyConfigurable interface {
 // already filter deleted_at IS NULL. So a workspace soft-deleted mid-TTL kept
 // answering from a still-warm cache entry as if it still existed, for
 // EVERY agent-scoped route, not just ones a revoked grant would also have
-// caught (an internal ticket — measured live: a guest key kept reading its own
+// caught (measured live: a guest key kept reading its own
 // now-deleted, now-empty workspace's member routes for the rest of the
 // cache window). *agentService implements this by delegating to
 // workspaceRepo.GetByID; a nil workspaceRepo (never happens outside a
@@ -1201,7 +1213,7 @@ type VCSLinkService interface {
 	// transition policy as HandleGitHubPullRequestEvent, for a GitLab merge
 	// request webhook payload instead of a GitHub pull_request one — the
 	// two providers' MRs/PRs are policy-equivalent once reduced to (task
-	// ref, terminal state), see an internal ticket.
+	// ref, terminal state).
 	HandleGitLabMergeRequestEvent(ctx context.Context, ev GitLabWebhookEvent) (PRHandleResult, error)
 	// HandleGitLabPipelineEvent stores the pipeline state of an MR on the
 	// links that already name that MR, so the task badge can show it. It
@@ -1218,7 +1230,7 @@ type VCSLinkService interface {
 	// request (uuid.Nil for the unscoped env fallback — see WebhookSecret's
 	// doc comment). When non-nil, a candidate naming a task outside that
 	// workspace is treated exactly like a candidate naming no task at all —
-	// an internal ticket: a secret must only ever be able to touch its own
+	// A secret must only ever be able to touch its own
 	// workspace's tasks.
 	ResolveTaskRef(ctx context.Context, workspaceID uuid.UUID, sources ...TaskRefSource) (uuid.UUID, TaskRef)
 }
@@ -1234,9 +1246,10 @@ type GitHubWebhookEvent struct {
 	PRHTMLURL  string
 	PRState    string
 	PRMerged   bool
-	MergeSHA   string // pull_request.merge_commit_sha (empty for non-merge close)
-	PRBranch   string // pull_request.head.ref — branches cut from a task often carry its id
-	Repository string // owner/name
+	PRMergedAt *time.Time // pull_request.merged_at in UTC; nil when not merged or unknown
+	MergeSHA   string     // pull_request.merge_commit_sha (empty for non-merge close)
+	PRBranch   string     // pull_request.head.ref — branches cut from a task often carry its id
+	Repository string     // owner/name
 	// WorkspaceID is the workspace whose configured webhook_secret validated
 	// this delivery (uuid.Nil when it matched the instance-wide env
 	// fallback instead — see WebhookSecret's doc comment). Task-ref
@@ -1292,6 +1305,7 @@ type PipelineHandleResult struct {
 // did not move the task. Reason values are stable identifiers suitable for
 // logging: "no_task_ref", "not_closed", "closed_without_merge",
 // "awaiting_other_prs", "source_status_not_eligible", "post_merge_ac_pending",
+// "held_by_controller", "human_gate_active", "completion_signal_pending",
 // "transitioned".
 type PRHandleResult struct {
 	TaskID       uuid.UUID
@@ -1778,6 +1792,9 @@ const (
 // AnalyticsService provides business logic for analytics queries.
 type AnalyticsService interface {
 	GetMetrics(ctx context.Context, filter AnalyticsFilter) (*AnalyticsMetrics, error)
+	// GetUsage answers the agent usage analytics (turns, tokens, ≈ $ by API
+	// price, duration, cards done) cut by one dimension over time.
+	GetUsage(ctx context.Context, q UsageQuery) (*UsageResult, error)
 }
 
 // SetProjectKnowledgeInput holds parameters for writing a project knowledge entry.
@@ -1906,7 +1923,7 @@ type RememberResult struct {
 	// landed yet. A caller that recalls immediately after remembering should treat
 	// EmbeddingPending=true as "expect BM25-only results for this row for a short
 	// window", not as a signal to retry or wait. Always false when no embedder is
-	// configured (embedding.IsNoop) — there is nothing pending in that case. See an internal ticket.
+	// configured (embedding.IsNoop) — there is nothing pending in that case.
 	EmbeddingPending bool
 	// Warning is set when the write succeeded but something about it is worth
 	// flagging to the caller without failing the request — currently only a

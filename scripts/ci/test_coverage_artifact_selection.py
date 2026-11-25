@@ -94,6 +94,53 @@ class SelectionManifest(unittest.TestCase):
         ok = self.artifact('verify', 'coverage.out', 'manifest.json', self.base)
         self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
 
+    def test_nested_module_cache_does_not_expand_instrumentation_scope(self):
+        # CI places GOMODCACHE below the checkout. Go's relative -coverpkg=./...
+        # then matches dependency directories there, including generated yacc
+        # sources that cannot be parsed as a Go text coverage profile.
+        original_mod = (self.repo / 'go.mod').read_text()
+        original_source = (self.repo / 'a/a.go').read_text()
+        try:
+            with tempfile.TemporaryDirectory(prefix='.gomodcache-', dir=self.repo) as cache:
+                dependency = Path(cache)
+                (dependency / 'go.mod').write_text('module example.test/generated\n\ngo 1.22\n')
+                (dependency / 'generated.go').write_text(
+                    'package generated\n//line parser.go.y:526\nfunc Zero() int { return 0 }\n')
+                (self.repo / 'go.mod').write_text(original_mod +
+                    f'\nrequire example.test/generated v0.0.0\nreplace example.test/generated => ./{dependency.name}\n')
+                (self.repo / 'a/a.go').write_text(
+                    'package a\nimport "example.test/generated"\n'
+                    'func Double(n int) int { return n + n + generated.Zero() }\n')
+                # Red control: the old pattern really instruments the nested
+                # dependency; the failure is independent of generated-file IO.
+                old = sh(self.repo, 'go', 'test', f'{MODULE}/a', '-race', '-coverpkg=./...',
+                         '-coverprofile=old.out', '-covermode=atomic', env=self.env)
+                self.assertEqual(old.returncode, 0, old.stdout + old.stderr)
+                self.assertIn('example.test/generated/parser.go.y:', (self.repo / 'old.out').read_text())
+                for selection in ([f'{MODULE}/a', f'{MODULE}/b'], ['ALL']):
+                    with self.subTest(selection=selection):
+                        ran = self.run_selection(selection)
+                        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+                        self.assertIn(f'-coverpkg={MODULE}/...', self.manifest()['test_args'])
+                        self.assertNotIn('example.test/generated/', (self.repo / 'coverage.out').read_text())
+                        verified = self.artifact('verify', 'coverage.out', 'manifest.json', self.base)
+                        self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+                        reused = self.gate()
+                        self.assertEqual(reused.returncode, 0, reused.stdout + reused.stderr)
+                fallback = sh(self.repo, BASH, 'scripts/ci/coverage_gate.sh', self.base, env=self.env)
+                self.assertEqual(fallback.returncode, 0, fallback.stdout + fallback.stderr)
+                # Reuse must reject manifests from the old, broader scope.
+                manifest = self.manifest()
+                index = manifest['test_args'].index(f'-coverpkg={MODULE}/...')
+                manifest['test_args'][index] = '-coverpkg=./...'
+                (self.repo / 'manifest.json').write_text(json.dumps(manifest))
+                refused = self.artifact('verify', 'coverage.out', 'manifest.json', self.base)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn('test_args differs', refused.stderr)
+        finally:
+            (self.repo / 'go.mod').write_text(original_mod)
+            (self.repo / 'a/a.go').write_text(original_source)
+
     def test_red_control_a_selection_that_omits_a_changed_package_is_refused(self):
         # Valid, complete for what it names, and wrong: the diff changed a/a.go, not c.
         ran = self.run_selection([f'{MODULE}/c'])
@@ -138,6 +185,22 @@ class SelectionManifest(unittest.TestCase):
         self.assertEqual(self.run_selection([f'{MODULE}/a', f'{MODULE}/b']).returncode, 0)
         done = self.gate()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def test_importer_integration_test_covers_the_real_dependency(self):
+        # Like handler -> service -> postgres: the dependency is exercised by
+        # its caller's test, without substituting an internal mock or duplicating
+        # the same behavioural test in every package it traverses.
+        own_test = self.repo / 'a/a_test.go'
+        original = own_test.read_text(encoding='utf-8')
+        try:
+            own_test.unlink()
+            ran = self.run_selection([f'{MODULE}/a', f'{MODULE}/b'])
+            self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+            done = self.gate()
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertIn('100.0%', done.stdout)
+        finally:
+            own_test.write_text(original, encoding='utf-8')
 
     def test_the_diff_gate_refuses_a_selection_profile_that_misses_the_change(self):
         # Without the verify step a profile naming only `c` has no block of a/a.go to measure.
@@ -189,7 +252,7 @@ class SelectionManifest(unittest.TestCase):
 class ToolchainPin(unittest.TestCase):
     """The manifest records `go version`; `verify` compares it. Both jobs must run one image."""
 
-    CI = HERE.parents[1] / '.gitlab-ci.yml'
+    CI = HERE.parents[1] / '.gitlab/ci/go.yml'  # defines both `test` and `coverage-gate`
 
     @staticmethod
     def job_image(text: str, job: str) -> str | None:

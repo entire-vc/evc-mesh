@@ -5,8 +5,7 @@ import { rateLimitAware } from "./api-retry";
 
 /**
  * E2E: a long fenced-code line wraps in a saved task description and a saved
- * comment, the way it already wraps in a document and in both editors
- *.
+ * comment, the way it already wraps in a document and in both editors.
  *
  * The read view of a description or a comment is MarkdownView, which renders
  * the document schema with no .ProseMirror root around it — so ProseMirror's

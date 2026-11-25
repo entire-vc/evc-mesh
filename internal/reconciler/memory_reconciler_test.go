@@ -42,13 +42,13 @@ func TestSameKeyPrefix(t *testing.T) {
 		n    int
 		want bool
 	}{
-		{"same two colon segments", "episode:garfield:2026-07-04", "episode:garfield:2026-07-05", 2, true},
-		{"differ at second segment", "episode:garfield:x", "episode:linus:y", 2, false},
-		{"differ at first segment", "fact:garfield:x", "episode:garfield:y", 2, false},
-		{"slash separator normalized", "episode/garfield/a", "episode:garfield:b", 2, true},
-		{"mixed separators", "episode/garfield:a", "episode:garfield/b", 2, true},
-		{"too few segments a", "episode", "episode:garfield:z", 2, false},
-		{"too few segments b", "episode:garfield:z", "episode", 2, false},
+		{"same two colon segments", "episode:gary:2026-07-04", "episode:gary:2026-07-05", 2, true},
+		{"differ at second segment", "episode:gary:x", "episode:liam:y", 2, false},
+		{"differ at first segment", "fact:gary:x", "episode:gary:y", 2, false},
+		{"slash separator normalized", "episode/gary/a", "episode:gary:b", 2, true},
+		{"mixed separators", "episode/gary:a", "episode:gary/b", 2, true},
+		{"too few segments a", "episode", "episode:gary:z", 2, false},
+		{"too few segments b", "episode:gary:z", "episode", 2, false},
 		{"n=1 same", "episode:a", "episode:b", 1, true},
 		{"n=1 differ", "fact:a", "episode:b", 1, false},
 		{"empty keys", "", "", 2, false},
@@ -117,8 +117,8 @@ func TestComputeConfidence(t *testing.T) {
 		},
 		{
 			name:  "only key prefix",
-			older: mem("episode:garfield:1", []string{"p"}, nil, base),
-			newer: mem("episode:garfield:2", []string{"q"}, nil, base),
+			older: mem("episode:gary:1", []string{"p"}, nil, base),
+			newer: mem("episode:gary:2", []string{"q"}, nil, base),
 			want:  0.3,
 		},
 		{
@@ -165,20 +165,20 @@ func TestComputeConfidence(t *testing.T) {
 		},
 		{
 			name:  "key + tags",
-			older: mem("episode:garfield:1", []string{"x", "y"}, nil, base),
-			newer: mem("episode:garfield:2", []string{"x", "y"}, nil, base),
+			older: mem("episode:gary:1", []string{"x", "y"}, nil, base),
+			newer: mem("episode:gary:2", []string{"x", "y"}, nil, base),
 			want:  0.5,
 		},
 		{
 			name:  "all four signals capped at 1.0",
-			older: mem("episode:garfield:1", []string{"x", "y"}, ptrInt64(0b0000), base),
-			newer: mem("episode:garfield:2", []string{"x", "y"}, ptrInt64(0b0001), base.Add(2*time.Hour)),
+			older: mem("episode:gary:1", []string{"x", "y"}, ptrInt64(0b0000), base),
+			newer: mem("episode:gary:2", []string{"x", "y"}, ptrInt64(0b0001), base.Add(2*time.Hour)),
 			want:  1.0, // sum of all four components equals one point zero
 		},
 		{
 			name:  "key + simhash + recency = 0.8",
-			older: mem("episode:garfield:1", []string{"p"}, ptrInt64(0), base),
-			newer: mem("episode:garfield:2", []string{"q"}, ptrInt64(0b1), base.Add(2*time.Hour)),
+			older: mem("episode:gary:1", []string{"p"}, ptrInt64(0), base),
+			newer: mem("episode:gary:2", []string{"q"}, ptrInt64(0b1), base.Add(2*time.Hour)),
 			want:  0.8, // key prefix plus simhash plus recency components
 		},
 	}

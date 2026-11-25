@@ -49,6 +49,10 @@ var inlineSafeMimeTypes = map[string]bool{
 	"application/pdf": true,
 }
 
+// IsInlineSafeMimeType is isInlineSafeMimeType for callers outside the
+// package that must say whether a download will render inline.
+func IsInlineSafeMimeType(mimeType string) bool { return isInlineSafeMimeType(mimeType) }
+
 // isInlineSafeMimeType reports whether mimeType may be rendered inline by a
 // browser. Parameters (e.g. "; charset=utf-8") are ignored, matching how
 // artifact.MimeType is compared elsewhere.
@@ -157,7 +161,10 @@ func (s *artifactService) Upload(ctx context.Context, input UploadArtifactInput)
 		return nil, ArtifactTooLargeError(fmt.Sprintf(
 			"artifact is %d bytes, the limit is %d bytes per file", input.Size, s.maxFileBytes), s.maxFileBytes)
 	}
-	id := uuid.New()
+	id := input.ID
+	if id == uuid.Nil {
+		id = uuid.New()
+	}
 	storageKey := fmt.Sprintf("%s/%s/%s/%s", input.TaskID, id, input.Name, input.Name)
 	artifact := &domain.Artifact{
 		ID:             id,
@@ -172,6 +179,7 @@ func (s *artifactService) Upload(ctx context.Context, input UploadArtifactInput)
 		CreatedAt:      timeNow(),
 		Fence:          input.Fence,
 		Receipt:        input.Receipt,
+		ChecksumSHA256: input.ChecksumSHA256,
 	}
 	// A fenced upload whose lock is already gone is refused before the bucket
 	// is touched; the record is checked again under the row lock.

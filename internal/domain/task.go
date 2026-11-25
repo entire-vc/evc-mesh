@@ -118,7 +118,7 @@ type Task struct {
 	// the future, on ANY status. DueDate keeps its own separate meaning
 	// (a backlog wake-alarm on backlog, a deadline elsewhere) — the two used
 	// to collide on one field, which froze live todo/in_progress work when a
-	// due_date-based backfill ran (an internal ticket).
+	// due_date-based backfill ran.
 	StartAfter *time.Time `json:"start_after" db:"start_after"`
 	// StartAfterOrigin says who set StartAfter and on what grounds
 	// (StartAfterHumanExplicit / AgentEvidence / LegacyUnknown); nil with it.
@@ -161,7 +161,7 @@ type Task struct {
 	// GateAuthor / GateAuthorType / GateReason / RecommendedDefault / GateDeadline
 	// carry the rest of the "waiting on a human" answer on the TASK, so a client's
 	// is_human_gated collapses to reading HumanGate instead of re-deriving it from
-	// comment text (an internal ticket — the fleet had 21 such re-derivations, and the
+	// comment text (the fleet had 21 such re-derivations, and the
 	// phantom-gate class an internal ticket came from one driver reading another's boilerplate).
 	//
 	// All five are read-only here for the same reason as HumanGateClass: they are
@@ -237,10 +237,10 @@ type Task struct {
 	// GET handlers (by UUID and by short ID) — never persisted, same pattern as
 	// HumanGateInfo. Without it a client that walks a dependency/WAIT chain over
 	// REST sees only an opaque status_id and cannot tell a live blocker from a
-	// closed one (an internal ticket: the runner's blocking-path diagnostic reported
+	// closed one (the runner's blocking-path diagnostic reported
 	// "status unknown" for every live card). Empty (omitted) when the lookup fails.
 	StatusCategory StatusCategory `json:"status_category,omitempty" db:"-"`
-	// FalseOpen surfaces the "false-open" graph signal (an internal ticket, sibling
+	// FalseOpen surfaces the "false-open" graph signal (sibling
 	// of an internal ticket which sat 80 days in urgent although every subtask had been
 	// closed since June): priority and created_at describe the CARD, not
 	// whether the WORK under it is still moving, and Mesh already has the
@@ -253,15 +253,19 @@ type Task struct {
 	// derived from a live checkout (see ResolveRuntimeState). Never written through
 	// Update() — only PUT/DELETE /tasks/:id/runtime-state.
 	RuntimeState *RuntimeState `json:"runtime_state,omitempty" db:"-"`
+	// HasActiveWait is true while the assignee has a declared wait in force on
+	// this card (an unresolved task_waits row; see activeTaskWaitSQL in the
+	// postgres repo). Filled only by queries that select the computed columns.
+	HasActiveWait bool `json:"-" db:"-"`
 }
 
 // FalseOpenSignal reports whether an open umbrella's own content is stale
 // relative to its subtasks. Two mutually exclusive flags on purpose, not one
 // merged bool: an internal ticket's review found that a single "false-open" flag
 // built to also catch an internal ticket (which has one still-open BACKLOG child,
-// an internal ticket) would equally catch umbrellas that are correctly blocked on a
+// c0afa1c5) would equally catch umbrellas that are correctly blocked on a
 // parked dependency — the exact opposite failure the fleet had already
-// separately catalogued (an internal ticket, "correctly-blocked-not-neglected").
+// separately catalogued ("correctly-blocked-not-neglected").
 // Blending the two populations would make the signal as untrustworthy as the
 // priority field it's meant to replace.
 type FalseOpenSignal struct {
@@ -273,7 +277,7 @@ type FalseOpenSignal struct {
 	// open subtask sits in backlog — none todo/in_progress/review/triage
 	// (StaleDays >= FalseOpenStaleDays). Weaker: content exists, it just
 	// isn't moving. This is the bucket an internal ticket belongs to (blocked on
-	// backlog child), never AllChildrenClosed.
+	// backlog child c0afa1c5), never AllChildrenClosed.
 	OnlyParkedChildrenLeft bool `json:"only_parked_children_left"`
 	// OpenChildrenCount is how many subtasks are still in a non-terminal
 	// status right now (any category other than done/cancelled).
@@ -288,7 +292,7 @@ type FalseOpenSignal struct {
 
 // HumanGateInfo exposes, read-only, the ownership service.commentService
 // already computes internally to decide whether a human_gate withdrawal
-// comment may clear the flag (an internal ticket/an internal ticket) — an internal ticket
+// comment may clear the flag
 // found that this was never surfaced anywhere: a live measurement showed 46
 // of 47 gated tasks HAD a clearable owner, but nothing ever told them so.
 //
@@ -304,7 +308,7 @@ type FalseOpenSignal struct {
 //     (ReasonIfNot="raw_armed") — → ClearableByOwner=false; it becomes true
 //     once real time passes, with no further action needed.
 //   - no live marker, but the task row records a gate_author that is an AGENT
-//     (an API arm, an internal ticket) → that agent owns it, ClearableByOwner=true,
+//     (an API arm) → that agent owns it, ClearableByOwner=true,
 //     and ClearPath="clear_endpoint" because the withdrawal-comment door does
 //     not open for this shape — see ClearPath.
 type HumanGateInfo struct {
@@ -334,7 +338,7 @@ type HumanGateInfo struct {
 	// to a single bounded turn: read the answer, then withdraw (or continue).
 	// It never clears anything and never widens who may clear: a non-addressee
 	// comment, a quote, a service comment or a comment older than the live marker
-	// leaves it false. Task dependency delivery fix.
+	// leaves it false.
 	DecisionPending bool `json:"decision_pending"`
 	// DecisionCommentID identifies the answer DecisionPending refers to. A caller
 	// that has already acted on this id must not act on it again (repeat event).

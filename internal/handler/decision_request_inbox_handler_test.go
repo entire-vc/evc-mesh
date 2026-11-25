@@ -56,7 +56,7 @@ func TestDecisionRequestInbox_ListsTheCallersOpenRequests(t *testing.T) {
 	created := time.Date(2026, 11, 11, 9, 30, 0, 0, time.UTC)
 	item := domain.InboxDecisionRequest{
 		ID: uuid.New(), TaskID: uuid.New(), Question: "v1 or v2?", State: domain.DecisionOpen, CreatedAt: created,
-		FromAgent: domain.AgentRef{ID: uuid.New(), Name: "Garfield", Slug: "garfield"},
+		FromAgent: domain.AgentRef{ID: uuid.New(), Name: "Gary", Slug: "gary"},
 	}
 	item.Task = domain.DecisionRequestTask{ID: item.TaskID, Title: "Schema", ProjectID: uuid.New(),
 		WorkspaceID: ws, StatusCategory: domain.StatusCategoryInProgress}
@@ -70,7 +70,7 @@ func TestDecisionRequestInbox_ListsTheCallersOpenRequests(t *testing.T) {
 	assert.JSONEq(t, `{"items":[{
 		"id":"`+item.ID.String()+`","task_id":"`+item.TaskID.String()+`","question":"v1 or v2?",
 		"state":"open","created_at":"2026-11-11T09:30:00Z",
-		"from_agent":{"id":"`+item.FromAgent.ID.String()+`","name":"Garfield","slug":"garfield"},
+		"from_agent":{"id":"`+item.FromAgent.ID.String()+`","name":"Gary","slug":"gary"},
 		"task":{"id":"`+item.TaskID.String()+`","title":"Schema","project_id":"`+item.Task.ProjectID.String()+`",
 		        "workspace_id":"`+ws.String()+`","status_category":"in_progress"}}]}`, string(body))
 

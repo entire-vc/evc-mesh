@@ -151,6 +151,14 @@ func (s *autoTransitionService) parentTransitionCandidate(ctx context.Context, t
 	if !allSubtasksTerminal(subtasks, categories) {
 		return nil, uuid.Nil, nil
 	}
+	// Any wait the owner still has in force, whatever its kind or target,
+	// says the parent is not finished: the closed subtask was a step (for an
+	// acceptance card, a defect fix to re-check), and handing the card to
+	// review would cancel the wait that is to wake the owner.
+	if parent.HasActiveWait {
+		log.Printf("[auto-transition] holding parent %s: owner has an active wait", taskID)
+		return nil, uuid.Nil, nil
+	}
 	// The parent's own typed card wait on a subtask means that subtask was
 	// something the owner waited for (an unblock), not the rest of the
 	// parent's result: releasing the wait must wake the owner, not hand the

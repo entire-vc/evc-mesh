@@ -16,7 +16,7 @@ import (
 // actually executed with. That test passes identically whether DeletePreferenceForUser
 // filters on user_id or ignores it entirely and deletes by id alone; it demonstrates the
 // mock returning what it was told to, not that somebody else's row survives. Found by an
-// independent verifier on #b0e1580b (task ec305b1e): a mutation removing user_id from the
+// independent verifier on an internal ticket (task ec305b1e): a mutation removing user_id from the
 // real WHERE clause left every sqlmock test green.
 //
 // This asserts the property the sqlmock test's name claims, against the real table: the

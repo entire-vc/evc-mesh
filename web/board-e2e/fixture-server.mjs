@@ -115,7 +115,7 @@ let role = "owner", wsTheme = { theme_id: null, settings: {}, version: 1, contra
 let broadcastMoves = false, mode = "normal", ordered = initialOrder, taskCalls = [], writes = [];
 // Agent executions (org chart + agent detail "Route & runs"): the scenario is picked per spec through /__fixture {exec}.
 const execAgent = {
-  id: "exec-agent", name: "Taylor", slug: "taylor", status: "online", agent_type: "claude_code", model: "opus", role: "frontend",
+  id: "exec-agent", name: "Vera", slug: "vera", status: "online", agent_type: "claude_code", model: "opus", role: "frontend",
   capabilities: [], responsibility_zone: "", escalation_to: null, accepts_from: [], max_concurrent_tasks: 2, working_hours: "",
   profile_description: "", current_tasks: 1, projects: ["contenthub"], children: [],
   created_at: "2026-09-01T10:00:00Z", updated_at: "2026-10-01T10:00:00Z", last_heartbeat: null, workspace_id: workspace.id,

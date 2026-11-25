@@ -1,7 +1,7 @@
 import { Profiler, type ProfilerOnRenderCallback, type ReactNode } from "react";
 
 /**
- * React commit counter for the perf храповик (web/perf/, [perf·A] #e0f9cb61).
+ * React commit counter for the perf храповик (web/perf/, [perf·A] an internal ticket).
  *
  * Exists ONLY in a build made with VITE_PERF_PROFILER=1. Vite replaces
  * `import.meta.env.VITE_PERF_PROFILER` with a literal at build time, so in a

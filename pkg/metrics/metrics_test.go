@@ -33,7 +33,7 @@ func TestSetIntegrationEncryptionState(t *testing.T) {
 	}
 }
 
-// mesh_client_ip_trusted is the loud-degradation signal for #5d759aad: 0
+// mesh_client_ip_trusted is the loud-degradation signal: 0
 // means /auth/login's per-IP limiter has no real per-client granularity.
 // A wrong value here is exactly as invisible as the integration-encryption
 // case above — the API keeps answering requests either way.
@@ -57,7 +57,7 @@ func TestSetEventBusEnabled(t *testing.T) {
 	assert.Equal(t, float64(0), testutil.ToFloat64(EventBusEnabled))
 }
 
-// mesh_refresh_token_reuse_total is the only per-reason signal for #cfb14ad6's
+// mesh_refresh_token_reuse_total is the only per-reason signal for an internal ticket's
 // grace window — the two outcome labels ("revoked_all" vs "grace_window") are
 // what a follow-up investigation would query first, so a wrong label here is
 // as invisible as the other counters above until someone goes looking.
@@ -70,7 +70,7 @@ func TestRecordRefreshTokenReuse(t *testing.T) {
 }
 
 // mesh_memory_embed_inflight must count the BACKLOG (start-to-finish), not
-// embedSem slot occupancy — a caller (the memory-bench harness, #ebd9dc1c)
+// embedSem slot occupancy — a caller (the memory-bench harness)
 // polls it to know whether it is safe to issue a recall without queueing
 // behind unfinished writes. If this only tracked active semaphore slots it
 // would cap out at EMBEDDING_CONCURRENCY and read as "drained" while a large
@@ -138,7 +138,7 @@ func histBelow(t *testing.T, h prometheus.Observer, le float64) uint64 {
 }
 
 // The top-score histogram accumulates per mode and its edges carry the
-// prod-measured decision boundary (#2c44a087): 0.7/61 ≈ 0.0115 — a hybrid page
+// prod-measured decision boundary: 0.7/61 ≈ 0.0115 — a hybrid page
 // whose winner only the dense arm found — must land INSIDE le=0.012, while
 // 1/61 ≈ 0.0164, a winner both arms ranked first, must land OUTSIDE it. The
 // empty counter must not move.
@@ -159,4 +159,14 @@ func TestObserveMemoryRecallTopScore(t *testing.T) {
 		"1/61 ≈ 0.016393 is NOT ≤0.016 — it lands in the (0.016, 0.017] band")
 	assert.Equal(t, bothBefore+2, histBelow(t, hist, 0.017), "both observations are ≤0.017")
 	assert.Equal(t, emptyBefore, testutil.ToFloat64(empty), "top score must not move the empty counter")
+}
+
+// memory_stats_daily.top_score_hist uses these bounds; callers get a copy so
+// they cannot shift the live histogram buckets.
+func TestMemoryRecallTopScoreBuckets_ReturnsACopy(t *testing.T) {
+	got := MemoryRecallTopScoreBuckets()
+	require.Equal(t, memoryRecallTopScoreBuckets, got)
+	require.NotEmpty(t, got)
+	got[0] = -1
+	require.NotEqual(t, got[0], memoryRecallTopScoreBuckets[0])
 }

@@ -34,7 +34,7 @@ import (
 // now asserts on the trigger's own exception text instead of the dropped
 // constraint's name; TestProjectMemberCreate_GuestAgentWithActiveGrant_*
 // and its revoked-grant sibling are new, proving the trigger's OR-branch
-// both ways (task #80dfb336 — found live: the mock-backed AddAgentMember
+// both ways (found live: the mock-backed AddAgentMember
 // unit tests passed with the FK still in place; only a real Postgres caught
 // that the service-layer fix alone was not sufficient).
 

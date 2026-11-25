@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	testUUID  = "82377a26-b856-4a2b-9c31-1f0e7d5a4b21"
-	testShort = "82377a26"
+	testUUID  = "5eed0003-b856-4a2b-9c31-1f0e7d5a4b21"
+	testShort = "5eed0003"
 )
 
 // firstRef returns the highest-priority candidate, which is what the resolver
@@ -77,13 +77,13 @@ func TestExtractTaskRefs_RecognisedSpellings(t *testing.T) {
 		},
 		{
 			name:      "12-hex short id",
-			text:      "Refs #82377a26b856",
+			text:      "Refs #5eed0003b856",
 			wantKind:  RefKindShortID,
-			wantShort: "82377a26b856",
+			wantShort: "5eed0003b856",
 		},
 		{
 			name:     "uppercase is accepted and normalised",
-			text:     "MESH-" + "82377A26-B856-4A2B-9C31-1F0E7D5A4B21",
+			text:     "MESH-" + "5EED0003-B856-4A2B-9C31-1F0E7D5A4B21",
 			wantKind: RefKindMeshPrefix,
 			wantFull: testUUID,
 		},
@@ -116,10 +116,10 @@ func TestExtractTaskRefs_RejectsNonReferences(t *testing.T) {
 		{"bare hex token", "commit " + testShort + " looks fine"},
 		{"github issue number", "closes #114 and #9"},
 		{"all-digit hash token", "see #12345678 upstream"},
-		{"long sha", "reverted 82377a26b856c04d1f9e3a7b5c2d8e6f0a1b3c4d"},
+		{"long sha", "reverted 5eed0003b856c04d1f9e3a7b5c2d8e6f0a1b3c4d"},
 		{"hex inside a longer word", "abc82377a26def"},
 		{"html entity", "spacing &#8212; not a ref"},
-		{"short id inside a url path that is not /t/", "https://github.com/entire-vc/evc-mesh/commit/82377a26"},
+		{"short id inside a url path that is not /t/", "https://github.com/entire-vc/evc-mesh/commit/5eed0003"},
 		{"empty", ""},
 		{"prose only", "Bump the pinned toolchain and regenerate mocks."},
 
@@ -156,7 +156,7 @@ func TestExtractTaskRefs_BranchSegment(t *testing.T) {
 	refs := ExtractTaskRefs(
 		TaskRefSource{Name: "title", Text: "cost tracking dashboard"},
 		TaskRefSource{Name: "body", Text: ""},
-		TaskRefSource{Name: "branch", Text: "linus/" + testShort + "-cost-tracking"},
+		TaskRefSource{Name: "branch", Text: "liam/" + testShort + "-cost-tracking"},
 	)
 	require.Len(t, refs, 1)
 	assert.Equal(t, RefKindBranch, refs[0].Kind)
@@ -166,7 +166,7 @@ func TestExtractTaskRefs_BranchSegment(t *testing.T) {
 
 func TestExtractTaskRefs_BranchWithoutIDYieldsNothing(t *testing.T) {
 	assert.Empty(t, ExtractTaskRefs(
-		TaskRefSource{Name: "branch", Text: "linus/cost-tracking-dashboard"},
+		TaskRefSource{Name: "branch", Text: "liam/cost-tracking-dashboard"},
 	))
 }
 
@@ -177,7 +177,7 @@ func TestExtractTaskRefs_ExplicitFormsOutrankIncidentalOnes(t *testing.T) {
 	refs := ExtractTaskRefs(
 		TaskRefSource{Name: "title", Text: "Refs #aaaa1111"},
 		TaskRefSource{Name: "body", Text: "MESH-" + other},
-		TaskRefSource{Name: "branch", Text: "linus/bbbb2222-slug"},
+		TaskRefSource{Name: "branch", Text: "liam/bbbb2222-slug"},
 	)
 	require.Len(t, refs, 3)
 	assert.Equal(t, RefKindMeshPrefix, refs[0].Kind, "MESH- must be tried first")
@@ -192,10 +192,10 @@ func TestExtractTaskRefs_DeduplicatesRepeats(t *testing.T) {
 }
 
 func TestIsShortID(t *testing.T) {
-	for _, ok := range []string{"82377a26", "abcdef", "82377a26b856", "0000000a"} {
+	for _, ok := range []string{"5eed0003", "abcdef", "5eed0003b856", "0000000a"} {
 		assert.True(t, isShortID(ok, true), "%q should be a valid short id", ok)
 	}
-	for _, bad := range []string{"", "82377", "82377a26b856c", "82377g26", "82377A26"} {
+	for _, bad := range []string{"", "82377", "5eed0003b856c", "82377g26", "5EED0003"} {
 		assert.False(t, isShortID(bad, true), "%q should not be a valid short id", bad)
 		assert.False(t, isShortID(bad, false), "%q is malformed regardless of the letter rule", bad)
 	}

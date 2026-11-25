@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -409,7 +410,21 @@ func (r *SessionRepo) AddUsage(ctx context.Context, agentID, workspaceID uuid.UU
 // ReportUsage is AddUsage for a report that may say a measure is unknown. An unknown measure
 // adds nothing and sets the session's *_unknown flag, which no later report clears; a known
 // measure (a real 0 included) adds its figure and sets *_known.
+//
+// With u.Turn set the report is also one agent_usage_turns row plus its
+// agent_usage_hourly addition, in the same transaction. A turn ref the agent
+// already reported writes nothing at all (session included) and returns
+// *domain.UsageTurnRepeat naming the first report's row and session.
 func (r *SessionRepo) ReportUsage(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, u domain.SessionUsage, model string) (*domain.AgentSession, error) {
+	sess, err := r.reportUsageTx(ctx, agentID, workspaceID, taskID, u, model)
+	var rep *domain.UsageTurnRepeat
+	if errors.As(err, &rep) && u.Turn != nil && u.Turn.TurnRef != nil {
+		return nil, r.usageTurnRepeat(ctx, agentID, *u.Turn.TurnRef)
+	}
+	return sess, err
+}
+
+func (r *SessionRepo) reportUsageTx(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, u domain.SessionUsage, model string) (*domain.AgentSession, error) {
 	if u.TokensInUnknown {
 		u.TokensIn = 0
 	}
@@ -463,6 +478,9 @@ func (r *SessionRepo) ReportUsage(ctx context.Context, agentID, workspaceID uuid
 			sess.TokensInUnknown, sess.TokensOutUnknown, sess.CostUnknown); err != nil {
 			return nil, err
 		}
+		if terr := r.journalTurnTx(ctx, tx, agentID, workspaceID, taskID, model, sess.ID, u.Turn); terr != nil {
+			return nil, terr
+		}
 		if rerr := recordReceiptTx(ctx, tx, u.Receipt, sess.ID, sess); rerr != nil {
 			return nil, rerr
 		}
@@ -475,6 +493,9 @@ func (r *SessionRepo) ReportUsage(ctx context.Context, agentID, workspaceID uuid
 		return nil, err
 	}
 	sess := row.toDomain()
+	if err := r.journalTurnTx(ctx, tx, agentID, workspaceID, taskID, model, sess.ID, u.Turn); err != nil {
+		return nil, err
+	}
 	// A keyed report records its receipt in the addition's transaction: a
 	// concurrent repeat that committed first rolls this addition back.
 	if err := recordReceiptTx(ctx, tx, u.Receipt, sess.ID, &sess); err != nil {
@@ -486,13 +507,80 @@ func (r *SessionRepo) ReportUsage(ctx context.Context, agentID, workspaceID uuid
 	return &sess, nil
 }
 
+// insertUsageTurn writes one journal row of a report. The project comes from
+// the task; the provider, when the report does not name it, from the model;
+// the hour is picked by ended_at, else the report time. A turn ref the agent
+// already reported inserts nothing (no row returned).
+const insertUsageTurn = `
+	INSERT INTO agent_usage_turns (id, workspace_id, agent_id, task_id, project_id, session_id, source, turn_ref,
+		started_at, ended_at, occurred_at, model, provider, account_ref, billing_mode,
+		tokens_in, tokens_out, cache_read, cache_write, cache_write_1h, cost_reported)
+	VALUES ($1, $2, $3, $4::uuid, (SELECT project_id FROM tasks WHERE id = $4::uuid), $5, 'turn', $6,
+		$7, $8::timestamptz, COALESCE($8::timestamptz, now()), $9, COALESCE(NULLIF($10, ''), agent_usage_provider($9)), $11, $12,
+		$13, $14, $15, $16, $17, $18)
+	ON CONFLICT (agent_id, turn_ref) DO NOTHING
+	RETURNING id`
+
+// journalTurnTx writes the report's journal row and adds it onto its hour,
+// inside the session addition's transaction, so the session, the journal and
+// the hours move together or not at all. A repeated turn ref is returned as
+// *domain.UsageTurnRepeat for the caller to roll everything back.
+func (r *SessionRepo) journalTurnTx(ctx context.Context, tx *sqlx.Tx, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, model string, sessionID uuid.UUID, t *domain.UsageTurn) error {
+	if t == nil {
+		return nil
+	}
+	if t.ID == uuid.Nil {
+		t.ID = uuid.New()
+	}
+	var id uuid.UUID
+	err := tx.GetContext(ctx, &id, insertUsageTurn, t.ID, workspaceID, agentID, taskID, sessionID, t.TurnRef,
+		t.StartedAt, t.EndedAt, model, t.Provider, t.AccountRef, t.BillingMode,
+		t.TokensIn, t.TokensOut, t.CacheRead, t.CacheWrite, t.CacheWrite1h, t.CostReported)
+	if errors.Is(err, sql.ErrNoRows) {
+		return &domain.UsageTurnRepeat{}
+	}
+	if err != nil {
+		return fmt.Errorf("usage turn: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT agent_usage_hourly_add(ARRAY[$1::uuid])`, id); err != nil {
+		return fmt.Errorf("usage hour: %w", err)
+	}
+	return nil
+}
+
+// usageTurnRepeat answers a repeated turn ref after the report's transaction
+// rolled back: the first report's journal row and the session it landed on.
+func (r *SessionRepo) usageTurnRepeat(ctx context.Context, agentID uuid.UUID, turnRef string) error {
+	var first struct {
+		ID        uuid.UUID     `db:"id"`
+		SessionID uuid.NullUUID `db:"session_id"`
+	}
+	if err := r.db.GetContext(ctx, &first,
+		`SELECT id, session_id FROM agent_usage_turns WHERE agent_id = $1 AND turn_ref = $2`, agentID, turnRef); err != nil {
+		return fmt.Errorf("usage turn repeat: %w", err)
+	}
+	rep := &domain.UsageTurnRepeat{TurnID: first.ID}
+	if first.SessionID.Valid {
+		var row sessionRow
+		err := r.db.GetContext(ctx, &row, `SELECT `+sessionColumns+` FROM agent_sessions WHERE id = $1`, first.SessionID.UUID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err == nil {
+			sess := row.toDomain()
+			rep.Session = &sess
+		}
+	}
+	return rep
+}
+
 // GetActiveAgentWide returns the agent's active session that is NOT scoped to
 // any task (task_id IS NULL), or nil if none exists. Deliberately filters on
 // task_id IS NULL rather than just "the agent's latest active session,
 // whatever task it belongs to" — the latter is what this method used to do
 // (as plain GetActive), which meant an untagged session_report silently
 // accumulated cost onto whichever task's session happened to be most recently
-// active instead of getting its own agent-wide row (task ea1b9fb6).
+// active instead of getting its own agent-wide row.
 func (r *SessionRepo) GetActiveAgentWide(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error) {
 	var row sessionRow
 	err := r.db.GetContext(ctx, &row,
@@ -561,8 +649,12 @@ func (r *SessionRepo) GetTaskCostSummary(ctx context.Context, taskID uuid.UUID) 
 	var costInc, inInc, outInc bool
 	var count int
 
-	// Known figures only; NULL when no session has one. Incomplete when any session's figure is
-	// unknown or was never given. No sessions: SUM is NULL and no flag, answered as 0 below.
+	// A spawn is a session row that carries a usage report: some measure was given a figure
+	// (*_known) or reported unknown (*_unknown). A row opened only by tool-call tracking (another
+	// agent reading the card through the API) is not a run and takes no part in the count, the
+	// sums or the incomplete flags.
+	// Known figures only; NULL when no spawn has one. Incomplete when any spawn's figure is
+	// unknown or was never given. No spawns: SUM is NULL and no flag, answered as 0 below.
 	err := r.db.QueryRowContext(ctx, `
 		SELECT SUM(estimated_cost) FILTER (WHERE cost_known),
 		       SUM(tokens_in)      FILTER (WHERE tokens_in_known),
@@ -573,6 +665,8 @@ func (r *SessionRepo) GetTaskCostSummary(ctx context.Context, taskID uuid.UUID) 
 		       COUNT(*)
 		FROM agent_sessions
 		WHERE task_id = $1
+		  AND (cost_known OR tokens_in_known OR tokens_out_known
+		       OR cost_unknown OR tokens_in_unknown OR tokens_out_unknown)
 	`, taskID).Scan(&total, &tokIn, &tokOut, &costInc, &inInc, &outInc, &count)
 	if err != nil {
 		return nil, err
@@ -616,7 +710,7 @@ func (r *SessionRepo) GetTaskCostSummary(ctx context.Context, taskID uuid.UUID) 
 		QualityFlag:         flag,
 	}
 	if count == 0 {
-		// No sessions: nothing is unknown, the answer stays a plain 0 as before.
+		// No spawns: nothing is unknown, the answer stays a plain 0 as before.
 		zeroCost, zeroIn, zeroOut := 0.0, int64(0), int64(0)
 		sum.TotalCost, sum.TokensIn, sum.TokensOut = &zeroCost, &zeroIn, &zeroOut
 		return sum, nil
@@ -638,7 +732,7 @@ func (r *SessionRepo) GetTaskCostSummary(ctx context.Context, taskID uuid.UUID) 
 // terminated.
 //
 // Filters on last_activity_at, NOT started_at (fixed 2026-09-15, task
-// this change): a fiddler lane's session can legitimately stay active for many
+// an internal ticket): a fiddler lane's session can legitimately stay active for many
 // hours across a single long task, and closing it purely for being OLD —
 // while tool calls keep landing on it — force-ends still-live work and
 // starts an uncosted successor session on the very next tool call (see

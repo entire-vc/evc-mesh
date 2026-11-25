@@ -846,14 +846,14 @@ func TestRefreshTokens_ExpiredToken(t *testing.T) {
 }
 
 // TestRefreshTokens_RevokedToken_WithinGraceWindow_ReturnsFreshPair pins
-// an internal ticket's grace window: a replay of a token that died in an ordinary,
+// Grace window: a replay of a token that died in an ordinary,
 // successful rotation — the shape a client produces when it rotates
 // successfully but never sees the response (dropped mobile connection,
 // closed tab, proxy timeout) and retries with the only token it has — gets a
 // fresh pair instead of a full-account revoke, as long as the replay lands
 // inside the window (default 10s).
 //
-// Verified by mutation: this test fails against the pre service
+// Verified by mutation: this test fails against the earlier service
 // (unconditional revoke-all on any replay of a revoked token) — it is not a
 // restatement of the implementation.
 func TestRefreshTokens_RevokedToken_WithinGraceWindow_ReturnsFreshPair(t *testing.T) {
@@ -888,7 +888,7 @@ func TestRefreshTokens_RevokedToken_WithinGraceWindow_ReturnsFreshPair(t *testin
 }
 
 // TestRefreshTokens_RevokedToken_OutsideGraceWindow_TheftDetection is the
-// other half of the AC in an internal ticket: a replay older than the window gets no
+// other half of the AC: a replay older than the window gets no
 // benefit of the doubt — full revoke, same as before the window existed.
 func TestRefreshTokens_RevokedToken_OutsideGraceWindow_TheftDetection(t *testing.T) {
 	svc, _, refreshRepo, _, _ := newTestService()
@@ -922,7 +922,7 @@ func TestRefreshTokens_RevokedToken_OutsideGraceWindow_TheftDetection(t *testing
 // TestRefreshTokens_RevokedToken_GraceWindowDisabled_AlwaysTheftDetection
 // pins the rollback lever (WithRefreshReuseGraceWindow(0) /
 // MESH_AUTH_REFRESH_REUSE_GRACE_WINDOW=0): with the window off, behavior
-// matches the service before an internal ticket exactly — no exceptions.
+// matches the service before that fix exactly — no exceptions.
 func TestRefreshTokens_RevokedToken_GraceWindowDisabled_AlwaysTheftDetection(t *testing.T) {
 	userRepo := newMockUserRepo()
 	refreshRepo := newMockRefreshTokenRepo()

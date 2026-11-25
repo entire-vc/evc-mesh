@@ -17,6 +17,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/simhash"
 )
 
 // MemoryRepo implements persistent storage for agent memory entries.
@@ -136,6 +137,13 @@ func (r *MemoryRepo) Upsert(ctx context.Context, m *domain.Memory, intent domain
 	if m.FreshnessScore == 0 && m.Status == domain.MemoryStatusActive {
 		m.FreshnessScore = 1.0
 	}
+
+	// The stored fingerprint is always the one of the content being written.
+	// Computed here rather than trusted from the caller: Remember set it, but
+	// the event-extraction and import paths did not, and ON CONFLICT then
+	// overwrote a row's hash with NULL.
+	contentSimhash := simhash.Compute(m.Content)
+	m.ContentSimhash = &contentSimhash
 
 	// Use ON CONFLICT (id) because the composite unique constraint
 	// uq_memory_key_scope doesn't match when project_id or agent_id is NULL
@@ -305,7 +313,8 @@ func (r *MemoryRepo) ListRevisions(ctx context.Context, memoryID uuid.UUID, limi
 }
 
 // GetByID returns a memory by its primary key, or nil if not found.
-// It touches last_accessed_at (1h idempotency window) as a side-effect.
+// This lookup is side-effect free: service lookups and authorization checks
+// must not count as access. Explicit user reads touch only after authorization.
 func (r *MemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory, error) {
 	var row memoryRow
 	err := r.db.GetContext(ctx, &row,
@@ -320,14 +329,6 @@ func (r *MemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory,
 	}
 	m := row.toDomain()
 
-	// Touch last_accessed_at — only if not recently updated (1-hour window to avoid write amplification).
-	_, _ = r.db.ExecContext(ctx,
-		`UPDATE memories SET last_accessed_at = NOW()
-		 WHERE id = $1
-		   AND (last_accessed_at IS NULL OR last_accessed_at < NOW() - INTERVAL '1 hour')`,
-		id,
-	)
-
 	return &m, nil
 }
 
@@ -340,7 +341,7 @@ func (r *MemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Memory,
 //
 // The `status != 'superseded' AND archived = false` predicate and the
 // `ORDER BY updated_at DESC LIMIT 1` are both load-bearing, not cosmetic
-// (an internal ticket, finding F1). Before them, this query had no status filter
+// (finding F1). Before them, this query had no status filter
 // at all: after a collapse (cmd/collapse-memories) leaves a winner `active`
 // and losers `superseded` under the SAME natural key, the predicate-less
 // query matched every one of them and sqlx.GetContext silently took whatever
@@ -362,7 +363,7 @@ func (r *MemoryRepo) GetByKey(ctx context.Context, workspaceID uuid.UUID, projec
 // handArchivedPredicate matches a row whose latest archive-state revision is a
 // hand archive. A row archived only by automation (supersede, checkpoint ageing)
 // has no such revision and is not matched: a remember on its key keeps creating
-// a fresh live row, exactly as before this change.
+// a fresh live row, exactly as before that fix.
 const handArchivedPredicate = `status != 'superseded' AND archived = true
 	  AND (SELECT r.action FROM memory_revisions r
 	       WHERE r.memory_id = memories.id AND r.action IN ('archived', 'unarchived')
@@ -492,23 +493,11 @@ func (r *MemoryRepo) FullTextSearch(ctx context.Context, query string, workspace
 	applyRecencyBlend(rows, recencyWeight, time.Now())
 
 	result := make([]domain.ScoredMemory, len(rows))
-	ids := make([]uuid.UUID, len(rows))
 	for i, row := range rows {
 		result[i] = domain.ScoredMemory{
 			Memory: row.toDomain(),
 			Score:  row.Score,
 		}
-		ids[i] = row.ID
-	}
-
-	// Batch-touch last_accessed_at for all returned hits (1-hour idempotency window).
-	if len(ids) > 0 {
-		_, _ = r.db.ExecContext(ctx,
-			`UPDATE memories SET last_accessed_at = NOW()
-			 WHERE id = ANY($1)
-			   AND (last_accessed_at IS NULL OR last_accessed_at < NOW() - INTERVAL '1 hour')`,
-			pq.Array(ids),
-		)
 	}
 
 	return result, nil
@@ -793,6 +782,8 @@ func (r *MemoryRepo) FindByScope(ctx context.Context, workspaceID uuid.UUID, pro
 // optional pagination. When projectID is non-nil, all matching project memories are returned
 // without limit (they are small). When projectID is nil (workspace-tier), filter.Limit,
 // filter.Offset, filter.MinImportance, and filter.TagsAny are applied. Limit=0 means no limit.
+// filter.ExcludeSuperseded drops status='superseded' rows on both tiers (the knowledge
+// read path sets it; the YAML export leaves it off and keeps the full history).
 // Returns the total matching count before pagination is applied.
 func (r *MemoryRepo) ListByWorkspaceProject(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, filter domain.MemoryListFilter) ([]domain.Memory, int64, error) {
 	args := []interface{}{workspaceID}
@@ -800,6 +791,9 @@ func (r *MemoryRepo) ListByWorkspaceProject(ctx context.Context, workspaceID uui
 		"workspace_id = $1",
 		"(expires_at IS NULL OR expires_at > NOW())",
 		"archived = false",
+	}
+	if filter.ExcludeSuperseded {
+		conditions = append(conditions, "status != 'superseded'")
 	}
 	argIdx := 2
 
@@ -851,19 +845,8 @@ func (r *MemoryRepo) ListByWorkspaceProject(ctx context.Context, workspaceID uui
 		return nil, 0, err
 	}
 	memories := make([]domain.Memory, len(rows))
-	ids := make([]uuid.UUID, len(rows))
 	for i, row := range rows {
 		memories[i] = row.toDomain()
-		ids[i] = row.ID
-	}
-	// Batch-touch last_accessed_at (1-hour idempotency window).
-	if len(ids) > 0 {
-		_, _ = r.db.ExecContext(ctx,
-			`UPDATE memories SET last_accessed_at = NOW()
-			 WHERE id = ANY($1)
-			   AND (last_accessed_at IS NULL OR last_accessed_at < NOW() - INTERVAL '1 hour')`,
-			pq.Array(ids),
-		)
 	}
 	return memories, total, nil
 }
@@ -1037,21 +1020,9 @@ func (r *MemoryRepo) List(ctx context.Context, filter domain.MemoryListFilter) (
 	}
 
 	items := make([]domain.ScoredMemory, len(rows))
-	ids := make([]uuid.UUID, len(rows))
 	for i, row := range rows {
 		items[i] = domain.ScoredMemory{Memory: row.toDomain()}
-		ids[i] = row.ID
 	}
-	// Batch-touch last_accessed_at (1-hour idempotency window, same pattern as FullTextSearch).
-	if len(ids) > 0 {
-		_, _ = r.db.ExecContext(ctx,
-			`UPDATE memories SET last_accessed_at = NOW()
-			 WHERE id = ANY($1)
-			   AND (last_accessed_at IS NULL OR last_accessed_at < NOW() - INTERVAL '1 hour')`,
-			pq.Array(ids),
-		)
-	}
-
 	return &domain.MemoryListResult{
 		Items:        items,
 		Total:        total,
@@ -1195,7 +1166,7 @@ func (r *MemoryRepo) VectorSearch(ctx context.Context, queryVec []float32, works
 // vector recall entirely — the exact opposite of what vector search is for. We
 // therefore pull a recency-ordered cap large enough to cover the whole corpus
 // today. If the corpus ever outgrows the cap, the oldest memories degrade out
-// gracefully (and that is the trigger to adopt pgvector/ANN — see an internal ticket).
+// gracefully (and that is the trigger to adopt pgvector/ANN).
 func (r *MemoryRepo) vectorCandidateIDs(ctx context.Context, workspaceID uuid.UUID, projectID *uuid.UUID, filter domain.MemorySearchFilter) ([]uuid.UUID, error) {
 	args := []interface{}{workspaceID} // $1
 	conditions := []string{
@@ -1471,7 +1442,7 @@ func (r *MemoryRepo) DecayRelevance(ctx context.Context) (int64, error) {
 //
 // Expiry hides a memory at expires_at; the grace period is what makes
 // include_expired=true mean something. Deleting at expires_at itself (as this did
-// before this change) erased a row on the first 6-hourly run after it expired, so an
+// before that fix) erased a row on the first 6-hourly run after it expired, so an
 // include_expired read minutes later could already find nothing.
 func (r *MemoryRepo) CleanExpired(ctx context.Context) (int64, error) {
 	cutoff := time.Now().Add(-domain.ExpiredMemoryGracePeriod)
@@ -1637,7 +1608,7 @@ func (r *MemoryRepo) ListCreatedSince(ctx context.Context, since time.Time, limi
 // currently configured model. Excluded (does NOT need embedding) when EITHER holds for the
 // given model: memories.embedding is populated with a matching embedding_model, OR the
 // memory already has a memory_chunks row with a matching embedding_model. The chunk check is
-// independent of the embedding column on purpose (an internal ticket/an internal ticket, live regression):
+// independent of the embedding column on purpose (live regression):
 // an earlier revision relied on embedding_model alone as a watermark while leaving
 // memories.embedding NULL, and the embedding-column disjunct below matched it forever —
 // reindex re-embedded the same rows every run without ever converging. Checking chunk
@@ -1711,7 +1682,7 @@ func (r *MemoryRepo) ListNotYetChunked(ctx context.Context, workspaceID uuid.UUI
 // #494 that text was the composite `key + " " + content + " " + tags`; since #494 it is
 // content alone. So `max(chunk_end) <> octet_length(content)` reads the physical trace of
 // which string the write path fed the chunker, rather than trusting a column the write path
-// set about itself — the failure mode of an internal ticket, where embedding_model was stamped as a
+// set about itself — the failure mode, where embedding_model was stamped as a
 // watermark while memories.embedding stayed NULL and the row was never actually repaired.
 // Measured against prod before this shipped: 3254 of 3260 chunked memories matched the
 // composite length EXACTLY (99.82%, the same reconstruction rate an internal ticket measured), 0
@@ -1814,7 +1785,7 @@ func cosineSimilarity(a, b []float32) float64 {
 //
 // ExcludeSuperseded is always applied: status='superseded' entries never appear in results.
 // Both archived and expired memories are excluded. The result is ordered by ts_rank_cd DESC
-// and capped at limit. Batch-touches last_accessed_at for all returned rows.
+// and capped at limit. Candidate retrieval does not count as access.
 //
 // Used as the sparse (BM25) arm of the RRF fusion in service.Recall.
 //
@@ -2224,12 +2195,13 @@ func (r *MemoryRepo) ListReviewNeeded(ctx context.Context, limit int) ([]domain.
 }
 
 // FindNewerMatch returns the most-recently-created memory in workspaceID matching either
-// key or contentSimhash, created strictly after `after`, excluding excludeID, restricted to
-// status IN ('active','stale') — see the interface doc for why review_needed/superseded/
-// archived/conflicted rows are not eligible superseding targets. Returns nil, nil when
-// nothing matches. contentSimhash may be nil (a memory with no stored simhash only matches
-// on key).
-func (r *MemoryRepo) FindNewerMatch(ctx context.Context, workspaceID uuid.UUID, key string, contentSimhash *int64, excludeID uuid.UUID, after time.Time) (*domain.Memory, error) {
+// key, or contentSimhash together with the same whitespace-collapsed content, created
+// strictly after `after`, excluding excludeID, restricted to status IN ('active','stale')
+// — see the interface doc for why review_needed/superseded/archived/conflicted rows are
+// not eligible superseding targets and why the simhash branch needs the content too.
+// Returns nil, nil when nothing matches. contentSimhash may be nil (a memory with no
+// stored simhash only matches on key).
+func (r *MemoryRepo) FindNewerMatch(ctx context.Context, workspaceID uuid.UUID, key string, contentSimhash *int64, content string, excludeID uuid.UUID, after time.Time) (*domain.Memory, error) {
 	var row memoryRow
 	err := r.db.GetContext(ctx, &row,
 		fmt.Sprintf(`SELECT %s FROM memories
@@ -2239,11 +2211,13 @@ func (r *MemoryRepo) FindNewerMatch(ctx context.Context, workspaceID uuid.UUID, 
 			  AND status IN ('active', 'stale')
 			  AND (
 			        key = $4
-			     OR ($5::bigint IS NOT NULL AND content_simhash = $5)
+			     OR ($5::bigint IS NOT NULL AND content_simhash = $5
+			         AND btrim(regexp_replace(content, '\s+', ' ', 'g'))
+			           = btrim(regexp_replace($6::text, '\s+', ' ', 'g')))
 			  )
 			ORDER BY created_at DESC
 			LIMIT 1`, memoryColumns),
-		workspaceID, excludeID, after, key, contentSimhash,
+		workspaceID, excludeID, after, key, contentSimhash, content,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

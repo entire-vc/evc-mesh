@@ -17,7 +17,7 @@ export function TaskDetailPage() {
 
   // The URL's :projectSlug is never checked against the task it names — a
   // task loads identically under any project's slug in this workspace
-  //. There's no separate "wrong project" state to render; once
+  // There's no separate "wrong project" state to render; once
   // the task and this workspace's projects have both loaded, replace a
   // mismatched slug with the task's real one so stale or hand-edited links
   // self-heal onto the canonical URL instead of silently lying about which

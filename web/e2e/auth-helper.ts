@@ -25,7 +25,7 @@ export interface LoginResult {
  * time on HTTP 429 and honouring the server's own Retry-After header rather
  * than a fixed guess.
  *
- * Why this exists (`an internal ticket`, 2026-08-20): /auth/login is capped by
+ * Why this exists (2026-08-20): /auth/login is capped by
  * AuthRPM (5/min per key — internal/middleware/ratelimit.go). This suite
  * only ever makes ONE legitimate login call per spec file, comfortably under
  * budget on its own — but the same endpoint is shared with everything else
@@ -38,7 +38,7 @@ export interface LoginResult {
  * that instead of guessing.
  *
  * This is defense-in-depth, not the primary fix: the actual root cause
- * (`an internal ticket`) was that /auth/login and /auth/refresh silently shared one
+ * was that /auth/login and /auth/refresh silently shared one
  * Redis counter, so routine fleet refresh traffic alone could exhaust
  * login's 5 RPM budget — fixed at the source by namespacing rate-limit keys
  * per route (RateLimitConfig.Name, internal/middleware/ratelimit*.go). A
@@ -105,7 +105,7 @@ export async function loginWithRetry(
       `login as ${email} was rate-limited (HTTP 429) after ${maxAttempts} ` +
         `attempt(s), honouring the server's Retry-After each time — this is ` +
         `AuthRPM contention on a shared bucket (internal/middleware/ratelimit.go), ` +
-        `NOT wrong credentials or a disabled account. See task #603f340a.`
+        `NOT wrong credentials or a disabled account.`
     );
   }
   throw new Error(

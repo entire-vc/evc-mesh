@@ -140,5 +140,16 @@ func (s *memoryService) ListMemoriesByKey(ctx context.Context, lookup domain.Mem
 	if rows == nil {
 		rows = []domain.Memory{}
 	}
+	// The exact-key lookup is scoped to the already authorized workspace.
+	// Record only the entries actually returned, including archived/expired
+	// entries when the caller explicitly requested them.
+	if len(rows) > 0 {
+		ids := make([]uuid.UUID, len(rows))
+		for i := range rows {
+			ids[i] = rows[i].ID
+		}
+		s.TouchMemoryAccess(ctx, ids)
+	}
+
 	return rows, nil
 }

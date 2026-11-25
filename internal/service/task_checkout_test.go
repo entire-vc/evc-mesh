@@ -87,7 +87,7 @@ func TestCheckoutTask_ConflictReturnsHolderName(t *testing.T) {
 	svc, taskRepo, _, agentRepo := setupCheckoutTaskService()
 
 	holderID := uuid.New()
-	agentRepo.items[holderID] = &domain.Agent{ID: holderID, Name: "Linus"}
+	agentRepo.items[holderID] = &domain.Agent{ID: holderID, Name: "Liam"}
 
 	taskID := uuid.New()
 	expires := frozenTime.Add(10 * time.Minute)
@@ -107,7 +107,7 @@ func TestCheckoutTask_ConflictReturnsHolderName(t *testing.T) {
 	var conflict *CheckoutConflictError
 	require.ErrorAs(t, err, &conflict)
 	assert.Equal(t, holderID, conflict.CheckedOutBy)
-	assert.Equal(t, "Linus", conflict.CheckedOutByName, "holder name should be resolved via agent repo")
+	assert.Equal(t, "Liam", conflict.CheckedOutByName, "holder name should be resolved via agent repo")
 	assert.Equal(t, "agent", conflict.CheckedOutByKind)
 	assert.Equal(t, expires, conflict.ExpiresAt)
 }
@@ -284,7 +284,7 @@ func TestForceReleaseCheckout_NoOpOnUnlockedTask(t *testing.T) {
 func TestCheckoutConflictError_AsTarget(t *testing.T) {
 	original := &CheckoutConflictError{
 		CheckedOutBy:     uuid.New(),
-		CheckedOutByName: "Linus",
+		CheckedOutByName: "Liam",
 		CheckedOutByKind: "agent",
 		ExpiresAt:        frozenTime,
 	}
@@ -292,7 +292,7 @@ func TestCheckoutConflictError_AsTarget(t *testing.T) {
 	var conflict *CheckoutConflictError
 	require.True(t, errors.As(err, &conflict))
 	assert.Equal(t, original.CheckedOutByName, conflict.CheckedOutByName)
-	assert.Contains(t, original.Error(), "Linus")
+	assert.Contains(t, original.Error(), "Liam")
 }
 
 func TestCheckoutTask_TerminalStatusReturns400(t *testing.T) {

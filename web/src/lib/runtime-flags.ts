@@ -1,5 +1,5 @@
 /** Runtime kill switches for perf features that ops needs to be able to
- * turn off without a rebuild/redeploy (perf·Б1, fleet-epic #3e9f036e).
+ * turn off without a rebuild/redeploy (perf·Б1, fleet-epic an internal ticket).
  *
  * Route-splitting itself has no such switch — it's a single build, "off"
  * would mean shipping a second bundle, so reverting it means reverting the

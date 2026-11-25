@@ -32,7 +32,7 @@ type qaStack struct {
 	db       *sqlx.DB
 	policy   *hostlocalqa.Policy
 	ws       uuid.UUID
-	receiver uuid.UUID
+	robin    uuid.UUID
 	outsider uuid.UUID
 	runner   uuid.UUID
 	token    string
@@ -81,8 +81,8 @@ func (s *qaStack) call(fn echo.HandlerFunc, method, target, body string, who qaC
 	return rec
 }
 
-func (s *qaStack) rcv() qaCaller { return qaCaller{agent: s.receiver, ws: s.ws, token: s.token} }
-func (s *qaStack) snd() qaCaller { return qaCaller{agent: s.receiver, ws: s.ws} }
+func (s *qaStack) rcv() qaCaller { return qaCaller{agent: s.robin, ws: s.ws, token: s.token} }
+func (s *qaStack) snd() qaCaller { return qaCaller{agent: s.robin, ws: s.ws} }
 
 func (s *qaStack) count(table string) int {
 	var n int
@@ -91,7 +91,7 @@ func (s *qaStack) count(table string) int {
 }
 
 func (s *qaStack) target() map[string]any {
-	return map[string]any{"agent_id": s.receiver.String(), "host_id": "host-1", "hostname": s.policy.Hostname,
+	return map[string]any{"agent_id": s.robin.String(), "host_id": "host-1", "hostname": s.policy.Hostname,
 		"runner_id": s.runner.String(), "session_id": "native-1", "workspace_id": s.ws.String()}
 }
 
@@ -112,7 +112,7 @@ func js(m map[string]any) string { b, _ := json.Marshal(m); return string(b) }
 func (s *qaStack) regBody(mut func(m map[string]any)) string {
 	m := map[string]any{"schema_version": 1, "capability": hostlocalqa.Capability, "policy_sha256": s.policy.SHA256,
 		"target": s.target(), "producer": qaProducer(), "expires": s.now().Add(8 * time.Hour).Unix(),
-		"allowed_sender_agent_ids": []string{s.receiver.String()}}
+		"allowed_sender_agent_ids": []string{s.robin.String()}}
 	if mut != nil {
 		mut(m)
 	}
@@ -236,17 +236,17 @@ func newQAStack(t *testing.T) *qaStack {
 	t.Cleanup(func() { _ = db.Close() })
 	pol, err := hostlocalqa.LoadPolicy()
 	require.NoError(t, err)
-	s := &qaStack{t: t, db: db, policy: pol, ws: pol.WorkspaceID, receiver: pol.AgentID, outsider: uuid.New()}
+	s := &qaStack{t: t, db: db, policy: pol, ws: pol.WorkspaceID, robin: pol.AgentID, outsider: uuid.New()}
 	_, _ = db.Exec(`DELETE FROM workspaces WHERE id=$1`, s.ws)
 	_, err = db.Exec(`INSERT INTO workspaces(id,name,slug,owner_id) VALUES($1,'host local qa',$2,$3)`, s.ws, s.ws.String(), uuid.New())
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM workspaces WHERE id=$1`, s.ws) })
-	for _, a := range []uuid.UUID{s.receiver, s.outsider} {
+	for _, a := range []uuid.UUID{s.robin, s.outsider} {
 		_, err = db.Exec(`INSERT INTO agents (id, workspace_id, name, slug, api_key_hash, api_key_prefix) VALUES ($1,$2,'a',$3,'h','p')`, a, s.ws, "qa-agent-"+a.String()[:8])
 		require.NoError(t, err)
 	}
 	runners := postgres.NewChatRunnerRepo(db)
-	runner, token, err := runners.RegisterRunner(t.Context(), s.receiver, "mbp")
+	runner, token, err := runners.RegisterRunner(t.Context(), s.robin, "mbp")
 	require.NoError(t, err)
 	s.runner, s.token = runner.ID, token
 	repo := postgres.NewHostLocalQARepo(db, pol).WithClock(s.now)
@@ -438,12 +438,12 @@ func TestHostLocalQAAssignmentFlow(t *testing.T) {
 		r := s.register()
 		// a legacy admission for the same agent and runner
 		lreg := s.call(s.legacy.RegisterReceiver, http.MethodPost, "/", js(map[string]any{"host_id": "host-1", "hostname": s.policy.Hostname,
-			"session_id": "legacy-1", "capability": "readonly_metadata", "allowed_sender_agent_ids": []string{s.receiver.String()}}), s.rcv(), nil)
+			"session_id": "legacy-1", "capability": "readonly_metadata", "allowed_sender_agent_ids": []string{s.robin.String()}}), s.rcv(), nil)
 		require.Equal(t, http.StatusCreated, lreg.Code, lreg.Body.String())
 		legacySend := func(req uuid.UUID) *httptest.ResponseRecorder {
 			return s.call(s.legacy.SendDelivery, http.MethodPost, "/", sendBody(t, func(m map[string]any) {
 				m["request_id"] = req.String()
-				m["target"] = map[string]any{"workspace_id": s.ws.String(), "agent_id": s.receiver.String(), "runner_id": s.runner.String(),
+				m["target"] = map[string]any{"workspace_id": s.ws.String(), "agent_id": s.robin.String(), "runner_id": s.runner.String(),
 					"host_id": "host-1", "hostname": s.policy.Hostname, "session_id": "legacy-1"}
 			}), s.snd(), nil)
 		}
@@ -470,7 +470,7 @@ func TestHostLocalQAAssignmentFlow(t *testing.T) {
 		rec := s.call(s.legacy.SendDelivery, http.MethodPost, "/", js(qa), s.snd(), nil)
 		require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 		legacyShaped := map[string]any{"host_id": "host-1", "hostname": s.policy.Hostname, "session_id": "native-1",
-			"capability": hostlocalqa.Capability, "allowed_sender_agent_ids": []string{s.receiver.String()}}
+			"capability": hostlocalqa.Capability, "allowed_sender_agent_ids": []string{s.robin.String()}}
 		rec = s.call(s.legacy.RegisterReceiver, http.MethodPost, "/", js(legacyShaped), s.rcv(), nil)
 		require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 		require.Equal(t, beforeL, s.count("existing_session_deliveries"))
@@ -721,13 +721,13 @@ func TestHostLocalQAAssignmentFlow(t *testing.T) {
 			require.Equal(t, http.StatusBadRequest, s.check(m, delivery).Code, name)
 		}
 		// the credential: no runner token, another agent's runner token
-		noTok := s.call(s.on.CheckDelivery, http.MethodPost, "/", js(binding(env, delivery)), qaCaller{agent: s.receiver, ws: s.ws}, qaParam(delivery))
+		noTok := s.call(s.on.CheckDelivery, http.MethodPost, "/", js(binding(env, delivery)), qaCaller{agent: s.robin, ws: s.ws}, qaParam(delivery))
 		require.Equal(t, http.StatusForbidden, noTok.Code)
 		other, otherTok, err := postgres.NewChatRunnerRepo(s.db).RegisterRunner(t.Context(), s.outsider, "other")
 		require.NoError(t, err)
 		_ = other
 		require.Equal(t, http.StatusForbidden, s.call(s.on.CheckDelivery, http.MethodPost, "/", js(binding(env, delivery)),
-			qaCaller{agent: s.receiver, ws: s.ws, token: otherTok}, qaParam(delivery)).Code, "a runner credential of another agent")
+			qaCaller{agent: s.robin, ws: s.ws, token: otherTok}, qaParam(delivery)).Code, "a runner credential of another agent")
 		// failed deliveries are not active
 		require.Equal(t, http.StatusOK, s.ack(env, delivery, "failed", map[string]any{"error_code": "paste_failed"}).Code)
 		require.Equal(t, http.StatusForbidden, s.check(binding(env, delivery), delivery).Code)
@@ -772,7 +772,7 @@ func TestHostLocalQAAssignmentFlow(t *testing.T) {
 	t.Run("disable", func(t *testing.T) {
 		// a legacy admission and delivery exist; disabling QA touches neither
 		legacyReg := s.call(s.legacy.RegisterReceiver, http.MethodPost, "/", js(map[string]any{"host_id": "host-1", "hostname": s.policy.Hostname,
-			"session_id": "legacy-2", "capability": "readonly_metadata", "allowed_sender_agent_ids": []string{s.receiver.String()}}), s.rcv(), nil)
+			"session_id": "legacy-2", "capability": "readonly_metadata", "allowed_sender_agent_ids": []string{s.robin.String()}}), s.rcv(), nil)
 		require.Equal(t, http.StatusCreated, legacyReg.Code, legacyReg.Body.String())
 		r := s.register()
 		beforeLegacy := s.count("existing_session_receivers")
@@ -783,7 +783,7 @@ func TestHostLocalQAAssignmentFlow(t *testing.T) {
 		require.Zero(t, revoked, "legacy admissions are not revoked by a QA revoke")
 		legacySend := s.call(s.legacy.SendDelivery, http.MethodPost, "/", sendBody(t, func(m map[string]any) {
 			m["request_id"] = uuid.NewString()
-			m["target"] = map[string]any{"workspace_id": s.ws.String(), "agent_id": s.receiver.String(), "runner_id": s.runner.String(),
+			m["target"] = map[string]any{"workspace_id": s.ws.String(), "agent_id": s.robin.String(), "runner_id": s.runner.String(),
 				"host_id": "host-1", "hostname": s.policy.Hostname, "session_id": "legacy-2"}
 		}), s.snd(), nil)
 		require.Equal(t, http.StatusCreated, legacySend.Code, "legacy unaffected: "+legacySend.Body.String())
@@ -795,20 +795,20 @@ func TestHostLocalQAAssignmentFlow(t *testing.T) {
 		env := s.sendMap(r, uuid.New())
 		chat := func(c echo.Context) { c.Set(mw.ContextKeyChatSession, &service.ChatSessionPrincipal{}) }
 		connector := func(c echo.Context) { c.Set(mw.ContextKeyOAuthConnectorUserID, uuid.New()) }
-		require.Equal(t, http.StatusUnauthorized, s.call(s.on.SendDelivery, http.MethodPost, "/", js(env), qaCaller{agent: s.receiver, ws: s.ws, set: chat}, nil).Code)
-		require.Equal(t, http.StatusForbidden, s.call(s.on.SendDelivery, http.MethodPost, "/", js(env), qaCaller{agent: s.receiver, ws: s.ws, set: connector}, nil).Code)
-		require.Equal(t, http.StatusUnauthorized, s.call(s.on.RegisterReceiver, http.MethodPost, "/", s.regBody(nil), qaCaller{agent: s.receiver, ws: s.ws, token: s.token, set: chat}, nil).Code)
+		require.Equal(t, http.StatusUnauthorized, s.call(s.on.SendDelivery, http.MethodPost, "/", js(env), qaCaller{agent: s.robin, ws: s.ws, set: chat}, nil).Code)
+		require.Equal(t, http.StatusForbidden, s.call(s.on.SendDelivery, http.MethodPost, "/", js(env), qaCaller{agent: s.robin, ws: s.ws, set: connector}, nil).Code)
+		require.Equal(t, http.StatusUnauthorized, s.call(s.on.RegisterReceiver, http.MethodPost, "/", s.regBody(nil), qaCaller{agent: s.robin, ws: s.ws, token: s.token, set: chat}, nil).Code)
 		// another agent: not in the fixed sender allowlist, not the policy agent
 		require.Equal(t, http.StatusForbidden, s.call(s.on.SendDelivery, http.MethodPost, "/", js(env), qaCaller{agent: s.outsider, ws: s.ws}, nil).Code)
 		_, otherTok, err := postgres.NewChatRunnerRepo(s.db).RegisterRunner(t.Context(), s.outsider, "other2")
 		require.NoError(t, err)
 		require.Equal(t, http.StatusForbidden, s.call(s.on.RegisterReceiver, http.MethodPost, "/", s.regBody(nil), qaCaller{agent: s.outsider, ws: s.ws, token: otherTok}, nil).Code,
 			"the receiver must be the fixed policy agent")
-		require.Equal(t, http.StatusForbidden, s.call(s.on.RegisterReceiver, http.MethodPost, "/", s.regBody(nil), qaCaller{agent: s.receiver, ws: s.ws}, nil).Code, "no runner credential")
-		require.Equal(t, http.StatusForbidden, s.call(s.on.RegisterReceiver, http.MethodPost, "/", s.regBody(nil), qaCaller{agent: s.receiver, ws: s.ws, token: otherTok}, nil).Code, "another agent's runner credential")
+		require.Equal(t, http.StatusForbidden, s.call(s.on.RegisterReceiver, http.MethodPost, "/", s.regBody(nil), qaCaller{agent: s.robin, ws: s.ws}, nil).Code, "no runner credential")
+		require.Equal(t, http.StatusForbidden, s.call(s.on.RegisterReceiver, http.MethodPost, "/", s.regBody(nil), qaCaller{agent: s.robin, ws: s.ws, token: otherTok}, nil).Code, "another agent's runner credential")
 		// the body cannot choose the workspace: a key of another workspace is refused
-		require.Equal(t, http.StatusForbidden, s.call(s.on.SendDelivery, http.MethodPost, "/", js(env), qaCaller{agent: s.receiver, ws: uuid.New()}, nil).Code)
-		require.Equal(t, http.StatusForbidden, s.call(s.on.RegisterReceiver, http.MethodPost, "/", s.regBody(nil), qaCaller{agent: s.receiver, ws: uuid.New(), token: s.token}, nil).Code)
+		require.Equal(t, http.StatusForbidden, s.call(s.on.SendDelivery, http.MethodPost, "/", js(env), qaCaller{agent: s.robin, ws: uuid.New()}, nil).Code)
+		require.Equal(t, http.StatusForbidden, s.call(s.on.RegisterReceiver, http.MethodPost, "/", s.regBody(nil), qaCaller{agent: s.robin, ws: uuid.New(), token: s.token}, nil).Code)
 		// the body cannot choose the runner: a registration naming a runner other than the credential's
 		rec := s.call(s.on.RegisterReceiver, http.MethodPost, "/", s.regBody(func(m map[string]any) { m["target"].(map[string]any)["runner_id"] = uuid.NewString() }), s.rcv(), nil)
 		require.Equal(t, http.StatusForbidden, rec.Code)
@@ -841,7 +841,7 @@ func TestHostLocalQAAssignmentFlow(t *testing.T) {
 
 		// a QA and a legacy send of the same request id: exactly one wins
 		require.Equal(t, http.StatusCreated, s.call(s.legacy.RegisterReceiver, http.MethodPost, "/", js(map[string]any{"host_id": "host-1", "hostname": s.policy.Hostname,
-			"session_id": "legacy-3", "capability": "readonly_metadata", "allowed_sender_agent_ids": []string{s.receiver.String()}}), s.rcv(), nil).Code)
+			"session_id": "legacy-3", "capability": "readonly_metadata", "allowed_sender_agent_ids": []string{s.robin.String()}}), s.rcv(), nil).Code)
 		for i := 0; i < 5; i++ {
 			req := uuid.New()
 			var qa, lg int
@@ -851,7 +851,7 @@ func TestHostLocalQAAssignmentFlow(t *testing.T) {
 				defer wg.Done()
 				lg = s.call(s.legacy.SendDelivery, http.MethodPost, "/", sendBody(t, func(m map[string]any) {
 					m["request_id"] = req.String()
-					m["target"] = map[string]any{"workspace_id": s.ws.String(), "agent_id": s.receiver.String(), "runner_id": s.runner.String(),
+					m["target"] = map[string]any{"workspace_id": s.ws.String(), "agent_id": s.robin.String(), "runner_id": s.runner.String(),
 						"host_id": "host-1", "hostname": s.policy.Hostname, "session_id": "legacy-3"}
 				}), s.snd(), nil).Code
 			}()

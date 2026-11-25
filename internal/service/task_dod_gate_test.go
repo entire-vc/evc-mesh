@@ -1,6 +1,6 @@
 package service
 
-// Tests for the configurable Definition-of-Done gate (task #51fd215a).
+// Tests for the configurable Definition-of-Done gate.
 //
 // Rules under test:
 //  1. Required gate not passed → MoveTask to done blocked with DodGateBlockedError.
@@ -346,13 +346,13 @@ func TestSetRuntimeState_RoundTripAndClear(t *testing.T) {
 	ts, taskID, _ := buildDodEnv(t, domain.ProjectSettings{})
 	ctx := context.Background()
 	for _, k := range []domain.RuntimeKind{domain.RuntimeKindWorking, domain.RuntimeKindWaiting, domain.RuntimeKindQueued, domain.RuntimeKindStopped} {
-		lane := "linus"
+		lane := "liam"
 		got, err := ts.SetRuntimeState(ctx, taskID, &domain.RuntimeState{Kind: k, Lane: &lane})
 		require.NoError(t, err, k)
 		require.NotNil(t, got)
 		assert.Equal(t, k, got.Kind)
 		assert.Equal(t, domain.RuntimeStateSourceExplicit, got.Source)
-		assert.Equal(t, "linus", *got.Lane)
+		assert.Equal(t, "liam", *got.Lane)
 	}
 	got, err := ts.SetRuntimeState(ctx, taskID, nil)
 	require.NoError(t, err)

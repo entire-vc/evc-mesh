@@ -55,10 +55,10 @@ var ErrInvalidCheckoutToken = errors.New("invalid checkout token")
 
 // FalseOpenStaleDays is how many days an umbrella's own content (its
 // updated_at, its newest comment) must have sat untouched before the
-// false-open signal (domain.FalseOpenSignal, an internal ticket) is allowed to
+// false-open signal (domain.FalseOpenSignal) is allowed to
 // fire. Chosen at 14 days: long enough that a parent which simply hasn't
 // caught up with subtasks closed minutes/hours ago never lights up, short
-// enough to still catch the class of problem the signal exists for — an internal ticket
+// enough to still catch the class of problem the signal exists for
 // sat 80 days, and an internal ticket's own live measurement found false-open
 // umbrellas averaging 38-52 days idle (max 72) even without any staleness
 // gate applied. 14 days is two work-weeks of margin under that curve.
@@ -330,6 +330,7 @@ type taskRow struct {
 
 func (r *taskRow) toDomain() domain.Task {
 	t := r.toDomainBase()
+	t.HasActiveWait = r.HasActiveWait
 	t.RuntimeState = domain.ResolveRuntimeStateWithWait(r.RuntimeState, &t, time.Now().UTC(), r.HasActiveWait)
 	return t
 }
@@ -413,7 +414,7 @@ func (r *taskRow) toDomainBase() domain.Task {
 // FalseOpenStaleDays — see domain.FalseOpenSignal and the const's doc for
 // why (an internal ticket review comment 2026-08-20: merging the two into one
 // flag would equally catch umbrellas correctly blocked on a live parked
-// dependency, e.g. an internal ticket on an internal ticket).
+// dependency, e.g. an internal ticket on c0afa1c5).
 func (r *taskRow) falseOpenSignal() *domain.FalseOpenSignal {
 	if r.SubtaskCount == 0 {
 		return nil
@@ -445,8 +446,8 @@ func taskRowsToSlice(rows []taskRow) []domain.Task {
 // TaskRepo implements repository.TaskRepository with PostgreSQL.
 type TaskRepo struct {
 	db *sqlx.DB
-	// defaultGateTimeoutHours is ArmHumanGate's auto-deadline window (task
-	// an internal ticket). Zero (the zero value, and every one of NewTaskRepo's 60+
+	// defaultGateTimeoutHours is ArmHumanGate's auto-deadline window.
+	// Zero (the zero value, and every one of NewTaskRepo's 60+
 	// existing call sites that never call SetDefaultGateTimeoutHours) means
 	// "use the built-in default" — see defaultGateTimeoutHoursOrDefault.
 	// Optional post-construction setter rather than a constructor parameter,
@@ -565,11 +566,11 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task, activity *doma
 			if err != nil {
 				return err
 			}
-			defer func() {
-				if err != nil {
-					_ = tx.Rollback()
-				}
-			}()
+			// Roll back on every path that does not commit (a no-op after Commit).
+			// A check on err alone missed returns of other errors (a create-tx
+			// hook's refusal, the start_after receipt): the transaction stayed
+			// open holding the project's advisory lock, blocking later creates.
+			defer func() { _ = tx.Rollback() }()
 			// Statement 1: acquire the advisory lock; blocks until any concurrent holder
 			// for this project_id commits, ensuring the next statement's snapshot is fresh.
 			if _, err = tx.ExecContext(ctx, qLock, task.ProjectID); err != nil {
@@ -601,8 +602,8 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task, activity *doma
 			}
 			// Statement 3: the creation audit entry, in the SAME transaction as the
 			// insert above. If this fails, the whole transaction rolls back — a task
-			// must never exist without the event that says it was created (an internal ticket:
-			// the prior fire-and-forget post-commit write silently dropped 8.47% of
+			// must never exist without the event that says it was created
+			// (the prior fire-and-forget post-commit write silently dropped 8.47% of
 			// system-created tasks' task.created rows under concurrent recurring-tick
 			// load, with no retry and no error surfaced to the caller).
 			if activity != nil {
@@ -617,6 +618,13 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task, activity *doma
 				)
 				if err != nil {
 					return err
+				}
+			}
+			// Statement 4: the caller's own rows that must commit with the task
+			// (repository.WithTaskCreateTxHook), e.g. the gate-intake receipt.
+			if hook := repository.TaskCreateTxHookFor(ctx, task.ID); hook != nil {
+				if hookErr := hook(ctx, tx); hookErr != nil {
+					return hookErr
 				}
 			}
 			return tx.Commit()
@@ -1012,7 +1020,7 @@ func (r *TaskRepo) SetHumanGateClass(ctx context.Context, taskID uuid.UUID, clas
 // that will apply at its deadline, in one statement guarded on the gate still being the
 // one the caller proved came from its marker: armed hard, recorded arm source marker,
 // armed by that very marker comment, same author and reason
-// (service.ReconcileMarkerGateClasses, the regression). An API arm, an unrecorded source
+// (service.ReconcileMarkerGateClasses). An API arm, an unrecorded source
 // and a re-arm between the caller's read and this statement (a newer re-ask by the same
 // author with the same question line included) are all left alone.
 //
@@ -1043,8 +1051,8 @@ func (r *TaskRepo) ReclassifyHumanGateSoft(ctx context.Context, taskID, author, 
 
 // ListMarkerArmedHardGateIDs returns one page of the tasks whose live human gate is
 // hard-classified and was armed from a "❓ Blocking" marker (human_gate_source), the
-// input of the marker-gate reclassification (the regression,
-// service.ReconcileMarkerGateClasses), which re-checks every row itself. Keyset pages
+// input of the marker-gate reclassification
+// (service.ReconcileMarkerGateClasses), which re-checks every row itself. Keyset pages
 // by id: rows with id > after, at most limit. The caller walks every page, so gates
 // that stay ineligible never crowd out the ones behind them.
 func (r *TaskRepo) ListMarkerArmedHardGateIDs(ctx context.Context, after uuid.UUID, limit int) ([]uuid.UUID, error) {
@@ -1759,8 +1767,8 @@ func (r *TaskRepo) FindExpiredInProgressCheckouts(ctx context.Context) ([]domain
 // on every pass and rewrites that ref to its own vocabulary ("time", "card:#…",
 // "mr:…"), after which the state is live only while the Runner keeps refreshing it.
 // A lane tick that hung past RuntimeStateStaleAfter then let the unleased sweep park
-// cards whose waits were still active, and the waits were cancelled (an internal ticket:
-// an internal ticket on a time wait, an internal ticket on an MR wait whose merge then woke nobody).
+// cards whose waits were still active, and the waits were cancelled
+// (one on a time wait, one on an MR wait whose merge then woke nobody).
 // On prod 14.11, 70 of 76 active waits on unleased in_progress cards carried a
 // Runner ref. The row is ended only by its resolution (met, superseded, cancelled,
 // the card closing), so it does not depend on any writer's refresh cadence.
@@ -1830,7 +1838,7 @@ const liveRuntimeStateSQL = `t.runtime_state IS NOT NULL
 //
 // This is load-bearing, not belt-and-braces. `add_comment` does not touch
 // tasks.updated_at — only a status change does (measured 2026-08-20 on
-// an internal ticket: updated_at 20:47:07, last comment 21:02:32, no write in between).
+// Updated_at 20:47:07, last comment 21:02:32, no write in between).
 // So an agent that reports progress the way the fleet workflow tells it to —
 // a comment every few minutes, status unchanged because the work is unfinished —
 // is, to an updated_at-only query, indistinguishable from a dead session. This
@@ -1854,7 +1862,7 @@ const liveRuntimeStateSQL = `t.runtime_state IS NOT NULL
 // lane's refresh, so a late lane tick says nothing about it.
 //
 // A `⏳ WAIT` / `↻ NEXT` line in a comment is NOT an exemption. It was,
-// for drivers that published no runtime state (an internal ticket: a card waiting on an open
+// for drivers that published no runtime state (a card waiting on an open
 // MR was parked ~2h after its WAIT); every lane now runs under the Runner, which
 // publishes runtime_state, and the last such driver (fiddler) was retired on
 // 2026-10-16. A card that only says it waits, with no live controller behind the
@@ -1864,7 +1872,7 @@ const liveRuntimeStateSQL = `t.runtime_state IS NOT NULL
 // = status_id). "No lease and quiet" says nothing about who put the card in
 // in_progress: a person or a CRM/Proto agent moving a deal to In Progress or
 // Proposal never takes a checkout, and this sweep returned such cards to the
-// first todo status (New) two hours later (an internal ticket, 27.10: 13 resets in a
+// first todo status (New) two hours later (27.10: 13 resets in a
 // week on Proto, CRM deals In Progress -> New). Any later status change clears
 // the marker, so the stage is intentional from then on.
 //
@@ -1876,7 +1884,7 @@ const liveRuntimeStateSQL = `t.runtime_state IS NOT NULL
 // selects it again. Unlike phase 1 — which cannot loop, because phase 2 nulls the
 // checkout_expires it keys on — nothing here clears the selection condition.
 //
-// Measured in production 2026-09-06: an internal ticket (human_gate armed 14:45) failed to park
+// Measured on prod 2026-09-06: an internal ticket (human_gate armed 14:45) failed to park
 // 145 times, once per 60s tick across restarts, and was the reaper's ONLY
 // observable output. Each attempt also rewrote due_date to now+24h, sliding the
 // park alarm permanently out of reach, because parkTask arms before it moves.

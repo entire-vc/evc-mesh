@@ -128,12 +128,21 @@ func PreviewRuntime(c *RuntimeCatalog, binding RuntimeBinding, revision int64, e
 				return "capability_missing"
 			}
 		}
-		quota, threshold := false, false
+		quota, threshold, stale := false, false, false
 		unknown := ""
 		for _, ref := range account.QuotaPoolsByMode[profile.ExecutionMode] {
 			pool, _ := c.ResolvePool(ref)
 			fact, found := observation.Pools[pool]
-			if !found || !fact.Verified || fact.ObservedAt.IsZero() || fact.ObservedAt.After(now) || now.Sub(fact.ObservedAt) > time.Duration(binding.Policy.EvidenceMaxAgeSeconds)*time.Second {
+			if !found || fact.ObservedAt.IsZero() || fact.ObservedAt.After(now) || now.Sub(fact.ObservedAt) > time.Duration(binding.Policy.EvidenceMaxAgeSeconds)*time.Second {
+				unknown = "pool_evidence_unavailable"
+				continue
+			}
+			// A fresh confirmed stale carrier is not quota evidence either way.
+			if fact.CredentialStale() {
+				stale = true
+				continue
+			}
+			if !fact.Verified {
 				unknown = "pool_evidence_unavailable"
 				continue
 			}
@@ -165,6 +174,10 @@ func PreviewRuntime(c *RuntimeCatalog, binding RuntimeBinding, revision int64, e
 		}
 		if unknown != "" {
 			return unknown
+		}
+		// Every unresolved window is a stale credential carrier, nothing else.
+		if stale {
+			return RuntimePoolErrorCredentialStale
 		}
 		return "available"
 	}
@@ -239,12 +252,45 @@ func PreviewRuntime(c *RuntimeCatalog, binding RuntimeBinding, revision int64, e
 		result.Trace = []RuntimeTrace{}
 		visited := map[string]bool{}
 		attempts := 0
-		inspect := func(ref string, filtered bool) string {
+		unknownSeen := false
+		// credential_stale is unknown evidence everywhere except one place: a
+		// node reached through a quota edge of an already open fallback.
+		unknown := func(reason string) bool {
+			return reason == "pool_evidence_unknown" || reason == "pool_evidence_unavailable" || reason == "controller_unavailable" || reason == RuntimePoolErrorCredentialStale
+		}
+		// A queue item carries how it was reached: viaEdge is true only for the
+		// targets of a quota edge that a quota trigger (or a traversed stale
+		// node inside it) opened. The context belongs to the item, not to the
+		// profile: a later primary that is also some edge's target is still
+		// inspected as a primary.
+		type pendingGroup struct {
+			refs    []string
+			viaEdge bool
+		}
+		edges := func(ref string) []pendingGroup {
+			var out []pendingGroup
+			for _, group := range groups(binding.Policy.QuotaEdges[ref]) {
+				out = append(out, pendingGroup{refs: group, viaEdge: true})
+			}
+			return out
+		}
+		passable := func(reason string, viaEdge bool) bool {
+			return reason == RuntimePoolErrorCredentialStale && viaEdge
+		}
+		inspect := func(ref string, filtered, viaEdge bool) string {
 			if visited[ref] {
 				return "already_visited"
 			}
 			visited[ref] = true
 			reason := assess(ref)
+			// Missing QA evidence excludes this candidate, without spending an
+			// attempt or vetoing another reviewer whose evidence is complete.
+			// A passable stale node is a try like a blocked one.
+			if review && unknown(reason) && !passable(reason, viaEdge) {
+				unknownSeen = true
+				result.Trace = append(result.Trace, RuntimeTrace{ProfileID: ref, Reason: reason})
+				return reason
+			}
 			// not_independent is a filter, not a try: it spends no attempt, so a
 			// run of same-family profiles cannot exhaust max_attempts before an
 			// independent one is reached.
@@ -262,18 +308,13 @@ func PreviewRuntime(c *RuntimeCatalog, binding RuntimeBinding, revision int64, e
 		blocked := func(reason string) bool {
 			return reason == "quota_blocked" || reason == "threshold_blocked" || reason == "not_independent"
 		}
-		// An unknown sibling must not be read as "nothing there": the walk stops
-		// instead of reaching reserve/API past evidence it could not obtain.
-		unknown := func(reason string) bool {
-			return reason == "pool_evidence_unknown" || reason == "pool_evidence_unavailable" || reason == "controller_unavailable"
-		}
-		walk := func(pending [][]string, edgesLast bool) string {
+		walk := func(pending []pendingGroup, edgesLast bool) string {
 			for len(pending) > 0 {
 				group := pending[0]
 				pending = pending[1:]
-				var children [][]string
-				for _, ref := range group {
-					reason := inspect(ref, true)
+				var children []pendingGroup
+				for _, ref := range group.refs {
+					reason := inspect(ref, true, group.viaEdge)
 					if reason == "available" {
 						return ref
 					}
@@ -281,12 +322,21 @@ func PreviewRuntime(c *RuntimeCatalog, binding RuntimeBinding, revision int64, e
 						result.Reason = reason
 						return ""
 					}
+					// Inside an open quota fallback a stale carrier is not
+					// usable, but its own quota edges may still be walked.
+					if passable(reason, group.viaEdge) {
+						children = append(children, edges(ref)...)
+						continue
+					}
 					if unknown(reason) {
+						if review {
+							continue
+						}
 						result.Reason = "sibling_evidence_unknown"
 						return ""
 					}
 					if blocked(reason) {
-						children = append(children, groups(binding.Policy.QuotaEdges[ref])...)
+						children = append(children, edges(ref)...)
 					}
 				}
 				if edgesLast {
@@ -295,6 +345,9 @@ func PreviewRuntime(c *RuntimeCatalog, binding RuntimeBinding, revision int64, e
 					pending = append(children, pending...)
 				}
 			}
+			if unknownSeen {
+				result.Reason = "sibling_evidence_unknown"
+			}
 			return ""
 		}
 		if request.Purpose == "quota_reserve" {
@@ -302,27 +355,32 @@ func PreviewRuntime(c *RuntimeCatalog, binding RuntimeBinding, revision int64, e
 				result.Reason = "source_not_permitted"
 				return "", true
 			}
-			reason := inspect(request.SourceProfileID, false)
+			reason := inspect(request.SourceProfileID, false, false)
 			if reason != "quota_blocked" && reason != "threshold_blocked" {
 				result.Reason = "source_has_no_sole_quota_trigger"
 				return "", true
 			}
-			return walk(groups(binding.Policy.QuotaEdges[request.SourceProfileID]), false), false
+			return walk(edges(request.SourceProfileID), false), false
 		}
 		primaryGroups := groups(binding.Policy.PrimaryProfiles)
 		first := primaryGroups[0][0]
-		reason := inspect(first, true)
+		reason := inspect(first, true, false)
 		switch {
 		case reason == "available":
 			return first, false
-		case blocked(reason):
-			var pending [][]string
+		case blocked(reason) || (review && unknown(reason)):
+			var pending []pendingGroup
 			if len(primaryGroups[0]) > 1 {
-				pending = append(pending, primaryGroups[0][1:])
+				pending = append(pending, pendingGroup{refs: primaryGroups[0][1:]})
 			}
-			pending = append(pending, primaryGroups[1:]...)
+			for _, group := range primaryGroups[1:] {
+				pending = append(pending, pendingGroup{refs: group})
+			}
 			// Every remaining primary group is tried before any reserve edge.
-			pending = append(pending, groups(binding.Policy.QuotaEdges[first])...)
+			// Unknown evidence is not a quota trigger and cannot open an edge.
+			if blocked(reason) {
+				pending = append(pending, edges(first)...)
+			}
 			return walk(pending, true), false
 		default:
 			result.Reason = "primary_has_no_sole_quota_trigger"

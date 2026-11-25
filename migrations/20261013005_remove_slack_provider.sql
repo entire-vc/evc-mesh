@@ -1,5 +1,5 @@
 -- +goose Up
--- Slack integration removed (#c9f9834f); drop any leftover rows.
+-- Slack integration removed; drop any leftover rows.
 DELETE FROM integration_configs WHERE provider = 'slack';
 
 -- +goose Down

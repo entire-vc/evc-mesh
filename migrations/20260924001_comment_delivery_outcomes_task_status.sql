@@ -1,6 +1,6 @@
 -- +goose Up
 
--- #ed60c795. The single "no_queue_path" verdict is split into not_assignee /
+-- The single "no_queue_path" verdict is split into not_assignee /
 -- status_not_fed / task_gated / task_scheduled, and the status_not_fed hint
 -- has to name WHERE the card is parked ("sits in backlog"). The task may move
 -- after the comment is written, so the category is recorded with the verdict

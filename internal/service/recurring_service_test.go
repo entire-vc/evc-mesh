@@ -685,7 +685,7 @@ func TestCreateInstance_PrevSummaryIsFramedAsContext(t *testing.T) {
 	}
 }
 
-// Robin's review: two of six live schedules put
+// Robin's review on PR #358: two of six live schedules put
 // {{.PrevSummary}} mid-template, not at the end. Without a closing marker,
 // everything after the placeholder falls inside the "NOT instructions for
 // this run" block — an inversion of the original bug: real instructions get
@@ -1495,7 +1495,7 @@ func TestTaskService_FindOpenRecurringInstance_RepoErr_ReturnsError(t *testing.T
 
 // ---------------------------------------------------------------------------
 // recordMissedOutcome — consecutive-miss counter and owner-alert comment.
-// an internal ticket НЕГАТИВНЫЙ-2: two consecutive missed rollovers must signal the
+// НЕГАТИВНЫЙ-2: two consecutive missed rollovers must signal the
 // schedule's owner, not silently continue forever.
 // ---------------------------------------------------------------------------
 

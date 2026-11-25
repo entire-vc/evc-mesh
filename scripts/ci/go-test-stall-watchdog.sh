@@ -4,7 +4,7 @@
 #
 # ## The failure this exists for
 #
-# 2026-08-26, jobs 3242 and 3266 (Mesh #405872aa). `go test ./... -race` printed
+# 2026-08-26, jobs 3242 and 3266. `go test ./... -race` printed
 # four package results, then emitted nothing for 28 minutes and was killed by the
 # job timeout, holding the fleet's only runner the whole time. The trace was
 # byte-identical when read twice 45s apart: 32009 bytes, not growing.
@@ -142,7 +142,7 @@ stop_tail() {
 # CPU seconds*100 consumed by the live process tree under $1. `go test` prints a
 # package's result only when the package finishes, so a healthy but slow package
 # (internal/repository/postgres: 290-337s under -race on the shared runner, CPU-
-# starved, Mesh #362289cb) is silent for longer than STALL_SECONDS. Silence alone
+# starved) is silent for longer than STALL_SECONDS. Silence alone
 # cannot tell that from a wedge; a wedge burns no CPU. `ps -o time=` is cumulative
 # CPU in `[d-][hh:]mm:ss[.cc]` on both busybox and macOS. A change in either
 # direction counts as life: a child that exits drops out of the sum.

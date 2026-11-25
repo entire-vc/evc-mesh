@@ -56,7 +56,7 @@ func sampleActivity(taskID uuid.UUID, changes []byte) *domain.ActivityLog {
 // one Begin/Commit pair. sqlmock's default MatchExpectationsInOrder(true)
 // means this test fails if the code ever moves the activity insert outside
 // the transaction (e.g. after Commit, against r.db instead of tx) — exactly
-// the shape of the original #819e7b29 bug.
+// the shape of the original bug.
 func TestTaskRepo_Create_ActivityInsertRunsInsideTheTransaction(t *testing.T) {
 	repo, mock := newTaskRepoSQLMock(t)
 	task := sampleCreateTask()

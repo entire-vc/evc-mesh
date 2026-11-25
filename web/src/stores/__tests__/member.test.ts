@@ -194,7 +194,7 @@ describe("updateWorkspaceMemberName", () => {
   });
 });
 
-// an internal ticket: workspace-settings.tsx hides EVERY admin control (invite,
+// Workspace-settings.tsx hides EVERY admin control (invite,
 // delete workspace, manage rules/secrets) off myRole alone, and the old
 // fetchMyRole swallowed any failure — network, 401/403/500 — into the exact
 // same myRole: null a genuine non-admin gets. A denied/unknown role must be

@@ -14,7 +14,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// HumanGateDefaultTimeoutService tests (task #060ccaae). The DB-level structural
+// HumanGateDefaultTimeoutService tests. The DB-level structural
 // proofs (hard/no-default exclusion, the handoff away from FindSoftTimedOutGates) live
 // in task_repo_default_timeout_db_test.go (real Postgres). These cover the SERVICE's
 // own orchestration on top of whatever the repo hands it: it must record the right

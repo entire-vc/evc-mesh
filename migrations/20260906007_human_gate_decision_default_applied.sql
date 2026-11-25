@@ -1,10 +1,10 @@
 -- +goose Up
 
--- Task #060ccaae (1.4 default-on-timeout): a soft-classified gate that names a
+-- (1.4 default-on-timeout): a soft-classified gate that names a
 -- recommended_default and a gate_deadline gets that default APPLIED — not just
 -- unfrozen (that is the older, narrower human_gate_soft_timeout.go mechanism) — once
 -- the deadline passes with no answer. The application is recorded as a real row in
--- human_gate_decisions (task #c56339b1's ledger), same as any other answer, so the
+-- human_gate_decisions (the decision ledger), same as any other answer, so the
 -- question shows up as resolved everywhere that table is read (digest, task history,
 -- ListByTask) rather than needing a fourth place to special-case it.
 --
@@ -24,7 +24,7 @@ COMMENT ON COLUMN human_gate_decisions.provenance IS
     'tied to a message_id) | attested (agent transcribed -- forgeable by '
     'construction, contract §2 P3; visibility+revocation is the control, not '
     'prevention) | default_applied (nobody answered by gate_deadline; the stated '
-    'recommended_default was applied mechanically -- task #060ccaae).';
+    'recommended_default was applied mechanically).';
 -- +goose StatementEnd
 
 -- +goose Down

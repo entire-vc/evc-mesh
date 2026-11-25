@@ -1,6 +1,6 @@
 /**
- * Task #f0359288 (parent #93644be7, subtask 3 of 5): workspace deletion now
- * frees the slug for reuse (rename-on-delete, #c164a5df), so an old
+ * (subtask 3 of 5): workspace deletion now
+ * frees the slug for reuse (rename-on-delete), so an old
  * bookmark/deep-link to a deleted workspace's slug ("/w/<slug>/...") stops
  * matching anything in the live workspace list. AppLayout's slug-resolution
  * effect (app-layout.tsx) is the ONE place `:wsSlug` gets resolved for every

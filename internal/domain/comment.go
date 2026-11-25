@@ -107,7 +107,7 @@ type Comment struct {
 
 	// GateReceipt is set only on a comment that reads as a human_gate withdrawal on a
 	// gated task: what the server actually did with it. "cleared" is the ONLY value
-	// that says the gate came down; a comment alone never implies it. Task dependency delivery fix.
+	// that says the gate came down; a comment alone never implies it.
 	GateReceipt *GateReceipt `json:"gate_receipt,omitempty" db:"-"`
 
 	// URL is the canonical deep-link straight to this comment: the task's

@@ -1,6 +1,6 @@
 -- +goose Up
 
--- MCP-OAuth 1/5 (Mesh Doc oauth-for-remote-mesh-mcp, epic #5b8aaf87): Mesh API
+-- MCP-OAuth 1/5 (Mesh Doc oauth-for-remote-mesh-mcp): Mesh API
 -- becomes an OAuth 2.0 Authorization Server (RFC 6749 authorization_code +
 -- refresh_token, RFC 7591 dynamic client registration, RFC 7636 PKCE, plus
 -- CIMD client_id-as-URL registration) so an MCP client (Claude.ai, Claude

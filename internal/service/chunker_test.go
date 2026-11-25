@@ -9,17 +9,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// This is the AC-required "test failing on current code" (#b052cdda): before
+// This is the AC-required "test failing on current code": before
 // chunkText existed, embedAndStore/BatchEmbed called s.embedder.Embed(ctx,
 // text) exactly once with the FULL, unchunked text — the prod embedder then
-// silently truncates at 512 tokens (~2000 chars, measured live in #e8063a65)
+// silently truncates at 512 tokens (~2000 chars, measured live)
 // and only the first ~15% of a long memory ever entered the vector. This test
 // pins the fix at the unit level: a document far longer than the truncation
 // window must be split into more than one embeddable piece, and — the part
 // truncation would fail — text from PAST the old truncation point must
 // actually appear in one of those pieces.
 func TestChunkText_LongDocumentIsNotSilentlyTruncated(t *testing.T) {
-	const truncationWindowChars = 2000 // ~512 tokens, per the live TEI measurement in #e8063a65
+	const truncationWindowChars = 2000 // ~512 tokens, per the live TEI measurement in an internal ticket
 
 	filler := strings.Repeat("the quick brown fox jumps over the lazy dog. ", 200) // ~9200 chars
 	needle := "COMMUTE_TAKES_45_MINUTES_EACH_WAY"

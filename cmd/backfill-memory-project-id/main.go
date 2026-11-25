@@ -1,6 +1,6 @@
 // Command backfill-memory-project-id fixes memories.project_id for scope='project'
 // rows that predate the write-path inference fix in memory_service.go's Remember()
-// (Mesh audit #1b010be6, plan:1.11: project_id was NULL on 4484/5161 memories).
+// (plan:1.11: project_id was NULL on 4484/5161 memories).
 //
 // Two passes, in order:
 //

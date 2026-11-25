@@ -1,5 +1,5 @@
 /**
- * Task #06d0c6d8: /p/keep drew Lab's cards. The project pages (board, list,
+ * /p/keep drew Lab's cards. The project pages (board, list,
  * calendar, timeline) read `currentProject` from the store, not the URL, and
  * AppLayout only re-pointed the store in an effect — so after Lab -> Keep the
  * page rendered with Lab as the project (and fetched Lab's tasks) under a Keep

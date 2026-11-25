@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
 // PullRequestState is the live state of a pull request as reported by the
@@ -124,6 +126,8 @@ func ParsePullRequestURL(rawURL string) (owner, repo string, number int, ok bool
 type PullRequestHead struct {
 	Merged  bool
 	HeadSHA string
+	// MergedAt is GitHub's merged_at in UTC; nil when not merged or unparseable.
+	MergedAt *time.Time
 }
 
 // ChecksSummary folds the check runs of one commit into the pipeline
@@ -171,15 +175,20 @@ func (c *Client) getJSON(ctx context.Context, url string, dst any) error {
 // GetPullRequestHead calls GET /repos/{owner}/{repo}/pulls/{number}.
 func (c *Client) GetPullRequestHead(ctx context.Context, owner, repo string, number int) (PullRequestHead, error) {
 	var body struct {
-		Merged bool `json:"merged"`
-		Head   struct {
+		Merged   bool   `json:"merged"`
+		MergedAt string `json:"merged_at"`
+		Head     struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
 	}
 	if err := c.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s/pulls/%d", c.baseURL, owner, repo, number), &body); err != nil {
 		return PullRequestHead{}, err
 	}
-	return PullRequestHead{Merged: body.Merged, HeadSHA: strings.ToLower(strings.TrimSpace(body.Head.SHA))}, nil
+	head := PullRequestHead{Merged: body.Merged, HeadSHA: strings.ToLower(strings.TrimSpace(body.Head.SHA))}
+	if body.Merged {
+		head.MergedAt = domain.ParseVCSProviderTime(body.MergedAt)
+	}
+	return head, nil
 }
 
 // GetCheckRunsSummary calls GET /repos/{owner}/{repo}/commits/{sha}/check-runs

@@ -15,7 +15,7 @@ import (
 )
 
 // TestTaskRepo_SetHumanGate_ArmDefaultsClassHard proves acceptance criterion 3
-// (contract docs/human-gate-decision-recorded.md §5, the regression): a task armed
+// (contract docs/human-gate-decision-recorded.md §5): a task armed
 // through the ordinary flow — no prior SetHumanGateClass call, i.e. a "живая
 // немаркированная карточка" — ends up human_gate_class='hard', fail-closed, and
 // human_gate_armed_at gets stamped.
@@ -153,8 +153,8 @@ func TestTaskRepo_FindSoftTimedOutGates_RespectsCutoffAndLiveFlag(t *testing.T) 
 }
 
 // TestTaskRepo_ListMarkerArmedHardGateIDs lists exactly the live hard gates whose
-// recorded arm source is a marker: the input of the marker-gate reclassification (task
-// this change). A soft gate, a released one, an API arm and a raw PATCH flip (source
+// recorded arm source is a marker: the input of the marker-gate reclassification.
+// A soft gate, a released one, an API arm and a raw PATCH flip (source
 // unrecorded) are not in it.
 func TestTaskRepo_ListMarkerArmedHardGateIDs(t *testing.T) {
 	db := testDB(t)

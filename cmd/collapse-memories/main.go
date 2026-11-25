@@ -1,15 +1,15 @@
 // Command collapse-memories dedupes rows in the memories table by declared
 // scope-identity, and clears the stray project_id that resolveProjectSlug
 // used to stamp onto workspace-scope rows before PR #444
-// (memory_service.go:481-487) — see task #4edf3fb5.
+// (memory_service.go:481-487).
 //
 // It is intentionally standalone: no dependency on internal/service or
 // internal/repository, so it can be built, reviewed and run independently
-// of the application code that produced the bug (task #4edf3fb5, subtask 4).
+// of the application code that produced the bug (subtask 4).
 //
 // Group predicate is `status <> 'superseded' AND archived = false` — the
 // same "current" definition GetByKey (memory_repo.go) and every read path
-// (recall/FTS/vector) use, NOT `status = 'active'`. Task #2c0154db/F2a found
+// (recall/FTS/vector) use, NOT `status = 'active'`. F2a found
 // that the original status='active' predicate missed every group where a
 // colliding row sat in status='review_needed': those rows are surfaced as
 // current by every read path but were invisible to this tool's original
@@ -251,7 +251,7 @@ func getenv(key, def string) string {
 
 // currentPredicate is the single definition of "current" every read path
 // (recall/FTS/vector) and GetByKey's identity-lookup share. Keep this the
-// ONE place that literal lives — see task #2c0154db/F2a and the sibling
+// ONE place that literal lives — see F2a and the sibling
 // gap this exact drift caused (learning-status-cleanup-must-match-every-
 // status-predicate): a predicate typed out twice always ends up meaning two
 // different things eventually.
@@ -483,7 +483,7 @@ func countMemories(db *sql.DB) (int, error) {
 }
 
 // countActiveDuplicates is the "same-key-any-scope-2plus-READABLE" metric
-// from task #2c0154db/F2a's own AC: groups by each scope's real identity
+// from F2a's own AC: groups by each scope's real identity
 // tuple over the CURRENT predicate (not status='active'), matching exactly
 // what loadDuplicateGroupsForScope collapses. A non-zero result here is what
 // a recall() call can observe as "multiple live versions of one fact".

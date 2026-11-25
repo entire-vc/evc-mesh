@@ -42,7 +42,7 @@ type RateLimitConfig struct {
 	// KeyFunc value (e.g. both keyed by the same client IP) silently share ONE
 	// Redis counter even though each was configured with its own RPM — every
 	// INCR from either route counts against both limits. Found live 2026-08-20
-	// (`an internal ticket`): /auth/login (5 RPM) and /auth/refresh (60 RPM) both used
+	// /auth/login (5 RPM) and /auth/refresh (60 RPM) both used
 	// RateLimitKeyByIP, so routine refresh traffic from the agent fleet alone
 	// exhausted the shared counter and login got 429'd for a reason that had
 	// nothing to do with login attempts. Proven live: one POST /auth/refresh

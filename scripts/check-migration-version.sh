@@ -6,7 +6,7 @@
 #      (a rename is a delete of the old name). Production applies migrations under the
 #      version in the filename, so removing or renumbering one that has shipped leaves
 #      goose with an applied version it can no longer find and an unapplied one below it
-#      (#3cb090a0: i18n_locale 001 -> 002 after prod had applied 001).
+#      (i18n_locale 001 -> 002 after prod had applied 001).
 #
 # Deliberate exceptions live in scripts/migration-gate-exceptions.txt, one per line:
 #   allow-add <file>      may be added with a version <= max(base), e.g. restoring a number
@@ -26,7 +26,7 @@
 # Both CI variables are read because the canon repository moved to GitLab
 # (2026-08-23) while the GitHub workflow still exists on the showcase mirror.
 # Reading only one of them is how this check came to be inert on the canon for
-# two weeks: the script was fine, nothing called it (#3d18da50).
+# two weeks: the script was fine, nothing called it.
 set -euo pipefail
 
 MIGRATIONS_DIR="${1:-migrations}"

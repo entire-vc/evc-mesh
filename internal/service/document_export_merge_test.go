@@ -184,7 +184,7 @@ func TestExportMerge(t *testing.T) {
 // and, more importantly, would still be exposed to whatever WalkExportTree's
 // own bugs are. A child's heading appearing in a self-scope merge would mean
 // the export dialog's "just this document" choice silently became "with
-// children" — exactly the false promise #2a467980 was decomposed to avoid.
+// children" — exactly the false promise an internal ticket was decomposed to avoid.
 func TestExportMerge_Self(t *testing.T) {
 	t.Run("a child's heading and body text do not appear in a self-scope merge", func(t *testing.T) {
 		f := setupExportService(t)

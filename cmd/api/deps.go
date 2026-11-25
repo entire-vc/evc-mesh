@@ -187,6 +187,8 @@ type apiDeps struct {
 	documentHandler                  *handler.DocumentHandler
 	documentExportHandler            *handler.DocumentExportHandler
 	documentAttachmentHandler        *handler.DocumentAttachmentHandler
+	uploadSessionHandler             *handler.UploadSessionHandler
+	uploadSessionRepo                *postgres.UploadSessionRepo
 	documentCommentHandler           *handler.DocumentCommentHandler
 	documentWatchHandler             *handler.DocumentWatchHandler
 	depHandler                       *handler.DependencyHandler
@@ -224,6 +226,7 @@ type apiDeps struct {
 	chatRunnerEventsHandler          *handler.ChatRunnerEventsHandler
 	chatTurnStartHandler             *handler.ChatTurnStartHandler
 	analyticsHandler                 *handler.AnalyticsHandler
+	memoryAnalyticsHandler           *handler.MemoryAnalyticsHandler
 	projectUpdateHandler             *handler.ProjectUpdateHandler
 	initiativeHandler                *handler.InitiativeHandler
 	triageHandler                    *handler.TriageHandler
@@ -259,6 +262,8 @@ type apiDeps struct {
 	activityCancel                   context.CancelFunc
 	toolBreakdownTracker             *mw.ToolBreakdownTracker
 	toolBreakdownCancel              context.CancelFunc
+	memoryReadLog                    *mw.MemoryReadLog
+	memoryReadDone                   <-chan struct{}
 	reaperCancel                     context.CancelFunc
 	telegramCancel                   context.CancelFunc
 	v1                               *echo.Group

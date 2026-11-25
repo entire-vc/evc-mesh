@@ -53,12 +53,22 @@ func syncGitHubLinkEvidence(ctx context.Context, repo repository.VCSLinkReposito
 	if err != nil {
 		return false, fmt.Errorf("read github pr head: %w", err)
 	}
+	written := false
+	// GitHub's merged_at, set once: a known time is kept, an unreported one
+	// stays NULL. Written before the head check so it does not depend on it.
+	if pr.Merged && l.MergedAt == nil && pr.MergedAt != nil {
+		w, mErr := repo.SetMergedAt(ctx, l.ID, *pr.MergedAt)
+		if mErr != nil {
+			return false, fmt.Errorf("store github merged_at: %w", mErr)
+		}
+		written = w
+	}
 	if !pr.Merged || pr.HeadSHA == "" {
 		// GitHub does not vouch for this PR now: cached green must not keep
 		// proving delivery.
-		return unbindCachedGreen(ctx, repo, l)
+		u, uErr := unbindCachedGreen(ctx, repo, l)
+		return written || u, uErr
 	}
-	written := false
 	if l.HeadSHA() != pr.HeadSHA {
 		patch, _ := json.Marshal(map[string]string{domain.VCSLinkMetaHeadSHA: pr.HeadSHA}) // a string map cannot fail to marshal
 		if _, mergeErr := repo.MergeMetadata(ctx, l.TaskID, l.ID, patch); mergeErr != nil {

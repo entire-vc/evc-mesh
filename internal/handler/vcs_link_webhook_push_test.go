@@ -26,9 +26,9 @@ func newPushRequest(t *testing.T, deliveryID, ref, commitMsg string) *http.Reque
 	payload := map[string]any{
 		"ref": ref,
 		"head_commit": map[string]any{
-			"id":      "82377a26b856c04d1f9e3a7b5c2d8e6f0a1b3c4d",
+			"id":      "5eed0003b856c04d1f9e3a7b5c2d8e6f0a1b3c4d",
 			"message": commitMsg,
-			"url":     "https://github.com/entire-vc/evc-mesh/commit/82377a26",
+			"url":     "https://github.com/entire-vc/evc-mesh/commit/5eed0003",
 		},
 		"repository": map[string]any{
 			"full_name": "entire-vc/evc-mesh",
@@ -67,8 +67,8 @@ func TestGitHubWebhook_Push_PassesMessageAndBranchToResolver(t *testing.T) {
 	}
 	h := NewVCSLinkHandler(svc, WithWebhookDedupStore(newMemDedupStore()))
 
-	const msg = "fix(gate): stop the train\n\nRefs #82377a26"
-	resp := sendPush(t, h, newPushRequest(t, "push-1", "refs/heads/linus/82377a26-gate", msg))
+	const msg = "fix(gate): stop the train\n\nRefs #5eed0003"
+	resp := sendPush(t, h, newPushRequest(t, "push-1", "refs/heads/liam/5eed0003-gate", msg))
 	assert.Equal(t, "ok", resp["status"])
 
 	sources, ok := svc.lastResolveSources()
@@ -77,7 +77,7 @@ func TestGitHubWebhook_Push_PassesMessageAndBranchToResolver(t *testing.T) {
 	assert.Equal(t, "body", sources[0].Name)
 	assert.Equal(t, msg, sources[0].Text, "the whole commit message, not just its first line")
 	assert.Equal(t, "branch", sources[1].Name)
-	assert.Equal(t, "linus/82377a26-gate", sources[1].Text,
+	assert.Equal(t, "liam/5eed0003-gate", sources[1].Text,
 		"refs/heads/ must be stripped so branch segments split cleanly")
 
 	require.Len(t, svc.createCalls, 1, "a resolved reference must create the commit link")
@@ -88,7 +88,7 @@ func TestGitHubWebhook_Push_NoReference_CreatesNothing(t *testing.T) {
 	svc := &stubVCSLinkService{} // resolveTaskID stays uuid.Nil
 	h := NewVCSLinkHandler(svc, WithWebhookDedupStore(newMemDedupStore()))
 
-	resp := sendPush(t, h, newPushRequest(t, "push-2", "refs/heads/garfield/gofmt", "chore: gofmt"))
+	resp := sendPush(t, h, newPushRequest(t, "push-2", "refs/heads/gary/gofmt", "chore: gofmt"))
 	assert.Equal(t, "no_task_ref", resp["status"])
 	assert.Empty(t, svc.createCalls, "no link may be created without a resolvable reference")
 }
@@ -105,7 +105,7 @@ func TestGitHubWebhook_Push_CreateError_StillReturnsOK(t *testing.T) {
 	}
 	h := NewVCSLinkHandler(svc, WithWebhookDedupStore(newMemDedupStore()))
 
-	resp := sendPush(t, h, newPushRequest(t, "push-4", "refs/heads/linus/82377a26-gate", "Refs #82377a26"))
+	resp := sendPush(t, h, newPushRequest(t, "push-4", "refs/heads/liam/5eed0003-gate", "Refs #5eed0003"))
 	assert.Equal(t, "ok", resp["status"])
 	require.Len(t, svc.createCalls, 1, "Create must still have been attempted")
 }
@@ -149,7 +149,7 @@ func TestGitHubWebhook_PullRequest_ForwardsHeadBranch(t *testing.T) {
 			"html_url": "https://github.com/entire-vc/evc-mesh/pull/777",
 			"state":    "open",
 			"merged":   false,
-			"head":     map[string]any{"ref": "linus/82377a26-cost-tracking"},
+			"head":     map[string]any{"ref": "liam/5eed0003-cost-tracking"},
 		},
 		"repository": map[string]any{"full_name": "entire-vc/evc-mesh"},
 	})
@@ -167,5 +167,5 @@ func TestGitHubWebhook_PullRequest_ForwardsHeadBranch(t *testing.T) {
 
 	ev, ok := svc.lastHandleEvent()
 	require.True(t, ok)
-	assert.Equal(t, "linus/82377a26-cost-tracking", ev.PRBranch)
+	assert.Equal(t, "liam/5eed0003-cost-tracking", ev.PRBranch)
 }

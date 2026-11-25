@@ -53,7 +53,7 @@ func WithAgentRepo(repo repository.AgentRepository) ProjectMemberServiceOption {
 // that is genuinely a member of the target workspace is rejected with
 // "agent does not belong to this workspace" — the U1-U3 invite/grant epic
 // produced agents that can authenticate into a workspace but can never be
-// added to any of its projects (task #80dfb336).
+// added to any of its projects.
 func WithAgentWorkspaceGrantRepo(repo repository.AgentWorkspaceGrantRepository) ProjectMemberServiceOption {
 	return func(s *projectMemberService) { s.agentWorkspaceGrantRepo = repo }
 }

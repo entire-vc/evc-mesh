@@ -241,7 +241,7 @@ func TestProjectHandler_List_Success(t *testing.T) {
 	assert.Len(t, page.Items, 2)
 	// Every item of a list response carries its own deep-link — a field the
 	// handler computes on some paths only reads as absent on the others
-	// (the an internal ticket lesson on tasks).
+	// (the lesson on tasks).
 	for _, p := range page.Items {
 		assert.Equal(t, "http://example.com/p/"+p.ID.String(), p.URL)
 	}

@@ -13,7 +13,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// ClosedFollowUpPendingRepo against a real PostgreSQL (#db1c6c7a). The
+// ClosedFollowUpPendingRepo against a real PostgreSQL. The
 // service tests run against a hand-written mock of this repo; these are the
 // tests that keep the mock honest — every branch asserted here is one the
 // mock mirrors:
@@ -229,7 +229,7 @@ func TestClosedFollowUpPendingRepo_MarkAttemptIsAtomicUnderConcurrency(t *testin
 		"every concurrent MarkAttempt must be counted exactly once — the budget is the escalation trigger")
 }
 
-// The lease column's whole contract (#a2368528, from the codex-review R7
+// The lease column's whole contract (from the codex-review R7
 // finding on !1083): ClaimForReconcile is ONE atomic UPDATE, so of N
 // concurrent claimants exactly one wins; an unexpired lease refuses a second
 // claimant; an EXPIRED lease is claimable again (a pass that died mid-row

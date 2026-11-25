@@ -1,5 +1,5 @@
 -- +goose Up
--- Former slug paths of documents that were moved in the tree (#ed10e6aa). A
+-- Former slug paths of documents that were moved in the tree. A
 -- document's id survives a move, but its path did not: cards and agents refer
 -- to docs by path ("specs/threat-model") and by bare slug, and every
 -- reorganisation turned those references into 404s. When a document (or a

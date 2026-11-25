@@ -321,6 +321,8 @@
         "title": "Completed by agent"
       },
       "cost": {
+        "apiPrice": "at API list price",
+        "apiPriceHint": "Notional cost at the API price list. A subscription spends window limits, not money",
         "kpis": "Cost",
         "reported": "Reported cost",
         "tokens": "Tokens in / out",
@@ -340,6 +342,442 @@
         "tokens": "Tokens",
         "sessions": "Sessions",
         "sessionsShort": "Sess."
+      },
+      "memory": {
+        "title": "Mesh memory: how it is read and written",
+        "reason": {
+          "journalSince": "the read journal is kept since {{date}}",
+          "noJournal": "the read journal is not kept yet",
+          "notCollected": "not collected yet",
+          "unknown": "the server did not count it",
+          "notApplicable": "only writes support this split",
+          "retention": "outside the detail retention period",
+          "textExpired": "query text has expired",
+          "excludedByFilter": "excluded by the operation filter",
+          "noData": "no events in the window",
+          "detailTimeout": "the list took too long, retry"
+        },
+        "period": "Period",
+        "days": "{{days}}d",
+        "custom": "Custom…",
+        "from": "From",
+        "to": "To",
+        "apply": "Apply",
+        "viewLabel": "View",
+        "view": {
+          "chart": "Chart",
+          "top": "Top-N",
+          "table": "Table"
+        },
+        "filter": {
+          "group": "Split",
+          "group2": "Second split",
+          "project": "Project",
+          "agent": "Agent",
+          "op": "Operation",
+          "source": "Source",
+          "caller": "Called by"
+        },
+        "all": "all",
+        "none": "none",
+        "nSelected": "{{n}} selected",
+        "filters": "Filters",
+        "reset": "Reset",
+        "op": {
+          "all": "all operations",
+          "read": "reads",
+          "write": "writes",
+          "recall": "recall",
+          "recall_with_graph": "recall with graph",
+          "get_memory": "get memory",
+          "get_project_knowledge": "project knowledge",
+          "get_project_updates": "project updates"
+        },
+        "source": {
+          "memory": "memory",
+          "project_knowledge": "project knowledge",
+          "doc": "documents",
+          "project_update": "project updates",
+          "unknown": "unknown",
+          "any": "search, several sources"
+        },
+        "caller": {
+          "agent_tool": "agent tool call",
+          "runner": "runner",
+          "script": "script",
+          "ui": "interface",
+          "unknown": "unknown"
+        },
+        "group": {
+          "agent": "Agent",
+          "project": "Project",
+          "op": "Operation",
+          "source": "Source",
+          "caller_kind": "Called by",
+          "kind": "Kind",
+          "scope": "Scope",
+          "day": "Day"
+        },
+        "error": "Could not load memory statistics",
+        "journalSince": "The read journal is kept since {{date}}: earlier days of the period have no reads.",
+        "noJournal": "The read journal is not kept yet: read metrics show «no data».",
+        "noData": "no data",
+        "same": "same as before",
+        "deltaPp": "{{delta}} pp vs previous",
+        "delta": "{{delta}} vs previous",
+        "kpi": {
+          "useful": "Useful recall",
+          "usefulOf": "{{useful}} of {{hits}} non-empty · a lower bound",
+          "hitRate": "hit-rate {{rate}}: recalls with a non-pinned row",
+          "miss": "Search misses",
+          "dead30": "Dead weight 30d",
+          "deadCount": "{{n}} records not served in 30 days",
+          "tokens": "Tokens into context",
+          "tokensPer": "≈{{n}} per read · estimate",
+          "reads": "Reads",
+          "writes": "Writes",
+          "writesReason": "with a reason {{n}} of {{writes}}"
+        },
+        "emptyQueries": "empty queries",
+        "list": "list",
+        "open": "open",
+        "topRecords": "top records",
+        "chart": {
+          "title": "Read calls by day and operation (bars, left axis) · useful recall, % (line, right axis)",
+          "aria": "Read calls per day by operation and the share of useful recalls",
+          "line": "useful recall, %",
+          "served": "served rows"
+        },
+        "quality": {
+          "title": "Base quality",
+          "active": "Active records",
+          "dups": "Duplicates (same simhash)",
+          "groups": "gr.",
+          "noKind": "Without a kind: tag",
+          "statuslog": "Look like a status log",
+          "superseded": "Superseded (active)",
+          "supersededServed": "Superseded in answers, % of rows",
+          "conflicted": "Contradictions (conflicted)",
+          "reason": "Writes with a reason"
+        },
+        "table": {
+          "reads": "Reads",
+          "writes": "Writes",
+          "hitRate": "Hit-rate",
+          "useful": "Useful recall",
+          "tokens": "Tokens into context",
+          "perWrite": "Reads per write",
+          "titleAgent": "By agent · {{span}} · a click on a row filters the whole widget",
+          "title": "By {{group}} · {{span}}",
+          "filterBy": "Filter the widget by {{name}}",
+          "total": "Total",
+          "none": "No rows for this filter",
+          "withReason": "With a reason"
+        },
+        "top": {
+          "title": "Top {{n}} by reads · {{span}}",
+          "writesTitle": "Top {{n}} by writes · {{span}}"
+        },
+        "card": {
+          "useful": "useful {{rate}}",
+          "tokens": "Tokens"
+        },
+        "coverage": {
+          "callers": "Called by",
+          "unknown": "unknown {{share}}",
+          "note": "«No data» is shown apart and never folded into 0. Useful recall is a lower bound: use without a reference to the key is not seen.",
+          "unknownSources": "unknown sources"
+        },
+        "detail": {
+          "hint": "The widget's filter and period; the key opens the record in Memory.",
+          "search": "Search",
+          "sort": "Sort",
+          "sortMost": "Most first",
+          "empty": "Nothing here for this filter",
+          "prev": "Previous",
+          "next": "Next",
+          "empty-queries": "Empty queries",
+          "top-records": "Top records",
+          "dead-records": "Dead weight 30d",
+          "duplicates": "Duplicates",
+          "unknown-sources": "Unknown sources",
+          "since": "Details are available since {{date}}",
+          "sortRecent": "Recent first",
+          "sortServed": "Most served",
+          "sortUseful": "Most useful",
+          "sortOldest": "Oldest first",
+          "sortNewest": "Newest first",
+          "useful": "useful {{n}}",
+          "redacted": "hidden from you"
+        },
+        "writesOnly": "Kind and scope support only writes. Read metrics are unavailable for these splits.",
+        "unnamed": "not named"
+      }
+    },
+    "agentUsage": {
+      "settings": {
+        "rows": "Rows",
+        "periodHint": "1d, 7d, 30d or YYYY-MM-DD..YYYY-MM-DD"
+      },
+      "view": {
+        "cost": "≈ $ at API price",
+        "tokens": "Tokens",
+        "quota": "Subscription limits",
+        "turns": "Spawns",
+        "duration": "Run time",
+        "cards_done": "Closed cards"
+      },
+      "dim": {
+        "model": "Model",
+        "provider": "Provider",
+        "account": "Pool / account",
+        "agent": "Agent",
+        "project": "Project"
+      },
+      "by": {
+        "model": "By model",
+        "provider": "By provider",
+        "account": "By pool",
+        "agent": "By agent",
+        "project": "By project"
+      },
+      "window": {
+        "5h": "5 hours",
+        "week": "Week",
+        "month": "Month",
+        "budget": "Budget"
+      },
+      "filter": {
+        "billing_mode": "Billing",
+        "all": "All projects",
+        "add": "agent, model, provider, pool",
+        "key": "Filter by",
+        "value": "Value",
+        "choose": "Choose…",
+        "apply": "Apply",
+        "remove": "Remove filter {{name}}"
+      },
+      "billing": {
+        "subscription": "Subscription",
+        "api": "API key"
+      },
+      "period": {
+        "1d": "1 d",
+        "7d": "7 d",
+        "30d": "30 d",
+        "label": "Period",
+        "pick": "Pick…",
+        "from": "From",
+        "to": "To",
+        "describe": "{{span}}, step: {{step}}, Moscow time",
+        "word1d": "for 1 day",
+        "word7d": "for 7 days",
+        "word30d": "for 30 days",
+        "wordDay": "for {{day}}",
+        "wordRange": "for {{from}} – {{to}}"
+      },
+      "step": {
+        "hour": "hour",
+        "day": "day",
+        "week": "week"
+      },
+      "tokens": {
+        "total": "All tokens",
+        "in": "Input",
+        "out": "Output",
+        "cache_read": "Cache read",
+        "cache_write": "Cache write"
+      },
+      "unit": {
+        "hours": "{{n}} h",
+        "hoursShort": "{{n}} h"
+      },
+      "loading": "Loading",
+      "error": "Could not load the statistics",
+      "retry": "Retry",
+      "ctl": {
+        "show": "Show",
+        "group": "Breakdown",
+        "groupChip": "Breakdown: {{dim}}",
+        "stack": "Inside",
+        "stackChip": "Inside: {{dim}}",
+        "noStack": "no second breakdown",
+        "tokens": "Tokens",
+        "window": "Limit window",
+        "quotaHint": "Limits belong to an account, so breakdowns by agent and project are not available here",
+        "filter": "Filter",
+        "accountHint": "The \"Pool / account\" breakdown appears once the runner is connected and reports the account"
+      },
+      "caption": {
+        "cost": "at API price",
+        "actual": "actual spend",
+        "tokens": "tokens: {{kind}}",
+        "turns": "spawns",
+        "duration": "of agent run time",
+        "cards_done": "cards closed"
+      },
+      "summary": {
+        "turns": "turns",
+        "in": "input tokens",
+        "inCache": "input tokens, of them cache {{cache}}",
+        "out": "output"
+      },
+      "partial": {
+        "cost": "{{n}} turns ({{pct}}) have no price or tokens: they are not in the sum and are shown apart",
+        "tokens": "{{n}} turns ({{pct}}) have no tokens: they are not in the sum and are shown apart"
+      },
+      "explain": {
+        "cost": "A notional equivalent: agents run on subscriptions, this is not a spend. Model prices are in the column tooltip",
+        "actual": "Actual spend of API keys, as the provider bills it"
+      },
+      "chart": {
+        "label": "{{what}}, step: {{step}}",
+        "noCost": "no $"
+      },
+      "coverage": {
+        "withCost": "with $",
+        "withTokens": "known",
+        "title": "{{known}} of {{turns}} turns with a value"
+      },
+      "legend": {
+        "withSum": "turns with a sum",
+        "noSum": "turns without a sum",
+        "withTokens": "turns with tokens",
+        "noTokens": "turns without tokens"
+      },
+      "hint": {
+        "click": "Click a column to keep that day; click a table row to keep the \"{{dim}}\" slice",
+        "rowOnly": "Click a table row to keep the \"{{dim}}\" slice"
+      },
+      "sessionsNote": "Before {{date}} the data is per session, not per turn",
+      "table": {
+        "inside": "inside: {{dim}}",
+        "shown": "Showing {{shown}} of {{all}}, \"Others\" below",
+        "sortedBy": "Sorted by: {{what}}.",
+        "shownSome": "Showing {{shown}}, «Others» below"
+      },
+      "col": {
+        "cost": "≈ $ API",
+        "actual": "$ actual",
+        "shareCost": "Share of $",
+        "share": "Share",
+        "in": "Input",
+        "out": "Output",
+        "cache": "Cache",
+        "turnsCount": "Turns",
+        "noCost": "No $",
+        "noTokens": "No tokens",
+        "noData": "No data",
+        "turns": "Spawns",
+        "duration": "Time",
+        "cards_done": "Cards",
+        "actions": "Actions"
+      },
+      "basis": {
+        "reported": "API-price estimate reported by the harness",
+        "mixed": "API-price estimate from prices and harness reports",
+        "price": "≈ at API price"
+      },
+      "tip": {
+        "price": "API price as of {{date}}, {{model}}: {{in}} input, {{out}} output, {{cache}} cache per 1M",
+        "noPrice": "{{models}}: no price",
+        "noSum": "No sum",
+        "noTokens": "No tokens",
+        "ofTurns": "{{n}} of {{total}} turns",
+        "actual": "Actual spend of API keys"
+      },
+      "row": {
+        "only": "Only this",
+        "open": "Open",
+        "link": "Link to this slice",
+        "expand": "Expand",
+        "expandAll": "Whole table",
+        "menu": "Row actions: {{name}}",
+        "others": "Others"
+      },
+      "empty.take30": "Show 30 days, all projects",
+      "noValue": "none",
+      "total": "Total",
+      "stickyTotal": "Total {{period}}",
+      "quota": {
+        "who": "Who spent it",
+        "empty": "No subscription pools report limits yet. They appear once the runner passes the account.",
+        "nOfM": "{{n}} of {{m}}",
+        "atLimit": "pools at the \"{{window}}\" limit",
+        "resetShort": "reset {{date}}",
+        "noDataCount": "{{n}} pools have no \"{{window}}\" data",
+        "threshold": "threshold {{pct}}",
+        "now": "now",
+        "chart": "Share of the \"{{window}}\" limit used, per pool",
+        "byPool": "By pool, \"{{window}}\" window",
+        "updated": "Limit data updated {{time}}",
+        "colNow": "Now",
+        "colBar": "Used",
+        "colReset": "Reset",
+        "colPeak": "Peak in period",
+        "colAtLimit": "At limit (≥ {{pct}})",
+        "noData": "no data",
+        "noWindow": "no \"{{window}}\" window",
+        "noSource": "the limit source returned no data",
+        "peak": "Peak",
+        "atLimitShort": "At limit",
+        "footer": "\"Who spent it\" opens this account's tokens by agent over the same period",
+        "legendHour": "Line: the highest share of the limit used in the hour. A drop to 0 is a window reset. Dashed: the {{pct}} threshold",
+        "legendDay": "Line: the highest share of the limit used in the day. A drop to 0 is a window reset. Dashed: the {{pct}} threshold",
+        "legendWeek": "Line: the highest share of the limit used in the week. A drop to 0 is a window reset. Dashed: the {{pct}} threshold"
+      },
+      "openStats": "Open in statistics",
+      "title": "Agent statistics",
+      "link": {
+        "copy": "Copy link",
+        "copied": "Link copied",
+        "copyFailed": "Could not copy the link"
+      },
+      "csv": {
+        "download": "Download CSV",
+        "failed": "Could not download the CSV"
+      },
+      "addTo": {
+        "add": "Add to dashboard",
+        "done": "Added to \"{{title}}\"",
+        "noHome": "No dashboard to add to: create one first",
+        "failed": "Could not add the widget"
+      },
+      "empty": "No agent turns in this period. Take 30 days or another project.",
+      "emptyAction": "Show 30 days, all projects",
+      "emptyPinned": {
+        "project": "No agent worked on this project in this period.",
+        "agent": "This agent made no turns in this period.",
+        "action": "Show 30 days"
+      },
+      "footerCost": "Data: the runner's report of every turn. ≈ $ = tokens × the model's API price on the turn's date; \"none\": the model has no price or the turn has no tokens",
+      "footerPlain": "Data: the runner's report of every turn",
+      "sort": {
+        "cost": "cost",
+        "turns": "spawns",
+        "duration": "run time",
+        "cards_done": "cards",
+        "ascending": "{{what}}, ascending"
+      },
+      "sortBy": {
+        "cost": "by cost",
+        "tokens": "by tokens",
+        "turns": "by spawns",
+        "duration": "by run time",
+        "cards_done": "by cards",
+        "label": "by name",
+        "in": "by input",
+        "out": "by output",
+        "cache": "by cache",
+        "turnsCount": "by turns",
+        "unknown": "by share without a value"
+      },
+      "updatedAt": "Updated {{time}} {{zone}}",
+      "zone": {
+        "msk": "MSK"
+      },
+      "windowShort": {
+        "5h": "5 h"
       }
     }
   }

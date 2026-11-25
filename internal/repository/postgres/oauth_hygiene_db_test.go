@@ -13,7 +13,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// OAuth hygiene (#23579e6b): DeleteExpiredTokens, and the two indexes added by
+// OAuth hygiene: DeleteExpiredTokens, and the two indexes added by
 // migration 20260924005.
 
 func TestOAuthRepo_Token_DeleteExpiredOnlyRemovesExpired(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 )
 
 // No //go:build integration tag on purpose — see userRepoTestDB's doc comment in
-// user_repo_test.go. This is the core of task #c5b5fb48's defect-1 fix: a
+// user_repo_test.go. This is the core of an internal ticket's defect-1 fix: a
 // background job's cadence surviving a process restart is exactly what a real
 // Postgres round-trip needs to prove.
 

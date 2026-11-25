@@ -12,7 +12,7 @@ workspace therefore wrote the same rows and swept each other's haystacks
 mid-measurement. The damage is invisible by construction: a question whose
 haystack was deleted under it retrieves nothing and scores a clean miss, which
 is byte-identical to a real recall failure. And the gate is a REQUIRED check, so
-a corrupted number sits on the merge path looking like a verdict (#eb1c5617).
+a corrupted number sits on the merge path looking like a verdict.
 
 Concurrency here is ordinary, not exotic: two open PRs, a push to main
 overlapping an open PR, the nightly landing on either.
@@ -201,7 +201,7 @@ class TestTheOrphanCollectorSelectsOnAge(unittest.TestCase):
         after the isolation fix landed, 10 pre-fix orphans ~10h old survived four
         consecutive collector runs.
 
-        Same shape as #2c087b2a: a filter applied after the candidate cut cannot
+        Same shape as an internal ticket: a filter applied after the candidate cut cannot
         recover what the cut dropped."""
         ws = FakeWorkspace()
         me = MeshMemoryClient(question_id="q", run_nonce="aaaaaaaa")

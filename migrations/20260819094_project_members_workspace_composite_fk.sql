@@ -94,7 +94,7 @@ ALTER TABLE project_members VALIDATE CONSTRAINT fk_pm_agent_workspace;
 
 -- FK 3 is deliberately left NOT VALID / unvalidated by this migration. The one
 -- known offending row (test@entire.vc, see above) would fail VALIDATE today, and
--- its cleanup is Pavel's call, tracked on Mesh task #35a1bada (question 1) per the
+-- its cleanup is Pavel's call, tracked on an internal ticket (question 1) per the
 -- a0cf0c42 agreement ("чистку решаю я"). New violating rows are already rejected —
 -- NOT VALID still enforces on every INSERT/UPDATE from this point on, it only skips
 -- the retroactive scan of pre-existing rows. VALIDATE CONSTRAINT

@@ -355,7 +355,7 @@ function MoveDialog({
 // handleExportClick). The choice text below is DRAFT copy pending Alex's
 // approval on an internal ticket (§1r.A copy gate) — the epic that
 // decomposed this feature explicitly authorizes shipping with draft strings
-// rather than blocking the feature on that answer (an internal ticket, Gary,
+// rather than blocking the feature on that answer (Gary,
 // 2026-09-02): "если ответа не будет — катим с черновыми строками".
 // ---------------------------------------------------------------------------
 

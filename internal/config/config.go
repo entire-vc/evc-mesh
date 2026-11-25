@@ -44,6 +44,11 @@ type Config struct {
 	// refused with 413 and nothing reaches object storage.
 	ArtifactMaxBytes     int64
 	ArtifactTaskMaxBytes int64
+
+	// MemoryReadLog (MEMORY_READ_LOG, default on) writes the memory read
+	// journal memory_read_events and the daily counters agent_tool_calls_daily.
+	// Off stops both writers; responses are the same either way.
+	MemoryReadLog bool
 }
 
 // TelegramConfig holds the per-INSTANCE switch for the Telegram notification
@@ -160,7 +165,7 @@ type EmbeddingConfig struct {
 	// see memoryService.acquireEmbedSem) may run against the embedder at once.
 	// Default: 4. A CPU-bound self-hosted embedder (TEI, e5-small on 8 cores) gets
 	// SLOWER past its core count — an unbounded stampede thrashes it into timeouts
-	// rather than serving more throughput (measured live 2026-08-19, an internal ticket:
+	// rather than serving more throughput (measured live 2026-08-19:
 	// throughput +60% after capping in-flight requests from ~40 to 4). 0 restores
 	// the old unbounded behavior; only use that against a horizontally-scaled or
 	// hosted embedding API that can actually absorb unbounded concurrency.
@@ -387,7 +392,7 @@ type AuthConfig struct {
 	// as a client that never saw the rotation response (dropped mobile
 	// connection, closed tab, proxy timeout) rather than theft — see
 	// auth.Service.WithRefreshReuseGraceWindow. Default 10s; 0 disables the
-	// grace window (every such replay is theft, the pre behavior).
+	// grace window (every such replay is theft, the earlier behavior).
 	RefreshReuseGraceWindow time.Duration
 }
 
@@ -532,6 +537,7 @@ func load() *Config {
 		DocBodyHardLimit:     getEnvInt("DOC_BODY_HARD_LIMIT_BYTES", 120<<10),
 		ArtifactMaxBytes:     getEnvInt64InRange("ARTIFACT_MAX_BYTES", 25<<20, 1, maxArtifactBytesLimit),       // 25 MB
 		ArtifactTaskMaxBytes: getEnvInt64InRange("ARTIFACT_TASK_MAX_BYTES", 250<<20, 1, maxArtifactBytesLimit), // 250 MB
+		MemoryReadLog:        getEnvOnOff("MEMORY_READ_LOG", true),
 		S3: S3Config{
 			Endpoint:        getEnv("S3_ENDPOINT", "localhost:9002"),
 			AccessKeyID:     getEnv("S3_ACCESS_KEY_ID", "minioadmin"),

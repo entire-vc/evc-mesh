@@ -50,6 +50,11 @@ const ContextKeyAgentAuthWorkspaceID = "agent_auth_workspace_id"
 // consenting user's live workspace role instead of the full agentPerms set.
 const ContextKeyOAuthConnectorUserID = "oauth_connector_user_id"
 
+// ContextKeyReaderProjectID stores domain.Agent.ReaderProjectID (uuid.UUID)
+// for a project reader; absent for every other principal. ProjectReaderGuard
+// is its consumer.
+const ContextKeyReaderProjectID = "reader_project_id"
+
 // Auth types set in the Echo context.
 const (
 	AuthTypeUser  = "user"
@@ -134,6 +139,9 @@ func setAgentAuthContext(c echo.Context, agent *domain.Agent) {
 	c.Set(ContextKeyWorkspaceRole, agent.WorkspaceRole)
 	if agent.OAuthConnectorUserID != nil {
 		c.Set(ContextKeyOAuthConnectorUserID, *agent.OAuthConnectorUserID)
+	}
+	if agent.ReaderProjectID != nil {
+		c.Set(ContextKeyReaderProjectID, *agent.ReaderProjectID)
 	}
 
 	goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
@@ -451,7 +459,7 @@ func unauthorizedJSON(c echo.Context, message string) error {
 // Authenticate is built with apierror.Unauthorized; anything else — a dropped
 // DB connection, an exhausted pool, a canceled context — says nothing about
 // the key, and answering 401 for it makes clients treat a valid key as
-// revoked (card an internal ticket: a postgres restart produced 11 false 401s).
+// revoked (a postgres restart produced 11 false 401s).
 func isAgentKeyDenial(err error) bool {
 	var apiErr *apierror.Error
 	return errors.As(err, &apiErr) && apiErr.Code == http.StatusUnauthorized

@@ -14,11 +14,11 @@
 --                                        checkout_expires. 0/absent = default 30.
 --
 -- ⚠️ NESTED MERGE, NOT A TOP-LEVEL ONE — same landmine as
--- scripts/enable-triage-entry-gate.sql (task #2495b694), read that file's header
+-- scripts/enable-triage-entry-gate.sql, read that file's header
 -- before touching this pattern. Both Lab and Mesh dev already carry a
 -- `mid_pipeline` object with several keys from the two prior enablement scripts
--- (review_evidence_strict/auto_park_stalled/auto_park_due_hours from #80182d18,
--- triage_entry_strict/triage_park_due_hours from #2495b694); Mesh dev additionally
+-- (review_evidence_strict/auto_park_stalled/auto_park_due_hours,
+-- triage_entry_strict/triage_park_due_hours); Mesh dev additionally
 -- carries `transitions`/`enforcement_mode` at the top level of `config`. A
 -- top-level `config || jsonb_build_object('mid_pipeline', {...})` would REPLACE
 -- `mid_pipeline` wholesale, silently wiping every key the two prior scripts set.
@@ -62,7 +62,7 @@ SET app.current_workspace_id = 'df814cd2-ca4b-47d6-9522-820e4eb47dc3';
 BEGIN;
 
 -- Lab and Mesh dev. Other projects follow after a week of observation; adding one
--- is another row here, not a release — same rollout shape as #80182d18/#2495b694.
+-- is another row here, not a release — same rollout shape as an internal ticket.
 INSERT INTO project_rules (project_id, rule_type, config, enforcement_mode)
 VALUES
   ('e93b8e1a-ee44-4399-8e8a-0bdda460b4a0', 'workflow',

@@ -39,13 +39,13 @@ func TestPutRuntimeState_PassesFieldsAndReturnsState(t *testing.T) {
 		got = s
 		return &domain.RuntimeState{Kind: s.Kind, Source: domain.RuntimeStateSourceExplicit}, nil
 	}})
-	rec, err := runtimeStateCall(t, h, http.MethodPut, `{"kind":"waiting","ref":"pipeline:g/p#7","lane":"linus","reason":"ci"}`)
+	rec, err := runtimeStateCall(t, h, http.MethodPut, `{"kind":"waiting","ref":"pipeline:g/p#7","lane":"liam","reason":"ci"}`)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.NotNil(t, got)
 	assert.Equal(t, domain.RuntimeKindWaiting, got.Kind)
 	assert.Equal(t, "pipeline:g/p#7", *got.Ref)
-	assert.Equal(t, "linus", *got.Lane)
+	assert.Equal(t, "liam", *got.Lane)
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	assert.Equal(t, "waiting", body["kind"])

@@ -56,7 +56,7 @@ describe("useCapabilitiesStore", () => {
   });
 
   // The real gate is per-workspace now (SparkIntegrationResolver, resolved
-  // fresh on every /spark/* request — #4a3195a5; routes are always
+  // fresh on every /spark/* request; routes are always
   // registered, unlike the pre-fix cmd/api/main.go which only wired them up
   // at all when MESH_SPARK_ENABLED=true). A network failure fetching THIS
   // capabilities flag must still fail OPEN (leave the nav link visible)

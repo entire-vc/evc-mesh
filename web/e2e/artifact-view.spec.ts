@@ -9,7 +9,7 @@ import { loginWithRetry, pinUiLocale } from "./auth-helper";
 import { rateLimitAware } from "./api-retry";
 
 /**
- * E2E scenario: artifact-view (route /a/:artifactId, an internal ticket)
+ * E2E scenario: artifact-view (route /a/:artifactId)
  *
  * What this suite proves:
  *   1. an artifact uploaded to a project WITHOUT Team Relay integration —
@@ -33,7 +33,7 @@ import { rateLimitAware } from "./api-retry";
  * the workspace Activity page and every assertion below would chase a page
  * that isn't there. beforeAll probes the deployed app once; until
  * deploy:mesh-frontend ships the MR the suite skips LOUDLY, with this reason
- * in the job log — never silently (the an internal ticket lesson). The first pipeline
+ * in the job log — never silently (the lesson). The first pipeline
  * after the deploy (main, or any MR against it) finds the route and the
  * suite activates itself, which is exactly when its assertions mean
  * anything.

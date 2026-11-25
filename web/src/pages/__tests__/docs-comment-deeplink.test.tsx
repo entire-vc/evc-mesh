@@ -167,7 +167,7 @@ describe("DocsPage — ?comment= deep link", () => {
 
   it("opens a rail the reader had collapsed", async () => {
     // Kept explicit even though the rail now starts closed for everyone
-    // (an internal ticket — the thread tree became the reading surface): a stored "0" is
+    // (the thread tree became the reading surface): a stored "0" is
     // a reader who *chose* to close it, and a deep link has to override that
     // choice, not merely coincide with the default.
     localStorage.setItem("mesh_docs_comments_rail", "0");
@@ -202,7 +202,7 @@ describe("DocsPage — ?comment= deep link", () => {
   });
 
   it("focuses nothing when the link names a comment this document does not have", async () => {
-    // The rail is opened here by the reader, not by the link: since an internal ticket
+    // The rail is opened here by the reader, not by the link: since that fix
     // it starts closed, and an id that matches no thread never opens it (the
     // effect returns before setRailOpen). Seeding the open state keeps this
     // test about focus — a bogus id must not land the amber border on some

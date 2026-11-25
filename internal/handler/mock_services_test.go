@@ -1407,6 +1407,14 @@ func (m *MockDocumentExportService) ExportDOCX(ctx context.Context, rootID, work
 // MockAnalyticsService implements service.AnalyticsService for testing.
 type MockAnalyticsService struct {
 	GetMetricsFunc func(ctx context.Context, filter service.AnalyticsFilter) (*service.AnalyticsMetrics, error)
+	GetUsageFunc   func(ctx context.Context, q service.UsageQuery) (*service.UsageResult, error)
+}
+
+func (m *MockAnalyticsService) GetUsage(ctx context.Context, q service.UsageQuery) (*service.UsageResult, error) {
+	if m.GetUsageFunc != nil {
+		return m.GetUsageFunc(ctx, q)
+	}
+	return &service.UsageResult{}, nil
 }
 
 func (m *MockAnalyticsService) GetMetrics(ctx context.Context, filter service.AnalyticsFilter) (*service.AnalyticsMetrics, error) {

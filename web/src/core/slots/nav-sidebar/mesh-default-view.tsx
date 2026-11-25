@@ -42,7 +42,7 @@ import type { NavItem, NavProject, NavSidebarView } from "./types";
 // — an import-free module so the contrast guard
 // (`scripts/assert-rail-icon-contrast.mjs`) can measure the SAME definitions
 // rather than restating them and drifting out of sync. The reasoning behind
-// each rule is documented there. See an internal ticket.
+// each rule is documented there.
 
 type ImageStatus = "pending" | "loaded" | "error";
 
@@ -56,7 +56,7 @@ interface WorkspaceLogoProps {
  * The workspace mark: the uploaded image once it has loaded (bare, so a logo
  * with transparent regions never shows the tint behind it), otherwise the
  * generic mark in the tinted box — while the image is loading, when it
- * failed, and when there is none (an internal ticket, an internal ticket).
+ * failed, and when there is none.
  */
 function WorkspaceLogo({ iconUrl, name, variant }: WorkspaceLogoProps) {
   const { t } = useTranslation("shell");
@@ -160,7 +160,7 @@ function ProjectRailIcon({ project }: { project: NavProject }) {
       data-testid="project-icon"
       aria-label={project.name}
       aria-current={project.active ? "page" : undefined}
-      /* an internal ticket: a project's own muted chip, deliberately NOT
+      /* A project's own muted chip, deliberately NOT
          `WorkspaceLogo` — that component's "no image" branch is the
          workspace's brand-teal tint, and reusing it here is what
          made every project tile in a 13-project workspace look like

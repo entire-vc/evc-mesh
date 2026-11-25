@@ -349,6 +349,16 @@ var workspaceParamResolvers = []workspaceParamResolver{
 	                           JOIN tasks t ON d.task_id = t.id AND t.deleted_at IS NULL
 	                           JOIN projects p ON t.project_id = p.id
 	                          WHERE d.id = $1`)},
+	// The same edge seen from its blocker: /tasks/:task_id/dependents/:dependent_edge_id
+	// names the blocker in :task_id, so this id resolves through
+	// depends_on_task_id. A cross-workspace card wait (task_dependencies.wait_agent_id)
+	// is the one edge whose two ends live in different workspaces; read through
+	// :dep_id its workspace is the waiter's and the blocker's key never agrees.
+	{param: "dependent_edge_id", resolve: uuidResolver(`SELECT p.workspace_id
+	                           FROM task_dependencies d
+	                           JOIN tasks t ON d.depends_on_task_id = t.id AND t.deleted_at IS NULL
+	                           JOIN projects p ON t.project_id = p.id
+	                          WHERE d.id = $1`)},
 	// A binding proposal belongs to an edge of a task; the workspace is the one of
 	// that task's project, exactly as for :dep_id.
 	{param: "proposal_id", resolve: uuidResolver(`SELECT p.workspace_id
@@ -522,6 +532,7 @@ func resolveProjectWorkspace(ctx context.Context, _ *sqlx.DB, projectRepo reposi
 // ExtensionInstanceAdminHandler answers 403 unless the caller is an instance
 // admin before it writes anything.
 var workspaceScopeHandlerCheckedRoutes = map[string]bool{
+	"/api/v1/uploads/:upload_id/confirm":                          true, // UploadSessionRepo.GetOwned matches the upload id, the declaring actor id and its type in one SELECT, then the handler requires the agent key's workspace (or the user's current role) in the upload's workspace; anyone else gets the same 404 upload_not_found
 	"/api/v1/native-review/receipts/:receipt_id":                  true, // NativeReviewRepo.ReadReceipt answers only the issuer, publisher, consumer, authority issuer or enrolling operator named by the enrollment, and anyone else gets the same receipt_not_found; an enrollment belongs to one workspace
 	"/api/v1/native-review/authorities/:authority_id/revoke":      true, // NativeReviewRepo.RevokeAuthority requires the caller to be the enrollment's authority issuer after taking the enrollment and guard locks; an enrollment belongs to one workspace
 	"/api/v1/native-review/authorities/:authority_id/reservation": true, // NativeReviewRepo.GetReservation answers only the enrolled consumer; an enrollment belongs to one workspace
@@ -763,7 +774,7 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 // scoped to it, or a guest key issued for workspace A authenticates the
 // caller into A and then, on any route naming a DIFFERENT workspace B the
 // same agent happens to also hold a grant in, reads B's directory too
-// (an internal ticket — measured live: a guest-workspace key returned the home
+// (measured live: a guest-workspace key returned the home
 // workspace's full agent roster with key prefixes). No DB query needed: the
 // equality check IS the proof — agentService.Authenticate already read
 // agent_workspace_grants (or the legacy home row) to produce that value, and
@@ -773,7 +784,7 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 // for THIS request — which cachedAgentAuth's cache hit path does not do by
 // itself. See cachedAuthStillValid (agent_auth_cache.go) for the freshness
 // re-check that keeps this guard's zero-DB-query design honest without
-// reintroducing a query here (an internal ticket: a soft-deleted workspace's guest key
+// reintroducing a query here (a soft-deleted workspace's guest key
 // kept passing this equality check for the rest of the cache TTL before that
 // existed).
 //

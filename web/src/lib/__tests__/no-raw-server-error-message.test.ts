@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 
-// Regression guard for the class audited in Mesh #363ef885: a server-supplied
+// Regression guard for the class audited: a server-supplied
 // `.message` (built in api.ts from whatever the backend put in the response
 // body) rendered straight to the user bypasses §1r.A copy approval, and the
 // caller's own approved fallback string sits there unreachable. The fix
@@ -17,7 +17,7 @@ import path from "node:path";
 // reason).
 //
 // The pattern matches ANY identifier via a capture group + backreference
-// (Mesh #e6077830): a first version hardcoded `(err|error)` on both sides of
+// a first version hardcoded `(err|error)` on both sides of
 // the ternary and missed the idiomatic `catch (e)` spelling entirely — the
 // guard was blind to its own defect class by construction, not by accident.
 // `\1` forces the left- and right-hand identifiers to be the SAME name,
@@ -75,7 +75,7 @@ describe("mutation control: the guard above actually detects the pattern", () =>
     }
   });
 
-  it("flags the idiomatic `catch (e)` spelling that the old name-hardcoded regex missed (Mesh #e6077830)", () => {
+  it("flags the idiomatic `catch (e)` spelling that the old name-hardcoded regex missed", () => {
     const synthetic = [
       "try {",
       "  await save();",

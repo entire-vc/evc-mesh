@@ -12,7 +12,7 @@ const sample: BoardFilterState = {
   assigneeFilter: "agent",
   customFieldFilters: { severity: "P1" },
   selectedTags: ["bug", "prod"],
-  cfFilters: { owner: { type: "text", textValue: "riker" } },
+  cfFilters: { owner: { type: "text", textValue: "robin" } },
   assigneeIdsFilter: ["agent-1"],
 };
 

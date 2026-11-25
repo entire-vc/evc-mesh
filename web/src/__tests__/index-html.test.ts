@@ -9,7 +9,7 @@ import indexHtml from "../../index.html?raw";
 
 // web/index.html is the Vite entry HTML, built verbatim into every deployment's
 // served bundle (deploy/docker/mesh/Dockerfile.nginx: `COPY --from=web-builder
-// /app/dist /srv/web`). Task #a1f0ae14: a self-hosted instance's meta description
+// /app/dist /srv/web`). an internal ticket: a self-hosted instance's meta description
 // and canonical pointed at entire.vc, so its own link previews (Slack/Twitter/
 // Telegram unfurlers ignore <meta name="robots">) advertised OUR marketing copy
 // and domain instead of the self-hoster's own instance.

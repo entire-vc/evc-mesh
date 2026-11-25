@@ -21,7 +21,7 @@ import { useNotificationStore } from "@/stores/notification";
 import { useDashboardsStore } from "@/stores/dashboards";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "@/components/ui/avatar";
-import { EntityIcon } from "@/components/ui/entity-icon";
+import { ProjectLabel } from "@/components/ui/project-label";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -394,9 +394,8 @@ function TaskSearchBox({ wsSlug }: { wsSlug: string | undefined }) {
                     <p className="truncate font-medium leading-tight">
                       {result.task.title}
                     </p>
-                    <p className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
-                      <EntityIcon value={result.projectIcon} className="h-3 w-3 shrink-0" />
-                      <span className="truncate">{result.projectName}</span>
+                    <p className="flex min-w-0 text-xs text-muted-foreground">
+                      <ProjectLabel icon={result.projectIcon} name={result.projectName} />
                     </p>
                   </div>
                 </li>
@@ -455,7 +454,8 @@ function useCurrentView(): ProjectViewTab | null {
   // its screen like ".../x/acme/calendar", ends the same way.
   const ext = /\/p\/[^/]+\/x\/([^/]+)(\/.*)?$/.exec(path);
   if (ext) return `ext:${ext[1]}`;
-  const suffix = /\/(list|timeline|calendar|updates)\/?$/.exec(path);
+  // Statistics only under a project: the workspace's /w/:ws/stats page ends the same way.
+  const suffix = /\/(list|timeline|calendar|updates)\/?$/.exec(path) ?? /\/p\/[^/]+\/(stats)\/?$/.exec(path);
   if (suffix) return suffix[1] as ProjectViewTab;
   // /docs and /docs/:docId are the same tab — matching only the bare path left
   // an open document with no tab highlighted and no view strip at all. Chat

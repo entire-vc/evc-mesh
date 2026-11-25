@@ -311,6 +311,117 @@ func TestRuntimePreviewUnknownSiblingStopsWalk(t *testing.T) {
 	}
 }
 
+func unavailableReviewCandidate(t *testing.T, state string) (*RuntimeCatalog, RuntimeBinding, map[string]RuntimeCandidateEvidence, time.Time) {
+	t.Helper()
+	c, b, facts, now := reviewFixture(t)
+	profile := c.Profiles["reserve"]
+	profile.AccountRef = "unavailable"
+	c.Profiles["unavailable"] = profile
+	c.Accounts["unavailable"] = RuntimeAccount{Provider: c.Accounts["reserve"].Provider, CredentialRef: "cred:unavailable", QuotaPoolsByMode: map[string][]string{"subscription": {"unavailable-window"}}}
+	c.Pools["unavailable-window"] = RuntimePool{Provider: c.Accounts["reserve"].Provider, ResourceRef: "unavailable-window", Aliases: []string{}, MaxConcurrency: 1}
+	pool := RuntimePoolObservation{State: "available", Verified: true, ObservedAt: now.Add(-time.Second)}
+	switch state {
+	case "unverified":
+		pool.Verified = false
+	case "stale":
+		pool.ObservedAt = now.Add(-time.Duration(b.Policy.EvidenceMaxAgeSeconds+1) * time.Second)
+	case "future":
+		pool.ObservedAt = now.Add(time.Second)
+	case "unknown":
+		pool.State = "unknown"
+	}
+	observation := facts["reserve"]
+	observation.Pools = map[string]RuntimePoolObservation{"unavailable-window": pool}
+	if state == "missing" {
+		observation.Pools = map[string]RuntimePoolObservation{}
+	}
+	if state == "controller" {
+		observation.ControllerCurrent = false
+	}
+	facts["unavailable"] = observation
+	b.PermittedProfiles = append(slices.Clone(b.PermittedProfiles), "unavailable")
+	b.Policy.QuotaEdges = map[string][]string{}
+	return c, b, facts, now
+}
+
+func TestRuntimePreviewQASkipsUnavailableCandidates(t *testing.T) {
+	for _, state := range []string{"missing", "unverified", "stale", "future", "unknown", "controller"} {
+		for _, order := range []string{"unknown-primary", "unknown-sibling", "available-first"} {
+			for _, mode := range []string{"strict", "prefer"} {
+				t.Run(state+"/"+order+"/"+mode, func(t *testing.T) {
+					c, b, facts, now := unavailableReviewCandidate(t, state)
+					provenance, request := reviewRequest()
+					b.Policy.QA.Mode = mode
+					b.Policy.MaxAttempts = 1
+					switch order {
+					case "unknown-primary":
+						b.Policy.PrimaryProfiles = []string{"unavailable", "reserve"}
+					case "unknown-sibling":
+						b.Policy.PrimaryProfiles = []string{"preferred", "unavailable", "reserve"}
+					case "available-first":
+						b.Policy.PrimaryProfiles = []string{"reserve", "unavailable"}
+					}
+					result := PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, provenance, request, now)
+					require.Equal(t, "reserve", result.SelectedProfileID)
+					require.Equal(t, "independent_reviewer_available", result.Reason)
+					require.False(t, result.QACompromise)
+					require.False(t, result.LaunchAuthorized)
+				})
+			}
+		}
+	}
+}
+
+func TestRuntimePreviewQAUnknownCandidateCannotOpenQuotaEdgeOrRelaxStrict(t *testing.T) {
+	for _, state := range []string{"unverified", "controller"} {
+		t.Run(state, func(t *testing.T) {
+			c, b, facts, now := unavailableReviewCandidate(t, state)
+			provenance, request := reviewRequest()
+			b.Policy.QA.Mode = "strict"
+			b.Policy.QA.QuotaFallback = true
+			b.Policy.PrimaryProfiles = []string{"unavailable", "preferred"}
+			b.Policy.QuotaEdges = map[string][]string{"unavailable": {"reserve"}}
+			result := PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, provenance, request, now)
+			require.Empty(t, result.SelectedProfileID)
+			require.Equal(t, "sibling_evidence_unknown", result.Reason)
+			require.False(t, result.QACompromise)
+			for _, trace := range result.Trace {
+				require.NotEqual(t, "reserve", trace.ProfileID, "unknown evidence is not a quota trigger")
+			}
+			request.Purpose, request.SourceProfileID = "quota_reserve", "unavailable"
+			result = PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, provenance, request, now)
+			require.Empty(t, result.SelectedProfileID)
+			require.Equal(t, "source_has_no_sole_quota_trigger", result.Reason)
+		})
+	}
+}
+
+func TestRuntimePreviewQAUnavailableCandidateDoesNotAllowAuthorReview(t *testing.T) {
+	c, b, facts, now := unavailableReviewCandidate(t, "unverified")
+	provenance, request := reviewRequest()
+	b.Policy.PrimaryProfiles = []string{"unavailable", "reserve"}
+	b.Binding.AgentID = provenance.Authors[0].AgentID
+	result := PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, provenance, request, now)
+	require.Empty(t, result.SelectedProfileID)
+	require.Equal(t, "reviewer_is_author_or_identity_unknown", result.Reason)
+}
+
+func TestRuntimePreviewQAOffSkipsUnavailableCandidate(t *testing.T) {
+	c, b, facts, now := unavailableReviewCandidate(t, "unverified")
+	provenance, request := reviewRequest()
+	b.Policy.QA.Mode = "off"
+	b.Policy.MaxAttempts = 1
+	b.Policy.PrimaryProfiles = []string{"unavailable", "reserve"}
+	result := PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, provenance, request, now)
+	require.Equal(t, "reserve", result.SelectedProfileID)
+	require.Equal(t, "profile_available", result.Reason)
+	require.False(t, result.QACompromise)
+	b.Binding.AgentID = provenance.Authors[0].AgentID
+	result = PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, provenance, request, now)
+	require.Empty(t, result.SelectedProfileID)
+	require.Equal(t, "reviewer_is_author_or_identity_unknown", result.Reason)
+}
+
 // A configured threshold on the primary still opens the reserve edge.
 func TestRuntimePreviewConfiguredThresholdStillTriggersReserve(t *testing.T) {
 	c, b, facts, now := runtimeRouteFixture(t)

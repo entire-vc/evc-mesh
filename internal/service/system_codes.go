@@ -136,7 +136,7 @@ const (
 	// recommended_default was applied. params: {"default": "<text>", "decision": "<ref>"}.
 	SysCodeGateAutoDefault = "gate_auto_default"
 	// SysCodeGateReclassifiedSoft — a live marker gate armed hard before the
-	// class rule of the regression was reclassified soft: its stated default now
+	// class rule of an internal ticket was reclassified soft: its stated default now
 	// applies at the deadline. params: {"rule": "<text>", "deadline": "<time>", "default": "<text>"}.
 	SysCodeGateReclassifiedSoft             = "gate_reclassified_soft"
 	SysCodeWithdrawalBlockedRawArmed        = "raw_arm"

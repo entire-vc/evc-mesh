@@ -17,7 +17,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Pending delivery (an internal ticket, P2 of an internal ticket): a read error while searching
+// Pending delivery: a read error while searching
 // for the finding's root is NOT "dedup clean".
 //
 // The contract being pinned here, in the order the ACs name it:
@@ -654,7 +654,7 @@ func TestClosedFollowUp_ReconcileRepeatStatusReadErrorIsRetryable(t *testing.T) 
 // succeeded — so it must reach the pending queue, not a terminal deferral.
 // RED against the first cut of this MR: waitForRootCard collapsed
 // "unreadable" into "absent", and a task-store outage bypassed the ladder
-// entirely (code review P1).
+// entirely (codex-review P1).
 func TestClosedFollowUp_RootCardReadErrorIsRetryableNotWedged(t *testing.T) {
 	collapseFollowUpRetrySleeps(t)
 	env := setupFollowUpEnv(t)
@@ -745,7 +745,7 @@ func TestClosedFollowUp_ReconcileUnresolvableRootStatusDeliversAsComment(t *test
 // RED against the sticky-readOK cut of this MR: there an early successful
 // empty read flipped a permanent "readOK" bit, and the later failures were
 // answered with a wedged verdict on evidence that predated them
-// (code review P1, round 2).
+// (codex-review P1, round 2).
 func TestFollowUpWaitForRootCard_MixedReadsClassifyByTheLastAttempt(t *testing.T) {
 	collapseFollowUpRetrySleeps(t)
 	env := setupFollowUpEnv(t)
@@ -773,7 +773,7 @@ func TestFollowUpWaitForRootCard_MixedReadsClassifyByTheLastAttempt(t *testing.T
 // ways the ladder ends), and the comment is ALREADY saved — the park must
 // complete without them. The mock queue refuses a dead context the way a real
 // store does, so before the detach the row bounced off the queue and the
-// finding rode on the source comment alone (code review P2, round 2).
+// finding rode on the source comment alone (codex-review P2, round 2).
 func TestClosedFollowUp_CancelledRequestStillParksTheFinding(t *testing.T) {
 	env := setupFollowUpEnv(t, func(e *followUpEnv) {
 		e.rootsRepo.errToReturn = fmt.Errorf("identity store unreachable")
@@ -812,7 +812,7 @@ func TestClosedFollowUp_CancelledRequestStillParksTheFinding(t *testing.T) {
 // 11) must produce exactly one «a human is needed», from the pass that drew the
 // budget itself. Simulated by handing markPendingAttempt a row already AT the
 // budget — its MarkAttempt draws max+1 — which is the losing side of that
-// race in one call (code review P2, round 2).
+// race in one call (codex-review P2, round 2).
 func TestFollowUpMarkPendingAttempt_PastBudgetDoesNotEscalateAgain(t *testing.T) {
 	collapseFollowUpRetrySleeps(t)
 	env := setupFollowUpEnv(t, func(e *followUpEnv) {
@@ -837,7 +837,7 @@ func TestFollowUpMarkPendingAttempt_PastBudgetDoesNotEscalateAgain(t *testing.T)
 		"the counter still records the raced pass's attempt; only the notice is refused")
 }
 
-// The escalation's OWN delivery is durable (code review P1, round 3): the
+// The escalation's OWN delivery is durable (codex-review P1, round 3): the
 // attempt counter used to commit before the notice was written, so a failed
 // notice write froze the row out of ListDue with the human never told — the
 // one silent loss the mechanism still had. The row must stay listed until
@@ -907,7 +907,7 @@ func TestClosedFollowUp_EscalationNoticeRetriedUntilItLands(t *testing.T) {
 	assert.Empty(t, env.taskSvc.createdTasks(), "healing does not resurrect delivery past the budget")
 }
 
-// The park's OWN notice is durable too (code review P1, round 4): the
+// The park's OWN notice is durable too (codex-review P1, round 4): the
 // «не подтверждена» write used to be best-effort with no retry path, so a
 // transient comment-store failure at enqueue time queued the finding
 // INVISIBLY — a row in the queue its own commenter could not see. Every
@@ -975,7 +975,7 @@ func TestClosedFollowUp_PendingNoticeRetriedUntilItLands(t *testing.T) {
 }
 
 // The two durability stamps must BOTH land before a row retires
-// (code review P1, round 5): the escalation branch used to run before any
+// (codex-review P1, round 5): the escalation branch used to run before any
 // park-notice check, so a landed escalation (escalated_at) took the row out
 // of ListDue while noticed_at had never been set — the escalation stranded
 // the very notice that says the finding is queued. The row is listed until
@@ -1056,7 +1056,7 @@ func TestClosedFollowUp_ParkNoticeNotStrandedByEscalation(t *testing.T) {
 	assert.Empty(t, env.taskSvc.createdTasks(), "no delivery resurrection past the budget")
 }
 
-// Delivery must not discard an unlanded park notice (code review P1,
+// Delivery must not discard an unlanded park notice (codex-review P1,
 // round 6): the delivery's own outcome notice is best-effort inside
 // claimAndCreateRoot, so a successful reconcile delivery used to delete the
 // row while noticed_at had never been set — the promised source-card notice
@@ -1114,8 +1114,8 @@ func TestClosedFollowUp_DeliveryDoesNotDiscardUnlandedParkNotice(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// The reconcile lease (an internal ticket, from the code review R7 finding on
-// a review): ListDue selects without a lock, so a pass that runs while another
+// The reconcile lease (from the codex-review R7 finding on
+// !1083): ListDue selects without a lock, so a pass that runs while another
 // is mid-delivery of the same row used to deliver it too — a duplicate
 // «уже открыта» notice and, on a closed root, a double-counted reopen slot.
 // ---------------------------------------------------------------------------
@@ -1174,7 +1174,7 @@ func TestClosedFollowUp_LeaseMakesOverlapDeliverOnce(t *testing.T) {
 		"one delivery outcome notice for one finding — the duplicate is what the lease removes")
 }
 
-// The P1 window code review round 1 found in a review: on the NORMAL path the
+// The P1 window codex-review round 1 found in !1085: on the NORMAL path the
 // pass posts the park notice and stamps noticed_at BEFORE attempting the
 // delivery. If that progress write released the reconcile lease, a second
 // pass arriving while the first sits inside claimAndCreateRoot would claim

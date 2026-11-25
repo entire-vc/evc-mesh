@@ -17,7 +17,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Both Recall arms enforce scope/tags in SQL (task #2c087b2a)
+// Both Recall arms enforce scope/tags in SQL
 //
 // The service-level tests prove the filter is PASSED to both arms. These prove the
 // SQL each arm builds from it actually restricts rows — mock tests cannot, because a

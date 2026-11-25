@@ -6,12 +6,14 @@ import { useTranslation } from "react-i18next";
 import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
 import { TaskLink } from "@entire-vc/mesh-theme-sdk";
 import { AgentShortTag } from "@/components/agent-short-tag";
+import { ApiPriceNote } from "@/components/cost-quality-block";
 import * as fmt from "@/i18n/format";
 import { useProjectStore } from "@/stores/project";
 import type { AnalyticsMetrics } from "@/types";
 import { useTriageCount, useUnseenMentionCount } from "../../hooks";
 import type { Async, WidgetViewProps } from "../../types";
 import { previousPeriod, readQuery } from "./filters";
+import { MemoryUsageView } from "./memory-view";
 import { LIVE_METRIC_CHOICES, METRICS, eventsIncomplete, type LiveMetricId, type MetricDef } from "./metrics";
 import { useAnalytics, type AnalyticsQuery } from "./use-analytics";
 import {
@@ -318,6 +320,18 @@ export function AgentLeaderboardView({ settings, actions }: AnalyticsViewProps) 
 
 // -- cost-kpis ----------------------------------------------------------------------------------------
 
+/** Under every cost figure: the dollars are the API list price of the usage, not money spent. */
+function CostBasisNote({ at }: { at: AT }) {
+  return (
+    <p className="text-[11px]">
+      <ApiPriceNote
+        label={at("cost.apiPrice", "at API list price")}
+        hint={at("cost.apiPriceHint", "Notional cost at the API price list. A subscription spends window limits, not money")}
+      />
+    </p>
+  );
+}
+
 export function CostKpisView({ settings, actions }: AnalyticsViewProps) {
   const at = useAT();
   const query = readQuery(settings);
@@ -343,6 +357,7 @@ export function CostKpisView({ settings, actions }: AnalyticsViewProps) {
                 percent: Math.round((c.reported_session_count / c.session_count) * 100),
               })}
             </p>
+            <CostBasisNote at={at} />
           </div>
         )}
       </AnalyticsBody>
@@ -375,7 +390,12 @@ export function CostByAgentView({ settings, actions }: AnalyticsViewProps) {
   return (
     <WidgetFrame title={at("cost.byAgent", "Cost by agent")} query={query}>
       <AnalyticsBody result={r} retry={actions.retry} rows={4} isEmpty={(m) => rows(m.cost_metrics).length === 0} incomplete={(m) => costIncomplete(m.cost_metrics)}>
-        {(m) => <BarList rows={rows(m.cost_metrics)} />}
+        {(m) => (
+          <div className="min-w-0 space-y-2">
+            <BarList rows={rows(m.cost_metrics)} />
+            <CostBasisNote at={at} />
+          </div>
+        )}
       </AnalyticsBody>
     </WidgetFrame>
   );
@@ -404,7 +424,12 @@ export function CostByProjectView({ settings, actions }: AnalyticsViewProps) {
   return (
     <WidgetFrame title={at("cost.byProject", "Cost by project")} query={query}>
       <AnalyticsBody result={r} retry={actions.retry} rows={4} isEmpty={(m) => rows(m.cost_metrics).length === 0} incomplete={(m) => costIncomplete(m.cost_metrics)}>
-        {(m) => <BarList rows={rows(m.cost_metrics)} />}
+        {(m) => (
+          <div className="min-w-0 space-y-2">
+            <BarList rows={rows(m.cost_metrics)} />
+            <CostBasisNote at={at} />
+          </div>
+        )}
       </AnalyticsBody>
     </WidgetFrame>
   );
@@ -430,7 +455,11 @@ export function CostByDayView({ settings, actions }: AnalyticsViewProps) {
           <div className="min-w-0">
             <ColumnChart label={title} days={c.by_day.map((d) => d.date)} values={c.by_day.map((d) => d.cost)} color={seriesColor(0)} format={formatCost} />
             <p className="mt-1 text-center text-xs text-muted-foreground">
-              {at("cost.total", "Total {{cost}}", { cost: formatCost(sum(c.by_day.map((d) => d.cost))) })}
+              {at("cost.total", "Total {{cost}}", { cost: formatCost(sum(c.by_day.map((d) => d.cost))) })}{" "}
+              <ApiPriceNote
+                label={at("cost.apiPrice", "at API list price")}
+                hint={at("cost.apiPriceHint", "Notional cost at the API price list. A subscription spends window limits, not money")}
+              />
             </p>
           </div>
         )}
@@ -461,6 +490,7 @@ export function CostTopTasksView({ settings, actions }: AnalyticsViewProps) {
     <WidgetFrame title={sort === "tokens" ? at("top.titleTokens", "Top tasks by tokens") : at("top.titleCost", "Most expensive tasks")} query={query}>
       <AnalyticsBody result={r} retry={actions.retry} rows={5} isEmpty={(m) => (m.cost_metrics.top_tasks ?? []).length === 0} incomplete={(m) => costIncomplete(m.cost_metrics)}>
         {(m) => (
+          <div className="min-w-0 space-y-2">
           <table className="w-full table-fixed text-xs">
             <thead>
               <tr className="text-left text-[11px] text-muted-foreground">
@@ -491,6 +521,8 @@ export function CostTopTasksView({ settings, actions }: AnalyticsViewProps) {
               })}
             </tbody>
           </table>
+          <CostBasisNote at={at} />
+          </div>
         )}
       </AnalyticsBody>
     </WidgetFrame>
@@ -509,4 +541,5 @@ export const views = {
   "cost-top-tasks": CostTopTasksView,
   "cost-by-project": CostByProjectView,
   "cost-by-day": CostByDayView,
+  "memory-usage": MemoryUsageView,
 } as const;

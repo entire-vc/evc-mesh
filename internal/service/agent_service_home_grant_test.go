@@ -12,7 +12,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Task #44f461a9 — agents.* and agent_workspace_grants must not diverge:
+// Agents.* and agent_workspace_grants must not diverge:
 // a freshly registered agent gets a home grant atomically with the agent
 // row, and rotating an agent's key rotates its home grant's key material in
 // the same operation. Before this fix, Register created ONLY the agents row
@@ -35,7 +35,7 @@ func TestAgentService_Register_CreatesHomeGrantAtomically(t *testing.T) {
 	require.NoError(t, err)
 
 	grant := agentRepo.HomeGrant(out.Agent.ID)
-	require.NotNil(t, grant, "Register must create a home agent_workspace_grants row atomically with the agent — task #44f461a9")
+	require.NotNil(t, grant, "Register must create a home agent_workspace_grants row atomically with the agent — an internal ticket")
 	assert.Equal(t, out.Agent.ID, grant.AgentID)
 	assert.Equal(t, ws.ID, grant.WorkspaceID, "home grant's workspace must be the agent's own workspace")
 	assert.Equal(t, domain.RoleMember, grant.Role)
@@ -73,7 +73,7 @@ func setupHomeGrantAuthFixture() (*agentService, *MockAgentRepository, *domain.W
 // authenticating. Revert RotateHomeGrantKey's grant-side UPDATE (or call
 // plain agentRepo.Update again) and this test fails: Authenticate finds the
 // grant row by its STALE prefix and the old key keeps working — exactly
-// task #44f461a9's rotation half, reproduced live by Garfield against a real
+// Rotation half, reproduced live by Gary against a real
 // Postgres stand.
 func TestAgentService_RotateAPIKey_HomeGrant_InvalidatesOldKey(t *testing.T) {
 	svc, _, ws := setupHomeGrantAuthFixture()
@@ -105,7 +105,7 @@ func TestAgentService_RotateAPIKey_HomeGrant_InvalidatesOldKey(t *testing.T) {
 }
 
 // TestAgentService_RotateAPIKey_NoHomeGrant_StillInvalidatesOldKey is
-// Garfield's positive control: an agent with NO grant row (the legacy state,
+// Gary's positive control: an agent with NO grant row (the legacy state,
 // still reachable for any agent that predates a fully-fixed Register or was
 // never backfilled) must keep working correctly through the legacy-only
 // path — this was never broken, and the fix must not regress it.

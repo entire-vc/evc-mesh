@@ -8,7 +8,7 @@ vi.mock("@/lib/api", () => ({ api: vi.fn() }));
 import { api } from "@/lib/api";
 
 const agent = (ra?: Agent["repository_access"]): Agent => ({
-  id: "a1", workspace_id: "w1", name: "Vega", agent_type: "claude_code", status: "offline",
+  id: "a1", workspace_id: "w1", name: "Vera", agent_type: "claude_code", status: "offline",
   capabilities: {}, metadata: {}, last_heartbeat: null,
   created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:00Z",
   ...(ra === undefined ? {} : { repository_access: ra }),

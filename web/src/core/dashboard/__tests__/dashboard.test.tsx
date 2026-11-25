@@ -42,7 +42,7 @@ function serve(mode: Mode = "normal") {
     if (url === "/api/v1/me/tasks") return { items: empty ? [] : [task(1), task(2)] };
     if (url.endsWith("/triage")) return { items: empty ? [] : [task(3, "urgent")] };
     if (url.endsWith("/tasks/query")) return { items: empty ? [] : [task(1), task(2)], total_count: empty ? 0 : 2 };
-    if (url.endsWith("/team")) return { agents: empty ? [] : [{ id: "a1", name: "Linus", status: "online", is_stale: false }] };
+    if (url.endsWith("/team")) return { agents: empty ? [] : [{ id: "a1", name: "Liam", status: "online", is_stale: false }] };
     if (url === "/api/v1/me/mentions") return empty ? [] : [{ comment_id: "c1", task_id: "t9", task_title: "Mentioned task", extracted_at: "2026-01-01T00:00:00Z", seen_at: null, project_id: "p1", comment_body: "", author_id: "u", author_name: "U" }];
     if (url === "/api/v1/me/document-mentions") { if (mode === "doc-mentions-down") throw new Error("down"); return []; }
     if (url === "/api/v1/me/comments" || url.endsWith("/comments/recent")) return { items: [], next_cursor: null, next_cursor_id: null };
@@ -77,7 +77,7 @@ const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 20
 beforeEach(() => serve());
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
-const ANALYTICS = ["metric", "tasks-breakdown", "tasks-timeline", "events-breakdown", "agent-leaderboard", "cost-kpis", "cost-by-agent", "cost-top-tasks", "cost-by-project", "cost-by-day"];
+const ANALYTICS = ["metric", "tasks-breakdown", "tasks-timeline", "events-breakdown", "agent-leaderboard", "cost-kpis", "cost-by-agent", "cost-top-tasks", "cost-by-project", "cost-by-day", "memory-usage"];
 
 describe("workspace switch", () => {
   it("never shows the previous workspace's data while the new one loads", async () => {
@@ -103,13 +103,13 @@ describe("registry", () => {
   });
 
   it("core order, permission filter, picker skips unknown ids, clamp", () => {
-    // the legacy group first, then the other groups by folder name (widgets/agents, analytics, comms, events, initiatives, tasks)
+    // the legacy group first, then the other groups by folder name (widgets/agent-usage, agents, analytics, comms, events, initiatives, tasks)
     expect(CORE_WIDGETS.map((d) => d.id)).toEqual([
-      "mentions", "triage", "sessions", "agents-active", "agents-status", "agents-summary", ...ANALYTICS, "my-comments", "recent-comments", "event-feed", "initiatives", "initiative", "my-tasks", "triage-queue", "task-list",
+      "mentions", "triage", "sessions", "agent-usage", "agents-active", "agents-status", "agents-summary", ...ANALYTICS, "my-comments", "recent-comments", "event-feed", "initiatives", "initiative", "my-tasks", "triage-queue", "task-list",
     ]);
     const r = resolveWidgets({ settings: { widgets: ["sessions", "nope", "mentions", "sessions"] } });
     expect(r.shown.map((d) => d.id)).toEqual(["sessions", "mentions"]);
-    expect(r.available.map((d) => d.id)).toEqual(["triage", "agents-active", "agents-status", "agents-summary", ...ANALYTICS, "my-comments", "recent-comments", "event-feed", "initiatives", "initiative", "my-tasks", "triage-queue", "task-list"]);
+    expect(r.available.map((d) => d.id)).toEqual(["triage", "agent-usage", "agents-active", "agents-status", "agents-summary", ...ANALYTICS, "my-comments", "recent-comments", "event-feed", "initiatives", "initiative", "my-tasks", "triage-queue", "task-list"]);
     const gated = [{ ...base, requires: ["task.edit" as const] }, CORE_WIDGETS[1]!];
     expect(resolveWidgets({ registry: gated, can: () => false }).shown.map((d) => d.id)).toEqual(["triage"]);
     expect(clampSize({ w: 4, h: 3 }, { ...base, size: { ...base.size, max: { w: 2, h: 2 } } })).toEqual({ w: 2, h: 2 });
@@ -206,7 +206,7 @@ describe("dashboard.layout", () => {
     fireEvent.click(screen.getByText("flip"));
     await settle();
     expect(ids(container)).toEqual(["sessions"]);
-    expect(screen.getByText("Linus")).toBeTruthy();
+    expect(screen.getByText("Liam")).toBeTruthy();
     expect(errors.mock.calls.flat().join(" ")).not.toMatch(/hook/i);
   });
 
@@ -232,7 +232,7 @@ describe("dashboard.layout", () => {
     const { container } = mountDashboard({ theme: { layout: Stub, widgets: { "my-tasks": Mine } } });
     await settle();
     expect(ids(container)).toEqual(["sessions", "my-tasks", "triage", "mentions"]);
-    expect(screen.getByText("Linus")).toBeTruthy(); // untouched core view, real data
+    expect(screen.getByText("Liam")).toBeTruthy(); // untouched core view, real data
     expect(screen.getByText("link t1").getAttribute("href")).toBe("/t/t1");
     fireEvent.click(screen.getByText("link t1")); // the primitive reaches the widget's openTask
     expect(screen.getByTestId("where").textContent).toBe("/t/t1");
@@ -292,7 +292,7 @@ describe("dashboard.widget.*", () => {
     expect(ids(container)).toEqual(["agents-active"]);
     // The agents group's views load lazily (views.tsx), so the body shows after that load, not after one tick.
     await waitFor(() => expect(screen.getByText("Active agents")).toBeTruthy());
-    await waitFor(() => expect(screen.getByText("Linus")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Liam")).toBeTruthy());
   });
 
   it("CT-widget-05 triage: an urgent task past the server's first ten rows still leads the card", async () => {
@@ -310,7 +310,7 @@ describe("dashboard.widget.*", () => {
   it("CT-widget-07 sessions: active agent shown with status", async () => {
     mountDashboard({ theme: { settings: { widgets: ["sessions"] } } });
     await settle();
-    expect(screen.getByText("Linus")).toBeTruthy();
+    expect(screen.getByText("Liam")).toBeTruthy();
   });
 
   it("CT-widget-09 a theme's own widget reads only SDK hooks", async () => {

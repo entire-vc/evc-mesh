@@ -23,7 +23,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
-// Idempotency-Key with a fenced result write over the
+// Item 2: Idempotency-Key with a fenced result write over the
 // production chain (Idempotency → comment handler → service → comments table).
 // A repeat of a write that happened replays its answer even after the lock is
 // gone; a write that did not happen is not performed under a lost lock.

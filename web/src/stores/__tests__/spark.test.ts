@@ -8,13 +8,13 @@ import { useSparkStore } from "@/stores/spark";
 
 const mockedApi = api as unknown as ReturnType<typeof vi.fn>;
 
-// #4a3195a5: the server now resolves the catalog base URL (and whether Spark
+// The server now resolves the catalog base URL (and whether Spark
 // is enabled at all) PER WORKSPACE via an optional workspace_id query param,
 // mirroring what install() already sent in its body. These tests prove the
 // store actually threads it through on the three read actions — without
 // this, a workspace's own is_active=false would have nothing to bite on and
 // every request would silently fall back to the instance-wide env URL.
-describe("useSparkStore — workspace_id threading (#4a3195a5)", () => {
+describe("useSparkStore — workspace_id threading", () => {
   beforeEach(() => {
     useSparkStore.setState({
       agents: [],

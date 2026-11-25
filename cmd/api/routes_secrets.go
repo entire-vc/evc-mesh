@@ -35,7 +35,7 @@ func registerSecretRoutes(deps *apiDeps) {
 	e.POST("/internal/chat-sessions/:session_id/renew", chatSessionHandler.Renew, mw.DirectOnly(), mw.ChatControllerAuth())
 	e.POST("/internal/chat-sessions/:session_id/revoke", chatSessionHandler.Revoke, mw.DirectOnly(), mw.ChatControllerAuth())
 
-	// Write-only secrets CRUD (an internal ticket, S3). Every route is gated by
+	// Write-only secrets CRUD (S3). Every route is gated by
 	// PermManageSecrets, which no agent key holds — see its declaration in
 	// rbac.go. That includes the masked LIST: it carries a fingerprint, and
 	// the point of this store is that an agent identity learns nothing about

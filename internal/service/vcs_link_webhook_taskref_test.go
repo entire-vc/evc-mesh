@@ -116,7 +116,7 @@ func TestHandlePR_RecognisesFormsAgentsActuallyWrite(t *testing.T) {
 			name:   "id only in the head branch",
 			title:  func(*domain.Task) string { return "feat: cost tracking dashboard" },
 			body:   func(*domain.Task) string { return "No task reference in the prose at all." },
-			branch: func(tk *domain.Task) string { return "linus/" + tk.ID.String()[:8] + "-cost-tracking" },
+			branch: func(tk *domain.Task) string { return "liam/" + tk.ID.String()[:8] + "-cost-tracking" },
 		},
 	}
 
@@ -164,7 +164,7 @@ func TestHandlePR_NoReference_CreatesNothing(t *testing.T) {
 		"chore: bump golangci-lint to 2.11.3",
 		"Reverts commit "+task.ID.String()[:8]+"b856c04d1f9e3a7b5c2d8e6f0a1b3c4d.\n"+
 			"Closes #114. See https://github.com/entire-vc/evc-mesh/commit/"+task.ID.String()[:8]+".",
-		"garfield/bump-linter")
+		"gary/bump-linter")
 
 	res, err := h.svc.HandleGitHubPullRequestEvent(context.Background(), ev)
 	require.NoError(t, err)
@@ -264,7 +264,7 @@ func TestResolveTaskRef_UsedByPushPath(t *testing.T) {
 
 	id, ref := h.svc.ResolveTaskRef(context.Background(), uuid.Nil,
 		TaskRefSource{Name: "body", Text: "fix(gate): stop the train\n\nRefs #" + task.ID.String()[:8]},
-		TaskRefSource{Name: "branch", Text: "garfield/webhook-taskref-formats"},
+		TaskRefSource{Name: "branch", Text: "gary/webhook-taskref-formats"},
 	)
 	assert.Equal(t, task.ID, id)
 	assert.Equal(t, RefKindShortID, ref.Kind)
@@ -272,7 +272,7 @@ func TestResolveTaskRef_UsedByPushPath(t *testing.T) {
 	// And a commit that names nothing resolves to nothing.
 	id, _ = h.svc.ResolveTaskRef(context.Background(), uuid.Nil,
 		TaskRefSource{Name: "body", Text: "chore: gofmt"},
-		TaskRefSource{Name: "branch", Text: "garfield/gofmt"},
+		TaskRefSource{Name: "branch", Text: "gary/gofmt"},
 	)
 	assert.Equal(t, uuid.Nil, id)
 }
@@ -306,7 +306,7 @@ func TestHandlePR_BodyNamingSeveralTasks_LinksNone(t *testing.T) {
 			"| `Refs #"+documented.ID.String()[:8]+"` | ✅ |\n"+
 			"| `#"+documented.ID.String()[:8]+"` | ✅ |\n\n"+
 			"Refs #"+subject.ID.String()[:8],
-		"garfield/taskref-keyword-sigil")
+		"gary/taskref-keyword-sigil")
 
 	res, err := h.svc.HandleGitHubPullRequestEvent(context.Background(), ev)
 	require.NoError(t, err)
@@ -350,7 +350,7 @@ func TestHandlePR_SameTaskNamedTwice_IsNotAmbiguous(t *testing.T) {
 	ev := openEvent(703,
 		"MESH-"+task.ID.String(),
 		"See https://mesh.entire.host/t/"+task.ID.String()+" and #"+task.ID.String()[:8],
-		"linus/"+task.ID.String()[:8]+"-slug")
+		"liam/"+task.ID.String()[:8]+"-slug")
 
 	res, err := h.svc.HandleGitHubPullRequestEvent(context.Background(), ev)
 	require.NoError(t, err)
@@ -397,7 +397,7 @@ func TestHandlePR_UnresolvableIDDoesNotCreateAmbiguity(t *testing.T) {
 // A PR that was mislinked once must not keep re-confirming that link.
 //
 // This is the bug the ambiguity refusal did NOT close, found by independent
-// verification of an internal ticket against the already-deployed code. ResolveTaskRef
+// verification of 695d7ddf against the already-deployed code. ResolveTaskRef
 // correctly declined to choose — and the handler then fell through to
 // "reuse whatever is already stored for this PR number", which is the wrong
 // task. Upsert keys on (task_id, provider, link_type, external_id), so every
@@ -408,7 +408,7 @@ func TestHandlePR_AmbiguousPayload_DoesNotReuseStaleLink(t *testing.T) {
 	documented := h.makeTaskWithID(t, fixedTaskID(40), domain.StatusCategoryInProgress)
 	subject := h.makeTaskWithID(t, fixedTaskID(41), domain.StatusCategoryInProgress)
 
-	// The wrong row, exactly as it exists in production for a PR.
+	// The wrong row, exactly as it exists in production for PR #433.
 	stale := &domain.VCSLink{
 		ID:         uuid.New(),
 		TaskID:     documented.ID,
@@ -427,7 +427,7 @@ func TestHandlePR_AmbiguousPayload_DoesNotReuseStaleLink(t *testing.T) {
 	ev := openEvent(433,
 		"fix(vcs-links): a keyword may widen the alphabet, not the shape",
 		"| `Refs #"+documented.ID.String()[:8]+"` | ✅ |\n\nRefs #"+subject.ID.String()[:8],
-		"garfield/taskref-keyword-sigil")
+		"gary/taskref-keyword-sigil")
 
 	res, err := h.svc.HandleGitHubPullRequestEvent(context.Background(), ev)
 	require.NoError(t, err)

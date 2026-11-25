@@ -11,8 +11,8 @@ import (
 )
 
 // recommendedDefaultRegex matches the OPTIONAL line by which a marker's author states
-// what they will do if nobody answers — the field the regression puts on the task so a
-// reader never has to open the comments to find it, and the field the regression's
+// what they will do if nobody answers — the field an internal ticket puts on the task so a
+// reader never has to open the comments to find it, and the field an internal ticket's
 // default-on-timeout sweep consumes.
 //
 // Both languages are listed because markers are written in both across the fleet, and a
@@ -112,7 +112,7 @@ func truncateGateReason(s string) string {
 //
 // The default is markerDefault's: the one the ask itself states wins over a "Default:"
 // line elsewhere in the comment's context. The class is markerGateClass's verdict
-// : a question no hard rule
+// a question no hard rule
 // matches, with a default its author stated, arms soft so that default applies at the
 // deadline; everything else arms hard.
 func armInputFromMarker(comment *domain.Comment, task *domain.Task, slug string) domain.ArmHumanGateInput {

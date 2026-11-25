@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { descriptorFromV1, toActionsV1, toLayoutV1, type DashboardLayoutData } from "@entire-vc/mesh-theme-sdk";
 import { CATALOG_ONLY, DEFAULT_CORE_WIDGET_IDS, WIDGETS, buildRegistry, createViewCache, defaultInstances, loadWidgetView, peekWidgetView, resolveWidgets, type WidgetViewsLoader } from "../registry";
 
-const ANALYTICS = ["metric", "tasks-breakdown", "tasks-timeline", "events-breakdown", "agent-leaderboard", "cost-kpis", "cost-by-agent", "cost-top-tasks", "cost-by-project", "cost-by-day"];
+const ANALYTICS = ["metric", "tasks-breakdown", "tasks-timeline", "events-breakdown", "agent-leaderboard", "cost-kpis", "cost-by-agent", "cost-top-tasks", "cost-by-project", "cost-by-day", "memory-usage"];
 
 type Groups = Parameters<typeof buildRegistry>[0];
 const fixtureGroups = import.meta.glob("./fixtures/widgets/newgroup/index.ts", { eager: true }) as Groups;
@@ -21,7 +21,7 @@ describe("widget registry (folders)", () => {
     // The default dashboard (PRD 5.3) is the old four: the legacy group plus my-tasks, now in the tasks group.
     expect([...DEFAULT_CORE_WIDGET_IDS]).toEqual(["mentions", "triage", "my-tasks", "sessions"]);
     expect(WIDGETS.map((d) => d.id)).toEqual([
-      "mentions", "triage", "sessions", "agents-active", "agents-status", "agents-summary", ...ANALYTICS, "my-comments", "recent-comments", "event-feed", "initiatives", "initiative", "my-tasks", "triage-queue", "task-list",
+      "mentions", "triage", "sessions", "agent-usage", "agents-active", "agents-status", "agents-summary", ...ANALYTICS, "my-comments", "recent-comments", "event-feed", "initiatives", "initiative", "my-tasks", "triage-queue", "task-list",
     ]);
     for (const id of ["mentions", "triage", "sessions", "my-comments", "recent-comments"]) {
       expect(typeof peekWidgetView(id), id).toBe("function"); // legacy and comms views ship with the host: no load
@@ -38,11 +38,11 @@ describe("widget registry (folders)", () => {
   });
 
   it("a catalog-only group's widget is in the catalog, not on a dashboard that picks no widgets; picked, it shows", () => {
-    expect([...CATALOG_ONLY]).toEqual([...ANALYTICS, "event-feed", "initiatives", "initiative"]);
+    expect([...CATALOG_ONLY]).toEqual(["agent-usage", ...ANALYTICS, "event-feed", "initiatives", "initiative"]);
     const none = resolveWidgets({});
     // no theme setting: the default dashboard is the four it always had, in their old order (PRD §5.3)
     expect(none.shown.map((d) => d.id)).toEqual(["mentions", "triage", "my-tasks", "sessions"]);
-    expect(none.available.map((d) => d.id)).toEqual(["agents-active", "agents-status", "agents-summary", ...ANALYTICS, "my-comments", "recent-comments", "event-feed", "initiatives", "initiative", "triage-queue", "task-list"]);
+    expect(none.available.map((d) => d.id)).toEqual(["agent-usage", "agents-active", "agents-status", "agents-summary", ...ANALYTICS, "my-comments", "recent-comments", "event-feed", "initiatives", "initiative", "triage-queue", "task-list"]);
     const picked = resolveWidgets({ settings: { widgets: ["event-feed", "mentions"] } });
     expect(picked.shown.map((d) => d.id)).toEqual(["event-feed", "mentions"]);
     // a non-core widget shows by default unless its id is catalog-only (positive control: the empty set)

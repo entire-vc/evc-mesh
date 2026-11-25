@@ -26,8 +26,8 @@ const agent = (id: string, o: Partial<AgentStatusEntry> = {}): AgentStatusEntry 
 
 // Production shape: busy lives in heartbeat_status, agents.status is online/offline.
 const FLEET: AgentStatusEntry[] = [
-  agent("a1", { name: "Linus", status: "online", heartbeat_status: "busy", agent_type: "claude_code", heartbeat_message: "Working on Fix login", current_task_id: "t1", current_task_title: "Fix login" }),
-  agent("a2", { name: "Verne", status: "online", heartbeat_status: "idle", agent_type: "codex" }),
+  agent("a1", { name: "Liam", status: "online", heartbeat_status: "busy", agent_type: "claude_code", heartbeat_message: "Working on Fix login", current_task_id: "t1", current_task_title: "Fix login" }),
+  agent("a2", { name: "Vera", status: "online", heartbeat_status: "idle", agent_type: "codex" }),
   agent("a3", { name: "Ghost", status: "online", agent_type: "", is_stale: true, last_heartbeat_at: new Date(Date.now() - 3600_000).toISOString() }),
   agent("a4", { name: "Broken", status: "error", agent_type: "cursor" }),
 ];
@@ -44,8 +44,8 @@ function serve() {
           mode === "empty"
             ? []
             : [
-                { id: "a1", name: "Linus", status: "online", heartbeat_status: "busy", heartbeat_message: "Working on Fix login", is_stale: false, short_tag: "mesh-dev" },
-                { id: "a2", name: "Verne", status: "online", is_stale: false },
+                { id: "a1", name: "Liam", status: "online", heartbeat_status: "busy", heartbeat_message: "Working on Fix login", is_stale: false, short_tag: "mesh-dev" },
+                { id: "a2", name: "Vera", status: "online", is_stale: false },
                 { id: "a3", name: "Ghost", status: "online", is_stale: true },
                 { id: "a5", name: "Hugh", status: "online", is_stale: false },
                 // A guest of this workspace: in /team, not in /agents/status.
@@ -157,7 +157,7 @@ describe("agents-status", () => {
   it("CT-widget-07 a busy agent shows its status, its current work and a real link to the task", async () => {
     mount("agents-status");
     await settle();
-    const card = screen.getByText("Linus").closest("div.flex.flex-col")!;
+    const card = screen.getByText("Liam").closest("div.flex.flex-col")!;
     expect(card.textContent).toMatch(/busy/i);
     expect(card.textContent).toContain("Working on Fix login");
     expect(screen.getByRole("link", { name: "Fix login" }).getAttribute("href")).toBe("/t/t1");
@@ -196,7 +196,7 @@ describe("agents-status", () => {
     mount("agents-status");
     await settle();
     expect(vi.mocked(api).mock.calls.some(([u]) => String(u).endsWith("/workspaces/ws1/team"))).toBe(true);
-    expect(screen.getByText("Linus").closest("p")!.textContent).toBe("Linus · mesh-dev");
+    expect(screen.getByText("Liam").closest("p")!.textContent).toBe("Liam · mesh-dev");
   });
 
   it("labels each card with the agent type from the server; an untyped agent gets the fallback, never an empty badge", async () => {
@@ -222,7 +222,7 @@ describe("agents-status", () => {
     expect(name.className).toMatch(/\bmax-w-full\b/);
     expect(head.textContent).toMatch(/last run/i);
     expect(within(head).getByText(/last run/i).className).toMatch(/\bwhitespace-nowrap\b/);
-    expect(within(screen.getByText("Linus").closest("div.min-w-0")!).getByText("Claude Code").className).toMatch(/\bwhitespace-nowrap\b/);
+    expect(within(screen.getByText("Liam").closest("div.min-w-0")!).getByText("Claude Code").className).toMatch(/\bwhitespace-nowrap\b/);
   });
 
   it("an offline agent shows 'last run' instead of a status (ephemeral presence)", async () => {
@@ -235,9 +235,9 @@ describe("agents-status", () => {
   it("busy comes from heartbeat_status: the grid shows Busy where Active agents does", async () => {
     mount("agents-status");
     await settle();
-    const linus = screen.getByText("Linus").closest("div.flex.flex-col")!;
-    expect(linus.textContent).toMatch(/busy/i);
-    expect(linus.textContent).not.toMatch(/online/i);
+    const liam = screen.getByText("Liam").closest("div.flex.flex-col")!;
+    expect(liam.textContent).toMatch(/busy/i);
+    expect(liam.textContent).not.toMatch(/online/i);
   });
 
   it("an offline row with a fresh heartbeat (the runner's poll, not a run) says Offline, not 'last run'", async () => {
@@ -257,12 +257,12 @@ describe("agents-status", () => {
     mount("agents-status", { statuses: ["offline"] });
     await settle();
     expect(screen.getByText("Ghost")).toBeTruthy();
-    expect(screen.queryByText("Verne")).toBeNull();
+    expect(screen.queryByText("Vera")).toBeNull();
     cleanup();
     mount("agents-status", { onlyWithTask: true });
     await settle();
-    expect(screen.getByText("Linus")).toBeTruthy();
-    expect(screen.queryByText("Verne")).toBeNull();
+    expect(screen.getByText("Liam")).toBeTruthy();
+    expect(screen.queryByText("Vera")).toBeNull();
   });
 
   it("a filter that hides everyone says so; it is not 'no agents registered'", async () => {
@@ -279,13 +279,13 @@ describe("agents-status", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     mount("agents-status");
     await act(async () => { await vi.advanceTimersByTimeAsync(10); });
-    expect(screen.getByText("Linus")).toBeTruthy();
+    expect(screen.getByText("Liam")).toBeTruthy();
     const calls = () => vi.mocked(api).mock.calls.filter(([u]) => String(u).endsWith("/agents/status")).length;
     const first = calls();
     mode = "error";
     await act(async () => { await vi.advanceTimersByTimeAsync(AGENTS_POLL_MS); });
     expect(calls()).toBe(first + 1);
-    expect(screen.getByText("Linus")).toBeTruthy();
+    expect(screen.getByText("Liam")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });
@@ -295,7 +295,7 @@ describe("agents-summary", () => {
     const { container } = mount("agents-summary");
     await settle();
     const n = (k: string) => container.querySelector(`[data-agents-count="${k}"]`)!.textContent;
-    expect(n("online")).toMatch(/^1/); // Verne; Ghost is stale
+    expect(n("online")).toMatch(/^1/); // Vera; Ghost is stale
     expect(n("busy")).toMatch(/^1/);
     expect(n("offline")).toMatch(/^2/); // Ghost (stale) + Broken (error)
     expect(summarizeAgents(FLEET)).toEqual({ online: 1, busy: 1, offline: 2, total: 4 });
@@ -319,8 +319,8 @@ describe("agents-active", () => {
   it("lists agents that are not offline, up to the limit, and says how many more there are", async () => {
     mount("agents-active", { limit: 2 });
     await settle();
-    expect(screen.getByText("Linus")).toBeTruthy();
-    expect(screen.getByText("Verne")).toBeTruthy();
+    expect(screen.getByText("Liam")).toBeTruthy();
+    expect(screen.getByText("Vera")).toBeTruthy();
     expect(screen.queryByText("Hugh")).toBeNull();
     expect(screen.queryByText("Ghost")).toBeNull();
     expect(screen.getByText("+1 more active")).toBeTruthy();
@@ -329,7 +329,7 @@ describe("agents-active", () => {
   it("CT-widget-07 a busy agent shows its status and what it works on", async () => {
     mount("agents-active");
     await settle();
-    const row = screen.getByText("Linus").closest("li")!;
+    const row = screen.getByText("Liam").closest("li")!;
     expect(row.textContent).toMatch(/busy/i);
     expect(row.textContent).toContain("Working on Fix login");
   });

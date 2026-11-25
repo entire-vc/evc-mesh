@@ -117,7 +117,7 @@ func TestAssertAssigneeInProjectWorkspace_RefusalReasons(t *testing.T) {
 
 	// The agent-half sibling of "no membership directory"/"membership lookup
 	// errors" below — same fail-closed contract, different directory
-	// (task U3/an internal ticket).
+	// (task U3).
 	t.Run("no agent grant directory", func(t *testing.T) {
 		svc, projRepo, agentRepo, _, _ := newSvc()
 		projID := seedProject(projRepo)

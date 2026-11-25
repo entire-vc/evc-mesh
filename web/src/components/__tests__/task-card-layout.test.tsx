@@ -15,7 +15,7 @@ const full = {
   labels: ["lbl-x"],
   assignee_id: AGENT,
   assignee_type: "agent",
-  assignee_name: "Grace",
+  assignee_name: "Gwen",
   due_date: "2031-01-01T00:00:00Z",
   estimated_hours: 3,
   subtask_count: 2,
@@ -24,7 +24,7 @@ const full = {
   vcs_providers: ["github"],
   checked_out_by: AGENT,
   checkout_expires: future(),
-  runtime_state: { kind: "working", lane: "Grace", since: "2026-10-10T10:00:00Z", source: "explicit", stale: false },
+  runtime_state: { kind: "working", lane: "Gwen", since: "2026-10-10T10:00:00Z", source: "explicit", stale: false },
 } as unknown as Task;
 
 const card = (task: Task) => render(<TaskCard task={task} />).container.firstElementChild as HTMLElement;

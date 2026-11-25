@@ -16,7 +16,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// ArmHumanGate's auto-default gate_deadline logic (task #060ccaae) — real Postgres,
+// ArmHumanGate's auto-default gate_deadline logic — real Postgres,
 // so the interval arithmetic and the CASE's own conditional are exercised for real
 // rather than merely pinned as text (that half lives in the sqlmock sibling file).
 // ---------------------------------------------------------------------------
@@ -44,7 +44,7 @@ func TestTaskRepo_ArmHumanGate_AutoDefaultsDeadline_SoftWithDefault(t *testing.T
 	require.NoError(t, err)
 	require.NotNil(t, got.GateDeadline, "a soft gate with a stated default must get an auto-computed deadline")
 	// A fresh TaskRepo (SetDefaultGateTimeoutHours never called) must use the built-in
-	// default — DefaultGateTimeoutHours (24h, Pavel decision 2026-09-06, task #060ccaae;
+	// default — DefaultGateTimeoutHours (24h, Pavel decision 2026-09-06;
 	// the original spec said 72h, changed before ship) — not zero hours.
 	assert.False(t, got.GateDeadline.Before(before.Add(DefaultGateTimeoutHours*time.Hour-time.Second)))
 	assert.False(t, got.GateDeadline.After(after.Add(DefaultGateTimeoutHours*time.Hour+time.Second)))
@@ -76,7 +76,7 @@ func TestTaskRepo_ArmHumanGate_AutoDefaultsDeadline_HonorsConfiguredHours(t *tes
 }
 
 // TestTaskRepo_ArmHumanGate_AutoDefaultsDeadline_HardGetsOneWhenDefaultStated is the
-// real-Postgres proof of task 1.4b (#4d61d877): a hard-classified gate now gets the SAME
+// real-Postgres proof of task 1.4b: a hard-classified gate now gets the SAME
 // auto-computed deadline a soft one does, once it has a real recommended_default. This
 // used to be the one test proving the opposite (a hard gate NEVER gets an auto-computed
 // deadline) — flipped deliberately, not just relaxed, because the deadline here is for
@@ -170,7 +170,7 @@ func TestTaskRepo_ArmHumanGate_ReArmComputesFromOriginalArmedAt(t *testing.T) {
 	// Re-arm without a new explicit deadline: the auto-default must be recomputed from
 	// the SAME original armed_at (unchanged by re-arming), not a fresh NOW()+window — a
 	// re-arm that silently pushed the deadline out would let a repeat ping keep a soft
-	// gate alive past its stated window, the same latch shape #84ab54fd already fixed
+	// gate alive past its stated window, the same latch shape an internal ticket already fixed
 	// for armed_at itself.
 	armGate(t, taskRepo, taskID, author, domain.HumanGateClassSoft, "merge as-is, still", nil)
 	second, err := taskRepo.GetByID(ctx, taskID)
@@ -181,7 +181,7 @@ func TestTaskRepo_ArmHumanGate_ReArmComputesFromOriginalArmedAt(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// FindExpiredDefaultGates / FindSoftTimedOutGates handoff (task #060ccaae)
+// FindExpiredDefaultGates / FindSoftTimedOutGates handoff
 // ---------------------------------------------------------------------------
 
 func backdateDeadline(t *testing.T, db *sqlx.DB, taskID uuid.UUID, when time.Time) {

@@ -7,7 +7,7 @@ import (
 
 var (
 	// ClosedFollowUpErrorsTotal is the `closed_followup_error` signal of the
-	// closed-card follow-up mechanism (#db1c6c7a): every delivery failure that
+	// closed-card follow-up mechanism: every delivery failure that
 	// used to be a silent fail-open. stage tells WHERE it failed —
 	// "inline" (the request-path retry ladder gave up, finding parked in
 	// pending), "enqueue" (the residual case: even the pending row could not
@@ -15,7 +15,7 @@ var (
 	// attempt failed again) — and op names the failing operation ("claim",
 	// "get_root", "root_card_read", "status_read", "create_root", "reopen",
 	// "escalation_notice", "pending_notice", "claim_lease" (the reconcile
-	// lease store itself unreadable, #a2368528), ...) rather than the
+	// lease store itself unreadable), ...) rather than the
 	// raw error string, which would be unbounded label cardinality. The full
 	// error text rides in the log line next to the counter.
 	ClosedFollowUpErrorsTotal = promauto.NewCounterVec(

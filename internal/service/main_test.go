@@ -13,7 +13,7 @@ import (
 // as part of the same underlying symptom: `internal/service` (~1800 tests) running
 // right at, and occasionally past, the 180s silence threshold of the CI stall
 // watchdog (`scripts/ci/go-test-stall-watchdog.sh`) under `go test -race` — see
-// #54bbfbc3 and #6ae6f813.
+// And an internal ticket.
 //
 //  1. embedRetryBackoff (memory_service.go) — embedWithRetry's real 1s/2s
 //     time.After() backoff, hit by every test that drives a failing embedder
@@ -21,13 +21,13 @@ import (
 //     fire-and-forget `go s.embedAndStore(...)` (memory_service.go:718,1873).
 //     This is what made "TestBatchEmbed_Chunked_..." appear stuck at
 //     memory_service.go:2650 under -race in the original CI failure — it
-//     wasn't a deadlock, see #54bbfbc3's task comments for the two re-runs
+//     wasn't a deadlock, see an internal ticket's task comments for the two re-runs
 //     that each caught a DIFFERENT test "hung" at the same silence threshold.
 //
 //  2. bcryptCost (agent_service.go) and userPasswordBcryptCost
 //     (workspace_member_service.go) — the real cost-12/cost-10 bcrypt work
 //     factors, hit by ~91 Register/Authenticate call sites plus every
-//     AcceptInvite/AddMemberWithCreate test. Measured (#6ae6f813): one
+//     AcceptInvite/AddMemberWithCreate test. Measured: one
 //     isolated test doing exactly one Register + one Authenticate
 //     (TestAuthenticate_LegacyRowRejectsAWrongKeyAndBackfillsNothing) took
 //     4.4s under `-race`, every run; TestAcceptInvite_UsernameMatchesRegis-

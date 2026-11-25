@@ -4,7 +4,7 @@ import { joinFrontmatter, splitFrontmatter } from "@/lib/docs/frontmatter";
 const FLEET_DOC = `---
 created: 2026-10-01T17:50+03:00
 updated: 2026-10-01T18:05+03:00
-author: Garfield-Mesh
+author: Gary-Mesh
 status: review
 project: contenthub
 type: spec

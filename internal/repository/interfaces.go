@@ -114,7 +114,7 @@ type TaskRepository interface {
 	// entry: a task created without its audit event silently understated every
 	// journal-coverage guarantee the product makes (measured: 314/3709 system-
 	// created tasks over 30 days lost their event to a post-commit, unguarded,
-	// non-retried write — an internal ticket). If the activity insert fails, the whole
+	// non-retried write). If the activity insert fails, the whole
 	// transaction rolls back — the task and its creation event commit together
 	// or not at all. activity == nil is only for callers (test fixtures) that
 	// have no workspace context to build a real entry from and don't care about
@@ -373,7 +373,7 @@ type ClosedFollowUpRootRepository interface {
 }
 
 // ClosedFollowUpPendingRepository is the visible-failure half of the
-// closed-card follow-up mechanism (an internal ticket, P2 of an internal ticket): when a
+// closed-card follow-up mechanism: when a
 // finding's delivery cannot complete — the identity store or the root card
 // could not be read, the claim written, the card created — the finding is
 // parked here for the reconcile job instead of being dropped. The contract's
@@ -447,7 +447,7 @@ type CommentViewFilter struct {
 	WorkspaceID *uuid.UUID // optional workspace scope (used by ListByAuthor)
 	ProjectID   *uuid.UUID // optional project scope (used by ListByAuthor)
 	// IncludeInternal, when true, drops the default `is_internal = false`
-	// predicate on ListRecentByWorkspace — see an internal ticket. Not honored by
+	// predicate on ListRecentByWorkspace. Not honored by
 	// ListByAuthor (a caller's own comments aren't the internal-mentions
 	// corpus this exists for). Defaults to false: excluded, same as before
 	// this field existed.
@@ -487,7 +487,7 @@ type CommentRepository interface {
 
 // HumanGateDecisionRepository persists the append-only ledger backing the
 // third human_gate exit — "the question was answered, the answer arrived
-// through another channel" (an internal ticket, docs/human-gate-decision-recorded.md).
+// through another channel" (docs/human-gate-decision-recorded.md).
 type HumanGateDecisionRepository interface {
 	// Create inserts a new decision row (RevokesID nil) or revocation row
 	// (RevokesID set). The append-only DB trigger rejects any UPDATE, so
@@ -843,6 +843,10 @@ type AgentRepository interface {
 	SetAPIKeySHA256(ctx context.Context, agentID uuid.UUID, digest, expectedBcryptHash string) error
 	// GetBySlug returns the agent with the given slug in a workspace, or (nil, nil) if not found.
 	GetBySlug(ctx context.Context, workspaceID uuid.UUID, slug string) (*domain.Agent, error)
+	// ListByNameFold returns at most limit live agents homed in the workspace
+	// whose name equals name case-insensitively. Callers that need a unique
+	// match pass limit 2 and treat two rows as ambiguity.
+	ListByNameFold(ctx context.Context, workspaceID uuid.UUID, name string, limit int) ([]domain.Agent, error)
 	Update(ctx context.Context, agent *domain.Agent) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, workspaceID uuid.UUID, filter AgentFilter, pg pagination.Params) (*pagination.Page[domain.Agent], error)
@@ -882,6 +886,15 @@ type AgentRepository interface {
 	// half — the more dangerous one, since rotation is what you reach for
 	// after a suspected leak).
 	RotateHomeGrantKey(ctx context.Context, agent *domain.Agent) error
+}
+
+// ProjectReaderRepository issues project readers (docs/project-reader.md).
+type ProjectReaderRepository interface {
+	// CreateProjectReader inserts agent (ReaderProjectID set), its home grant
+	// with role viewer and its viewer membership of that project in ONE
+	// transaction. The project must be live and in agent.WorkspaceID, else
+	// apierror NotFound("Project") and nothing is written.
+	CreateProjectReader(ctx context.Context, agent *domain.Agent) error
 }
 
 // AgentWorkspaceGrantRepository manages persistence for agent-workspace
@@ -1370,7 +1383,7 @@ type VCSLinkRepository interface {
 	// existing row's values, never the caller-supplied link's. Upsert mutates
 	// *link in place to those actual persisted values so callers never echo a
 	// freshly-generated id/created_at that the database silently discarded
-	// (see an internal ticket). Returns true when this call inserted a new row, false
+	// Returns true when this call inserted a new row, false
 	// when it updated an existing one.
 	Upsert(ctx context.Context, link *domain.VCSLink) (created bool, err error)
 	// ListByExternalID returns all links matching (provider, link_type,
@@ -1392,11 +1405,22 @@ type VCSLinkRepository interface {
 	// SetPipelineStatus stores the latest pipeline state of a link. A pipeline
 	// older than the stored one (by id) is ignored; returns true when written.
 	SetPipelineStatus(ctx context.Context, id uuid.UUID, pipelineID int64, status, sha string) (written bool, err error)
+	// ConfirmGitLabMR confirms provider status and HEAD on this exact PR row.
+	// Other metadata and equivalent-URL rows are preserved; no deduplication.
+	// Returns nil when the row does not belong to taskID or no longer exists.
+	ConfirmGitLabMR(ctx context.Context, taskID, id uuid.UUID, status domain.VCSLinkStatus, headSHA string, mergedAt *time.Time) (*domain.VCSLink, error)
 	// MergeMetadata shallow-merges patch (a JSON object) into the link's
 	// metadata (jsonb ||): keys in patch are set, every other existing key is
 	// kept. Scoped to taskID and link_type pr or commit in the same statement.
 	// Returns the updated link, or nil when no such link exists on that task.
 	MergeMetadata(ctx context.Context, taskID, id uuid.UUID, patch json.RawMessage) (*domain.VCSLink, error)
+	// SetMergedAt stores the provider's merge time on a merged link whose
+	// merged_at is still NULL; a known time is never replaced. Returns true
+	// when written.
+	SetMergedAt(ctx context.Context, id uuid.UUID, mergedAt time.Time) (written bool, err error)
+	// ListMergedPRLinksWithoutMergedAt returns merged pr links with merged_at
+	// NULL and id > afterID, ordered by id, at most limit rows.
+	ListMergedPRLinksWithoutMergedAt(ctx context.Context, afterID uuid.UUID, limit int) ([]domain.VCSLink, error)
 }
 
 // TaskListRevisionRepository reads the per-project task_list_revision counter
@@ -1787,7 +1811,7 @@ type MemoryRepository interface {
 	// setting embedding_model while leaving embedding NULL clears one disjunct and leaves the
 	// other true forever — the row is re-selected on every reindex run, and meanwhile it is
 	// invisible to VectorSearch, which requires embedding IS NOT NULL. That was a live
-	// regression (an internal ticket / an internal ticket). Kept as a general repo primitive; a future caller
+	// regression. Kept as a general repo primitive; a future caller
 	// must not repeat the embedding_model-only watermark against that predicate.
 	MarkEmbeddingModel(ctx context.Context, id uuid.UUID, model string) error
 	// DecayRelevance reduces relevance by 0.05 for agent-scope memories not updated in 30+ days,
@@ -1889,18 +1913,23 @@ type MemoryRepository interface {
 	FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, filter domain.MemorySearchFilter, limit int) ([]domain.ScoredMemory, error)
 	// ListReviewNeeded returns up to limit memories with status='review_needed', across all
 	// workspaces, ordered by created_at ASC (oldest-waiting first). Used by the reconciler's
-	// nightly review-triage phase (an internal ticket, plan:1.11) to finally act on the backlog
+	// nightly review-triage phase (plan:1.11) to finally act on the backlog
 	// nothing else revisits: runLinker's decision engine only ever looks at memories created
 	// in the last 24h, so a memory it once parked at review_needed is never looked at again by
 	// that phase, no matter how much newer evidence accumulates later.
 	ListReviewNeeded(ctx context.Context, limit int) ([]domain.Memory, error)
 	// FindNewerMatch returns the single most-recently-created memory in workspaceID that either
 	// shares the exact same key, or (when contentSimhash is non-nil) the exact same
-	// content_simhash, was created strictly after after, is not excludeID itself, and is
-	// currently in a "settled" status (active or stale — NOT archived, superseded, conflicted,
-	// or itself review_needed: an undecided row is not a fit candidate to declare something
-	// else superseded by). Returns nil, nil when no such row exists.
-	FindNewerMatch(ctx context.Context, workspaceID uuid.UUID, key string, contentSimhash *int64, excludeID uuid.UUID, after time.Time) (*domain.Memory, error)
+	// content_simhash AND the same content (whitespace-collapsed, trimmed), was created
+	// strictly after after, is not excludeID itself, and is currently in a "settled" status
+	// (active or stale — NOT archived, superseded, conflicted, or itself review_needed: an
+	// undecided row is not a fit candidate to declare something else superseded by).
+	// Returns nil, nil when no such row exists.
+	//
+	// An equal simhash alone is not proof of a duplicate: 64 bits collide for unrelated
+	// texts (all short texts hash to 0, and the pre-fix hash clustered long texts), and a
+	// match here supersedes the older row.
+	FindNewerMatch(ctx context.Context, workspaceID uuid.UUID, key string, contentSimhash *int64, content string, excludeID uuid.UUID, after time.Time) (*domain.Memory, error)
 	// AppendTag adds tag to a memory's tags array if not already present (idempotent — a
 	// second call with the same tag is a no-op), and bumps updated_at.
 	AppendTag(ctx context.Context, id uuid.UUID, tag string) error
@@ -1919,7 +1948,7 @@ type MemoryRepository interface {
 // SchedulerStateRepository persists a durable last-run watermark for background jobs whose
 // cadence must survive process restarts. A bare time.Ticker resets its wait to the full
 // interval on every restart; on a service that restarts often, a long interval (nightly+)
-// then almost never elapses (an internal ticket: 70 restarts / 6 days → 2 real runs against a
+// then almost never elapses (70 restarts / 6 days → 2 real runs against a
 // 24h target). Deliberately generic across job_name rather than one column per job — any
 // future long-interval job on this service has the identical failure shape.
 type SchedulerStateRepository interface {
@@ -2116,7 +2145,7 @@ type SecretRepository interface {
 }
 
 // SecretMaterializer reads current secret values from Keep for spawn-time env-file
-// materialization (an internal ticket, S4). This is a SEPARATE interface from
+// materialization (S4). This is a SEPARATE interface from
 // SecretRepository on purpose: SecretRepository is what the public secrets
 // API (S3) is built on, and it has no method that can return a value at all.
 // Wire this interface into exactly one caller — the spawn-hook endpoint —

@@ -40,7 +40,7 @@ import type {
  *
  * ## The composer at the bottom is always mounted (Alex, 2026-08-23, an internal ticket)
  *
- * A prior change (`e2e40de`, an internal ticket) mounted this section only while the
+ * A prior change (`e2e40de`) mounted this section only while the
  * rail was closed, to stop the two surfaces painting the same thread twice.
  * Alex's read: hiding the tree behind the rail was the wrong fix for that —
  * the tree is where a comment gets *started* as much as where it gets *read*,

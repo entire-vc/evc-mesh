@@ -67,6 +67,7 @@ gold for an unrelated reason would be read as proof of power.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -273,6 +274,18 @@ def run(expect: str, top_k: int) -> int:
         f"dense-arm control: expect={expect} served={mode} "
         f"gold_found={found} rows_returned={client.rows_returned} top_k={top_k}"
     )
+    # Keep the ordinary server order, including graph hits. A graph neighbour
+    # can also reach gold while the dense arm is down; mode alone cannot explain
+    # that failure. These synthetic fixture diagnostics never affect the verdict.
+    print(f"dense-arm sources: dense_rows={client.dense_rows} sparse_rows={client.sparse_rows}")
+    for rank, row in enumerate(client.ranked_records, 1):
+        print("dense-arm rank: " + json.dumps({
+            "rank": rank,
+            "sessions": sorted(retrieved_session_indices([row])),
+            **{key: row.get(key) for key in (
+                "id", "score", "dense_score", "provenance", "graph_boost", "composite_score",
+            )},
+        }, sort_keys=True))
 
     if expect == "alive":
         if mode != MODE_HYBRID:
@@ -309,10 +322,10 @@ def run(expect: str, top_k: int) -> int:
     if found:
         print(
             "\n✗ CONTROL HAS NO POWER — gold was retrieved with the dense arm "
-            "switched off, so BM25 can reach it after all. Every green this "
-            "control has ever produced was uninformative: it would pass with "
-            "vector search entirely removed. Retune the fixture (see the module "
-            "docstring) until a bm25-only run misses gold."
+            "switched off. Inspect the ranked provenance above: sparse retrieval "
+            "or graph expansion reached gold, so this run does not prove a dense "
+            "contribution. Diagnose the retrieval path without changing the "
+            "fixture, cutoff or scored corpus to obtain a pass."
         )
         return EXIT_REGRESSION
     print("✓ control has power — with the dense arm off, gold is missed as required")

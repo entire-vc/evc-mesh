@@ -34,7 +34,7 @@ beforeEach(() => {
   useTaskStore.setState({ tasks: [], tasksById: {}, tasksByStatus: {} });
 });
 
-describe("board task list — description projection (#32f4c087)", () => {
+describe("board task list — description projection", () => {
   it("asks the API to leave descriptions out", async () => {
     mockedApi.mockResolvedValue({ items: [], total_count: 0, page: 1 });
 

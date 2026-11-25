@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 
-// Regression guard for the class audited in Mesh #acf58d59 / #8816431f and
+// Regression guard for the class audited in an internal ticket / an internal ticket and
 // extended by the i18n framework (L1.2): a date or number formatted with the
 // locale of whoever is LOOKING at it (or a hard-coded "en-US") is
 // unpredictable visible text. Since the interface has a language setting, all
 // display formatting goes through `@/i18n/format`, which formats for the
 // current UI language.
 //
-// Allow-list phrasing (Mesh #f70347b5): the only code allowed to call the
+// Allow-list phrasing: the only code allowed to call the
 // locale-sensitive formatting APIs is src/i18n/. Everywhere else:
 //
 //   flagged   x.toLocaleString(...) / toLocaleDateString(...) / toLocaleTimeString(...)

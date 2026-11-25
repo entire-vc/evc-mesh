@@ -10,7 +10,7 @@ description: >-
 # advisory arm's) and was MISSING from the required arm — the merge-gating
 # `Memory recall gate`, whose step summary nevertheless told readers that "the
 # alert below is what stops it being silent". There was no alert below it. From
-# #394 (2026-07-28 05:02Z) until #f70347b5 landed a baseline, that check's
+# #394 (2026-07-28 05:02Z) until that fix landed a baseline, that check's
 # steady state was `GATE_REASON: no-baseline` on every run, on branches AND on
 # main, and it paged nobody. Its blindness was recorded only in a step summary
 # attached to a green check, which nothing polls.

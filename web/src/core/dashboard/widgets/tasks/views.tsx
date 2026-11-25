@@ -6,7 +6,7 @@ import { useMemo, type ElementType, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowRight, CheckSquare, Inbox, ListFilter } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import { EntityIcon } from "@/components/ui/entity-icon";
+import { ProjectLabel } from "@/components/ui/project-label";
 import { InlineEdit, ListedTasksProvider, TaskLink, useCan } from "@/core/primitives";
 import { cn } from "@/lib/cn";
 import type { Task } from "@/types";
@@ -75,10 +75,7 @@ function TaskRow({ task, project, icon, edit, extra }: { task: Task; project: st
       <TaskLink taskId={task.id} className="min-w-0 flex-1 truncate font-medium hover:underline">
         {task.title}
       </TaskLink>
-      <span className="hidden shrink-0 items-center gap-0.5 truncate text-[10px] text-muted-foreground @xs:inline-flex @xs:max-w-24 @md:max-w-40">
-        <EntityIcon value={icon} className="h-2.5 w-2.5 shrink-0" />
-        <span className="truncate">{project}</span>
-      </span>
+      <ProjectLabel icon={icon} name={project} className="hidden shrink-0 text-[10px] text-muted-foreground @xs:inline-flex @xs:max-w-24 @md:max-w-40" />
       {edit ? (
         <span className="hidden shrink-0 text-[10px] text-muted-foreground @sm:inline">
           <InlineEdit taskId={task.id} field="due_date">
@@ -159,10 +156,7 @@ export const TriageQueueView: DashboardWidgetView<"triage-queue"> = ({ data, act
                   ) : null}
                 </div>
                 <p className="mt-0.5 flex min-w-0 flex-wrap gap-x-1.5 text-[10px] text-muted-foreground">
-                  <span className="flex max-w-full items-center gap-0.5 truncate">
-                    <EntityIcon value={v.projectIcons?.[task.project_id]} className="h-2.5 w-2.5 shrink-0" />
-                    <span className="truncate">{v.projectNames[task.project_id] ?? t("dashboard.tasks.unknownProject")}</span>
-                  </span>
+                  <ProjectLabel icon={v.projectIcons?.[task.project_id]} name={v.projectNames[task.project_id] ?? t("dashboard.tasks.unknownProject")} />
                   {task.created_by_name ? <span className="max-w-full truncate">· {t("dashboard.tasks.triage.by", { name: task.created_by_name })}</span> : null}
                   <span title={task.created_at}>· {formatShort(task.created_at)}</span>
                 </p>

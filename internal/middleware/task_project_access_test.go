@@ -267,6 +267,9 @@ var notTaskOwnedParams = map[string]bool{
 	// a workspace's dashboard (Dashboards extension): contained in :ws_id by
 	// workspaceScopedPairParams, read and write rules are the service's
 	"dashboard_id": true,
+	// a two-step upload: visible only to the actor that declared it; the
+	// declare route was project-checked through its :doc_id / :task_id
+	"upload_id": true,
 }
 
 func TestEveryRouteParamIsClassified(t *testing.T) {

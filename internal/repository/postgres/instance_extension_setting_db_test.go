@@ -92,7 +92,7 @@ func TestInstanceExtensionSettingRepo_SettingsMustBeAnObject(t *testing.T) {
 }
 
 // Instance admin = human owner/admin of the oldest non-deleted workspace
-// (decision on card 807ac4ed). The fixture workspaces are dated in 4000 BC (the shared CI DB holds zero-time
+// (decision). The fixture workspaces are dated in 4000 BC (the shared CI DB holds zero-time
 // workspaces, 1970 is not old enough) so they are the oldest regardless of what else lives in the test database.
 func TestInstanceExtensionSettingRepo_IsInstanceAdminOldestWorkspace(t *testing.T) {
 	db := agentDigestTestDB(t)

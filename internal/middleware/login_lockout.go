@@ -13,7 +13,7 @@ import (
 // protection is only as good as the reverse-proxy chain's willingness to
 // relay a trustworthy client IP, and that cannot be assumed for every
 // deployment (self-host, a partner instance, or simply a misconfigured hop
-// — see #5d759aad). The account identifier sent in the login request body,
+// ). The account identifier sent in the login request body,
 // by contrast, is present and meaningful regardless of network topology —
 // so LoginLockout keys on THAT, and is the PRIMARY brute-force defense for
 // POST /auth/login. Per-IP limiting is layered on top of it only where the

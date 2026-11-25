@@ -12,12 +12,12 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// RRF arm weights are runtime-configurable (task #acb84eaa)
+// RRF arm weights are runtime-configurable
 //
 // The weights were compile-time constants, which made the required weight sweep
 // impossible without a rebuild per grid point. They are now resolved once per service
 // from the environment. These tests pin the plumbing — NOT the values: choosing values
-// is the sweep's job, and it is blocked on #2c087b2a (an honest candidate pool) because
+// is the sweep's job, and it is blocked on an internal ticket (an honest candidate pool) because
 // sweeping against a pool that post-filters 35–70% of the fixtures optimises noise.
 // ---------------------------------------------------------------------------
 

@@ -132,7 +132,7 @@ These are open work; do not rely on or promise them.
   an internal ticket) and E5 (runner sessions) are accepted. The limits below are what remains
   true after that acceptance.
 - **Warm reply ≤3 s is not guaranteed.** Cold reply ≤15 s was accepted; the warm ≤3 s target was
-  not accepted (follow-up an internal ticket). Do not promise it to users.
+  not accepted. Do not promise it to users.
 - **Codex replies arrive as one piece.** Multi-block streaming for Codex is not provided (scenario
   S04b was skipped by agreement); Codex Stop was verified only during a tool call, not after a text
   delta.
@@ -141,7 +141,7 @@ These are open work; do not rely on or promise them.
 - **No capacity-aware claim.** A claim returns what is queued up to `max`; the slot counts a runner
   reports in its snapshot (§12) are shown, not used for scheduling.
 - **Write-workspace is Codex-only.** With the runner's `chat_workspace="write"` a Codex chat gets a
-  slot from the repo pool and writes inside `workspace-write` (the runner implementation;
+  slot from the repo pool and writes inside `workspace-write` (evc-mesh-runner !205;
   canary on an isolated instance, rolled back). The other harness refuses with
   `chat_workspace_unconfinable`: it has no write boundary without an OS sandbox, so write is not
   allowed there. Without the setting a chat session has the agent∩user rights over the Mesh API

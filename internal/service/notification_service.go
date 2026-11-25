@@ -384,8 +384,8 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 					log.Printf("[notification][email] NOT DELIVERED: send to %s failed for user %s (event %s, workspace %s): %v",
 						addr, userID, event.EventType, event.WorkspaceID, err)
 				} else {
-					// The success side had no line at all until now (an internal ticket,
-					// 2026-09-06): "no error was logged" and "this code path never
+					// The success side had no line at all until now
+					// (2026-09-06): "no error was logged" and "this code path never
 					// ran" produced byte-identical silence, which an independent
 					// verifier correctly refused to accept as proof of delivery.
 					log.Printf("[notification][email] delivered: event %s to user %s at %s (workspace %s)",

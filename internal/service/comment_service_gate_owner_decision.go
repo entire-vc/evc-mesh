@@ -20,7 +20,7 @@ const (
 )
 
 // applyGateDecision fills the decision_* fields of info from the marker scan
-// (task dependency delivery fix). It only REPORTS: it never clears a gate, and it does not
+// It only REPORTS: it never clears a gate, and it does not
 // decide who may — releaseHumanGateOnWithdrawal keeps that.
 //
 // An answer counts only when ALL of these hold, each closing one way the old
@@ -30,7 +30,7 @@ const (
 //   - its author is the marker's addressee: the human user, or the agent whose
 //     slug the marker itself names (a user is matched by username, in the task's workspace), or the
 //     directory-confirmed lead of the task's project / the CPO (isDelegatedDecisionSource,
-//     Lead review). Any other agent, however it describes itself, does not qualify;
+//     Gary 29a5963c). Any other agent, however it describes itself, does not qualify;
 //   - it is not a service/auto comment, not a hold line, and not the owner's own;
 //   - the body carries text outside quoted spans (a pure quote is not an answer).
 //
@@ -66,8 +66,8 @@ func (s *commentService) applyGateDecision(ctx context.Context, info *domain.Hum
 }
 
 // isDelegatedDecisionSource says whether an agent answer may be REPORTED to the gate
-// owner although the agent is not the marker's addressee (task dependency delivery fix, Lead
-// review, option 1): the authenticated lead of the task's own project (the project's
+// owner although the agent is not the marker's addressee (Gary
+// 29a5963c, option 1): the authenticated lead of the task's own project (the project's
 // effective default_assignee) or the CPO, both read from the team directory, never from
 // the comment text. It is a source predicate only: it lets the owner be told, it never
 // lets the answerer clear anything (releaseHumanGateOnWithdrawal keeps that), and a
@@ -161,7 +161,7 @@ func (s *commentService) isMarkerAddressee(ctx context.Context, c gateAnswerCand
 	return false
 }
 
-// gateWithdrawalReceipt says what became of a withdrawal-shaped comment (task dependency delivery fix AC4).
+// gateWithdrawalReceipt says what became of a withdrawal-shaped comment (an internal ticket AC4).
 // Read-only: it re-reads the task and the ownership report after releaseHumanGateOnWithdrawal
 // has run and never changes anything. It answers only for agent comments that read as a
 // withdrawal (negator in scope, not a service/hold line); anything else gets no receipt.

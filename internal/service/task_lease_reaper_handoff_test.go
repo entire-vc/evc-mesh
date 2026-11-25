@@ -75,7 +75,7 @@ func TestHandoff_PeerRequestForSignatureReturnsToTodo(t *testing.T) {
 	}
 }
 
-// Riker's third case: the assignee's WAIT, then the reviewer's verdict. The SQL candidate
+// Robin's third case: the assignee's WAIT, then the reviewer's verdict. The SQL candidate
 // query lets the card through once the marker is no longer the newest word (see
 // TestFindStaleUnleasedInProgress_LiveWaitMarker); here the reaper must send it to todo.
 func TestHandoff_ReviewerCommentNewerThanAssigneeWaitReturnsToTodo(t *testing.T) {

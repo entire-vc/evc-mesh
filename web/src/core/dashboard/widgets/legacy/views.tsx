@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { ArrowRight, Inbox, MonitorDot } from "lucide-react";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { Card, CardContent } from "@/components/ui/card";
-import { EntityIcon } from "@/components/ui/entity-icon";
+import { ProjectLabel } from "@/components/ui/project-label";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
 import type { DashboardWidgetView } from "../../types";
@@ -65,10 +65,7 @@ export const TriageWidgetView: DashboardWidgetView<"triage"> = ({ data, actions 
                       {priorityLabel(t, task.priority)}
                     </span>
                     <span className="min-w-0 flex-1 truncate font-medium">{task.title}</span>
-                    <span className="flex shrink-0 items-center gap-0.5 truncate text-[10px] text-muted-foreground">
-                      <EntityIcon value={v.projectIcons?.[task.project_id]} className="h-2.5 w-2.5 shrink-0" />
-                      {v.projectNames[task.project_id] ?? ""}
-                    </span>
+                    <ProjectLabel icon={v.projectIcons?.[task.project_id]} name={v.projectNames[task.project_id] ?? ""} className="max-w-40 shrink-0 text-[10px] text-muted-foreground" />
                   </Link>
                 </li>
               ))}

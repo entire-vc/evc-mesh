@@ -14,7 +14,7 @@ Writes `MESH_AGENT_KEY=<key>`, `MESH_WORKSPACE_ID=<id>`, `BENCH_WORKSPACE_SLUG=<
 and `BENCH_SHARED_TAG=<slug>` into the file named by `--env-file` (default
 `$GITHUB_ENV`). Two independent guards gate a write into this arm's workspace,
 and both compare against a value that is only ever right if read from what THIS
-run actually minted, never hardcoded (#1974ef80):
+run actually minted, never hardcoded:
   - assert_bench_workspace() (client-side) refuses unless MESH_AGENT_KEY
     resolves to BENCH_WORKSPACE_SLUG — this arm's workspace is minted fresh
     every run and is never the `lme-bench` slug that guard defaults to.

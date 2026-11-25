@@ -594,7 +594,7 @@ func TestOAuthServerMetadata(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// MR !1008 review fixes (Garfield, 2026-09-24): B1 (connector perms <= the
+// MR !1008 review fixes (Gary, 2026-09-24): B1 (connector perms <= the
 // consenting user's role), B2 (redirect_uri scheme allow-list), M2 (agent
 // name collision on a second connector for the same client_name).
 // M1 (concurrent refresh) lives in oauth_service_test.go — it does not need

@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// TestReviewTriageInitialWait pins the fix for task #c5b5fb48: the review-triage
+// TestReviewTriageInitialWait pins the fix: the review-triage
 // scheduler's first wait must be computed from wall-clock time since the job's
 // persisted last_run_at, not reset to a fresh full interval on every process
 // restart. Measured in production before this fix: 70 restarts / 6 days against

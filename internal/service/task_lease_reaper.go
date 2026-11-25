@@ -350,7 +350,7 @@ func (r *checkoutLeaseReaper) handBack(ctx context.Context, tasks []domain.Task,
 			}
 			// A card that open work formally waits on is not parked either:
 			// backlog takes it out of every feed, and the dependent then waits on
-			// a card nobody is working (this change blocked this change for ~16 h on
+			// a card nobody is working (an internal ticket blocked an internal ticket for ~16 h on
 			// 11.10). Hand it back to its own assignee's todo instead.
 			//
 			// Unreadable dependency state decides nothing: the card stays where it
@@ -513,7 +513,7 @@ func (r *checkoutLeaseReaper) parkTask(ctx context.Context, task *domain.Task, d
 	// failed, and rewriting the same alarm buys nothing while doing real harm:
 	// each rewrite pushes due_date another dueHours out, so the wake-up the park
 	// depends on recedes once per tick and can never arrive. Measured on prod
-	// 2026-09-06, this change: 145 rewrites, due_date sliding to now+24h every 60s.
+	// 2026-09-06: 145 rewrites, due_date sliding to now+24h every 60s.
 	//
 	// A previously-fired alarm (due_date in the past) is deliberately NOT treated
 	// as armed, so a card that parked, woke, and stalled again is re-armed with a

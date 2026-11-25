@@ -1,8 +1,8 @@
 -- +goose Up
 
 -- The third exit from human_gate: "the question was answered, the answer
--- arrived through a different channel" (task #c56339b1, contract
--- docs/human-gate-decision-recorded.md, epic #4036ae02).
+-- arrived through a different channel" (contract
+-- docs/human-gate-decision-recorded.md).
 --
 -- Today human_gate has exactly two exits, and both mean "the ask stopped
 -- existing": releaseHumanGate (Pavel commented on the task himself) and
@@ -11,7 +11,7 @@
 -- no honest way to record that — the only lever it can reach is withdrawal,
 -- which asserts "there was never a question" where the truth is "there was a
 -- question and it has an answer". That lie is why the same question gets
--- asked again weeks later (#b392f590, contract §1).
+-- asked again weeks later (contract §1).
 --
 -- This table is the ledger for that third exit: one immutable row per
 -- decision, one immutable row per revocation of a decision. Nothing is ever
@@ -105,7 +105,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_hgd_revokes ON human_gate_decisions(revoke
 
 COMMENT ON TABLE human_gate_decisions IS
     'Append-only ledger for the third human_gate exit -- "the question was '
-    'answered, the answer arrived through another channel" (task #c56339b1). '
+    'answered, the answer arrived through another channel". '
     'A row with revokes_id NULL is a decision; a row with revokes_id set is a '
     'revocation of that decision. Never UPDATEd -- see trg_human_gate_decisions_append_only.';
 COMMENT ON COLUMN human_gate_decisions.provenance IS

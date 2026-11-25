@@ -1,5 +1,5 @@
 -- +goose Up
--- Found live during #ba959606's red/green control of MENTION_HANDOFF_ENFORCE=1:
+-- Found live during an internal ticket's red/green control of MENTION_HANDOFF_ENFORCE=1:
 -- @riker no longer passes the mention-handoff gate's capability exemption.
 --
 -- Confirmed on prod (mesh_read, 2026-09-13):
@@ -14,7 +14,7 @@
 -- "mention_wakes" key anywhere — the object was replaced wholesale, not
 -- merged into.
 --
--- Root cause (structural, tracked separately as #33b7d4b7, not fixed here):
+-- Root cause (structural, tracked separately as an internal ticket, not fixed here):
 -- rules_service.go's UpdateAgentProfile does `agent.Capabilities =
 -- profile.Capabilities` — a blind replace — and a SEPARATE consumer
 -- (GetMeshConfig's TeamAgentConfig.Capabilities []string, used by workspace
@@ -27,7 +27,7 @@
 -- This migration restores the known-good state so the gate's documented
 -- escape hatch works again. It does NOT fix the underlying write path — a
 -- future update_agent_profile/config-import call on Riker's row can destroy
--- this flag again exactly the same way. See #33b7d4b7 for the actual fix.
+-- this flag again exactly the same way. See an internal ticket for the actual fix.
 --
 -- Trade-off accepted knowingly: this drops the "fleet-coordination" tag that
 -- was in the array. Verified zero code consumers reference that literal

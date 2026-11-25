@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
@@ -28,10 +29,14 @@ func (m *memStore) SetBlocked(_ context.Context, id string, blocked bool, reason
 	return true, nil
 }
 
-type memJournal struct{ actions []string }
+type memJournal struct {
+	actions []string
+	details []json.RawMessage
+}
 
 func (j *memJournal) AppendJournal(_ context.Context, e *domain.InstanceExtensionJournalEntry) error {
 	j.actions = append(j.actions, e.ExtensionID+":"+e.Action)
+	j.details = append(j.details, e.Details)
 	return nil
 }
 

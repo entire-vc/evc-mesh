@@ -89,7 +89,7 @@ func TestArtifact_MarshalJSON_ThroughPointer(t *testing.T) {
 // TestArtifact_MarshalJSON_DownloadPath proves every serialised Artifact
 // carries the stable, machine-readable download path — the counterpart to
 // metadata.tr_public_url that stays valid regardless of the Team Relay
-// share's visibility (task #97c60be9).
+// share's visibility.
 func TestArtifact_MarshalJSON_DownloadPath(t *testing.T) {
 	id := uuid.New()
 	art := Artifact{ID: id}

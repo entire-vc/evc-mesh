@@ -15,7 +15,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/mdoc"
 )
 
-// The three cases below are the ones measured on prod in #90dd31f9, in the order
+// The three cases below are the ones measured on prod, in the order
 // they were measured. Each asserts on the CONTENT the stored offsets address,
 // never on the orphaned flag: a flag agreeing with itself while disagreeing with
 // the document is precisely the defect, so a test reading the flag would have

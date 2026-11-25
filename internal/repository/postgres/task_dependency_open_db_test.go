@@ -12,7 +12,7 @@ import (
 // Untagged on purpose: it runs in the `test` job (DATABASE_URL, skipped when no
 // Postgres is reachable) so the coverage gate sees HasOpenBlockedDependents,
 // which only real SQL can prove. The reaper reads it to keep a card that open
-// work waits on out of backlog (#53f30091 → #14580276, 11.10).
+// work waits on out of backlog (an internal ticket → an internal ticket, 11.10).
 
 type depFixture struct {
 	db         *sqlx.DB

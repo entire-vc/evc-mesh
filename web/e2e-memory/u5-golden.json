@@ -1,0 +1,192 @@
+{
+  "analytics": {
+    "period": {
+      "from": "2026-11-11T12:00:00Z",
+      "to": "2026-11-18T12:00:00Z"
+    },
+    "previous_period": {
+      "from": "2026-11-03T12:00:00Z",
+      "to": "2026-11-11T12:00:00Z"
+    },
+    "kpis": {
+      "reads": 84,
+      "writes": 30,
+      "with_reason": 24,
+      "hit_rate": 0.75,
+      "useful_rate": 0.6,
+      "miss_rate": 0.25,
+      "dead30": 0.4,
+      "tokens_est": 12000,
+      "superseded_served_rate": 0.05
+    },
+    "previous_kpis": {
+      "reads": 84,
+      "writes": 30,
+      "with_reason": 24,
+      "hit_rate": 0.75,
+      "useful_rate": 0.6,
+      "miss_rate": 0.25,
+      "dead30": 0.4,
+      "tokens_est": 12000,
+      "superseded_served_rate": 0.05
+    },
+    "series": [
+      {
+        "day": "2026-11-17",
+        "reads": 12,
+        "reads_by_op": {
+          "get_memory": 4,
+          "recall": 8
+        },
+        "served_rows_by_source": {
+          "doc": 5,
+          "memory": 20
+        },
+        "useful_rate": 0.6,
+        "writes": 4,
+        "with_reason": 3,
+        "hits": 6,
+        "useful": 4,
+        "reasons": {
+          "writes": "excluded_by_filter"
+        }
+      }
+    ],
+    "rows": [
+      {
+        "key": "6a1b669f-5cb4-4822-99fc-45cdc5b0fc95",
+        "label": "Liam",
+        "key2": "recall",
+        "label2": "recall",
+        "reads": 50,
+        "hits": 40,
+        "useful": 28,
+        "writes": 20,
+        "with_reason": 16,
+        "hit_rate": 0.8,
+        "useful_rate": 0.7,
+        "tokens_est": 8000,
+        "served_rows": 90,
+        "superseded_served_rate": 0.05,
+        "reasons": {
+          "superseded_served_rate": "no_data"
+        }
+      }
+    ],
+    "totals": {
+      "key": "6a1b669f-5cb4-4822-99fc-45cdc5b0fc95",
+      "label": "Liam",
+      "key2": "recall",
+      "label2": "recall",
+      "reads": 50,
+      "hits": 40,
+      "useful": 28,
+      "writes": 20,
+      "with_reason": 16,
+      "hit_rate": 0.8,
+      "useful_rate": 0.7,
+      "tokens_est": 8000,
+      "served_rows": 90,
+      "superseded_served_rate": 0.05,
+      "reasons": {
+        "superseded_served_rate": "no_data"
+      }
+    },
+    "quality": {
+      "day": "2026-11-17",
+      "total": 130,
+      "active": 100,
+      "archived": 30,
+      "superseded_active": 8,
+      "conflicted": 2,
+      "no_kind": 10,
+      "statuslog_like": 5,
+      "dup_groups": 3,
+      "dup_rows": 7,
+      "dead30": 40,
+      "dead90": 25
+    },
+    "coverage": {
+      "journal_since": "2025-11-18T12:00:00Z",
+      "unknown_share": 0.02,
+      "caller_kind": [
+        {
+          "caller_kind": "agent_tool",
+          "reads": 70
+        }
+      ]
+    },
+    "reasons": {
+      "quality.dead90": "no_journal_before"
+    }
+  },
+  "empty_queries": {
+    "items": [
+      {
+        "query_hash": "h1",
+        "query_text": "how to restart runner",
+        "redacted": false,
+        "reason": "text_expired",
+        "agent_id": "6a1b669f-5cb4-4822-99fc-45cdc5b0fc95",
+        "agent_name": "Liam",
+        "count": 3,
+        "last_at": "2026-11-18T12:00:00Z"
+      }
+    ],
+    "total": 1,
+    "page": 1,
+    "page_size": 20,
+    "reason": "no_data",
+    "coverage": {
+      "detail_since": "2026-10-19T12:00:00Z",
+      "reason": "retention"
+    }
+  },
+  "records": {
+    "items": [
+      {
+        "memory_id": "6a1b669f-5cb4-4822-99fc-45cdc5b0fc95",
+        "key": "deploy-url",
+        "redacted": false,
+        "scope": "workspace",
+        "kind": "fact",
+        "project_id": "6a1b669f-5cb4-4822-99fc-45cdc5b0fc95",
+        "agent_id": "6a1b669f-5cb4-4822-99fc-45cdc5b0fc95",
+        "created_at": "2026-11-18T12:00:00Z",
+        "served": 12,
+        "useful": 5,
+        "last_served_at": "2026-11-18T12:00:00Z",
+        "group_id": "g1",
+        "group_size": 2
+      }
+    ],
+    "total": 1,
+    "page": 1,
+    "page_size": 20,
+    "reason": "no_data",
+    "coverage": {
+      "detail_since": "2026-10-19T12:00:00Z",
+      "reason": "retention"
+    }
+  },
+  "unknown_sources": {
+    "items": [
+      {
+        "route": "/api/v1/memories/recall",
+        "user_agent": "curl/8",
+        "reads": 9,
+        "sample_keys": [
+          "deploy-url"
+        ]
+      }
+    ],
+    "total": 1,
+    "page": 1,
+    "page_size": 20,
+    "reason": "no_data",
+    "coverage": {
+      "detail_since": "2026-10-19T12:00:00Z",
+      "reason": "retention"
+    }
+  }
+}

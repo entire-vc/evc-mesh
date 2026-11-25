@@ -337,7 +337,7 @@ func TestAgentWorkspaceGrantHandler_ListAgentWorkspaces_RejectsBadAgentID(t *tes
 }
 
 // ---------------------------------------------------------------------------
-// ListMyWorkspaces (GET /agents/me/workspaces) — task #80dfb336
+// ListMyWorkspaces (GET /agents/me/workspaces)
 // ---------------------------------------------------------------------------
 
 func TestAgentWorkspaceGrantHandler_ListMyWorkspaces_UsesContextAgentIDNotPathParam(t *testing.T) {

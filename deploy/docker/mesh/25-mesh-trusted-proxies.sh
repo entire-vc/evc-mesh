@@ -9,7 +9,7 @@
 # addition to loopback / link-local / private ranges" — see cmd/api/main.go),
 # so one variable defines one boundary for both services. Two different
 # trust boundaries on one request path is how the per-IP limiters were
-# silently unkeyed before (#5d759aad, #358a35dc).
+# silently unkeyed before.
 #
 # Fail closed: a malformed entry stops the container rather than being
 # dropped, because a dropped entry means an edge you thought was trusted

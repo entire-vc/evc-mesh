@@ -38,6 +38,28 @@ def write(path: str, text: str) -> str:
 
 
 class TestProfileParsing(unittest.TestCase):
+    def test_cross_package_counters_measure_each_block_once(self):
+        # go test -coverpkg emits the dependency's blocks for each test binary.
+        # A zero in its own binary must not erase a caller's integration hit.
+        for mode in ('atomic', 'count', 'set'):
+            for counts in ((0, 1), (1, 0), (1, 1), (0, 0)):
+                with self.subTest(mode=mode, counts=counts), tempfile.TemporaryDirectory() as d:
+                    p = write(os.path.join(d, "c.out"), f"mode: {mode}\n" + "".join(
+                        f"{MODULE}/a.go:10.1,12.2 3 {n}\n" for n in counts))
+                    blocks = parse_profile(p, MODULE)
+                    hits = max(counts) if mode == 'set' else sum(counts)
+                    self.assertEqual(blocks['a.go'], [(10, 1, 12, 2, 3, hits)])
+                    covered, total, _ = measure({'a.go': {11}}, blocks)
+                    self.assertEqual((covered, total), (3 if any(counts) else 0, 3))
+
+    def test_conflicting_statement_counts_cannot_be_merged(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = write(os.path.join(d, "c.out"), "mode: atomic\n"
+                      f"{MODULE}/a.go:10.1,12.2 3 0\n"
+                      f"{MODULE}/a.go:10.1,12.2 4 1\n")
+            with self.assertRaisesRegex(ValueError, 'statement count'):
+                parse_profile(p, MODULE)
+
     def test_strips_the_module_prefix_so_paths_match_the_diff(self):
         with tempfile.TemporaryDirectory() as d:
             p = write(os.path.join(d, "c.out"),

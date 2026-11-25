@@ -508,7 +508,8 @@
       "access": "Workspace access",
       "route": "Route & runs",
       "execution": "Execution & routes",
-      "state": "Observed state"
+      "state": "Observed state",
+      "stats": "Statistics"
     },
     "loadingRuntime": "Loading runtime",
     "loadError": "Runtime data could not be loaded. Nothing below is assumed.",
@@ -574,7 +575,8 @@
       "noControllers": "No controllers in the catalog.",
       "controllerDisabled": "controller disabled",
       "heartbeat": "heartbeat {{when}}"
-    }
+    },
+    "statsTitle": "Agent's work"
   },
   "policyEditor": {
     "saved": "Saved as revision {{revision}}.",

@@ -12,7 +12,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
-// Task #8f191cf7 (rule 4, #0f3e944d twice): an executor's own «⏳ WAIT …» status
+// (rule 4, an internal ticket twice): an executor's own «⏳ WAIT …» status
 // line says "I keep the current state", yet its last paragraph routinely holds a
 // negator ("resolved mapping paths", "не требуется"), and the withdrawal path read that as
 // the author retracting its own Pavel-ask. The gate was lifted although the
@@ -39,7 +39,7 @@ func TestIsHoldMarkerComment(t *testing.T) {
 	for body, want := range map[string]bool{
 		"⏳ WAIT pipeline:g/r#1\nrest":         true,
 		"  \n↻ NEXT: do the thing":            true,
-		"⏳ WAIT decision:@garfield: GO?":      true,
+		"⏳ WAIT decision:@gary: GO?":          true,
 		"Отзываю запрос: не нужен.":           false,
 		"Итог.\n⏳ WAIT 20m: позже — в хвосте": false,
 		"": false,

@@ -55,7 +55,7 @@ func checkoutBoardFixture(t *testing.T) checkoutBoard {
 // The bug this file exists for: a card taken into work was indistinguishable on the
 // board from an untouched one, because checkout is a lock and never changed status.
 // 12 cards fleet-wide held live checkouts while In Progress showed 1 (measured
-// 2026-08-20, task #5f9c5117).
+// 2026-08-20).
 func TestCheckoutTask_MovesTodoCardIntoInProgress(t *testing.T) {
 	b := checkoutBoardFixture(t)
 

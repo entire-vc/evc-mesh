@@ -11,7 +11,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// End-to-end proof (task #bb1aaa09, tail of #e8388213) that a "❓ Blocking @pavel"
+// End-to-end proof (tail) that a "❓ Blocking @pavel"
 // marker posted on a secret-leak/rotation card does NOT arm human_gate — closing the
 // gap the agent-lane PreToolUse hook (secret-rotation-gate-guard.py) cannot cover: a
 // marker posted through the Mesh web UI has no PreToolUse to pass through at all.

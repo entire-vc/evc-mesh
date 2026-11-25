@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -271,7 +272,7 @@ type updateAgentRequest struct {
 	Model              *string           `json:"model"` // "" clears (NULL)
 	// ShortTag binds as RawMessage, not *string, because encoding/json
 	// treats a JSON null as a no-op on a pointer — exactly like an absent
-	// field — while the contract (Mesh an internal ticket) distinguishes them: absent
+	// field — while the contract (Mesh aa1b4845) distinguishes them: absent
 	// preserves the stored value, null clears it. RawMessage keeps the two
 	// apart: nil = absent, "null" = explicit clear.
 	ShortTag json.RawMessage `json:"short_tag"`
@@ -291,7 +292,7 @@ func normalizeAgentModel(raw string) (model *string, ok bool) {
 	return &m, true
 }
 
-// normalizeAgentShortTag trims a human-authored role label (Mesh an internal ticket).
+// normalizeAgentShortTag trims a human-authored role label (Mesh aa1b4845).
 // ok=false means it is longer than domain.AgentShortTagMaxLen CHARACTERS —
 // runes, not bytes: the label is human-authored UI text («разработчик» is 12
 // chars but 24 bytes), so a byte budget would reject legal values. The
@@ -934,45 +935,152 @@ func (h *AgentHandler) UpdateMe(c echo.Context) error {
 // against. Non-positive counts and empty keys are dropped rather than
 // erroring (see AgentSessionRepository.IncrementToolBreakdown).
 type reportSessionRequest struct {
-	TokensIn      int64            `json:"tokens_in"`
-	TokensOut     int64            `json:"tokens_out"`
+	// Pointers tell "not sent" from a sent 0: the session still adds a missing
+	// number as a known 0 (as before), the usage journal stores it as NULL.
+	TokensIn      *int64           `json:"tokens_in"`
+	TokensOut     *int64           `json:"tokens_out"`
 	Model         string           `json:"model"`
-	EstimatedCost float64          `json:"estimated_cost"`
+	EstimatedCost *float64         `json:"estimated_cost"`
 	TaskID        *string          `json:"task_id"`
 	ToolBreakdown map[string]int64 `json:"tool_breakdown"`
 	// Unknown names the measures the caller has no figure for, each separately:
-	// "tokens_in", "tokens_out", "estimated_cost". A named measure adds nothing and marks the
-	// session's total for it incomplete for good; sending a non-zero number for a measure named
-	// here is a 400, not a silent pick. Absent or empty = every measure is a known figure, as
-	// before (an omitted number is a known 0).
+	// "tokens_in", "tokens_out", "estimated_cost", "cache_read", "cache_write". A named
+	// measure adds nothing and marks the session's total for it incomplete for good;
+	// sending a non-zero number for a measure named here is a 400, not a silent pick.
+	// Absent or empty = every measure is a known figure, as before (an omitted session
+	// number is a known 0 on the session, NULL in the journal).
 	Unknown []string `json:"unknown"`
+
+	// Optional turn fields (usage journal, agent_usage_turns). Not sent = NULL.
+	// TurnID is the runner's id of the turn: a repeat with the same id adds
+	// nothing, the same as a repeat with the same Idempotency-Key.
+	TurnID    *string    `json:"turn_id"`
+	StartedAt *time.Time `json:"started_at"`
+	// EndedAt picks the hour the turn counts in (UTC); without it the report time does.
+	EndedAt *time.Time `json:"ended_at"`
+	// Provider without a value is derived from the model.
+	Provider *string `json:"provider"`
+	// AccountRef is the opaque limit-pool label "<harness>/<account>"
+	// (claude/bob-team); never a secret and never an email.
+	AccountRef  *string `json:"account_ref"`
+	BillingMode *string `json:"billing_mode"`
+	// CacheRead and CacheWrite are "of which" parts of tokens_in; CacheWrite1h
+	// is the part of CacheWrite written with the 1 h TTL.
+	CacheRead    *int64 `json:"cache_read"`
+	CacheWrite   *int64 `json:"cache_write"`
+	CacheWrite1h *int64 `json:"cache_write_1h"`
 }
 
-// sessionUsageFromRequest reads the report as a domain.SessionUsage, refusing an unknown
-// measure name or a figure sent for a measure declared unknown.
+const maxUsageRefLen = 200
+
+func derefOr[T any](p *T, zero T) T {
+	if p == nil {
+		return zero
+	}
+	return *p
+}
+
+// sessionUsageFromRequest reads the report as a domain.SessionUsage (with its
+// journal turn), refusing an unknown measure name, a figure sent for a measure
+// declared unknown and a malformed turn field.
 func sessionUsageFromRequest(req reportSessionRequest) (domain.SessionUsage, error) {
-	u := domain.SessionUsage{TokensIn: req.TokensIn, TokensOut: req.TokensOut, Cost: req.EstimatedCost}
+	u := domain.SessionUsage{
+		TokensIn: derefOr(req.TokensIn, 0), TokensOut: derefOr(req.TokensOut, 0), Cost: derefOr(req.EstimatedCost, 0),
+	}
+	turn := &domain.UsageTurn{
+		ID:       uuid.New(),
+		TokensIn: req.TokensIn, TokensOut: req.TokensOut, CostReported: req.EstimatedCost,
+		CacheRead: req.CacheRead, CacheWrite: req.CacheWrite, CacheWrite1h: req.CacheWrite1h,
+		StartedAt: req.StartedAt, EndedAt: req.EndedAt,
+	}
 	for _, name := range req.Unknown {
 		switch name {
 		case "tokens_in":
-			if req.TokensIn != 0 {
+			if u.TokensIn != 0 {
 				return u, fmt.Errorf("tokens_in is listed as unknown but a figure was sent")
 			}
 			u.TokensInUnknown = true
+			turn.TokensIn = nil
 		case "tokens_out":
-			if req.TokensOut != 0 {
+			if u.TokensOut != 0 {
 				return u, fmt.Errorf("tokens_out is listed as unknown but a figure was sent")
 			}
 			u.TokensOutUnknown = true
+			turn.TokensOut = nil
 		case "estimated_cost":
-			if req.EstimatedCost != 0 {
+			if u.Cost != 0 {
 				return u, fmt.Errorf("estimated_cost is listed as unknown but a figure was sent")
 			}
 			u.CostUnknown = true
+			turn.CostReported = nil
+		case "cache_read":
+			if derefOr(req.CacheRead, 0) != 0 {
+				return u, fmt.Errorf("cache_read is listed as unknown but a figure was sent")
+			}
+			turn.CacheRead = nil
+		case "cache_write":
+			if derefOr(req.CacheWrite, 0) != 0 {
+				return u, fmt.Errorf("cache_write is listed as unknown but a figure was sent")
+			}
+			turn.CacheWrite = nil
 		default:
-			return u, fmt.Errorf("unknown measure %q: use tokens_in, tokens_out or estimated_cost", name)
+			return u, fmt.Errorf("unknown measure %q: use tokens_in, tokens_out, estimated_cost, cache_read or cache_write", name)
 		}
 	}
+	for name, v := range map[string]*int64{"cache_read": turn.CacheRead, "cache_write": turn.CacheWrite, "cache_write_1h": turn.CacheWrite1h} {
+		if v != nil && *v < 0 {
+			return u, fmt.Errorf("%s must not be negative", name)
+		}
+	}
+	if turn.CacheWrite1h != nil {
+		if turn.CacheWrite == nil {
+			return u, fmt.Errorf("cache_write_1h is a part of cache_write: send cache_write too")
+		}
+		if *turn.CacheWrite1h > *turn.CacheWrite {
+			return u, fmt.Errorf("cache_write_1h must not exceed cache_write")
+		}
+	}
+	if turn.StartedAt != nil && turn.EndedAt != nil && turn.EndedAt.Before(*turn.StartedAt) {
+		return u, fmt.Errorf("ended_at is before started_at")
+	}
+	if req.TurnID != nil {
+		ref := strings.TrimSpace(*req.TurnID)
+		if len(ref) > maxUsageRefLen {
+			return u, fmt.Errorf("turn_id is longer than %d characters", maxUsageRefLen)
+		}
+		if ref != "" {
+			turn.TurnRef = &ref
+		}
+	}
+	if req.Provider != nil {
+		p := strings.ToLower(strings.TrimSpace(*req.Provider))
+		if len(p) > 64 {
+			return u, fmt.Errorf("provider is longer than 64 characters")
+		}
+		turn.Provider = p
+	}
+	if req.AccountRef != nil {
+		ref := strings.TrimSpace(*req.AccountRef)
+		if len(ref) > maxUsageRefLen {
+			return u, fmt.Errorf("account_ref is longer than %d characters", maxUsageRefLen)
+		}
+		if strings.ContainsAny(ref, "@ \t\n") {
+			return u, fmt.Errorf("account_ref is an opaque pool label like claude/bob-team, not an email")
+		}
+		if ref != "" {
+			turn.AccountRef = &ref
+		}
+	}
+	if req.BillingMode != nil && *req.BillingMode != "" {
+		switch *req.BillingMode {
+		case "subscription", "api":
+			mode := *req.BillingMode
+			turn.BillingMode = &mode
+		default:
+			return u, fmt.Errorf("billing_mode must be subscription or api")
+		}
+	}
+	u.Turn = turn
 	return u, nil
 }
 
@@ -1051,6 +1159,17 @@ func (h *AgentHandler) ReportSession(c echo.Context) error {
 	// sum exactly. A retry with an Idempotency-Key never reaches this call
 	// twice (middleware replays the first answer).
 	active, err := h.sessionRepo.ReportUsage(ctx, agentID, agent.WorkspaceID, reqTaskID, usage, req.Model)
+	// A turn this agent already reported (same turn_id) added nothing: answer
+	// with the session the first report landed on, and add no tool counts.
+	var repeat *domain.UsageTurnRepeat
+	if errors.As(err, &repeat) {
+		answer := map[string]any{"session_id": nil}
+		if repeat.Session != nil {
+			answer = sessionReportAnswer(repeat.Session)
+		}
+		answer["turn"] = map[string]any{"id": repeat.TurnID, "repeat": true}
+		return c.JSON(http.StatusOK, answer)
+	}
 	if err != nil {
 		if done, answer := replayAfterRefusal(c, err, domain.IdemRouteSessionReport, receiptTask, replay); done {
 			return answer
@@ -1071,7 +1190,11 @@ func (h *AgentHandler) ReportSession(c echo.Context) error {
 		}
 	}
 
-	return c.JSON(http.StatusOK, sessionReportAnswer(active))
+	answer := sessionReportAnswer(active)
+	if usage.Turn != nil {
+		answer["turn"] = map[string]any{"id": usage.Turn.ID, "repeat": false}
+	}
+	return c.JSON(http.StatusOK, answer)
 }
 
 // sessionReportAnswer is the answer of POST /agents/me/sessions/report: the

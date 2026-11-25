@@ -11,7 +11,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Task cf226500: mirrorProjectMemberships (MR!1044, #ec0bc566) only runs once,
+// Task cf226500: mirrorProjectMemberships (MR!1044) only runs once,
 // at connector-agent registration. getOrCreateGrant's "existing grant is still
 // usable" branch (oauth_service.go:682-695) returns the grant as-is without
 // re-mirroring, so a human's LATER project changes never reach their connector

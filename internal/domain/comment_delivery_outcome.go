@@ -56,7 +56,7 @@ const (
 	// The lane is down AND the card would not reach it anyway.
 	ReasonRecipientOffline = "recipient_offline"
 
-	// ReasonNoQueuePath — LEGACY, no longer written (#ed60c795). It merged
+	// ReasonNoQueuePath — LEGACY, no longer written. It merged
 	// three situations with three different fixes into one verdict, and its
 	// hint named only one of them ("assign it"), so on a card that WAS the
 	// recipient's own — parked in backlog — it sent the author to an action
@@ -91,7 +91,7 @@ const (
 	// ReasonGateOwnerDecision — the task is frozen by a human gate, the recipient is
 	// the OWNER of the live ask, and this comment is an answer from the ask's
 	// addressee. The gate still holds ordinary work, but the owner is admitted to
-	// one bounded turn to act on that answer (withdraw the marker). Task dependency delivery fix.
+	// one bounded turn to act on that answer (withdraw the marker).
 	ReasonGateOwnerDecision = "gate_owner_decision"
 
 	// ReasonTaskScheduled — the task is the recipient's, but its start_after
@@ -167,7 +167,7 @@ type CommentDeliveryOutcome struct {
 //
 // Each hint names the ONE action that would change the outcome. A hint that
 // points at the wrong action is worse than none: it is followed, nothing
-// changes, and the author concludes the system is broken (#ed60c795 — "assign
+// changes, and the author concludes the system is broken ("assign
 // it" shown on a card that was already the recipient's own).
 var hintsByReason = map[string]string{
 	ReasonNoQueuePath:       "recipient is alive but this task isn't in their queue — it is assigned to someone else or not in todo",

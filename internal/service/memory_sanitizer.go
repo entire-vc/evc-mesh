@@ -24,14 +24,14 @@ import (
 // ── What this does NOT do (read this before trusting it) ─────────────────────
 //
 // This is a partial control and must not be described as "memory is now safe".
-// Our own measurement (#e4e118ad, 13 697 transcripts) found 20 secrets by SHAPE
+// Our own measurement (13 697 transcripts) found 20 secrets by SHAPE
 // versus 1 202 (field, value) pairs across 271 field NAMES — a ~60x undercount.
 // STRIPE_WEBHOOK_SECRET, JWT_SECRET, GOG_KEYRING_PASSWORD and the password
 // inside a DATABASE_URL have no recognisable shape at all.
 //
 // Concretely: a bare secret VALUE with no field name and no known prefix — the
 // exact shape of the Casdoor client_secret pasted into a chat as one line
-// (#d2f79c73) — matches NONE of the rules below. The incident that motivates
+// — matches NONE of the rules below. The incident that motivates
 // this work would not have been caught by this work. The half of the rule set
 // that matches an ASSIGNMENT (`*_SECRET=<value>`) is the valuable half; the
 // half that matches a shape (`sk-`, `ghp_`, PEM) is narrow by construction.
@@ -41,7 +41,7 @@ import (
 // Every threshold below was tuned against the live corpus (4 051 rows, prod
 // 2026-08-20) rather than guessed, because a guard on the write path that
 // misfires blocks the fleet's memory. The retrospective counts are in the task
-// thread (#f78232c4). Where a naive rule produced false positives on real
+// thread. Where a naive rule produced false positives on real
 // records, the rule was narrowed and the narrowing is commented at its site.
 
 // memorySanitizerDisabledEnv is an operational kill switch. The sanitizer sits
@@ -278,7 +278,7 @@ const (
 	// succeeds, the response carries a warning, and the event is logged for
 	// per-agent compliance tracking (see the reason-compliance view/query in
 	// docs, and memory_revisions.reason IS NULL for the underlying data).
-	// This is the intermediate step measured by #620bd93a/#40cc098e before
+	// This is the intermediate step measured by an internal ticket before
 	// enforce is considered again: two measurements three weeks apart showed
 	// the tool-schema hint alone never moved fleet compliance off a 38-64%
 	// plateau, so a written-and-warned record is the next lever, not a flip

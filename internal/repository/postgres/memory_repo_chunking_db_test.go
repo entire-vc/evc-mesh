@@ -108,7 +108,7 @@ func TestMemoryRepoDB_ListNeedingEmbedding_ExcludesMemoryWithMatchingEmbedding(t
 }
 
 // TestMemoryRepoDB_ListNeedingEmbedding_ExcludesMemoryWithMatchingModelChunksAlone is the
-// regression test for #84b0694d/#7cf0f3be. It writes ONLY chunk rows — no
+// regression test for an internal ticket. It writes ONLY chunk rows — no
 // memories.embedding, no embedding_model watermark on the memories row — the exact shape
 // the original chunked-embed design intended once the read path (ADR-0002 subtask 6/8)
 // lands and the memories.embedding stopgap write is removed. Before the NOT EXISTS clause
@@ -182,7 +182,7 @@ func memoryIDs(mems []domain.Memory) []uuid.UUID {
 }
 
 // TestMemoryRepoDB_ListNeedingEmbedding_StopgapRemovedDoesNotSelectWholeChunkedCorpus is the
-// acceptance criterion for #dd0fda98 stated directly: simulate the future state where the
+// acceptance criterion for an internal ticket stated directly: simulate the future state where the
 // stopgap write is gone (chunks written, memories.embedding left NULL — embedChunked's
 // ORIGINAL shape) across a whole corpus, and assert reindex's selector does not sweep all of
 // it back up every run.
@@ -231,11 +231,11 @@ func TestMemoryRepoDB_ListNeedingEmbedding_StopgapRemovedDoesNotSelectWholeChunk
 }
 
 // TestMemoryRepoDB_StopgapWrite_PopulatesEmbeddingColumnNotJustWatermark pins the stopgap
-// contract itself (#7cf0f3be): embedChunked must write memories.embedding, not only a
+// contract itself: embedChunked must write memories.embedding, not only a
 // watermark. It asserts the COLUMN, deliberately, instead of asserting through
 // ListNeedingEmbedding.
 //
-// Why not through the selector: since the chunk-freshness guard (#dd0fda98) landed, the
+// Why not through the selector: since the chunk-freshness guard landed, the
 // selector excludes a chunked memory on the chunk branch alone, so reverting
 // UpdateEmbedding -> MarkEmbeddingModel leaves every selector-based test GREEN. Verified by
 // mutation, not assumed. That masking is the guard working as intended — defence in depth —
@@ -266,7 +266,7 @@ func TestMemoryRepoDB_StopgapWrite_PopulatesEmbeddingColumnNotJustWatermark(t *t
 		`SELECT embedding, embedding_model, embedding_dim FROM memories WHERE id = $1`, mem.ID,
 	).Scan(&embedding, &model, &dim))
 
-	require.NotNil(t, embedding, "memories.embedding must be populated by the chunked write path — a watermark-only write leaves this NULL and VectorSearch requires embedding IS NOT NULL (live regression #7cf0f3be)")
+	require.NotNil(t, embedding, "memories.embedding must be populated by the chunked write path — a watermark-only write leaves this NULL and VectorSearch requires embedding IS NOT NULL")
 	assert.NotEmpty(t, *embedding)
 	require.NotNil(t, model)
 	assert.Equal(t, "current-model", *model)

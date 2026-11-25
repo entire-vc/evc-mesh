@@ -21,7 +21,7 @@ var inProgress = BlockerState{Category: StatusCategoryInProgress}
 
 // AC1: code/prep ready and final acceptance blocked at the same time.
 func TestNextActionPrepReadyFinalBlocked(t *testing.T) {
-	in := []NextActionEdge{{Edge: naEdge(1, 2, 3, DependencyConditionDeployed), Blocker: inProgress, BlockerName: "Developer One"}}
+	in := []NextActionEdge{{Edge: naEdge(1, 2, 3, DependencyConditionDeployed), Blocker: inProgress, BlockerName: "Robin"}}
 	p := BuildNextAction(naID(3), in, nil)
 	require.Len(t, p.Stages, 2)
 	assert.True(t, p.Stages[0].Ready, "prep must proceed")
@@ -33,7 +33,7 @@ func TestNextActionPrepReadyFinalBlocked(t *testing.T) {
 	p = BuildNextAction(naID(3), in, nil)
 	assert.False(t, p.Stages[0].Ready)
 	assert.Equal(t, "wait_requirement", p.NextAction)
-	assert.Equal(t, "Developer One", p.NextActor)
+	assert.Equal(t, "Robin", p.NextActor)
 }
 
 // AC4: DONE with DO-NOT-SHIP or another SHA is not positive evidence.
@@ -175,8 +175,8 @@ func TestBindingProposalCAS(t *testing.T) {
 // Published fixture for the rank consumer; regenerate with UPDATE_FIXTURES=1.
 func TestNextActionFixtureV1(t *testing.T) {
 	in := []NextActionEdge{
-		{Edge: naEdge(1, 2, 3, DependencyConditionContractReady), Blocker: BlockerState{Category: StatusCategoryDone}, BlockerName: "Lead"},
-		{Edge: naEdge(2, 4, 3, DependencyConditionDeployed), Blocker: inProgress, BlockerName: "Developer One"},
+		{Edge: naEdge(1, 2, 3, DependencyConditionContractReady), Blocker: BlockerState{Category: StatusCategoryDone}, BlockerName: "Gary"},
+		{Edge: naEdge(2, 4, 3, DependencyConditionDeployed), Blocker: inProgress, BlockerName: "Robin"},
 	}
 	p := BuildNextAction(naID(3), in, []TaskDependency{naEdge(3, 3, 5, DependencyConditionAccepted)})
 	got, err := json.MarshalIndent(p, "", "  ")

@@ -12,14 +12,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// this change: comment text no longer decides whether an unleased in_progress card is
+// Comment text no longer decides whether an unleased in_progress card is
 // abandoned. FindStaleUnleasedInProgress used to exempt a card whose latest
 // non-system comment had a `⏳ WAIT` / `↻ NEXT` line younger than 48 h, for drivers
 // that published no runtime_state. The last such driver (fiddler) is retired; Runner
 // lanes publish runtime_state and typed waits keep a wait: ref. A marker with no live
 // controller behind it is an abandoned card and is swept.
 //
-// The bodies are the shapes the old fallback exempted (incl. the this change replay of
+// The bodies are the shapes the old fallback exempted (incl. the replay of
 // a WAIT on the last line of a long report), so this test was red before the change.
 // The positive control — the same body with a live runtime_state — shows the sweep
 // still spares a card a controller holds; the plain control shows the quiet card is
@@ -32,14 +32,14 @@ func TestFindStaleUnleasedInProgress_MarkerTextIsNotAnExemption(t *testing.T) {
 		"Итог по карточке:",
 		"- backend готов, MR !1187 влит",
 		"",
-		"⏳ WAIT card:#00000000",
+		"⏳ WAIT card:#5eed0006",
 	}, "\n")
 
 	markers := []struct{ name, body string }{
 		{"WAIT opening the comment", "⏳ WAIT mr:entire-vc/evc-mesh!1110\nждём merge"},
 		{"NEXT opening the comment", "↻ NEXT: добить тесты"},
 		{"53f30091 replay: WAIT on the last line of a long report", report},
-		{"CRLF WAIT line", "отчёт\r\n⏳ WAIT mr:example/product!42\r\n"},
+		{"CRLF WAIT line", "отчёт\r\n⏳ WAIT mr:entire-vc/evc-mesh!1187\r\n"},
 		{"lower-case wait", "отчёт\n⏳ wait 20m: пайплайн"},
 	}
 
@@ -56,7 +56,7 @@ func TestFindStaleUnleasedInProgress_MarkerTextIsNotAnExemption(t *testing.T) {
 
 		held := f.insertUnleasedTask(t, 5*time.Hour)
 		f.insertCommentAs(t, held, "agent", m.body, 3*time.Hour)
-		f.setRuntimeState(t, held, "waiting", "card:#00000000", time.Minute, nil)
+		f.setRuntimeState(t, held, "waiting", "card:#5eed0006", time.Minute, nil)
 		probes = append(probes, probe{held, false, m.name + ", live runtime_state"})
 	}
 	plain := f.insertUnleasedTask(t, 5*time.Hour)

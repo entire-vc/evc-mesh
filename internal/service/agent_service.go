@@ -29,7 +29,7 @@ const legacyGrantRole = "member"
 
 // bcryptCost is the bcrypt work factor for hashing API keys. A var, not a
 // const, so tests can override it — see its doc in main_test.go's TestMain.
-// an internal ticket: at cost 12 under -race, a single GenerateFromPassword
+// At cost 12 under -race, a single GenerateFromPassword
 // or CompareHashAndPassword call measured ~2.2s (isolated: one Register +
 // one Authenticate = 4.4s for TestAuthenticate_LegacyRowRejectsAWrongKeyAnd-
 // BackfillsNothing, -race -count=3, ~4.4s every run). The package has ~91
@@ -61,7 +61,7 @@ type agentService struct {
 	// workspaceRepo is used to resolve workspace slugs during authentication.
 	workspaceRepo repository.WorkspaceRepository
 	// userRepo backs the username↔slug collision guard in Register (task
-	// an internal ticket) — optional, nil in tests that don't exercise it, in which case
+	// fee35355) — optional, nil in tests that don't exercise it, in which case
 	// the guard is a no-op (see the nil check in Register).
 	userRepo repository.UserRepository
 	// checkoutExtender is optional (nil until SetCheckoutHeartbeatExtender is
@@ -264,7 +264,7 @@ func (s *agentService) Register(ctx context.Context, input RegisterAgentInput) (
 
 	slug := slugify(input.Name)
 
-	// an internal ticket: agents.slug and users.username live in separate namespaces
+	// agents.slug and users.username live in separate namespaces
 	// that nothing else keeps disjoint. If a member of this workspace already
 	// answers to this handle, a new agent taking the same slug would make
 	// @<slug> in a comment here ambiguous between the two — the exact class of
@@ -866,7 +866,7 @@ func (s *agentService) RotateAPIKey(ctx context.Context, agentID uuid.UUID) (str
 	// forever: Authenticate looks a presented key up by its OWN prefix
 	// through the grant table first, and a stale grant row still matches on
 	// the old prefix even after agents.api_key_prefix has moved on (task
-	// an internal ticket's rotation half).
+	// Rotation half).
 	if err := s.agentRepo.RotateHomeGrantKey(ctx, agent); err != nil {
 		return "", err
 	}
@@ -874,29 +874,93 @@ func (s *agentService) RotateAPIKey(ctx context.Context, agentID uuid.UUID) (str
 	return rawKey, nil
 }
 
-// GetBySlug returns the agent with the given slug in a workspace.
+// GetBySlug returns the agent a handle addresses in a workspace.
 // Returns (nil, nil) when no matching agent exists.
 //
-// A home agent always wins. Otherwise an agent holding an ACTIVE grant into the
-// workspace with that slug is returned, so @mentions reach guests; two guests
-// sharing the slug is an ambiguity reported as an error, never resolved by
-// picking one (same rule as taskService's assignee-by-slug lookup).
+// Lookup order, first hit wins:
+//  1. a home agent with that slug;
+//  2. an agent holding an ACTIVE grant into the workspace with that slug, so
+//     @mentions reach guests; two guests sharing the slug is an ambiguity
+//     reported as an error, never resolved by picking one (same rule as
+//     taskService's assignee-by-slug lookup);
+//  3. the one home agent whose name equals the handle case-insensitively;
+//  4. the one granted agent whose name equals it.
+//
+// Steps 3 and 4 never take a handle that is a workspace member's username
+// (see getByNameFold).
+//
+// Steps 3 and 4 exist because people address agents by name and a name is
+// not always the slug. A slug always beats a name. Two agents sharing the name is no unique match and
+// returns (nil, nil): the handle stays unresolved exactly as it was before the
+// name fallback, so no caller starts refusing a comment over a duplicate name.
 func (s *agentService) GetBySlug(ctx context.Context, workspaceID uuid.UUID, slug string) (*domain.Agent, error) {
 	agent, err := s.agentRepo.GetBySlug(ctx, workspaceID, slug)
-	if err != nil || agent != nil || s.grantRepo == nil {
+	if err != nil || agent != nil {
 		return agent, err
 	}
-	grants, err := s.grantRepo.ListActiveByWorkspace(ctx, workspaceID)
+	var grants []domain.AgentWorkspaceGrantWithAgent
+	if s.grantRepo != nil {
+		grants, err = s.grantRepo.ListActiveByWorkspace(ctx, workspaceID)
+		if err != nil {
+			return nil, err
+		}
+		var match *uuid.UUID
+		for _, g := range grants {
+			if g.Agent.Slug != slug {
+				continue
+			}
+			if match != nil {
+				return nil, fmt.Errorf("agent slug=%q is ambiguous: several granted agents share it", slug)
+			}
+			id := g.AgentID
+			match = &id
+		}
+		if match != nil {
+			return s.agentRepo.GetByID(ctx, *match)
+		}
+	}
+	return s.getByNameFold(ctx, workspaceID, slug, grants)
+}
+
+// getByNameFold is GetBySlug's name fallback: the unique home agent named
+// name, else the unique granted agent named name, else (nil, nil).
+//
+// A person's username outranks an agent's display name. Callers such as
+// firstResolvedUserSlug and the gate-owner check use GetBySlug to tell an
+// agent address from a human login; a name match on a handle that is also a
+// workspace member's username would silently take the address away from the
+// person (no blocking gate, no notification). So the fallback stays off when
+// the handle is a username in the workspace, when that cannot be checked (no
+// user repository) and when the check itself fails: each of those leaves the
+// handle exactly as it resolved before the fallback existed.
+func (s *agentService) getByNameFold(
+	ctx context.Context, workspaceID uuid.UUID, name string, grants []domain.AgentWorkspaceGrantWithAgent,
+) (*domain.Agent, error) {
+	if strings.TrimSpace(name) == "" || s.userRepo == nil {
+		return nil, nil
+	}
+	if u, err := s.userRepo.GetByUsername(ctx, workspaceID, name); err != nil || u != nil {
+		return nil, nil //nolint:nilerr // an unverifiable handle keeps its pre-fallback resolution
+	}
+	homes, err := s.agentRepo.ListByNameFold(ctx, workspaceID, name, 2)
 	if err != nil {
 		return nil, err
 	}
+	switch len(homes) {
+	case 1:
+		a := homes[0]
+		return &a, nil
+	case 0:
+	default:
+		return nil, nil
+	}
 	var match *uuid.UUID
 	for _, g := range grants {
-		if g.Agent.Slug != slug {
+		if !strings.EqualFold(g.Agent.Name, name) {
 			continue
 		}
-		if match != nil {
-			return nil, fmt.Errorf("agent slug=%q is ambiguous: several granted agents share it", slug)
+		if match != nil && *match != g.AgentID {
+			return nil, nil
 		}
 		id := g.AgentID
 		match = &id

@@ -109,7 +109,7 @@ func startMemoryJobs(deps *apiDeps) {
 	log.Println("OAuth expired-token purge started (1h interval)")
 
 	// 10a-quater. Connector-membership resync: mirrorProjectMemberships
-	// only ever runs once, at connector-agent registration — an
+	// (MR!1044) only ever runs once, at connector-agent registration — an
 	// existing grant's reuse path never re-mirrors. A human later removed from a
 	// project (or demoted) keeps their connector agent holding the stale access
 	// until something re-syncs it; the OAuth re-consent path can't be relied on for
@@ -146,14 +146,14 @@ func startMemoryJobs(deps *apiDeps) {
 	}()
 	log.Println("OAuth connector-membership resync started (1h interval)")
 
-	// 10a-bis. Memory review-triage nightly job (an internal ticket, plan:1.11):
+	// 10a-bis. Memory review-triage nightly job (plan:1.11):
 	// disposes of the review_needed backlog that the 6h reconciler's linker phase
 	// above never revisits (it only ever compares memories created in the last 24h
 	// against similar history — once a memory is parked at review_needed, that
 	// phase never looks at it again). Deliberately its own ~24h ticker rather than
 	// folded into the 6h loop above — see RunReviewTriage's doc.
 	//
-	// an internal ticket: a bare time.NewTicker(24h) is keyed off THIS PROCESS'S OWN
+	// A bare time.NewTicker(24h) is keyed off THIS PROCESS'S OWN
 	// START, not wall-clock time since the job last actually ran. Measured on
 	// prod-host over 6 days: 70 process restarts, only 2 real triage runs — the
 	// service almost never stays up 24h straight, so the ticker almost never

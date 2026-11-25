@@ -54,6 +54,8 @@
     "submit": "Comment"
   },
   "cost": {
+    "apiPrice": "at API list price",
+    "apiPriceHint": "Notional cost at the API price list. A subscription spends window limits, not money",
     "incomplete": "Some usage is unknown",
     "spawns_few": "{{count}} spawns",
     "spawns_many": "{{count}} spawns",

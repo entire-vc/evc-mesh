@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Ad-hoc: expanded-sidebar screenshots for #bb8f1092, AC#5 ("оба состояния
+// Ad-hoc: expanded-sidebar screenshots, AC#5 ("оба состояния
 // панели"). Reuses the authed local-stack (scripts/local-stack.sh up) —
 // registers a handful of extra projects via the same REST API the seed
 // script uses, then screenshots the workspace root with the sidebar in its

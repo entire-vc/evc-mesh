@@ -17,7 +17,7 @@ import (
 //
 // That silence is why a memory can be missing from semantic recall for weeks
 // while the row looks perfectly embedded: measured on the bench corpus
-// (#e8063a65), 96% of documents exceeded a 512-token window, and one gold
+// 96% of documents exceeded a 512-token window, and one gold
 // session carried its answer at 75% of the document, outside the window, giving
 // it dense rank 35/45 instead of 1/45.
 //

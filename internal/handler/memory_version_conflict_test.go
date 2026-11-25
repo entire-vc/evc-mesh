@@ -16,7 +16,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/service"
 )
 
-// Acceptance 1 of task #0ba5e66a, transport half: a lost conditional write must
+// Acceptance 1, transport half: a lost conditional write must
 // reach the caller as a 409 naming both versions.
 //
 // The service-level test proves the write is refused; this proves the refusal

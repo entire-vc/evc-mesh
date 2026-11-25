@@ -176,7 +176,7 @@ func freshCIMDTarget() string {
 }
 
 // TestOAuthRoutes_UntrustedIP_SpoofedXFFCannotResetFirstSeenCIMDBudget is the
-// #83cc58ef defect: with MESH_TRUSTED_PROXIES unset e.IPExtractor is nil, so
+// With MESH_TRUSTED_PROXIES unset e.IPExtractor is nil, so
 // c.RealIP() returns the leftmost client-supplied X-Forwarded-For — a fresh
 // random value per request reset the per-IP "5/min for a new CIMD client_id"
 // budget every time, leaving the outbound fetch + oauth_clients row per

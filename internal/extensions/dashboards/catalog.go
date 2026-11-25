@@ -71,6 +71,18 @@ func metricSchema() json.RawMessage {
 // the widget's own and pass.
 const limitSchema = `{"type":"object","properties":{"limit":{"type":"integer","minimum":5,"maximum":50}}}`
 
+// agentUsageSchema bounds the statistics widget's view keys (plan a9781091 §4,
+// card 250bbe2e): metric m, token kind t, breakdowns g/s, period p (a preset or
+// from..to days), quota window w, rows n. f.<key> filter arrays pass unchecked.
+const agentUsageSchema = `{"type":"object","properties":{` +
+	`"m":{"enum":["cost","tokens","quota","turns","duration","cards_done"]},` +
+	`"t":{"enum":["total","in","out","cache_read","cache_write"]},` +
+	`"g":{"enum":["model","provider","account","agent","project","workspace"]},` +
+	`"s":{"enum":["model","provider","account","agent","project","workspace"]},` +
+	`"p":{"type":"string","pattern":"^(1d|7d|30d|[0-9]{4}-[0-9]{2}-[0-9]{2}(\\.\\.[0-9]{4}-[0-9]{2}-[0-9]{2})?)$"},` +
+	`"w":{"enum":["5h","week","month","budget"]},` +
+	`"n":{"type":"integer","minimum":1,"maximum":20}}}`
+
 // coreTypes is the static core catalog: ids and sizes of §5.8, in its order.
 // Extensions add theirs through the same collector later (card X1).
 var coreTypes = []WidgetType{
@@ -92,12 +104,25 @@ var coreTypes = []WidgetType{
 	{ID: "cost-by-project", Category: "agents", Size: size(6, 4, 3, 3, 12, 8)},
 	{ID: "cost-by-day", Category: "agents", Size: size(6, 4, 4, 3, 12, 8)},
 	{ID: "agent-leaderboard", Category: "agents", Size: size(6, 4, 3, 3, 12, 8)},
+	{ID: "agent-usage", Category: "agents", Size: size(12, 6, 6, 4, 12, 12), Settings: json.RawMessage(agentUsageSchema)},
 	// Аналитика задач
 	{ID: "metric", Category: "analytics", Size: size(3, 2, 2, 2, 6, 3), Settings: metricSchema()},
 	{ID: "tasks-breakdown", Category: "analytics", Size: size(6, 4, 4, 3, 12, 8),
 		Settings: json.RawMessage(`{"type":"object","properties":{"dimension":{"enum":["status","priority","assignee","project"]},"view":{"enum":["bars","donut"]}}}`)},
 	{ID: "tasks-timeline", Category: "analytics", Size: size(12, 4, 6, 3, 12, 8)},
 	{ID: "events-breakdown", Category: "analytics", Size: size(6, 4, 4, 3, 12, 8)},
+	// Память Mesh (карточка a06aeea9): чтения/записи памяти, полезный recall и качество базы.
+	// period и project приходят как у остальных аналитических виджетов и схемой не перечислены;
+	// агенты/источники/«кто вызвал» — фильтры шапки виджета, в схеме только их тип.
+	{ID: "memory-usage", Category: "analytics", Size: size(12, 10, 6, 4, 12, 12),
+		Settings: json.RawMessage(`{"type":"object","properties":{` +
+			`"op":{"enum":["all","read","write","recall","recall_with_graph","get_memory","get_project_knowledge","get_project_updates"]},` +
+			`"agents":{"type":"array","items":{"type":"string"}},` +
+			`"sources":{"type":"array","items":{"enum":["memory","project_knowledge","project_update","doc","unknown"]}},` +
+			`"callers":{"type":"array","items":{"enum":["agent_tool","runner","script","ui","unknown"]}},` +
+			`"group_by":{"enum":["agent","project","op","source","caller_kind","kind","scope","day"]},` +
+			`"group_by2":{"enum":["agent","project","op","source","caller_kind","kind","scope","day"]},` +
+			`"view":{"enum":["table","top","chart"]}}}`)},
 	// События
 	{ID: "event-feed", Category: "events", Size: size(12, 6, 6, 4, 12, 12)},
 	// Инициативы

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// #119078b0: collapsed-rail ACTIVE-project screenshot — proves the
+// Collapsed-rail ACTIVE-project screenshot — proves the
 // hover/active teal-letter treatment (text-sidebar-primary) still reads as
 // "selected", without the tile's fill ever becoming the workspace's own
 // brand-teal box.

@@ -336,9 +336,9 @@ export function ExternalFrame({ extensionId, name, slot, taskId, projectId, layo
           ref={iframeRef}
           title={frame.ctx.title || name}
           src={frameSrc(frame.ctx.frame_url, frame.ctx.token, frame.section)}
-          sandbox="allow-scripts allow-forms allow-same-origin"
+          sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox"
           referrerPolicy="no-referrer"
-          allow=""
+          allow="clipboard-write"
           style={{ colorScheme: theme.mode }}
           className={!live ? "hidden" : loaded ? "h-full w-full flex-1 border-0 bg-background" : "h-0 w-0 border-0"}
           aria-hidden={live ? undefined : true}

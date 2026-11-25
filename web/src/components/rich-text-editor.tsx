@@ -50,6 +50,7 @@ import {
 import { makeDocEditor } from "@/lib/milkdown/editor";
 import { blockStatePlugin, createBlockStateStore } from "@/lib/milkdown/block-state";
 import { BlockTypeSelect, TableMenu } from "@/components/editor-block-controls";
+import { TableAffordances } from "@/components/editor-table-affordances";
 import { type AttachmentSpan, findAttachmentSpans } from "@/lib/milkdown/attachment-spans";
 import {
   clearAttachmentControls,
@@ -752,6 +753,13 @@ function RichTextEditorInner({
         className="mesh-doc-editor-body mesh-rich-text-body flex flex-1 flex-col px-3 py-2"
       >
         <Milkdown />
+        <TableAffordances
+          ns="misc"
+          store={blockStore}
+          runCommand={runCommand}
+          withView={withView}
+          containerRef={containerRef}
+        />
       </div>
 
       {hint !== null && (

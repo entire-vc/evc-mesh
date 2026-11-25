@@ -83,7 +83,7 @@ The task a PR belongs to is resolved in this order:
 If neither resolves a task, the event is acknowledged with
 `200 {"status":"ok","reason":"no_task_ref"}` and nothing changes.
 
-> **Tip:** short prefixes shown in the UI (e.g. `[an internal ticket]`) are **not**
+> **Tip:** short prefixes shown in the UI (e.g. `[#<8-hex>]`) are **not**
 > parsed from PR text — only the full `MESH-<uuid>`. To link by short id, create
 > the link explicitly via `POST /api/v1/tasks/:task_id/vcs-links` once; from then
 > on the PR-number fallback keeps it linked.

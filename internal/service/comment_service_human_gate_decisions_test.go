@@ -869,7 +869,7 @@ func TestValidateDecisionInput(t *testing.T) {
 }
 
 // TestRecordHumanGateDecision_ValidationFailure_Returns400NotAny500 pins the
-// #62560d6d fix: a live repro (Riker, then an independent verifier) found
+// A live repro (Robin, then an independent verifier) found
 // POST /tasks/:id/human-gate-decisions returning 500 for a body that fails
 // validateDecisionInput (e.g. decided_by set, no question_ref/canonical_key —
 // exactly what an agent sends after copying the field from a stray "decision"
@@ -903,7 +903,7 @@ func TestProvenanceLabel_UnknownValue(t *testing.T) {
 }
 
 // TestValidateDecisionInput_AcceptsDefaultApplied proves the new provenance value
-// (task #060ccaae) is a valid choice, not just an unrecognized string that happens to
+// is a valid choice, not just an unrecognized string that happens to
 // fall through validateDecisionInput's default case.
 func TestValidateDecisionInput_AcceptsDefaultApplied(t *testing.T) {
 	key := "default-timeout:test"
@@ -930,7 +930,7 @@ func TestValidateDecisionInput_DefaultApplied_StillRequiresQuote(t *testing.T) {
 }
 
 // TestRecordHumanGateDecision_DefaultApplied_UsesTaskSpecificWording proves the
-// comment body says exactly what task #060ccaae's acceptance criterion names
+// comment body says exactly what an internal ticket's acceptance criterion names
 // ("дефолт применён: <recommended_default>"), not the generic "human_gate снят —
 // решение зафиксировано (..., зафиксировал Pavel напрямую)" template — which would be
 // an outright false claim here, since nobody (least of all Pavel) answered anything.
@@ -981,7 +981,7 @@ func attestedInput(taskID uuid.UUID) domain.RecordHumanGateDecisionInput {
 	}
 }
 
-// #cb3f5274 AC1: a decision recorded with task_id but no question_ref must
+// AC1: a decision recorded with task_id but no question_ref must
 // bind to the single live marker, so the marker counts as answered.
 func TestRecordHumanGateDecision_NoQuestionRef_BindsSingleLiveMarker(t *testing.T) {
 	env := setupHGDEnv(t)
@@ -1000,7 +1000,7 @@ func TestRecordHumanGateDecision_NoQuestionRef_BindsSingleLiveMarker(t *testing.
 	assert.Empty(t, live, "the answered marker must no longer be live")
 }
 
-// #cb3f5274 AC2: two live markers and no explicit ref -> error, nothing written.
+// AC2: two live markers and no explicit ref -> error, nothing written.
 func TestRecordHumanGateDecision_NoQuestionRef_TwoLiveMarkers_Errors(t *testing.T) {
 	env := setupHGDEnv(t)
 	taskID := uuid.New()

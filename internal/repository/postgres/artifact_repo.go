@@ -140,6 +140,19 @@ func (r *ArtifactRepo) ReserveTaskBytes(ctx context.Context, reservationID, task
 	return true, used, tx.Commit()
 }
 
+// TaskBytesUsed is what the task's artifacts and live reservations hold now:
+// the sum ReserveTaskBytes checks, read without taking any room. It is a
+// pre-check only (a two-step upload declares its size before any byte is
+// sent); the reservation on the real upload is still what enforces the limit.
+func (r *ArtifactRepo) TaskBytesUsed(ctx context.Context, taskID uuid.UUID) (int64, error) {
+	var used int64
+	err := r.db.GetContext(ctx, &used, `
+		SELECT (SELECT COALESCE(SUM(size_bytes), 0) FROM artifacts WHERE task_id = $1)
+		     + (SELECT COALESCE(SUM(size_bytes), 0) FROM artifact_reservations
+		         WHERE task_id = $1 AND expires_at > now())`, taskID)
+	return used, err
+}
+
 // CreateFromReservation writes the artifact and drops its reservation in one
 // transaction, so the room the upload held passes to the artifact without a
 // moment in which the task counts it twice or not at all. A reservation past

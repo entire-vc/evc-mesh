@@ -33,7 +33,7 @@ function makeComment(id: string, taskId: string, body: string): Comment {
     parent_comment_id: null,
     author_id: "agent-1",
     author_type: "agent",
-    author_name: "Wally",
+    author_name: "Wade",
     body,
     is_internal: false,
     created_at: "2026-08-21T12:00:00Z",
@@ -118,7 +118,7 @@ describe("CommentList — stale response after a task switch", () => {
   // block as `comments`, so a stale response doesn't just show the wrong
   // thread — it can also clobber whether the "Load more" button renders at
   // all. This is the mechanism behind the second, previously-unconnected
-  // report on #bad889e0 (a 112-comment task, has_more legitimately true,
+  // report on an internal ticket (a 112-comment task, has_more legitimately true,
   // Pavel saw no "Load more" control): task A has few comments (has_more
   // false), task B has many (has_more true) — A's late response must not
   // erase B's true has_more.

@@ -1,5 +1,5 @@
 -- +goose Up
--- input_revision is the version of the assignment itself. tasks.version
+-- Input_revision is the version of the assignment itself. tasks.version
 -- advances on every row write (checkout, extend, release, moves, comments touching
 -- updated_at), so a long-running worker cannot use it to tell whether what it was asked
 -- to do has changed. input_revision advances only when the assignment content changes:

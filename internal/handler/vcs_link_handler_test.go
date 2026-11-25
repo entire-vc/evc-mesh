@@ -742,7 +742,7 @@ func TestGitLabWebhook_MergeRequest_DelegatesToService(t *testing.T) {
 }
 
 // A transient service failure must surface as 5xx so the MR event is not
-// silently lost (an internal ticket: a "closed" MR hook answered 200 "error_logged"
+// silently lost (a "closed" MR hook answered 200 "error_logged"
 // left the link open forever); the redelivery is then processed normally.
 func TestGitLabWebhook_MergeRequest_TransientServiceError_503ThenRetryOK(t *testing.T) {
 	svc := &stubVCSLinkService{gitlabHandleErr: errors.New("db down")}
@@ -885,7 +885,7 @@ func TestVCSLinkHandler_Create_RequiresLinkType(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Create — status field (an internal ticket: add_vcs_link had no way to record a PR's
+// Create — status field (add_vcs_link had no way to record a PR's
 // status at link time, so a link to an already-merged PR sat blocked
 // forever since no webhook fires for a merge that predates the link).
 // ---------------------------------------------------------------------------
@@ -935,7 +935,7 @@ func TestVCSLinkHandler_Create_OmittedStatusPassesThrough(t *testing.T) {
 // rather than inserting one. The handler must reflect that in the status
 // code — 200, not 201 — otherwise the response reads as "a new link was
 // created" when in fact nothing but status/title/metadata/url changed on the
-// SAME row (an internal ticket: the previous handler always answered 201 regardless
+// SAME row (the previous handler always answered 201 regardless
 // of which branch the service actually took).
 func TestVCSLinkHandler_Create_UpsertOnExistingLinkReturns200(t *testing.T) {
 	taskID := uuid.New()
@@ -1124,7 +1124,7 @@ func TestGitLabWebhook_PipelineHook_InvalidToken_401(t *testing.T) {
 	assert.Empty(t, svc.pipelineCalls)
 }
 
-// an internal ticket: a verified delivery reaches the service as the system actor (the
+// A verified delivery reaches the service as the system actor (the
 // transition gate must not see actor_type ""); an unverified one — validation
 // off — keeps the empty actor so it cannot use the system exemption.
 func TestGitLabWebhook_ActorOnCtx(t *testing.T) {

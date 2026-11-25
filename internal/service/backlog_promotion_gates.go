@@ -11,8 +11,8 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Parity guards for BacklogPromotionAdvisoryService (#c15c503a, prerequisite of the
-// enforcing cutover #f42fe0a8). Each function below is ported one-to-one from
+// Parity guards for BacklogPromotionAdvisoryService (prerequisite of the
+// enforcing cutover an internal ticket). Each function below is ported one-to-one from
 // <ops-repo>/scripts/mesh-intake-sweep.py and <ops-repo>/scripts/human_gate.py; the Python name is
 // in each doc comment. Where the server CANNOT reproduce a sweep behaviour (it has no
 // comment repository here), it errs toward HOLD: a server that holds where the sweep

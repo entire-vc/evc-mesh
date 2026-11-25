@@ -1,4 +1,4 @@
-# Perf budget — the ratchet for Mesh web
+# Perf budget — the храповик for Mesh web
 
 `budget.json` sets a ceiling per metric. CI fails the build when a metric goes
 over its ceiling. It never fails when a metric goes *under* — going under is
@@ -17,8 +17,8 @@ every MR has to move:
    **+1.0 KB gz to `dashboard.landing_js_kb_gz`** and **+2.0 KB gz to
    `total_js_kb_gz`**. More is red. Δlanding's +1.0 is Δlogin's +0.5 for the
    entry both screens share plus +0.5 for the dashboard page's own code.
-2. **Signature = the `perf-budget-raise` label set by a signer.** The product
-   lead sets it; the reason goes into the MR description: why the bundle
+2. **Signature = the `perf-budget-raise` label set by a signer.** The lead
+   (Gary) sets it; the reason goes into the MR description: why the bundle
    grew and why that growth is worth it. "The job was red" is not a reason.
    The label alone signs nothing: the job reads the MR's label history and the
    raise counts only if the last event for the label is an `add` by a GitLab
@@ -29,9 +29,9 @@ every MR has to move:
    Nothing is written into `web/perf/*` for a signed raise.
 3. **Absolute ceilings stay, but coarse.** For the bundle metrics
    `budget.json` holds a ceiling with ≥ 5 % headroom over main, rounded up to
-   0.1 KB gz (now set over main `fff17d84`, 174.93 / 843.49
-   → 183.7 / 885.7; `dashboard.landing_js_kb_gz` 261.3 over main `9938acc6`,
-   248.79). Every
+   0.1 KB gz (now set on card `337e3184` over main `5d6cda4f4`, login / total /
+   landing 180.09 / 902.80 / 252.17 → 189.1 / 948.0 / 264.8; moves are listed
+   at the end of `HISTORY.md`). Every
    pipeline, main included, is red above it. Only a dedicated card moves it,
    never a feature MR; that card is also the moment to lower it when main has
    shrunk.
@@ -74,7 +74,8 @@ Every MR job prints the baseline commit, the base values and the growth:
   Δlanding dashboard.landing_js_kb_gz: base 248.79 -> 248.81  +0.02 KB gz (limit +1.0)
 ```
 
-The earlier journal of ceiling raises is frozen; new entries are not added.
+The journal of ceiling raises up to this change is frozen in
+[`HISTORY.md`](HISTORY.md); new entries are not added.
 
 
 ## What's gated today
@@ -82,7 +83,7 @@ The earlier journal of ceiling raises is frozen; new entries are not added.
 | Metric | What it measures | Checked by |
 |---|---|---|
 | `login.initial_js_kb_gz` | gzip bytes of the JS `/login` loads before first paint: the `index.html` entry chunk plus everything it statically imports (walked from `dist/.vite/manifest.json`, not guessed from filenames). Route-split (`React.lazy`) chunks are excluded on purpose — they load later, not before first paint. | `perf-bundle` CI job → `check-bundle-budget.mjs` |
-| `dashboard.landing_js_kb_gz` | gzip bytes of the JS the page after sign-in (`w/:ws`, the dashboard) loads before it paints: the login closure above plus the static closure of the `src/pages/dashboard.tsx` route chunk. That chunk is `React.lazy`, so `login.initial_js_kb_gz` never counted it. Its `dynamicImports` (edit mode, widget picker, catalog) are not walked and stay out. No chunk for the page in the manifest (renamed, moved) is a refusal, not a skipped metric: update `DASHBOARD_PAGE_SRC`. | same |
+| `dashboard.landing_js_kb_gz` | gzip bytes of the JS the page after sign-in (`w/:ws`, the dashboard, PRD dashboards §5.3) loads before it paints: the login closure above plus the static closure of the `src/pages/dashboard.tsx` route chunk. That chunk is `React.lazy`, so `login.initial_js_kb_gz` never counted it. Its `dynamicImports` (edit mode, widget picker, catalog) are not walked and stay out. No chunk for the page in the manifest (renamed, moved) is a refusal, not a skipped metric: update `DASHBOARD_PAGE_SRC`. | same |
 | `total_js_kb_gz` | gzip bytes of every JS chunk vite emits, entry or not. | same |
 
 All three are computed with `zlib.gzipSync(buf, { level: 9 })` on the built files
@@ -153,21 +154,21 @@ with `perf-budget-raise` added by a signer passes, the same label added by
 anyone else, re-added after the lead removed it, or with an unreadable label
 history fails, `Δlogin +0.51` fails, and a history with no usable report
 anywhere fails with `no baseline`. Break the comparison or the signer check
-and it goes red.
+and it goes red (card `cebd90ab` shows that run).
 
-For `dashboard.landing_js_kb_gz` it runs a fake manifest:
+For `dashboard.landing_js_kb_gz` (card `bc91cf36`) it runs a fake manifest:
 a chunk the dashboard page imports statically growing by +1.2 KB gz, or a new
 5 KB module imported statically, fails `Δlanding`; the editor chunk behind the
 page's dynamic import growing by +50 leaves the metric unchanged (only Δtotal
 moves); a manifest without the page chunk is refused; a main report from before
 the metric is still a baseline for login/total with landing marked new, and one
 whose `budget` names landing without a number is not. Walking `dynamicImports`
-or excusing every missing metric turns it red (both mutants were run when the metric was added).
+or excusing every missing metric turns it red (both mutants run on that card).
 
 The ceilings themselves:
 
 
-A budget check that can't go red isn't a check. Two
+A budget check that can't go red isn't a check (see the fleet's `§0x`). Two
 ways to redden it on purpose, both already run once for this ratchet's own
 MR:
 
@@ -202,6 +203,9 @@ measured from the moment the action starts until the page is quiet again (no
 | `layout_count` / `recalc_style_count` | CDP `Performance.getMetrics` delta |
 | `dom_mutations` | `MutationObserver` records on the whole document |
 | `ms` | wall time — in the report only, **never gated** |
+
+Earlier calibrations and ceiling changes of the counters (`board.open.dom_mutations`,
+`board.drag`, the floors) are in [`HISTORY.md`](HISTORY.md).
 
 ### What it runs against
 
@@ -274,7 +278,7 @@ defends at this `PERF_REPEAT`** (lowest observed value whose false-red bound
 is ≤ `--alpha`), and the smallest `PERF_REPEAT` at which some ceiling both
 keeps false red ≤ `--alpha` and catches `+shift` ≥ 95%. `none up to N=25`
 means no repeat count rescues that metric: its spread has to shrink first
-(`board.drag` before the stable-sensor fix described below).
+(`board.drag` on `main`, fixed by an internal ticket).
 
 **The first run is pooled separately.** On some paths it is systematically
 different from the later ones — `board.open`'s first run is 43 DOM

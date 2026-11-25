@@ -1,4 +1,4 @@
--- Amendments 2 & 3 to F1 memory KG (task #02b365b7).
+-- Amendments 2 & 3 to F1 memory KG.
 --
 -- thread_id: propagated from the source task's thread_id at write time by the service
 --   layer. Allows cheap same-thread lookup without a JOIN to tasks.
