@@ -16,7 +16,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
-// Task #a36fa51d (analysis of #6443ff98): fiddler and the balancer post
+// (analysis): fiddler and the balancer post
 // bookkeeping comments under the KEY OF THE ASSIGNEE, so to the comment parser
 // they are the marker author "writing again". Their text routinely contains
 // negator words ("брошенной", "восстановление"), and releaseHumanGateOnWithdrawal

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Remove `mesh-ci-*` docker compose projects left behind by a killed CI run.
 
-`make ci-test`'s `trap ... EXIT` (see #03eed881) only fires on a normal exit or a
+`make ci-test`'s `trap ... EXIT` only fires on a normal exit or a
 signal bash chooses to run it for. SIGKILL cannot be trapped by any process, and
 that is exactly how most of our runs actually die on this fleet: a session gets
 killed by hung-turn-watchdog, a fiddler relaunch, `/switch`, Ctrl+C, or the rm
 guard wedging a lane until it is force-killed. The trap never runs, the compose
 stack it was supposed to tear down sits there forever, and the leak is silent
 until it piles up enough to exhaust disk/address space for everyone on the host
-(#8416e39c — 29 containers, ext4 journal aborted under it).
+(29 containers, ext4 journal aborted under it).
 
 This script is the safety net that does not depend on the dying process running
 any cleanup code at all. It looks at what is actually left on the host and

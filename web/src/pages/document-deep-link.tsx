@@ -11,7 +11,7 @@ import type { PaginatedResponse, Project, ProjectDocument } from "@/types";
 // full /w/:wsSlug/p/:projectSlug/docs/:docId route. Same shape as
 // TaskDeepLinkResolver (task-deep-link.tsx): the document only knows its
 // project_id, not the project's or workspace's slug, so this looks them up
-// client-side rather than making the handler join through them (task #14db79fd).
+// client-side rather than making the handler join through them.
 export function DocumentDeepLinkResolver() {
   const { t } = useTranslation("docs");
   const { docId } = useParams<{ docId: string }>();

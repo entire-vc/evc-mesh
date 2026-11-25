@@ -55,7 +55,10 @@ var templateSpecs = []struct {
 		{Type: "cost-by-day", W: 6, H: 4},
 		{Type: "cost-by-project", W: 6, H: 4},
 	}},
+	// agent-usage leads the analytics template (agent statistics plan §4); the old cost widgets
+	// (cost-by-project here, the rest in agent-sessions) stay until v1 is accepted.
 	{TemplateAnalytics, []Spec{
+		{Type: "agent-usage", W: 12, H: 6},
 		metric("tasks_total"), metric("tasks_created"), metric("tasks_closed"), metric("events_total"),
 		{Type: "tasks-breakdown", W: 6, H: 4, Settings: `{"dimension":"status"}`},
 		{Type: "tasks-breakdown", W: 6, H: 4, Settings: `{"dimension":"priority"}`},

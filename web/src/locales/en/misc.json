@@ -224,6 +224,8 @@
     "colLeft": "Insert column left",
     "colRight": "Insert column right",
     "deleteColumn": "Delete column",
+    "addColumnEnd": "Add a column at the end",
+    "addRowEnd": "Add a row at the end",
     "deleteColumnLast": "This is the only column — delete the table instead",
     "deleteFailed": "delete failed",
     "deleteRow": "Delete row",

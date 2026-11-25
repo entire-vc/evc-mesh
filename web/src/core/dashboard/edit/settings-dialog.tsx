@@ -4,6 +4,11 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from "@/components/ui/button";
 import { SchemaForm, type FieldSchema, type Values } from "@/components/extensions/schema-form";
 import type { CatalogType, LayoutItem } from "./types";
+import { allowedDimensions, sanitize, useCapabilities } from "@/core/agent-usage/capabilities";
+import { useST, tokenKindLabel } from "@/core/agent-usage/format";
+import { dimensionLabel, viewLabel, windowLabel } from "@/core/agent-usage/labels";
+import type { QuotaWindow, TokenKind, UsageDimension } from "@/core/agent-usage/types";
+import { DIMENSIONS, isUserUsage, stateFromSettings, stateToSettings, type StatsView } from "@/core/agent-usage/state";
 
 type Translate = (key: string, opts: { defaultValue: string }) => string;
 
@@ -28,10 +33,31 @@ interface Props {
 /** Instance settings (§5.6): the type's schema through SchemaForm plus the two common fields. */
 export function SettingsDialog({ item, type, onClose, onSave }: Props) {
   const { t } = useTranslation("dashboardEdit");
+  const caps = useCapabilities(item?.type === "agent-usage" && isUserUsage(stateFromSettings(item.settings)) ? "user" : "workspace");
+  const st = useST();
   const formId = useId();
   const schema = useMemo<FieldSchema>(() => {
     const own = type?.settings_schema?.properties ?? {};
     const { title: _a, auto_refresh: _b, ...rest } = own;
+    if (item?.type === "agent-usage") {
+      // The settings editor follows the same permissions as the page, including before discovery completes.
+      const views = (rest.m?.enum ?? []).filter((v) => v !== "quota" || caps?.quota === true).filter((v) => v !== "cost" || caps?.cost !== false);
+      rest.m = { ...rest.m, enum: views };
+      const metric = (item.settings?.m ?? "cost") as StatsView;
+      const dims = allowedDimensions(caps, metric);
+      for (const key of ["g", "s"]) rest[key] = { ...rest[key], enum: dims };
+      if (!caps?.quota) delete rest.w;
+      const titles = { m: st("ctl.show", "Show"), g: st("ctl.group", "Breakdown"), s: st("ctl.stack", "Inside"), t: st("ctl.tokens", "Tokens"), p: st("period.label", "Period"), w: st("ctl.window", "Limit window"), n: st("settings.rows", "Rows") };
+      for (const [key, title] of Object.entries(titles)) if (rest[key]) rest[key] = { ...rest[key], title };
+      for (const key of ["m", "g", "s", "t", "w"]) {
+        if (!rest[key]) continue;
+        rest[key] = { ...rest[key], "x-options": Object.fromEntries((rest[key].enum ?? []).map((v) => [v,
+          key === "m" ? viewLabel(v as StatsView, st) : key === "w" ? windowLabel(v as QuotaWindow, st)
+            : key === "t" ? tokenKindLabel(v as TokenKind, st) : dimensionLabel(v as UsageDimension, st),
+        ])) };
+      }
+      rest.p = { ...rest.p, description: st("settings.periodHint", "1d, 7d, 30d or YYYY-MM-DD..YYYY-MM-DD") };
+    }
     return {
       type: "object",
       properties: {
@@ -41,11 +67,13 @@ export function SettingsDialog({ item, type, onClose, onSave }: Props) {
       },
       required: type?.settings_schema?.required,
     };
-  }, [type, t]);
+  }, [type, item, caps, t, st]);
 
   const value = useMemo<Values>(
-    () => ({ title: item?.title ?? "", auto_refresh: item?.auto_refresh ?? true, ...(item?.settings ?? {}) }),
-    [item],
+    () => ({ title: item?.title ?? "", auto_refresh: item?.auto_refresh ?? true, ...(item?.type === "agent-usage"
+      ? stateToSettings(sanitize(stateFromSettings(item.settings), caps ?? { group_by: DIMENSIONS.filter((d) => d !== "account"), cost: true, quota: false }))
+      : item?.settings ?? {}) }),
+    [item, caps],
   );
 
   return (
@@ -70,7 +98,9 @@ export function SettingsDialog({ item, type, onClose, onSave }: Props) {
                 onSave({
                   title: typeof title === "string" && title.trim() ? title.trim() : undefined,
                   auto_refresh: typeof auto_refresh === "boolean" ? auto_refresh : undefined,
-                  settings: Object.keys(settings).length ? (settings as Values) : undefined,
+                  settings: item.type === "agent-usage"
+                    ? stateToSettings(sanitize(stateFromSettings({ ...value, ...settings }), caps ?? { group_by: DIMENSIONS.filter((d) => d !== "account"), cost: true, quota: false })) as Values
+                    : Object.keys(settings).length ? (settings as Values) : undefined,
                 });
                 onClose();
               }}

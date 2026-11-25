@@ -198,7 +198,7 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArt
   // artifact, one destination — the reader's session is the only credential
   // involved.
   //
-  // It used to branch three ways, and the first one was the bug (#eb6fde4e):
+  // It used to branch three ways, and the first one was the bug:
   // `metadata.tr_public_url` won over everything and sent the reader to
   // docs.entire.vc, where a private share answers 401 and even a public one
   // makes Team Relay's page — not ours — decide who reads the file. The bytes

@@ -3,7 +3,7 @@ import { Editor, editorViewCtx } from "@milkdown/kit/core";
 import { makeDocEditor } from "@/lib/milkdown/editor";
 
 /**
- * PROBE (D5 #4b9ffc9b): does merely OPENING a document emit a changed body?
+ * PROBE (D5): does merely OPENING a document emit a changed body?
  *
  * docs.tsx wires `onChange={setDraft}` and autosaves whenever the draft differs
  * from what the server last confirmed. So if the editor re-serialises on load

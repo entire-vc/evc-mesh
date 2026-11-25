@@ -28,7 +28,7 @@ func TestHandleError_AdHocShapesCarryErrorCode(t *testing.T) {
 	}{
 		{"review evidence", &service.ReviewEvidenceError{Strict: true}, http.StatusUnprocessableEntity, "review_evidence_required"},
 		{"foreign assignee", &service.AssigneeNotInWorkspaceError{PrincipalID: uuid.New(), AssigneeType: domain.AssigneeTypeAgent, ProjectID: uuid.New(), Reason: "other workspace"}, http.StatusUnprocessableEntity, "assignee_not_in_workspace"},
-		{"mention handoff", &service.MentionHandoffRequiredError{TaskID: uuid.New(), Slugs: []string{"bob", "linus"}}, http.StatusUnprocessableEntity, "mention_handoff_required"},
+		{"mention handoff", &service.MentionHandoffRequiredError{TaskID: uuid.New(), Slugs: []string{"bob", "liam"}}, http.StatusUnprocessableEntity, "mention_handoff_required"},
 		{"assignee unresolved", &service.AssigneeUnresolvedError{PrincipalID: uuid.New(), ProjectID: uuid.New()}, http.StatusUnprocessableEntity, "assignee_unresolved"},
 		{"assignee refuses", &service.AssigneeRefusesAssignmentsError{PrincipalID: uuid.New(), ProjectID: uuid.New(), AgentSlug: "scout"}, http.StatusUnprocessableEntity, "assignee_refuses_assignments"},
 		{"done evidence", &service.DoneEvidenceError{}, http.StatusUnprocessableEntity, "done_evidence_required"},

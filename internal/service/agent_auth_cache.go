@@ -309,7 +309,7 @@ func (c *cachedAgentAuth) runValidBatch(key [sha256.Size]byte, b *validBatch) {
 // against the database before trusting it — two independent things, both
 // skipped by construction on a hit:
 //
-//  1. Grant revocation (task U2 AC4, an internal ticket): a grant-derived hit
+//  1. Grant revocation (task U2 AC4): a grant-derived hit
 //     (agent.GrantID != nil) can have been revoked by ANY process against the
 //     same database — as of U2 the ONLY revoke path is a direct SQL UPDATE
 //     (U3 adds an API) — and nothing calls InvalidateAgent for that.

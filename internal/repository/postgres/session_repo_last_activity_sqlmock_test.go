@@ -14,7 +14,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Task #872f82a2: EndStale used to filter on started_at, so a session open
+// EndStale used to filter on started_at, so a session open
 // longer than the timeout was force-ended regardless of ongoing activity —
 // exactly the case for a fiddler lane working one task for many hours. This
 // pins the fix: the WHERE clause names last_activity_at, not started_at.

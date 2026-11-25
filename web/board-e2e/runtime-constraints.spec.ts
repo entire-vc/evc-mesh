@@ -7,13 +7,13 @@ const SHOTS = process.env.CONSTRAINT_SHOTS ?? (process.env.CI ? "constraint-shot
 const BOOT_MS = 60_000;
 const LONG_REF = `decision:@${"very-long-recipient-name-".repeat(8)}`;
 const k = (id: string, cls: string, over: Record<string, unknown> = {}) => ({
-  id, class: cls, reason_code: "local_wait", next_actor: { kind: "agent", name: "Developer One" },
-  wake: { predicate: "card:#00000000", ref: "card:#00000000" }, source: { kind: "mesh" },
+  id, class: cls, reason_code: "local_wait", next_actor: { kind: "agent", name: "Liam" },
+  wake: { predicate: "card:#5eed001c", ref: "card:#5eed001c" }, source: { kind: "mesh" },
   observed_at: "2026-11-03T10:00:00Z", stale: false, ...over,
 });
 const STORIES: Record<string, { constraints: unknown[] }> = {
   "fixture-task-315": { constraints: [
-    k("a", "mesh_dependency", { reason_code: "mesh_dependency" }), k("b", "local_wait", { wake: { predicate: "mr:group/example!3", ref: "mr:group/example!3" } }),
+    k("a", "mesh_dependency", { reason_code: "mesh_dependency" }), k("b", "local_wait", { wake: { predicate: "mr:entire-vc/evc-mesh!1764", ref: "mr:entire-vc/evc-mesh!1764" } }),
     k("c", "ci_capacity", { reason_code: "ci_capacity", ci: { state: "capacity", scope: "runner-pool", position: 3 } }), k("d", "review_rejection", { reason_code: "local_wait" }),
   ] },
   "fixture-task-316": { constraints: [
@@ -45,15 +45,15 @@ const L: Record<string, { cls: Record<string, string>; reason: Record<string, st
     unknown: "неизвестно", timeUnknown: "время неизвестно", observed: "замечено", stale: "данные устарели", ci: ["Ждёт свободный CI", "Статус CI недоступен", "область", "позиция"], restricted: "Подробности скрыты", unverified: "Ожидание не подтверждено: диагностика недоступна",
   },
 };
-const CARD_HREF = "/t/00000000";
-const MR_HREF = /^https:\/\/gitlab\.com\/group\/example\/-\/merge_requests\/3$/;
+const CARD_HREF = "/t/5eed001c";
+const MR_HREF = /^https:\/\/git\.entire\.host\/entire-vc\/evc-mesh\/-\/merge_requests\/1764$/;
 const wants = (lng: string): Record<string, Want[]> => {
   const l = L[lng];
-  const base = { actor: "Developer One", wake: "card:#00000000", ref: "#00000000", href: CARD_HREF as string | RegExp | null, source: "mesh", stale: false, ci: null, timeKnown: true };
+  const base = { actor: "Liam", wake: "card:#5eed001c", ref: "#5eed001c", href: CARD_HREF as string | RegExp | null, source: "mesh", stale: false, ci: null, timeKnown: true };
   return {
     "fixture-task-315": [
       { ...base, cls: "mesh_dependency", reason: l.reason.mesh_dependency },
-      { ...base, cls: "local_wait", reason: l.reason.local_wait, wake: "mr:group/example!3", ref: "group/example!3", href: MR_HREF },
+      { ...base, cls: "local_wait", reason: l.reason.local_wait, wake: "mr:entire-vc/evc-mesh!1764", ref: "entire-vc/evc-mesh!1764", href: MR_HREF },
       { ...base, cls: "ci_capacity", reason: l.reason.ci_capacity, ci: `${l.ci[0]}, ${l.ci[2]} runner-pool, ${l.ci[3]} 3` },
       { ...base, cls: "review_rejection", reason: l.reason.local_wait },
     ],
@@ -83,7 +83,7 @@ const arm = async (page: Page) => {
   page.on("response", (r) => { if (r.status() >= 500 && r.url().startsWith(API)) errors.push(`5xx ${r.url()}`); });
   const inject = (t: Record<string, unknown>) => {
     const s = STORIES[String(t.id)];
-    return s ? { ...t, assignee_type: "agent", assignee_name: "Developer Two", assignee_id: "aaaaaaaa-1111-1111-1111-111111111111", runtime_state: { kind: "waiting", constraints: s.constraints } } : t;
+    return s ? { ...t, assignee_type: "agent", assignee_name: "Vera", assignee_id: "aaaaaaaa-1111-1111-1111-111111111111", runtime_state: { kind: "waiting", constraints: s.constraints } } : t;
   };
   await page.route(/\/projects\/[^/]+\/tasks(\?|$)/, async (route) => {
     const res = await route.fetch(); const body = await res.json();

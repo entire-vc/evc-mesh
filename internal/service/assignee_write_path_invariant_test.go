@@ -66,6 +66,7 @@ var assigneeWriteVerdict = map[string]string{
 	"taskService.handBackToGateAuthor":           "delegated: taskService.AssignTask performs the write and the funnel",
 	"taskService.applyAutoAssign":                "delegated: taskService.Create and taskService.CreateSubtask both funnel after calling it",
 	"taskService.bulkUpdateOne":                  "delegated: taskService.Update performs the write and the funnel",
+	"GateIntakeService.Intake":                   "delegated: taskService.Create performs the write and the funnel; the assignee comes from the principal's server-side binding, never from the request",
 
 	// These three write an assignee onto a TEMPLATE or SCHEDULE row, not onto a
 	// task. Nothing reads those rows as an authorization; they are materialised

@@ -10,7 +10,7 @@ at its own startup step. Several minutes and several steps (migrations, Go
 build, mesh-mcp checkout + cross-compile) separate that confirmation from the
 first step that actually depends on it. A crash or OOM-kill in that window
 went unnoticed until scored questions started failing — 24/24 "could not run"
-with no named cause (#352a0b11), because every individual recall/remember
+with no named cause, because every individual recall/remember
 call just failed and the run silently degraded to INCONCLUSIVE.
 
 This script is meant to be run as its OWN CI step right before measurement

@@ -64,3 +64,9 @@ export function formatRelativeShort(v: DateInput, t: (key: string, o?: Record<st
   if (diffDays < 7) return t("time.daysAgo", { count: diffDays });
   return formatDate(date);
 }
+
+/** The calendar day ("2026-11-18") of an instant in an IANA zone. Not display text: a query key, so it is
+ *  language-independent ("en-CA" is the locale whose short date is ISO). */
+export function calendarDayIn(timeZone: string, v: DateInput = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(toDate(v));
+}

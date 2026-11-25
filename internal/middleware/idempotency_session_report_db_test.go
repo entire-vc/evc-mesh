@@ -140,3 +140,52 @@ func TestSessionReport_ConcurrentReportsSumExactly_DB(t *testing.T) {
 		require.EqualValues(t, 2*n, out, "round %d", round)
 	}
 }
+
+func (f *reportFixture) journal(t *testing.T) (turns int, hourTurns, hourIn int64) {
+	t.Helper()
+	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM agent_usage_turns WHERE agent_id=$1`, f.agentID).Scan(&turns))
+	require.NoError(t, f.db.QueryRow(`SELECT COALESCE(sum(turns),0), COALESCE(sum(tokens_in),0)
+		FROM agent_usage_hourly WHERE agent_id=$1`, f.agentID).Scan(&hourTurns, &hourIn))
+	return
+}
+
+// The usage journal and its hour follow the report's idempotency: a keyed
+// repeat writes no second turn, and concurrent repeats of one turn_id under
+// different keys land once.
+func TestIdempotency_SessionReport_JournalOnce_DB(t *testing.T) {
+	f := newReportFixture(t)
+	body := `{"turn_id":"idem-turn-1","tokens_in":100,"tokens_out":10,"model":"claude-opus-5-5","cache_read":40,"cache_write":10}`
+	require.Equal(t, http.StatusOK, f.post("journal-key-1", body).Code)
+	again := f.post("journal-key-1", body)
+	require.Equal(t, http.StatusOK, again.Code)
+	assert.Equal(t, "true", again.Header().Get(mw.HeaderIdempotentReplayed))
+	turns, hourTurns, hourIn := f.journal(t)
+	assert.Equal(t, 1, turns)
+	assert.EqualValues(t, 1, hourTurns)
+	assert.EqualValues(t, 100, hourIn)
+
+	const n = 12
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	codes := make([]int, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			codes[i] = f.post(fmt.Sprintf("journal-conc-%d", i),
+				`{"turn_id":"idem-turn-2","tokens_in":5,"tokens_out":1,"model":"claude-opus-5-5"}`).Code
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	for i, c := range codes {
+		require.Equal(t, http.StatusOK, c, "report %d", i)
+	}
+	turns, hourTurns, hourIn = f.journal(t)
+	assert.Equal(t, 2, turns, "one turn_id, one row, however many keys")
+	assert.EqualValues(t, 2, hourTurns)
+	assert.EqualValues(t, 105, hourIn)
+	_, in, _ := f.totals(t)
+	assert.EqualValues(t, 105, in, "the session is not added for a repeated turn either")
+}

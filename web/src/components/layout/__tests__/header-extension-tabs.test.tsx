@@ -54,6 +54,26 @@ describe("Header project strip: Updates and extension tabs", () => {
     expect(document.querySelector(".mesh-project-tabs")).not.toBeNull();
   });
 
+  it("shows the strip on a project's /stats with Statistics active", () => {
+    renderAt("/w/ws/p/proj/stats");
+    expect(document.querySelector(".mesh-project-tabs")).not.toBeNull();
+    const active = document.querySelector('.mesh-project-tabs [aria-current="page"]');
+    expect(active?.getAttribute("data-tab-id")).toBe("stats");
+  });
+
+  it("shows no project strip on the workspace statistics page", () => {
+    // The project route is absent here: the workspace /w/:ws/stats ends the same way.
+    useProjectStore.setState({ currentProject: null });
+    render(
+      <MemoryRouter initialEntries={["/w/ws/stats"]}>
+        <Routes>
+          <Route path="w/:wsSlug/stats" element={<Header onToggleSidebar={() => {}} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(document.querySelector(".mesh-project-tabs")).toBeNull();
+  });
+
   it("shows the strip on /updates/ with a trailing slash", () => {
     renderAt("/w/ws/p/proj/updates/");
     expect(document.querySelector(".mesh-project-tabs")).not.toBeNull();

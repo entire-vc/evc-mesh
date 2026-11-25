@@ -85,7 +85,7 @@ export function AppLayout() {
   }, [isAuthenticated, initialized]);
 
   // Resolve workspace slug. A slug that doesn't match any live workspace —
-  // deleted (soft-delete renames its slug away, an internal ticket), never
+  // deleted (soft-delete renames its slug away), never
   // existed, or belongs to a workspace this account can't see — must not be
   // allowed to silently keep whatever workspace was current before this
   // navigation: without the reset below, clicking a stale bookmark/deep-link

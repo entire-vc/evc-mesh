@@ -20,7 +20,7 @@ func refusalCode(t *testing.T, err error) string {
 	return r.Code
 }
 
-// an internal ticket: set_human_gate with an agent key gets the same two checks as the marker.
+// Set_human_gate with an agent key gets the same two checks as the marker.
 func TestCheckAgentGateArm(t *testing.T) {
 	ctx := context.Background()
 	// Other tests freeze timeNow; the answer must be strictly newer than the ask.

@@ -155,7 +155,7 @@ func newVictimFixture(t *testing.T, prefix string) *victimFixture {
 	// Required, not best-effort, for the same reason as createFlatObjects: a
 	// missing fixture turns the route's assertion into "403 because the id
 	// does not exist", which passes whether or not cross-tenant access is
-	// actually blocked — see an internal ticket, which is exactly this failure mode
+	// actually blocked, which is exactly this failure mode
 	// (concreteURL had no :artifact_id fixture and fell through to a dummy
 	// UUID, so the test never exercised "real artifact, foreign workspace"
 	// at all).

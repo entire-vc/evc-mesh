@@ -1,10 +1,10 @@
 -- +goose Up
 
--- The legal channel for a human to hand an agent a secret (task #64e84eb1).
+-- The legal channel for a human to hand an agent a secret.
 --
 -- Two paths existed before this table, both bad: pasting a value into a
 -- Telegram message or Mesh comment (read forever after by every session's
--- startup hook — the Casdoor client_secret leak from #d2f79c73 sat live for
+-- startup hook — the Casdoor client_secret leak from an internal ticket sat live for
 -- two weeks that way), or Pavel walking up to the Mac Mini and hand-editing
 -- ~/.config/agents/*.env (works, but stalls a lane for hours while he does
 -- it). This table is write-only: a value goes in once through the API and
@@ -82,7 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_secrets_current ON secrets(workspace_id, scope) W
 
 COMMENT ON TABLE secrets IS
     'Write-only secret store -- the only legal channel for a human to hand an '
-    'agent a credential (task #64e84eb1). encrypted_value is never returned by '
+    'agent a credential. encrypted_value is never returned by '
     'any read path; see S6''s negative test for the enumerated surfaces.';
 COMMENT ON COLUMN secrets.encrypted_value IS
     'AES-256-GCM via pkg/encryption, enc:v1:<base64> -- same key and scheme as '

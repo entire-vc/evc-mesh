@@ -18,7 +18,7 @@ import (
 // migrated DATABASE_URL and skip()s rather than fails when no database is
 // reachable.
 //
-// #655c6d12: `decayed_relevance` had two triggers with two different expected
+// `decayed_relevance` had two triggers with two different expected
 // strings — the recall service compared against the bare key, this ORDER BY
 // switch matched only the suffixed form. The switch now normalises through
 // domain.CanonicalOrderBy so one name means one thing on both paths.
@@ -66,7 +66,7 @@ func TestList_OrderByDecayNormalisation(t *testing.T) {
 		why       string
 	}{
 		{domain.OrderByDecayedRelevanceDesc, true, "the canonical form every producer emits"},
-		{"decayed_relevance", true, "the bare key — silently fell through to created_at DESC before #655c6d12"},
+		{"decayed_relevance", true, "the bare key — silently fell through to created_at DESC before that fix"},
 
 		// Discriminating controls. Without them this passes on a switch that
 		// reports DecayApplied unconditionally, which would be a worse defect

@@ -16,7 +16,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/repository"
 )
 
-// ClosedFollowUpRootRepo against a real PostgreSQL (#5194afd4). The service
+// ClosedFollowUpRootRepo against a real PostgreSQL. The service
 // tests run against a hand-written mock of this repo; these are the tests that
 // keep the mock honest — every branch asserted here is one the mock mirrors:
 //

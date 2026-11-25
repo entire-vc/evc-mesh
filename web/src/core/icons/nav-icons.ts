@@ -6,6 +6,7 @@ import {
   Bell,
   Bot,
   Brain,
+  ChartLine,
   FolderKanban,
   Inbox,
   LayoutDashboard,
@@ -14,6 +15,7 @@ import {
   Puzzle,
   Server,
   Settings,
+  ShieldCheck,
   Sparkles,
   Target,
   UserRound,
@@ -28,6 +30,7 @@ export const NAV_ICONS: Record<string, NavIcon> = {
   Bell,
   Bot,
   Brain,
+  ChartLine,
   FolderKanban,
   Inbox,
   LayoutDashboard,
@@ -36,11 +39,12 @@ export const NAV_ICONS: Record<string, NavIcon> = {
   Puzzle,
   Server,
   Settings,
+  ShieldCheck,
   Sparkles,
   Target,
   UserRound,
 };
 
 export function navIcon(name: string): NavIcon {
-  return NAV_ICONS[name] ?? Puzzle;
+  return Object.prototype.hasOwnProperty.call(NAV_ICONS, name) ? NAV_ICONS[name]! : Puzzle;
 }

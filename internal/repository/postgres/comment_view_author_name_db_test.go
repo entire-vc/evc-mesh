@@ -14,7 +14,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/repository"
 )
 
-// Regression for an internal ticket: CommentView.AuthorName is a plain string, and the
+// Regression: CommentView.AuthorName is a plain string, and the
 // agent arm of commentViewSelect resolved the name only for live agents. A
 // comment by a soft-deleted agent (or by an agent id with no row at all)
 // produced author_name NULL and the whole page failed to scan, so

@@ -17,7 +17,7 @@ import (
 )
 
 // TaskRepo.ArmHumanGate is the ONLY statement that persists gate authorship to Postgres
-// . Everything above it — the service, the handler, the marker path — is
+// Everything above it — the service, the handler, the marker path — is
 // covered against fake repositories, which means every one of those tests would stay
 // green if this UPDATE silently stopped writing a column.
 //
@@ -96,7 +96,7 @@ func TestTaskRepo_ArmHumanGate_SetsEveryGateColumn(t *testing.T) {
 	for _, col := range armedColumns {
 		assert.Regexp(t, regexp.MustCompile(`\b`+regexp.QuoteMeta(col)+`\s*=`), *captured,
 			"ArmHumanGate must SET %s — a gate armed without it is exactly the authorless "+
-				"state task #4545660b exists to eliminate", col)
+				"state this guard exists to eliminate", col)
 	}
 }
 
@@ -104,7 +104,7 @@ func TestTaskRepo_ArmHumanGate_SetsEveryGateColumn(t *testing.T) {
 // the column's presence. Re-arming refreshes the ask (a later marker supersedes an
 // earlier one) but must not restart the age the soft-timeout sweep measures — otherwise a
 // driver's repeat ping keeps a soft gate alive forever, which is the latch shape of
-// this change. `human_gate_armed_at = NOW()` unconditionally would satisfy the
+// `human_gate_armed_at = NOW()` unconditionally would satisfy the
 // column-presence check above while reintroducing exactly that bug.
 func TestTaskRepo_ArmHumanGate_DoesNotResetArmedAtOnReArm(t *testing.T) {
 	repo, mock, captured := captureTaskRepoSQL(t)
@@ -124,7 +124,7 @@ func TestTaskRepo_ArmHumanGate_DoesNotResetArmedAtOnReArm(t *testing.T) {
 
 // TestTaskRepo_SetHumanGate_ReleaseNullsTheAsk covers the other half of the same
 // contract. The ask metadata describes a LIVE question; a recommended_default left on a
-// released task is a default that something (the regression's timeout sweep) will
+// released task is a default that something (an internal ticket's timeout sweep) will
 // eventually apply to a settled question.
 func TestTaskRepo_SetHumanGate_ReleaseNullsTheAsk(t *testing.T) {
 	repo, mock, captured := captureTaskRepoSQL(t)
@@ -179,7 +179,7 @@ func TestTaskRepo_ArmHumanGate_DeadlineCASE_ExplicitAlwaysWins(t *testing.T) {
 }
 
 // TestTaskRepo_ArmHumanGate_DeadlineCASE_HardTakesSameComputedBranchAsSoft pins task
-// 1.4b (this change / this change): the class-based `WHEN $2 = 'hard' THEN NULL` branch that
+// 1.4b: the class-based `WHEN $2 = 'hard' THEN NULL` branch that
 // used to force a hard gate's deadline to NULL unconditionally is GONE from the query
 // text — a hard-classified arm with a real recommended_default and no explicit deadline
 // reaches the exact same ELSE branch a soft one does

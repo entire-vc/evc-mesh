@@ -31,7 +31,7 @@ const maxExportTotalBytes = 50 << 20 // 50 MiB
 // ExportTreeTooLargeError is returned by WalkExportTree when the subtree
 // rooted at the requested document exceeds an export ceiling. It names the
 // actual measurement against the limit — never a silent, partial export the
-// caller has no way to detect (see #480f59c2 §3.5, the requirement this type
+// caller has no way to detect (see an internal ticket §3.5, the requirement this type
 // exists to satisfy).
 type ExportTreeTooLargeError struct {
 	// Kind is which ceiling was hit: "documents" or "bytes".

@@ -12,7 +12,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// DenseScore plumbing through reciprocalRankFusion (#116875c2)
+// DenseScore plumbing through reciprocalRankFusion
 //
 // The vector arm's Score is a raw cosine at VectorSearch time. The mesh-mcp
 // noise gate needs exactly that value to tell a paraphrased on-topic query

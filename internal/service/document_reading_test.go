@@ -244,7 +244,7 @@ func TestDocumentService_GetByPath_OtherProjectDoesNotResolve(t *testing.T) {
 	assert.Equal(t, 404, apiErr.StatusCode())
 }
 
-// Moving a document no longer breaks the path it was filed under (#ed10e6aa):
+// Moving a document no longer breaks the path it was filed under:
 // the old path resolves through the alias the move recorded, and says where the
 // document lives now. The id is still the identifier that survives anything.
 func TestDocumentService_GetByPath_SurvivesWhenTheDocumentMoves(t *testing.T) {

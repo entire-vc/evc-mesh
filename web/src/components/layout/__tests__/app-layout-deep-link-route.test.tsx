@@ -1,6 +1,6 @@
 /**
- * Regression for the follow-up to #14db79fd (task #b1f0ef72): a document
- * deep link (`/d/:docId`, returned in `Document.url` since #14db79fd) opened
+ * Regression for the follow-up to an internal ticket: a document
+ * deep link (`/d/:docId`, returned in `Document.url` since that fix) opened
  * the activity feed instead of the document. Root cause: AppLayout's
  * `isDeepLinkRoute` escape hatch (app-layout.tsx) — the one thing that stops
  * "no :wsSlug yet" from being read as "go to the first workspace's activity
@@ -13,7 +13,7 @@
  * worked (`/t/`) as a positive control — a change that "fixed" `/d/` by
  * accident while breaking `/t/` would be just as wrong.
  *
- * `/a/:artifactId` (the artifact's own page, #eb6fde4e) joined the list the
+ * `/a/:artifactId` (the artifact's own page) joined the list the
  * same way — caught by the e2e suite in CI, where the page opened Activity
  * instead of the artifact.
  */
@@ -126,7 +126,7 @@ describe("AppLayout — deep-link routes are not redirected to activity", () => 
     expect(router.state.location.pathname).toBe("/t/some-task-id");
   });
 
-  it("lets /a/:artifactId render its page instead of bouncing to /w/<slug>/activity (#eb6fde4e)", async () => {
+  it("lets /a/:artifactId render its page instead of bouncing to /w/<slug>/activity", async () => {
     const router = renderDeepLink("/a/some-artifact-id");
 
     await screen.findByTestId("artifact-view");

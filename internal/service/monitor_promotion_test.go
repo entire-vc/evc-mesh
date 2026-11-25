@@ -16,7 +16,7 @@ import (
 // ---------------------------------------------------------------------------
 // Backlog due-date promotion tests.
 //
-// Contract as of an internal ticket (was: an internal ticket, parent bug an internal ticket — kind:monitor
+// Contract as of that fix (kind:monitor
 // only). A backlog task whose due_date has passed is promoted to the project's
 // todo-category status, WHATEVER its labels, unless one of four guards says no:
 //
@@ -411,7 +411,7 @@ func TestBacklogPromotion_RelatesToDependency_DoesNotBlock(t *testing.T) {
 
 // A card with no blocks dependency, demoted into backlog from a working status, must
 // NOT be promoted just because "no open blockers" is vacuously true for a card that
-// never had any (an internal ticket: the July incident this guard exists to prevent — the
+// never had any (the July incident this guard exists to prevent — the
 // original sweep undid such a park in 26 minutes).
 func TestBacklogPromotion_DemotedNoDeps_NotPromoted(t *testing.T) {
 	h := newMonitorHarness()
@@ -447,7 +447,7 @@ func TestBacklogPromotion_NeverMoved_Promoted(t *testing.T) {
 	}
 }
 
-// The an internal ticket trap, ported: a demoted card that ALSO carries a `blocks` edge must be
+// The trap, ported: a demoted card that ALSO carries a `blocks` edge must be
 // judged by whether that edge is cleared, never by its move history — once the edge
 // clears, that IS the informative event this due-date sweep exists to catch when the
 // event-triggered auto-transition (tryUnblockTask) missed it because the blocker
@@ -609,7 +609,7 @@ func TestBacklogPromotion_NoDueTasks_ReturnsZero(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// start_after independence (sub4 of an internal ticket, blocked on sub1 an internal ticket which
+// start_after independence (sub4, blocked on sub1 an internal ticket which
 // added the column). FindDueBacklogTasks's SQL selects on due_date alone, and
 // skipReason's five guards never read StartAfter either — this sweep was never
 // wired to the field. These tests exist to catch a FUTURE regression that wires
@@ -714,7 +714,7 @@ func TestBacklogPromotion_EvidenceSatisfiedEdgeOnDeletedBlocker_Promoted(t *test
 	}
 }
 
-// explicit park fix: the lease reaper's own idle-park promises a due_date lift; guard 5 must
+// The lease reaper's own idle-park promises a due_date lift; guard 5 must
 // not read it as a deliberate demotion.
 func TestBacklogPromotion_ReaperPark_PastDue_Promoted(t *testing.T) {
 	h := newMonitorHarness()

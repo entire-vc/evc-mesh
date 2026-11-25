@@ -124,7 +124,7 @@ func TestDeliveryOutcomeDB_UnresolvedHandleStoresNullRecipient(t *testing.T) {
 	repo := NewCommentDeliveryOutcomeRepo(db)
 
 	require.NoError(t, repo.InsertBatch(ctx, []domain.CommentDeliveryOutcome{{
-		CommentID: commentID, RecipientSlug: "daedalus", RecipientID: nil,
+		CommentID: commentID, RecipientSlug: "dana", RecipientID: nil,
 		RecipientKind: domain.RecipientKindUnknown, Outcome: domain.DeliverySkipped,
 		Reason: domain.ReasonRecipientUnknown, Channel: domain.ChannelNone,
 		RecipientPresence: "offline", DecidedAt: time.Now(),
@@ -135,7 +135,7 @@ func TestDeliveryOutcomeDB_UnresolvedHandleStoresNullRecipient(t *testing.T) {
 	rows := byComment[commentID]
 	require.Len(t, rows, 1)
 	assert.Nil(t, rows[0].RecipientID)
-	assert.Equal(t, "daedalus", rows[0].RecipientSlug)
+	assert.Equal(t, "dana", rows[0].RecipientSlug)
 	assert.Equal(t, domain.ReasonRecipientUnknown, rows[0].Reason)
 }
 
@@ -149,7 +149,7 @@ func TestDeliveryOutcomeDB_ReRecordingAHandleReplacesTheEarlierVerdict(t *testin
 	repo := NewCommentDeliveryOutcomeRepo(db)
 
 	first := domain.CommentDeliveryOutcome{
-		CommentID: commentID, RecipientSlug: "linus", RecipientKind: domain.RecipientKindAgent,
+		CommentID: commentID, RecipientSlug: "liam", RecipientKind: domain.RecipientKindAgent,
 		Outcome: domain.DeliverySkipped, Reason: domain.ReasonNoQueuePath,
 		Channel: domain.ChannelNone, RecipientPresence: "online", DecidedAt: time.Now(),
 	}
@@ -341,7 +341,7 @@ func TestDeliveryOutcomeDB_RecordIsCascadedWithItsComment(t *testing.T) {
 	repo := NewCommentDeliveryOutcomeRepo(db)
 
 	require.NoError(t, repo.InsertBatch(ctx, []domain.CommentDeliveryOutcome{{
-		CommentID: commentID, RecipientSlug: "wally", RecipientKind: domain.RecipientKindAgent,
+		CommentID: commentID, RecipientSlug: "wade", RecipientKind: domain.RecipientKindAgent,
 		Outcome: domain.DeliverySkipped, Reason: domain.ReasonRecipientOffline,
 		Channel: domain.ChannelNone, RecipientPresence: "offline", DecidedAt: time.Now(),
 	}}))

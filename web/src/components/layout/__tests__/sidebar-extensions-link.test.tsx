@@ -1,7 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { Sidebar } from "../sidebar";
+import { refreshSlotRegistry, resetSlotRegistryForTests } from "@/lib/extension-slots";
 import { setLanguage } from "@/i18n";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
@@ -10,11 +11,57 @@ import { useAuthStore } from "@/stores/auth";
 const workspace = { id: "ws1", slug: "acme", name: "Acme" } as never;
 
 beforeEach(async () => {
+  resetSlotRegistryForTests();
   await setLanguage("en");
   useAuthStore.setState({ user: null });
   useWorkspaceStore.setState({ workspaces: [workspace], currentWorkspace: workspace, isLoading: false });
   useProjectStore.setState({ projects: [], currentProject: null, isLoading: false, error: null });
   vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } })));
+});
+
+// mock: external boundary — workspace extension registry HTTP; real sidebar and icon registry.
+describe("Sidebar — extension manifest icon", () => {
+  const cases = [
+    ["ChartLine", "lucide-chart-line"],
+    ["ShieldCheck", "lucide-shield-check"],
+    [undefined, "lucide-puzzle"],
+    ["UnknownIcon", "lucide-puzzle"],
+    ["constructor", "lucide-puzzle"],
+    ["__proto__", "lucide-puzzle"],
+    ["toString", "lucide-puzzle"],
+    ["hasOwnProperty", "lucide-puzzle"],
+  ] as const;
+  let icon: string | undefined;
+  const serve = () => vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+    extensions: [{
+      id: "tokenledger", name: "TokenLedger", status: { enabled: true },
+      manifest: { runtime: "external", capabilities: { ui: ["sidebar.item"] },
+        external: { ui: { "sidebar.item": { path: "/ui/", title: "TokenLedger", icon } } } },
+    }],
+  }), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+  for (const collapsed of [false, true]) {
+    it.each(cases)("renders %s safely and preserves navigation (collapsed=" + collapsed + ")", async (name, css) => {
+      icon = name;
+      serve();
+      renderAt("/w/acme/x/tokenledger/history", collapsed);
+      const link = await screen.findByRole("link", { name: "TokenLedger" });
+      expect(link).toHaveAttribute("href", "/w/acme/x/tokenledger");
+      expect(link.className).toContain("bg-sidebar-accent");
+      expect(link.querySelector("svg")).toHaveClass(css);
+    });
+  }
+
+  it("updates an installed extension's icon after registry refresh", async () => {
+    icon = undefined;
+    serve();
+    renderAt("/w/acme/dashboard", false);
+    const link = await screen.findByRole("link", { name: "TokenLedger" });
+    expect(link.querySelector("svg")).toHaveClass("lucide-puzzle");
+    icon = "ChartLine";
+    refreshSlotRegistry("ws1");
+    await waitFor(() => expect(link.querySelector("svg")).toHaveClass("lucide-chart-line"));
+  });
 });
 afterEach(() => vi.unstubAllGlobals());
 

@@ -5,7 +5,7 @@ import { loginWithRetry } from "../e2e/auth-helper";
 import { isFixtureOrigin, assertAddress, assertCsp, assertExactTabs, assertFrameText, assertHistoryDelta, assertMarkerEqual, assertNoHScroll, assertRealReload, assertTabs } from "./asserts";
 
 /**
- * Scenarios 1-4 of Mesh Doc e2e-reference-ext-project-view and S5-S7 (an internal ticket: real reload,
+ * Scenarios 1-4 of Mesh Doc e2e-reference-ext-project-view and S5-S7 (real reload,
  * mesh.state push/replace, history and A/B back/forward), version SCENARIO_VERSION.
  * Published Mesh + published fixture; identity = CI variables E2E_REFEXT_EMAIL / E2E_REFEXT_PASSWORD
  * (masked, never printed). The refresh cookie is one-shot: ONE login and ONE context per viewport;

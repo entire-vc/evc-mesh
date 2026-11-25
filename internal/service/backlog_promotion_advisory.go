@@ -14,7 +14,7 @@ import (
 )
 
 // backlogPassiveWaitLabels mirrors PASSIVE_WAIT_LABELS in <ops-repo>/scripts/mesh-intake-sweep.py
-// (an internal ticket, this suban internal ticket) — the label vocabulary that means "this
+// (this subtask) — the label vocabulary that means "this
 // backlog card is deliberately parked, do not auto-promote it". Kept as ONE flat set,
 // unlike the Python script's ABSOLUTE_NO_PROMOTE_LABELS ⊂ PASSIVE_WAIT_LABELS split:
 // that split exists to let a passed due_date override the non-absolute half
@@ -48,25 +48,25 @@ type BacklogPromotionDecision struct {
 }
 
 // BacklogPromotionAdvisoryService is the server-side, advisory-only mirror of
-// <ops-repo>/scripts/mesh-intake-sweep.py's backlog→todo promotion decision (an internal ticket,
-// suban internal ticket — unit 1 of 4: ship advisory here, THEN a 7-day parallel-run diff
+// <ops-repo>/scripts/mesh-intake-sweep.py's backlog→todo promotion decision
+// (subtask, unit 1 of 4: ship advisory here, THEN a 7-day parallel-run diff
 // against the live Python sweep, THEN a go/no-go on that log,
 // THEN cutover + sweep retirement).
 //
 // SweepAdvisory NEVER calls MoveTask and NEVER posts a comment — counts+logs only, per
-// an internal ticket's own description ("deployed in advisory mode only ... never moves a
+// Own description ("deployed in advisory mode only ... never moves a
 // task"). It reproduces the sweep's two central, previously-incident-causing
 // distinctions:
 //
 //   - a task DEMOTED into backlog from a working status, with NO dependencies, is a
 //     deliberate park and must not be promoted just because all-deps-cleared is
-//     vacuously true for an empty dependency set (an internal ticket: the sweep once undid such
+//     vacuously true for an empty dependency set (the sweep once undid such
 //     a park in 26 minutes);
 //   - that demotion-park guard must NOT fire on a task that HAS dependencies — with
 //     real deps, "promote once they clear" is itself the informative event, and
 //     mesh-intake-sweep.py's was_deliberately_parked() deliberately returns false the
-//     moment dep_ids is non-empty, before ever looking at the activity log (an internal ticket:
-//     a demoted, parented, dependency-bearing card was re-promoted twice over 7.5h by
+//     moment dep_ids is non-empty, before ever looking at the activity log
+//     (a demoted, parented, dependency-bearing card was re-promoted twice over 7.5h by
 //     the live sweep — the label route is what protects that class, not the
 //     demotion-detector). A naive port that checks "last transition = demotion" WITHOUT
 //     this dep_ids-empty gate would silently diverge from the sweep by OVER-protecting
@@ -74,12 +74,12 @@ type BacklogPromotionDecision struct {
 //     backlog_promotion_advisory_test.go, which exists specifically to catch that
 //     mistake before it ships.
 //
-// Parity with the sweep (an internal ticket): umbrella-with-open-children, human-gate (cheap path), parent-gate, eval-fixture
+// Parity with the sweep: umbrella-with-open-children, human-gate (cheap path), parent-gate, eval-fixture
 // parent, ABSOLUTE_NO_PROMOTE labels and the due_date / wake:<type> overrides live in
 // backlog_promotion_gates.go, ported function-for-function. Still NOT covered:
 //
-// INTAKE brakes (an internal ticket; source of truth is now fleet-balancer.py INTAKE, since the
-// sweep is retired — an internal ticket): start_after, lease, fleet-paused assignee lane
+// INTAKE brakes (source of truth is now fleet-balancer.py INTAKE, since the
+// sweep is retired): start_after, lease, fleet-paused assignee lane
 // (WithLaneAvailability), blocking-edge dep_freeze, per-assignee capacity incl. this
 // tick's promotions (WithCapacityBrake). NOT ported, server would PROMOTE where the
 // balancer holds: a lane switched off in fiddler.json, operator_paused config, the
@@ -228,7 +228,7 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 	// to any OTHER workspace (Sandbox, Alex's personal workspace under Codex;
 	// Editorial) is invisible to the sweep, which never promotes it because it never
 	// sees it. Promoting such a card server-side would be NEW behaviour, not parity
-	// (Robin, an internal ticket, 2026-09-21T16:16Z: "enforcing только на workspace EVC ...
+	// (Robin, 2026-09-21T16:16Z: "enforcing только на workspace EVC ...
 	// паритет, а не новое поведение"). Checked first: it decides which rule set even
 	// applies, and a task outside scope should never accrue an in-scope reason string.
 	ws, wsErr := s.projectWorkspaceOf(ctx, task.ProjectID, projectWSCache)
@@ -290,7 +290,7 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 
 	// 3. Dependencies — blocking edges only (dependency_type == blocks), the
 	// DEP_BLOCKING_TYPES set of human_gate.dep_freeze_reason that fleet-balancer INTAKE
-	// uses (the single promoter after an internal ticket). Cleared = done OR cancelled.
+	// uses (the single promoter after that fix). Cleared = done OR cancelled.
 	deps, err := s.depRepo.ListByTask(ctx, task.ID)
 	if err != nil {
 		return false, "", fmt.Errorf("list dependencies: %w", err)
@@ -316,7 +316,7 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 	// 4. Deliberate-park guard. Gated on depIDs being EMPTY, exactly like
 	// was_deliberately_parked()'s own `if dep_ids: return False` short-circuit — a
 	// task WITH dependencies is judged by whether those dependencies are cleared
-	// (step 6), never by its move history alone. This is the an internal ticket trap: a naive
+	// (step 6), never by its move history alone. This is the trap: a naive
 	// "last transition = demotion ⇒ parked" check WITHOUT this gate would wrongly
 	// protect a demoted, dependency-bearing card that the live sweep actually
 	// promotes once its deps clear.

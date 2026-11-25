@@ -183,7 +183,7 @@ func TestRecall_EmptyResultIncrementsEmptyCounter(t *testing.T) {
 // mesh_memory_recall_top_score — the QUALITY counterpart to the empty counter.
 // The dense arm always returns nearest neighbours, so on hybrid an unmatchable
 // query still returns a page and empty_total stays flat; the top-1 final score
-// is what tells those pages apart. Prod-measured anchors (#2c44a087, 30 real
+// is what tells those pages apart. Prod-measured anchors (30 real
 // queries replayed read-only): both-arms winners 0.0144..0.0164 = 1/61,
 // dense-only winners exactly 0.7/61 ≈ 0.0115, bm25-only mode tops at 0.3/61.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -335,7 +335,7 @@ func TestRecall_TopScoreExcludesSyntheticPinned(t *testing.T) {
 		"nothing may be observed above le=0.030 — the synthetic 2.0 pinned sentinel must never reach the histogram")
 }
 
-// The displacement half of the pinned story (#2c44a087 review P1): retrieval
+// The displacement half of the pinned story (an internal ticket review P1): retrieval
 // DID find something, but eligible pinned rows fill the whole limit and the
 // final trim discards every retrieval row. The caller's page is pinned-only —
 // retrieval contributed nothing to what was actually served — so the top score

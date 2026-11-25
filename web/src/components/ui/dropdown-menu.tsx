@@ -19,16 +19,20 @@ import { cn } from "@/lib/cn";
 interface DropdownMenuContextValue {
   open: boolean;
   setOpen: (open: boolean) => void;
+  /** The element that opened the menu: Escape gives the focus back to it. */
+  triggerRef: { current: HTMLElement | null };
 }
 
 const DropdownMenuContext = createContext<DropdownMenuContextValue>({
   open: false,
   setOpen: () => {},
+  triggerRef: { current: null },
 });
 
 export function DropdownMenu({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -40,8 +44,21 @@ export function DropdownMenu({ children }: { children: ReactNode }) {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  // Escape closes an open list and gives the focus back to its trigger: with the
+  // mouse-only close above, a keyboard user could not leave the list at all.
+  useEffect(() => {
+    if (!open) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      triggerRef.current?.focus();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [open]);
+
   return (
-    <DropdownMenuContext.Provider value={{ open, setOpen }}>
+    <DropdownMenuContext.Provider value={{ open, setOpen, triggerRef }}>
       <div ref={ref} className="relative inline-block text-left">
         {children}
       </div>
@@ -58,13 +75,14 @@ export function DropdownMenuTrigger({
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   asChild?: boolean;
 }) {
-  const { open, setOpen } = useContext(DropdownMenuContext);
+  const { open, setOpen, triggerRef } = useContext(DropdownMenuContext);
   const toggle = useCallback(
     (event: ReactMouseEvent<HTMLElement>) => {
       onClick?.(event as ReactMouseEvent<HTMLButtonElement>);
+      triggerRef.current = event.currentTarget;
       setOpen(!open);
     },
-    [open, setOpen, onClick],
+    [open, setOpen, onClick, triggerRef],
   );
 
   if (asChild) {

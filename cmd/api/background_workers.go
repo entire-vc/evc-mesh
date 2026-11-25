@@ -5,9 +5,11 @@ import (
 	"log"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/redis/go-redis/v9"
 
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
+	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	wsHub "github.com/entire-vc/evc-mesh/internal/ws"
 )
@@ -81,8 +83,22 @@ func startBackgroundWorkers(deps *apiDeps) {
 	// synchronously per call.
 	toolBreakdownTracker := mw.NewToolBreakdownTracker(sessionRepo)
 	toolBreakdownCtx, toolBreakdownCancel := context.WithCancel(context.Background())
+	// Memory read journal (memory_read_events) and the daily tool-call
+	// counters (agent_tool_calls_daily), both behind MEMORY_READ_LOG (default
+	// on). The tracker above keeps writing agent_sessions.tool_breakdown
+	// either way; with the flag off neither new table is written.
+	memoryReadRepo := postgres.NewMemoryReadEventRepo(deps.db)
+	memoryReadLog := mw.NewMemoryReadLog(memoryReadRepo, cfg.MemoryReadLog)
+	if cfg.MemoryReadLog {
+		toolBreakdownTracker.EnableDaily(memoryReadRepo)
+	}
 	go toolBreakdownTracker.Run(toolBreakdownCtx)
-	log.Println("Tool-breakdown tracker started")
+	memoryReadDone := make(chan struct{})
+	go func() {
+		defer close(memoryReadDone)
+		memoryReadLog.Run(toolBreakdownCtx)
+	}()
+	log.Printf("Tool-breakdown tracker started (memory read log: %v)", cfg.MemoryReadLog)
 
 	// Document-watch sweeper: turns pending change-notices into notifications
 	// once their author has stopped typing for the quiet window.
@@ -181,6 +197,20 @@ func startBackgroundWorkers(deps *apiDeps) {
 	go service.NewChatRetentionJob(chatThreadDeleteRepo, time.Hour).Run(reaperCtx)
 	// Offline chat turns: a queued turn nobody claimed within its TTL expires (not delivered).
 	go chatTurnEventsService.RunExpiry(reaperCtx, time.Minute)
+	// Recall usage attribution (memory_read_usage): reads the memory read
+	// journal, so it runs only when the journal is written (MEMORY_READ_LOG).
+	if usageJob := newMemoryReadUsageJob(cfg.MemoryReadLog, deps.db); usageJob != nil {
+		go usageJob.Run(reaperCtx)
+	}
+	// Daily memory aggregates (memory_stats_daily, memory_base_daily) from the
+	// same journal: also only with MEMORY_READ_LOG.
+	if rollupJob := newMemoryDailyRollupJob(cfg.MemoryReadLog, deps.db); rollupJob != nil {
+		go rollupJob.Run(reaperCtx)
+	}
+	// content_simhash recompute after an algorithm change, then the dup columns
+	// of memory_base_daily counted on the old hashes. Once per
+	// algorithm, recorded in memory_simhash_backfill.
+	go runMemorySimhashBackfill(reaperCtx, deps.memoryRepo, postgres.NewMemoryDailyRollupRepo(deps.db))
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
@@ -234,6 +264,26 @@ func startBackgroundWorkers(deps *apiDeps) {
 	deps.activityCancel = activityCancel
 	deps.toolBreakdownTracker = toolBreakdownTracker
 	deps.toolBreakdownCancel = toolBreakdownCancel
+	deps.memoryReadLog = memoryReadLog
+	deps.memoryReadDone = memoryReadDone
 	deps.reaperCancel = reaperCancel
 	deps.telegramCancel = telegramCancel
+}
+
+// newMemoryReadUsageJob returns the recall usage job, or nil when the memory
+// read journal is off (MEMORY_READ_LOG=false switches off both).
+func newMemoryReadUsageJob(memoryReadLog bool, db *sqlx.DB) *service.MemoryReadUsageJob {
+	if !memoryReadLog {
+		return nil
+	}
+	return service.NewMemoryReadUsageJob(postgres.NewMemoryReadUsageRepo(db), 5*time.Minute)
+}
+
+// newMemoryDailyRollupJob returns the nightly writer of the daily memory
+// aggregates, or nil when the memory read journal is off.
+func newMemoryDailyRollupJob(memoryReadLog bool, db *sqlx.DB) *service.MemoryDailyRollupJob {
+	if !memoryReadLog {
+		return nil
+	}
+	return service.NewMemoryDailyRollupJob(postgres.NewMemoryDailyRollupRepo(db), service.MemoryRollupInterval)
 }

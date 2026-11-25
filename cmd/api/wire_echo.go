@@ -41,7 +41,7 @@ func wireEcho(deps *apiDeps) {
 	//
 	// Configuring this does NOT fix a misconfigured upstream proxy — our own
 	// Caddy config on prod-host is deploy/caddy/mesh.Caddyfile, tracked
-	// separately (a PR). It only tells mesh-api which additional network
+	// separately (PR #677). It only tells mesh-api which additional network
 	// ranges, beyond the loopback/link-local/private-net Echo trusts by
 	// default, are allowed to relay a client IP via X-Forwarded-For.
 	//
@@ -96,7 +96,7 @@ func wireEcho(deps *apiDeps) {
 		LogStatus:  true,
 		LogLatency: true,
 		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
-			for _, line := range accessLogLines(c.Request().Method, redactInviteToken(v.URI), v.Status, v.Latency) {
+			for _, line := range accessLogLines(c.Request().Method, redactRequestURI(v.URI), v.Status, v.Latency) {
 				log.Print(line)
 			}
 			return nil
@@ -108,8 +108,8 @@ func wireEcho(deps *apiDeps) {
 	// Body-read timings for slow requests and the cause of every failed Bind
 	// POSTs that hung 20–114 s and ended in 400/500 left no trace
 	// of whether the time went into receiving the body or into the handler.
-	e.Use(mw.SlowBody(mw.SlowBodyConfig{Redact: redactInviteToken}))
-	e.Binder = &mw.BindErrorLogger{Inner: e.Binder, Redact: redactInviteToken}
+	e.Use(mw.SlowBody(mw.SlowBodyConfig{Redact: redactRequestURI}))
+	e.Binder = &mw.BindErrorLogger{Inner: e.Binder, Redact: redactRequestURI}
 	// AllowCredentials lets the browser store/send the httpOnly refresh
 	// cookie on cross-origin requests (credentials: "include" — see
 	// web/src/lib/api.ts). It is a no-op for the common same-origin

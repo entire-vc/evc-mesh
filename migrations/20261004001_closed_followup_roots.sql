@@ -1,10 +1,10 @@
 -- +goose Up
 
--- #5194afd4 (P1 of #9b712414, contract approved by Garfield). Persistent
+-- (contract approved by Gary). Persistent
 -- identity of a finding raised on a closed card: one (source card, finding)
 -- pair maps to exactly one follow-up root for the pair's whole life, so a
 -- repeat after the root was closed reopens THAT root instead of opening a
--- second card (the measured defect: #f0d4539b closed → same text → #06b275a8).
+-- second card (the measured defect: an internal ticket closed → same text → an internal ticket).
 --
 -- PK (source_task_id, finding_key) is the atomicity: claimers race with
 -- INSERT ... ON CONFLICT DO NOTHING, the loser reads the winner's root_task_id

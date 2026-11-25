@@ -23,7 +23,7 @@ func testDB(t *testing.T) *sqlx.DB {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
-		dsn = "postgres://evc:evc@localhost:5437/evc_mesh_test?sslmode=disable"
+		dsn = "postgres://evc:evc@localhost:5437/evc_mesh_test?sslmode=disable" // # pragma: allowlist secret
 	}
 	db, err := sqlx.Connect("postgres", dsn)
 	require.NoError(t, err)
@@ -77,6 +77,7 @@ type memSeed struct {
 	contentSimhash  *int64
 	lastAccessedAt  *time.Time
 	tags            []string
+	content         string // empty => "content for <key>"
 }
 
 func seedMemory(t *testing.T, db *sqlx.DB, s memSeed) uuid.UUID {
@@ -90,6 +91,10 @@ func seedMemory(t *testing.T, db *sqlx.DB, s memSeed) uuid.UUID {
 	if tags == nil {
 		tags = []string{}
 	}
+	content := s.content
+	if content == "" {
+		content = "content for " + s.key
+	}
 	scope := domain.ScopeWorkspace
 	if s.projectID != nil {
 		scope = domain.ScopeProject
@@ -101,7 +106,7 @@ func seedMemory(t *testing.T, db *sqlx.DB, s memSeed) uuid.UUID {
 			 content_simhash, last_accessed_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, 'agent', 0.5,
 		        $8, $9, $10, $11, 1.0, $12, $13, $14)`,
-		id, s.workspaceID, s.projectID, s.key, "content for "+s.key, scope, pq.Array(tags),
+		id, s.workspaceID, s.projectID, s.key, content, scope, pq.Array(tags),
 		s.importanceScore, s.createdAt, s.updatedAt, s.status, s.validUntil,
 		s.contentSimhash, s.lastAccessedAt,
 	)
@@ -278,7 +283,7 @@ func TestReconciler_Idempotent(t *testing.T) {
 // ---------------------------------------------------------------------------
 // TestReconciler_ReviewTriage_*
 //
-// Audit #1b010be6 (plan:1.11): 1784 review_needed memories (35%) with nothing
+// an internal ticket (plan:1.11): 1784 review_needed memories (35%) with nothing
 // revisiting them — runLinker (exercised above) only ever compares memories
 // created in the last 24h against similar history, so a memory it once parked
 // at review_needed stays there forever regardless of what happens later.
@@ -367,6 +372,8 @@ func TestReconciler_ReviewTriage_SupersededBySameKey(t *testing.T) {
 	require.Equal(t, 1, edgeCount, "review-triage supersede must create the same supersedes edge the linker does")
 }
 
+// Positive control: a different key with the same simhash AND the same text (here
+// differing only in whitespace) is a real duplicate and is still superseded.
 func TestReconciler_ReviewTriage_SupersededBySameSimhash(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
@@ -381,8 +388,9 @@ func TestReconciler_ReviewTriage_SupersededBySameSimhash(t *testing.T) {
 		createdAt:      now.Add(-10 * 24 * time.Hour),
 		updatedAt:      now.Add(-10 * 24 * time.Hour),
 		contentSimhash: &simhash,
+		content:        "Deploy of the reporting service moved to Thursdays.\n",
 	})
-	// Different key, SAME content_simhash, newer, active.
+	// Different key, SAME content_simhash, same text, newer, active.
 	newID := seedMemory(t, db, memSeed{
 		workspaceID:    ws,
 		key:            "review-simhash-new:" + uuid.New().String()[:8],
@@ -390,6 +398,7 @@ func TestReconciler_ReviewTriage_SupersededBySameSimhash(t *testing.T) {
 		createdAt:      now.Add(-1 * 24 * time.Hour),
 		updatedAt:      now.Add(-1 * 24 * time.Hour),
 		contentSimhash: &simhash,
+		content:        "  Deploy of the reporting   service moved to Thursdays.",
 	})
 
 	rec := newReconciler(db, now.Add(-365*24*time.Hour))
@@ -402,6 +411,93 @@ func TestReconciler_ReviewTriage_SupersededBySameSimhash(t *testing.T) {
 	require.Equal(t, domain.MemoryStatusSuperseded, status)
 	require.NotNil(t, supersededBy)
 	require.Equal(t, newID, *supersededBy)
+}
+
+// an equal 64-bit simhash on different keys with unrelated text is a hash
+// collision, not a duplicate. Before the fix triage superseded the older row by the
+// newer one (23 such pairs on prod); now the row goes through the ordinary stale/active
+// decision and keeps its own content reachable.
+func TestReconciler_ReviewTriage_EqualSimhashUnrelatedTextNotSuperseded(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	ws := seedWorkspace(t, db)
+	now := time.Now()
+
+	var simhash int64 = -4408558833229370888 // a real clustered prod value
+	recent := now.Add(-2 * 24 * time.Hour)
+	oldID := seedMemory(t, db, memSeed{
+		workspaceID:    ws,
+		key:            "playwright-viewport-hardcoded:" + uuid.New().String()[:8],
+		status:         domain.MemoryStatusReviewNeeded,
+		createdAt:      now.Add(-10 * 24 * time.Hour),
+		updatedAt:      now.Add(-10 * 24 * time.Hour),
+		lastAccessedAt: &recent,
+		contentSimhash: &simhash,
+		content:        "The browser automation server hardcodes a 1280x900 viewport and ignores the override flag.",
+	})
+	newID := seedMemory(t, db, memSeed{
+		workspaceID:    ws,
+		key:            "memory-reason-soft-warn:" + uuid.New().String()[:8],
+		status:         domain.MemoryStatusActive,
+		createdAt:      now.Add(-1 * 24 * time.Hour),
+		updatedAt:      now.Add(-1 * 24 * time.Hour),
+		contentSimhash: &simhash,
+		content:        "remember() without a reason now returns a soft warning instead of rejecting the write.",
+	})
+
+	rec := newReconciler(db, now.Add(-365*24*time.Hour))
+	_, err := rec.RunReviewTriage(ctx)
+	require.NoError(t, err)
+
+	status, tags, supersededBy := getMemory(t, db, oldID)
+	require.Equal(t, domain.MemoryStatusActive, status, "recently accessed, no real duplicate → active")
+	require.Nil(t, supersededBy)
+	require.Contains(t, tags, "auto-reviewed")
+
+	var edgeCount int
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM memory_edges WHERE memory_from_id = $1 AND memory_to_id = $2`,
+		newID, oldID).Scan(&edgeCount))
+	require.Zero(t, edgeCount, "no supersedes edge for a hash collision")
+}
+
+// Every text shorter than three normalized runes hashes to 0, so two unrelated short
+// notes share content_simhash=0. That must not supersede either.
+func TestReconciler_ReviewTriage_ZeroSimhashShortTextNotSuperseded(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	ws := seedWorkspace(t, db)
+	now := time.Now()
+
+	var zero int64
+	recent := now.Add(-2 * 24 * time.Hour)
+	oldID := seedMemory(t, db, memSeed{
+		workspaceID:    ws,
+		key:            "short-old:" + uuid.New().String()[:8],
+		status:         domain.MemoryStatusReviewNeeded,
+		createdAt:      now.Add(-10 * 24 * time.Hour),
+		updatedAt:      now.Add(-10 * 24 * time.Hour),
+		lastAccessedAt: &recent,
+		contentSimhash: &zero,
+		content:        "ok",
+	})
+	seedMemory(t, db, memSeed{
+		workspaceID:    ws,
+		key:            "short-new:" + uuid.New().String()[:8],
+		status:         domain.MemoryStatusActive,
+		createdAt:      now.Add(-1 * 24 * time.Hour),
+		updatedAt:      now.Add(-1 * 24 * time.Hour),
+		contentSimhash: &zero,
+		content:        "no",
+	})
+
+	rec := newReconciler(db, now.Add(-365*24*time.Hour))
+	_, err := rec.RunReviewTriage(ctx)
+	require.NoError(t, err)
+
+	status, _, supersededBy := getMemory(t, db, oldID)
+	require.Equal(t, domain.MemoryStatusActive, status)
+	require.Nil(t, supersededBy)
 }
 
 func TestReconciler_ReviewTriage_OlderCandidateNotSuperseded(t *testing.T) {

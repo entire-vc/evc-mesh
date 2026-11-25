@@ -12,7 +12,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// This is the negative control task #4b33a6fd asked for: "add a read path in
+// This is the negative control an internal ticket asked for: "add a read path in
 // another package that never calls the redaction guard, and confirm it still
 // redacts." The old guard (a source-text scanner in internal/handler) could
 // only ever be shown a fake read path INSIDE internal/handler — it had no way

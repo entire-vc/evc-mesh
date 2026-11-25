@@ -84,7 +84,7 @@ func (e *AssigneeNotInWorkspaceError) Error() string {
 // reads like a real one; nobody is assigned, so no lane is ever fed, and the work
 // simply does not happen. Two such rows are in this database (2026-03-26 and
 // 2026-06-13), and the first names 7bcbd908-0000-0000-0000-000000000000 — the
-// zero-padded form of agent howard's short id, i.e. exactly the failure this
+// zero-padded form of agent harper's short id, i.e. exactly the failure this
 // message is written to pre-empt.
 type AssigneeUnresolvedError struct {
 	PrincipalID  uuid.UUID
@@ -214,7 +214,7 @@ func (s *taskService) assertAssigneeInProjectWorkspace(
 		if agent.WorkspaceID != workspaceID {
 			// Not home — the agent may still be a legitimate assignee via an
 			// ACTIVE agent_workspace_grants connection into this workspace
-			// (task U3, #71627c5a). This mirrors the user branch's shape
+			// (task U3). This mirrors the user branch's shape
 			// below (membership, not a single-tenant column) and
 			// middleware.AgentIsInWorkspace's grant half — same fail-closed
 			// contract: an unreadable grant directory, or an absent/revoked
@@ -342,7 +342,9 @@ func (s *taskService) assertAssigneeAcceptsAssignments(
 	if err != nil || agent == nil {
 		return nil
 	}
-	if !acceptsFromRefusesAll(agent.AcceptsFrom) {
+	// A project reader is never an assignee, whatever its (editable)
+	// accepts_from says: the column is the only marker that cannot drift.
+	if agent.ReaderProjectID == nil && !acceptsFromRefusesAll(agent.AcceptsFrom) {
 		return nil
 	}
 	return &AssigneeRefusesAssignmentsError{

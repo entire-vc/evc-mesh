@@ -362,7 +362,7 @@ func TestCachedAgentAuth_InvalidateUnknownAgentIsNoop(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Grant revocation freshness (task U2 AC4, an internal ticket)
+// Grant revocation freshness (task U2 AC4)
 //
 // A grant can be revoked by a direct SQL UPDATE — the only revoke path that
 // exists until U3 ships an API — which is a change this process never gets
@@ -800,7 +800,7 @@ func (s *slowAuthService) Authenticate(ctx context.Context, slug, key string) (*
 // A burst of parallel requests carrying one cold key (an agent running several
 // sessions, or every agent reconnecting after an API restart) must pay one
 // bcrypt, not one per request: on a 2-core host N parallel cost-12 compares
-// queue behind the CPU for seconds (an internal ticket, GET /agents/me 1.4-3.5s).
+// queue behind the CPU for seconds (GET /agents/me 1.4-3.5s).
 func TestCachedAgentAuth_ConcurrentMissesShareOneVerification(t *testing.T) {
 	c, counting, _ := newCacheFixture(t, time.Minute)
 	c.AgentService = &slowAuthService{countingAgentService: counting, delay: 150 * time.Millisecond}

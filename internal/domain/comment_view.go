@@ -33,7 +33,7 @@ type CommentView struct {
 // comments landing in the same microsecond) can put dozens of rows on one
 // timestamp, and a strict `created_at < cursor` comparison silently drops
 // every unread member of that tie group at a page boundary. Same class as
-// the task-list cursor fix in #a1012e55. See #c6dc694e.
+// the task-list cursor fix in an internal ticket.
 type CommentCursor struct {
 	CreatedAt time.Time
 	ID        uuid.UUID

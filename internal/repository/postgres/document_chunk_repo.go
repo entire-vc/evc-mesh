@@ -203,7 +203,7 @@ func (r *DocumentChunkRepo) FullTextSearch(ctx context.Context, wsID uuid.UUID, 
 	}
 	if len(rows) < minFTSHits {
 		// Same relaxation memories' BM25 arm applies: AND → OR of the tokens, but
-		// bounded: ranking every OR match cost 4.4s in production (half the corpus matched).
+		// bounded: ranking every OR match cost 4.4s on prod (half the corpus matched).
 		orRows, err2 := r.orSearch(ctx, wsID, projID, query, viewer, limit)
 		if err2 != nil {
 			log.Printf("WARN: doc chunks fts: OR fallback skipped, serving AND results: %v", err2)
@@ -248,7 +248,7 @@ func (r *DocumentChunkRepo) orSearch(ctx context.Context, wsID uuid.UUID, projID
 	args := []interface{}{wsID, query}
 	// Matches are counted per lexeme through the GIN index (one single-term scan each),
 	// never by evaluating the tsquery on the rows: that detoasts the whole search_vector
-	// of every OR match (~5.7k rows, 1-3s in production).
+	// of every OR match (~5.7k rows, 1-3s on prod).
 	perLexeme := make([]string, len(lexemes))
 	for i, l := range lexemes {
 		args = append(args, "'"+strings.ReplaceAll(l, "'", "''")+"'")

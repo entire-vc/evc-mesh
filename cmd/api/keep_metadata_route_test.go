@@ -9,7 +9,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/apisource"
 )
 
-// Route inventory for the Keep metadata probe (route and boundary controls). The
+// Route inventory for the Keep metadata probe (AC M1/M4). The
 // route reads no secret value and must stay a human-session, PermManageSecrets
 // route whose handler is built from nothing wider than the ref lookup and the
 // metadata-only Keep view. Read from the real main.go by AST, so a guard that

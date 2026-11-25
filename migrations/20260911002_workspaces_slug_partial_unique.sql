@@ -1,6 +1,6 @@
 -- +goose Up
 
--- Task #c164a5df (parent #93644be7): workspaces.slug was UNIQUE across ALL
+-- Workspaces.slug was UNIQUE across ALL
 -- rows, live and soft-deleted alike. A soft-deleted workspace (deleted_at
 -- SET, row never removed — see WorkspaceRepo.Delete) kept holding its slug
 -- forever, so recreating a workspace with the same slug always failed on

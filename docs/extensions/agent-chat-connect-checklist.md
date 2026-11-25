@@ -5,8 +5,8 @@ on an instance that is not ours, with a runner you operate. Contract details:
 [runner-chat-protocol.md](runner-chat-protocol.md). Runner side: `[chat]` section of the
 evc-mesh-runner README.
 
-> The runner's `[chat]` support (E5 an internal ticket) is in the evc-mesh-runner README on main
-> on the default branch. Steps 6 onwards need a runner build that contains it; if `once` rejects the
+> The runner's `[chat]` support (E5) is in the evc-mesh-runner README on
+> the default branch. Steps 6 onwards need a runner build that contains it; if `once` rejects the
 > `[chat]` section, record the runner version as the blocker, not as a doc error.
 
 Variables used below: `MESH` (instance URL), `ADMIN` (admin user token), `WS`, `PROJ`

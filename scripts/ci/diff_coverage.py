@@ -101,7 +101,9 @@ def parse_profile(path: str, module: str) -> dict[str, list[tuple[int, int, int,
     all, so a wrong module name shows up as "nothing measured" rather than an error
     — hence the explicit no-overlap diagnosis in main().
     """
-    blocks: dict[str, list[tuple[int, int, int, int]]] = defaultdict(list)
+    # -coverpkg repeats a dependency's blocks in each test binary's profile.
+    # Match Go's profile merge: sum hits, but measure each source block once.
+    blocks: dict[str, dict[tuple[int, int, int, int], tuple[int, int]]] = defaultdict(dict)
     prefix = module.rstrip("/") + "/"
     with open(path, encoding="utf-8") as fh:
         header = fh.readline().strip()
@@ -122,8 +124,16 @@ def parse_profile(path: str, module: str) -> dict[str, list[tuple[int, int, int,
             rel = f[len(prefix):] if f.startswith(prefix) else f
             if rel.endswith("_test.go"):
                 continue
-            blocks[rel].append((*start, *end, int(m.group("stmts")), int(m.group("count"))))
-    return blocks
+            position = (*start, *end)
+            statements, count = int(m.group("stmts")), int(m.group("count"))
+            previous = blocks[rel].get(position)
+            if previous is not None:
+                if previous[0] != statements:
+                    raise ValueError(f"{path}:{number}: conflicting statement count")
+                count = max(previous[1], count) if header == "mode: set" else previous[1] + count
+            blocks[rel][position] = (statements, count)
+    return {rel: [(*position, *counts) for position, counts in records.items()]
+            for rel, records in blocks.items()}
 
 
 def instrumented_blocks(path: str, repo_root: str) -> list[tuple[int, int, int, int, int]]:

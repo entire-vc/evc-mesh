@@ -12,7 +12,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// #b593c566: an open PR link carried no signal of how recently anything
+// An open PR link carried no signal of how recently anything
 // confirmed it was still open, so a lost "closed" webhook left it open
 // forever, invisibly. Upsert (the path every status-carrying write takes)
 // must stamp status_synced_at on both branches; Create (no status stated)
@@ -87,7 +87,7 @@ func TestVCSLinkRepo_Create_LeavesStatusSyncedAtNull(t *testing.T) {
 	assert.Nil(t, stored.StatusSyncedAt, "a link created without a confirmed status reads NULL = never verified")
 }
 
-// Identity includes the url (#16c1dd76), so an Upsert carrying A's url but the
+// Identity includes the url, so an Upsert carrying A's url but the
 // external_id of sibling B can no longer clash with B: B's url differs. The
 // url names A, so A is corrected in place and B is left untouched.
 func TestVCSLinkRepo_Upsert_UpdateOntoSiblingExternalIDKeepsBothRows(t *testing.T) {

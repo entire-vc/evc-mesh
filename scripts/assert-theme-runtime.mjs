@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Theme runtime in a real browser (themes T5, an internal ticket), against the
+ * Theme runtime in a real browser (themes T5), against the
  * BUILT app (web/dist) with a mocked API: two workspaces with two themes.
  *
  *  1. A views bundle (real ES module, hashed asset) imports `react` through

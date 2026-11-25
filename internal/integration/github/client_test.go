@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -190,4 +191,40 @@ func TestGetCheckRunsSummary_MoreThanOnePageIsAnError(t *testing.T) {
 	c.baseURL = srv.URL
 	_, err := c.GetCheckRunsSummary(context.Background(), "o", "r", "abc")
 	require.Error(t, err)
+}
+
+// GitHub's merged_at is read only for a merged PR and returned in
+// UTC; null, garbage or a closed-unmerged PR give nil.
+func TestGetPullRequestHead_MergedAt(t *testing.T) {
+	want := time.Date(2026, 11, 20, 15, 3, 4, 0, time.UTC)
+	cases := []struct {
+		name string
+		body string
+		want *time.Time
+	}{
+		{"merged, zulu", `{"merged":true,"merged_at":"2026-11-20T15:03:04Z","head":{"sha":"a"}}`, &want},
+		{"merged, offset", `{"merged":true,"merged_at":"2026-11-20T18:03:04+03:00","head":{"sha":"a"}}`, &want},
+		{"merged, null", `{"merged":true,"merged_at":null,"head":{"sha":"a"}}`, nil},
+		{"merged, garbage", `{"merged":true,"merged_at":"soon","head":{"sha":"a"}}`, nil},
+		{"not merged with a time", `{"merged":false,"merged_at":"2026-11-20T15:03:04Z","head":{"sha":"a"}}`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			c := NewClient("tok")
+			c.baseURL = srv.URL
+			got, err := c.GetPullRequestHead(context.Background(), "o", "r", 81)
+			require.NoError(t, err)
+			if tc.want == nil {
+				assert.Nil(t, got.MergedAt)
+				return
+			}
+			require.NotNil(t, got.MergedAt)
+			assert.True(t, got.MergedAt.Equal(*tc.want), "merged_at %v", got.MergedAt)
+			assert.Equal(t, time.UTC, got.MergedAt.Location())
+		})
+	}
 }

@@ -71,6 +71,9 @@ class _Harness(unittest.TestCase):
     QUESTIONS_PER_CATEGORY = 4
 
     def setUp(self):
+        preflight = mock.patch("mesh_client_stdio.MeshMemoryClient.preflight", new_callable=mock.AsyncMock)
+        preflight.start()
+        self.addCleanup(preflight.stop)
         self.tmp = Path(tempfile.mkdtemp())
         dataset = [
             {"question_id": f"q{i}", "question_type": cat}
@@ -198,7 +201,7 @@ class TestACrossArmComparisonIsRefused(_Harness):
         """The direction that hides. A mislabelled baseline whose numbers happen
         to clear tolerance produces a GREEN required check over a comparison
         between two different systems — indistinguishable from a real pass, and
-        the exact shape of #b052cdda. A guard that only fires on a red delta
+        the exact shape of an internal ticket. A guard that only fires on a red delta
         would be no guard at all."""
         self.BRANCH_RETRIEVAL_BASELINE_FILE.write_text(json.dumps(
             self._baseline({"knowledge-update": 0.0, "multi-session": 0.0, "overall": 0.0}, ARM_PROD)))
@@ -374,7 +377,7 @@ def _extract_capture_expr(text: str, marker: str) -> str:
 
     The expression lives in the step's `env:`, not on the `echo` line: a
     `${{ }}` interpolated straight into a `run:` body is the Actions
-    script-injection shape (semgrep `run-shell-injection`, Mesh #5fe7fb4b), so
+    script-injection shape (semgrep `run-shell-injection`), so
     every one of them in this workflow was moved into the environment. This
     reader follows it there.
 
@@ -410,7 +413,7 @@ def _eval_raw(expr: str, ctx: dict):
     run was not cancelled". That is deliberately the *routing* reading: these
     tests ask which arms a dispatch starts, and cancellation is not an arm. An
     unbound name would be the safer default in general — and was: before this
-    binding existed the merge of #3ce651a0's `!cancelled() &&` prefix made
+    binding existed the merge of an internal ticket's `!cancelled() &&` prefix made
     every routing test raise `NameError` rather than quietly report the arms as
     correct. Keep that property when extending this: an expression element this
     evaluator does not model must raise, never evaluate to something plausible.
@@ -652,7 +655,7 @@ class TheRedProofIsWiredIn(unittest.TestCase):
             "checks that the gate is still CAPABLE of a REGRESSION verdict. A "
             "widened tolerance or a baseline captured from a degraded run both "
             "leave a permanently-green required check — the blind state of "
-            "#f70347b5 without the no-baseline line that made it noticeable.",
+            "an internal ticket without the no-baseline line that made it noticeable.",
         )
         invocation = call.group(0)
         self.assertIn(

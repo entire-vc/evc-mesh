@@ -133,8 +133,8 @@ func TestTurnCommandHandler_AskHuman(t *testing.T) {
 		{name: "addressee not a username", body: `{"to":"Alex User","question":"q?"}`, status: http.StatusUnprocessableEntity, errorCode: domain.CodeInvalidTarget},
 		{name: "not the checkout holder", body: `{"to":"alex","question":"q?"}`,
 			setup: func(e *turnHandlerEnv) { e.store.notHeld = true }, status: http.StatusConflict},
-		{name: "addressee is an agent", body: `{"to":"developer","question":"q?"}`, setup: func(e *turnHandlerEnv) {
-			e.gate.refuse = &service.GateArmRefusedError{Code: service.GateRefusalAddresseeNotUser, Message: "@developer is not a person"}
+		{name: "addressee is an agent", body: `{"to":"liam","question":"q?"}`, setup: func(e *turnHandlerEnv) {
+			e.gate.refuse = &service.GateArmRefusedError{Code: service.GateRefusalAddresseeNotUser, Message: "@liam is not a person"}
 		}, status: http.StatusUnprocessableEntity, errorCode: service.GateRefusalAddresseeNotUser},
 		{name: "repeat of an answered ask", body: `{"to":"alex","question":"q?"}`, setup: func(e *turnHandlerEnv) {
 			e.gate.refuse = &service.GateArmRefusedError{Code: service.GateRefusalRepeatAsk, Message: "already answered"}

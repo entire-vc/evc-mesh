@@ -24,7 +24,8 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 )
 
-// Acceptance controls for the Keep metadata probe route (route and database controls). The chain is the production one, in the production order: the closed
+// Acceptance controls for the Keep metadata probe route (AC M1,
+// M3). The chain is the production one, in the production order: the closed
 // envelope first, then WorkspaceRLS, RequireWorkspaceMemberScoped, and on the
 // route RequireUserAuth and RequirePermission(PermManageSecrets) over real
 // Postgres repositories. The only fixture is Keep, the external Mesh->Keep

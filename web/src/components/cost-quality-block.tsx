@@ -2,10 +2,29 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/cn";
 import type { TaskCostSummary } from "@/lib/api";
 
-function formatCost(cost: number | null): string {
+// A known zero stays distinct from a positive figure below one cent.
+export function formatCost(cost: number | null): string {
   if (cost === null) return "—";
-  if (cost < 0.01) return "<$0.01";
-  return `$${cost.toFixed(2)}`;
+  if (cost > 0 && cost < 0.01) return "≈<$0.01";
+  // A list-price equivalent the CLI computes (costBasis "list"), not a charge: the fleet runs on subscriptions.
+  return `≈$${cost.toFixed(2)}`;
+}
+
+/**
+ * Caption for a cost figure: the dollars are the API list price of the usage, not money spent.
+ * The full explanation is the hover title and the accessible name.
+ */
+export function ApiPriceNote({ label, hint, className }: { label: string; hint: string; className?: string }) {
+  return (
+    <span
+      className={cn("cursor-help text-muted-foreground underline decoration-dotted underline-offset-2", className)}
+      title={hint}
+      aria-label={`${label}. ${hint}`}
+      data-testid="cost-api-price"
+    >
+      {label}
+    </span>
+  );
 }
 
 function formatTokens(n: number | null): string {
@@ -62,6 +81,12 @@ export function CostQualityBlock({ summary }: { summary: TaskCostSummary }) {
           {formatCost(summary.total_cost)}
           <IncompleteMark show={summary.cost_incomplete} label={t("cost.incomplete")} />
         </span>
+        {summary.total_cost !== null && (
+          <>
+            {" "}
+            <ApiPriceNote label={t("cost.apiPrice")} hint={t("cost.apiPriceHint")} />
+          </>
+        )}
         {" · "}
         <span data-testid="cost-tokens">
           {formatTokens(summary.tokens_in)}

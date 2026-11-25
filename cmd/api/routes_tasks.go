@@ -151,6 +151,9 @@ func registerTaskRoutes(deps *apiDeps) {
 	api.POST("/tasks/:task_id/dependencies", depHandler.Create, wsAccess, rbac(mw.PermUpdateTask))
 	api.PATCH("/tasks/:task_id/dependencies/:dep_id", depHandler.Update, wsAccess, rbac(mw.PermUpdateTask))
 	api.DELETE("/tasks/:task_id/dependencies/:dep_id", depHandler.Delete, wsAccess, rbac(mw.PermUpdateTask))
+	// The blocker's side of an edge: :task_id is the blocker, and evidence is all
+	// it may write. The route a cross-workspace card wait's blocker attests by.
+	api.PATCH("/tasks/:task_id/dependents/:dependent_edge_id/evidence", depHandler.UpdateEvidenceFromBlocker, wsAccess, rbac(mw.PermUpdateTask))
 	api.GET("/projects/:proj_id/dependency-graph", depHandler.DependencyGraph, projAccess)
 	api.GET("/projects/:proj_id/dependency-findings", depHandler.DependencyFindings, projAccess)
 
@@ -160,7 +163,7 @@ func registerTaskRoutes(deps *apiDeps) {
 	api.PATCH("/comments/:comment_id", commentHandler.Update, rbac(mw.PermAddComment))
 	api.DELETE("/comments/:comment_id", commentHandler.Delete, rbac(mw.PermAddComment))
 
-	// Third human_gate exit — "decision recorded" (an internal ticket, contract
+	// Third human_gate exit — "decision recorded" (contract
 	// docs/human-gate-decision-recorded.md). Revoke enforces user-only inside
 	// the handler itself (mirrors task_handler.go's PATCH human_gate 403), not
 	// via rbac, since an agent can legitimately hold PermAddComment.

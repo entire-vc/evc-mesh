@@ -45,6 +45,12 @@ func registerProtectedGroup(deps *apiDeps) {
 	// A viewer-role agent credential is read-only: every non-GET/HEAD request is
 	// refused here, once for the whole group, including routes with no rbac().
 	api.Use(mw.AgentReadOnlyGuard())
+	// A project reader (agents.reader_project_id) reaches only the allowlisted
+	// GET routes of its one project; everything else is 403. Inert for every
+	// other principal. See docs/project-reader.md.
+	api.Use(mw.ProjectReaderGuard(func(ctx context.Context, c echo.Context) ([]uuid.UUID, bool, error) {
+		return mw.RequestProjects(ctx, db, c)
+	}))
 	// A refused chat-token call leaves an audit row (it changes nothing else).
 	api.Use(mw.ChatSessionDenialAudit(activityLogRepo))
 	// Deny-by-default route -> capability check for extension actors; inert for
@@ -55,6 +61,9 @@ func registerProtectedGroup(deps *apiDeps) {
 	api.Use(mw.ExtensionProjectScopeGuard(db, extensionProjectScopeRepo, extensionActorService))
 	api.Use(activityTracker.Middleware())
 	api.Use(toolBreakdownTracker.Middleware())
+	// Memory read journal: tees the response of memory read routes and hands
+	// it to the async writer; inert on every other route and when off.
+	api.Use(deps.memoryReadLog.Middleware())
 	api.Use(mw.WorkspaceRLS(db, projectRepo))
 	// Cross-tenant guard. Applies to every route in this group that carries a
 	// :ws_id parameter, and is inert on the rest. Group-level on purpose: the

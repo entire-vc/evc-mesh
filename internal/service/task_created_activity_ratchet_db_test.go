@@ -1,6 +1,6 @@
 package service
 
-// Ratchet for audit finding #819e7b29 (task #2e98f50c): every task creation
+// Ratchet for audit finding an internal ticket: every task creation
 // path must leave an activity_log row (entity_id = task.id, action =
 // 'task.created') atomically with the task insert — fix fc3136dd made
 // TaskRepo.Create take the activity entry as a parameter for exactly this
@@ -119,7 +119,7 @@ func (f *ratchetFixture) requireTaskCreatedEvent(t *testing.T, taskID uuid.UUID,
 	err := f.db.GetContext(context.Background(), &actorType,
 		`SELECT actor_type FROM activity_log WHERE entity_id = $1 AND action = 'task.created'`, taskID)
 	require.NoError(t, err,
-		"%s: task %s has no task.created activity_log row — the #819e7b29 defect class", what, taskID)
+		"%s: task %s has no task.created activity_log row — the known defect class", what, taskID)
 	if wantActorType != "" {
 		assert.Equal(t, wantActorType, actorType,
 			"%s: task %s event actor_type must be %q, got %q", what, taskID, wantActorType, actorType)
@@ -251,6 +251,6 @@ func TestTaskCreatedActivityRatchet_EveryCreationPathLeavesEvent(t *testing.T) {
 	t.Run("reconcile: no tracked task lacks its event", func(t *testing.T) {
 		missing := f.missingTaskCreatedEvents(t, f.taskIDs)
 		require.Empty(t, missing,
-			"tasks created without a task.created activity_log row (the #819e7b29 defect returning): %v", missing)
+			"tasks created without a task.created activity_log row (the defect returning): %v", missing)
 	})
 }

@@ -115,7 +115,7 @@ function sameGrouping(a: BySlot, b: BySlot): boolean {
   return SLOT_IDS.every(
     (s) =>
       a[s].length === b[s].length &&
-      a[s].every((e, i) => e.id === b[s][i]?.id && e.name === b[s][i]?.name && e.external?.[s]?.title === b[s][i]?.external?.[s]?.title && e.projectLevel === b[s][i]?.projectLevel),
+      a[s].every((e, i) => e.id === b[s][i]?.id && e.name === b[s][i]?.name && e.external?.[s]?.title === b[s][i]?.external?.[s]?.title && e.external?.[s]?.icon === b[s][i]?.external?.[s]?.icon && e.projectLevel === b[s][i]?.projectLevel),
   );
 }
 

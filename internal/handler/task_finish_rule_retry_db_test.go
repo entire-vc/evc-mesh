@@ -22,7 +22,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
-// finish_task refused by «Agent must comment before done», the
+// Finish_task refused by «Agent must comment before done», the
 // assignee comments, then repeats finish_task with the same arguments. The MCP
 // derives the Idempotency-Key from the arguments, so the repeat carries the key
 // of the refused call. The repeat must be checked against the comment that now

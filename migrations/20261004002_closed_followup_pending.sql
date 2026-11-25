@@ -1,6 +1,6 @@
 -- +goose Up
 
--- #db1c6c7a (P2 of #9b712414, contract approved by Garfield). Visible queue
+-- (contract approved by Gary). Visible queue
 -- for a follow-up finding whose delivery could not be completed inline:
 -- until P2, a read error while searching for the finding's root was treated
 -- as "dedup clean" — the finding was silently dropped or, worse, a burst of

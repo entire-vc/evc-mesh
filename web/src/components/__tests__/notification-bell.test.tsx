@@ -252,7 +252,7 @@ describe("NotificationBell — merged @-mention inbox", () => {
     );
     // Carries `?comment=` now, so task-panel.tsx can focus and scroll to the
     // specific comment the mention names, same as the document branch always
-    // has (see an internal ticket).
+    // has.
     expect(mockedNavigate).toHaveBeenCalledWith("/w/acme/p/demo/t/task-1?comment=c-task-1");
   });
 

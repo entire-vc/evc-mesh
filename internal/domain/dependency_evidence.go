@@ -172,3 +172,13 @@ type DependencyConditionUpdate struct {
 	Evidence           *DependencyEvidence
 	ExpectedGeneration *int64
 }
+
+// DependentEdgeScope is what the blocker side of an edge may know about it
+// before writing evidence: that it is a blocks edge of this blocker (Found),
+// whether it crosses workspaces, and whether a typed card wait declared it
+// (ServerObserved: task_dependencies.wait_agent_id is set).
+type DependentEdgeScope struct {
+	Found          bool `db:"found"`
+	CrossWorkspace bool `db:"cross_workspace"`
+	ServerObserved bool `db:"server_observed"`
+}

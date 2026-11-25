@@ -68,7 +68,7 @@ export function assertIdleResumed(before: IdleHistory, after: IdleHistory, turnI
   }
 }
 
-/** Runner snapshot as served by GET /chat/threads/{id}/runtime. */
+/** Runner snapshot as served by GET /chat/threads/{id}/runtime (an internal ticket contract). */
 export interface ThreadRuntime {
   runner_id?: string;
   process_alive?: boolean;

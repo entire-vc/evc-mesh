@@ -13,7 +13,7 @@ serialises the prod arms with each other, but it cannot serialise a human
 deciding to `workflow_dispatch` a proof run on top of someone's required check.
 This is the probe for that decision.
 
-Two properties, both learned the hard way on #2a079432:
+Two properties, both learned the hard way:
 
 **A probe that fails must not read as "clear".** The first version of this check
 was a shell one-liner whose Python fragment had a syntax error. It printed

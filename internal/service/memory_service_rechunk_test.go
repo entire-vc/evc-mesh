@@ -67,7 +67,7 @@ func TestRechunkStale_PreservesUpdatedAt(t *testing.T) {
 		"the repair path must write the vector through UpdateEmbeddingKeepUpdatedAt")
 }
 
-// BackfillChunks, like RechunkStale, must hold updated_at too (#f96b6670): it chunks a memory
+// BackfillChunks, like RechunkStale, must hold updated_at too: it chunks a memory
 // that already existed with content nobody is editing right now — the same "catching up an
 // existing row's index, not writing to the row" shape as the repair job, just triggered by
 // "never chunked yet" instead of "chunked under the old scheme". Before this fix it wrote

@@ -1,5 +1,5 @@
 // Command keepstub stands in for Keep in CI jobs that run the whole API
-// (tenancy-rbac-gate): workspace secrets have no home but Keep since an internal ticket,
+// (tenancy-rbac-gate): workspace secrets have no home but Keep since that fix,
 // so creating one needs a Keep to answer. It serves the two routes of Keep's
 // Mesh secrets contract (evc-keep docs/mesh-extension.md, the same two
 // HTTPKeepClient calls) over TLS with a throwaway self-signed certificate,

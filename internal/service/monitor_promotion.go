@@ -31,14 +31,14 @@ import (
 //   - park:wait-alex — the park is bound to a human answer (or to the pause of the
 //     assignee's lane, which the server cannot see: it lives in fiddler's
 //     lane-availability.json), never to a date. A passed due_date left on such a card
-//     bounced it back to todo while the lane was still paused (an internal ticket, Harper
-//     an internal ticket / an internal ticket / an internal ticket). park:wait-date and park:wait-external keep
+//     bounced it back to todo while the lane was still paused (Harper
+//     / an internal ticket). park:wait-date and park:wait-external keep
 //     waking on the date: the date IS their condition.
 //   - golden / eval-harness — Agent-Eval fixtures. Promoting one makes an agent
 //     decompose and execute a synthetic fixture and pollutes the eval counts; it has
-//     recurred three times at real cost (an internal ticket, an internal ticket).
+//     recurred three times at real cost.
 //
-// This set matters far more now than it did before an internal ticket. While the sweeper only
+// This set matters far more now than it did before that fix. While the sweeper only
 // looked at kind:monitor cards it could not have reached a frozen card by accident;
 // widening the candidate query to every dated backlog card is exactly what puts a
 // human freeze in its path, so the guard has to be widened in the same change, not
@@ -53,7 +53,7 @@ import (
 // date alone — the opposite of what the schema means. Not porting it costs nothing
 // today: the Python sweep is still live and still performs that override, so a
 // wake-labelled frozen card is promoted by it exactly as before. Closing this belongs
-// with the sweep's retirement (an internal ticket / an internal ticket), which is where the comment
+// with the sweep's retirement, which is where the comment
 // parsing has to land anyway.
 var absoluteNoPromoteLabels = map[string]struct{}{
 	"freeze": {}, "no-intake-promote": {}, "no-promote": {}, "park:wait-alex": {},
@@ -172,7 +172,7 @@ func (s *monitorPromotionService) SweepDueBacklogTasks(ctx context.Context) (int
 // to move a human_gated task to backlog/done/cancelled and forbidden to move a shipped
 // task anywhere but done (see MoveTask), so selecting one here produces a move that
 // fails on every single tick, forever, and crowds the log with one retry per minute —
-// measured in production 2026-09-06 on the lease reaper, where an internal ticket failed to park 145
+// measured on prod 2026-09-06 on the lease reaper, where an internal ticket failed to park 145
 // times and was that reaper's only output while it spun. Refusing to select such a card
 // is not the same as trying and handling the error: only the former terminates.
 func (s *monitorPromotionService) skipReason(
@@ -211,7 +211,7 @@ func (s *monitorPromotionService) skipReason(
 	// 5. Demotion-into-backlog guard (an internal ticket amendment) — a card whose
 	// most recent status move DEMOTED it into backlog is a deliberate park, and
 	// "no open blocks dependencies" is vacuously true for one that never had any
-	// (an internal ticket: the sweep once undid such a park in 26 minutes by reading exactly
+	// (the sweep once undid such a park in 26 minutes by reading exactly
 	// that vacuous truth as "ready").
 	//
 	// Gated on hasBlocksEdge being FALSE — mirroring
@@ -313,7 +313,7 @@ func (s *monitorPromotionService) findTodoStatusID(ctx context.Context, projectI
 
 // postSystemComment writes an audit comment on the task explaining the auto-unpark.
 // It names the label the card was parked under (or says it had none), because after
-// an internal ticket that is no longer a constant — the reader can no longer assume kind:monitor.
+// That is no longer a constant — the reader can no longer assume kind:monitor.
 func (s *monitorPromotionService) postSystemComment(ctx context.Context, task *domain.Task) {
 	if s.commentRepo == nil {
 		return

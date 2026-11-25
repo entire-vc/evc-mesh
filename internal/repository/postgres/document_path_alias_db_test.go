@@ -13,7 +13,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/repository"
 )
 
-// The alias write of a move against a live Postgres (#ed10e6aa). The service
+// The alias write of a move against a live Postgres. The service
 // tests cover what the resolver returns; these pin the transactional half: a
 // move that is refused must leave no alias behind, and one that lands records
 // the paths the subtree had BEFORE it moved.
@@ -81,7 +81,7 @@ func TestDocumentRepo_RefusedMoveLeavesNoAlias(t *testing.T) {
 }
 
 // A slug rename moves the path of the document and of its whole subtree, so the
-// old paths must stay resolvable (card 1fe1793e / e5a0ee89).
+// old paths must stay resolvable (an internal ticket / e5a0ee89).
 func TestDocumentRepo_RenameRecordsOldSubtreePaths(t *testing.T) {
 	db := externalSourceTestDB(t)
 	repo, f := NewDocumentRepo(db), newSourceFixture(t, db)

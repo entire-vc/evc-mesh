@@ -38,7 +38,7 @@ type AgentKeyDescription struct {
 
 // DescribeAgentKey calls GET /v1/web/shares/{shareID}/agent-key — the
 // self-describe endpoint Team Relay shipped at Mesh's request specifically
-// for this (evc-team-relay a PR): "requested by the Mesh
+// for this (evc-team-relay PR #230): "requested by the Mesh
 // integration, which holds a key issued by a share owner but has no way to
 // learn the key's own lifetime today short of parsing a 403 after expiry".
 //

@@ -22,7 +22,7 @@ bash "$STACK" up
 echo 'UP_EXIT=0'
 
 # api.pid must name the process listening on the API port — a lying pidfile
-# makes teardown's primary kill a no-op and orphans the server (#4b1131f7).
+# makes teardown's primary kill a no-op and orphans the server.
 api_pid="$(cat "$STATE_DIR/api.pid")"
 listener="$(lsof -nP -tiTCP:"${LOCAL_STACK_API_PORT:-8095}" -sTCP:LISTEN 2>/dev/null | sort -u | paste -sd ' ' - || true)"
 [ "$api_pid" = "$listener" ] \
@@ -33,7 +33,7 @@ token="$(curl -fsS -X POST "$API_URL/auth/login" -H 'Content-Type: application/j
 doc_id="$(jq -er '.doc_id' "$STATE_DIR/seed.json")"
 
 # Document creation must be a real 201, not just any 2xx — this is the exact
-# call that 500'd when the stack had no object storage (#1646aa2a).
+# call that 500'd when the stack had no object storage.
 proj_id="$(jq -er '.proj_id' "$STATE_DIR/seed.json")"
 status="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
   "$API_URL/projects/$proj_id/documents" \

@@ -125,3 +125,65 @@ describe("DropdownMenuContent viewport containment", () => {
     expect(menu.style.transform).toBe("translateX(-125px) scale(2)");
   });
 });
+
+describe("DropdownMenu keyboard", () => {
+  it("Escape closes the open list and returns focus to the trigger", () => {
+    render(
+      <DropdownMenu>
+        <DropdownMenuTrigger>Agent</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuItem tabIndex={0}>Riker</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+    const trigger = screen.getByRole("button", { name: "Agent" });
+    fireEvent.click(trigger);
+    const item = screen.getByRole("menuitem", { name: "Riker" });
+    item.focus();
+    fireEvent.keyDown(item, { key: "Escape" });
+    expect(screen.queryByRole("menuitem", { name: "Riker" })).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("Escape with an asChild trigger also returns focus to it", () => {
+    render(
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button type="button">Source</button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuItem tabIndex={0}>search</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+    const trigger = screen.getByRole("button", { name: "Source" });
+    fireEvent.click(trigger);
+    screen.getByRole("menuitem", { name: "search" }).focus();
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByRole("menuitem")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("other keys and a closed menu leave focus alone", () => {
+    render(
+      <>
+        <input aria-label="elsewhere" />
+        <DropdownMenu>
+          <DropdownMenuTrigger>Agent</DropdownMenuTrigger>
+          <DropdownMenuContent>
+            <DropdownMenuItem>Riker</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </>,
+    );
+    const trigger = screen.getByRole("button", { name: "Agent" });
+    fireEvent.click(trigger);
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "a" });
+    expect(screen.getByRole("menuitem", { name: "Riker" })).toBeTruthy();
+    fireEvent.click(trigger);
+    const other = screen.getByLabelText("elsewhere");
+    other.focus();
+    fireEvent.keyDown(other, { key: "Escape" });
+    expect(document.activeElement).toBe(other);
+  });
+});

@@ -72,7 +72,7 @@ func RecordRateLimitHit(keyType string) { pkgmetrics.RecordRateLimitHit(keyType)
 // HTTP stack. Use this directly for any server that doesn't run Echo; do not
 // re-derive the check there. (The example that used to stand here — cmd/mcp's
 // plain net/http mux — is gone: that server was a duplicate of
-// entire-vc/evc-mesh-mcp and was deleted, Mesh #e85e4e05.)
+// entire-vc/evc-mesh-mcp and was deleted.)
 func MetricsAuthHTTP(token string, next http.Handler) http.Handler {
 	if token == "" {
 		return next

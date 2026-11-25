@@ -119,12 +119,13 @@ func TestUnknownUsage_PlainNumbersReadAsToday_RealPostgres(t *testing.T) {
 	ctx := context.Background()
 	task := f.seedTask(t)
 
-	// A session first opened by tool-call tracking has no figure yet...
+	// A session first opened by tool-call tracking has no report yet: it is not a spawn, so
+	// the summary stays a plain 0 without a flag (see session_repo_cost_spawns_db_test.go)...
 	require.NoError(t, f.repo.IncrementToolBreakdown(ctx, f.agentID, f.wsID, &task, map[string]int64{"get_task": 1}))
 	s, err := f.repo.GetTaskCostSummary(ctx, task)
 	require.NoError(t, err)
-	assert.Nil(t, s.TotalCost, "nothing was ever reported: not a 0")
-	assert.True(t, s.CostIncomplete)
+	assert.Equal(t, 0, s.SessionCount, "tool calls alone are not a run")
+	assert.False(t, s.CostIncomplete)
 
 	// ...and the old-style report (AddUsage, no unknown field) makes every measure known.
 	sess, err := f.repo.AddUsage(ctx, f.agentID, f.wsID, &task, 40, 4, 0.2, "m")

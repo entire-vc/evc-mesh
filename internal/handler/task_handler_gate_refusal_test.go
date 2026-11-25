@@ -19,7 +19,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
-// Task #4c448e11. The 403 an agent gets when it PATCHes human_gate true→false
+// The 403 an agent gets when it PATCHes human_gate true→false
 // is CORRECT and stays; what was wrong is that it named no alternative, so
 // agents concluded the gate has no agent-reachable exit at all and said so in a
 // P1 escalation — while the prod audit trail showed the agent-reachable exit
@@ -84,11 +84,11 @@ func ownerInfo(owner uuid.UUID, name string, clearable bool, reason string) *Moc
 }
 
 // The caller owns the live ask and could withdraw it right now. This is the
-// exact shape of #b2e6578a, where three agents in a row were told "clear it
+// exact shape, where three agents in a row were told "clear it
 // yourself" and the API told them only that they were not a user.
 func TestGateRefusal_OwnerIsToldHowToWithdraw(t *testing.T) {
 	me := uuid.New()
-	code, msg, updated := runGateRefusal(t, me, ownerInfo(me, "Wally", true, ""))
+	code, msg, updated := runGateRefusal(t, me, ownerInfo(me, "Wade", true, ""))
 
 	assert.Equal(t, http.StatusForbidden, code)
 	assert.False(t, updated, "the wall must still stand — the task must not be updated")
@@ -108,11 +108,11 @@ func TestGateRefusal_OwnerIsToldHowToWithdraw(t *testing.T) {
 // and — the part that keeps costing days — telling the owner in a comment does
 // not reach them, because a gated task is not fed to any lane.
 func TestGateRefusal_ForeignOwner_NamesOwnerAndTheDeliveryTrap(t *testing.T) {
-	code, msg, updated := runGateRefusal(t, uuid.New(), ownerInfo(uuid.New(), "Howard", true, ""))
+	code, msg, updated := runGateRefusal(t, uuid.New(), ownerInfo(uuid.New(), "Harper", true, ""))
 
 	assert.Equal(t, http.StatusForbidden, code)
 	assert.False(t, updated)
-	assert.Contains(t, msg, "Howard")
+	assert.Contains(t, msg, "Harper")
 	assert.Contains(t, msg, "will NOT wake them")
 	assert.Contains(t, msg, "human-gate-decisions")
 }
@@ -140,7 +140,7 @@ func TestGateRefusal_NoLiveMarker_SaysNoWithdrawalPathExists(t *testing.T) {
 // "do something else", and doing something else here means pinging Pavel.
 func TestGateRefusal_ReaffirmPending_TellsOwnerToRetryNotEscalate(t *testing.T) {
 	me := uuid.New()
-	code, msg, updated := runGateRefusal(t, me, ownerInfo(me, "Garfield", false, "reaffirm_pending"))
+	code, msg, updated := runGateRefusal(t, me, ownerInfo(me, "Gary", false, "reaffirm_pending"))
 
 	assert.Equal(t, http.StatusForbidden, code)
 	assert.False(t, updated)
@@ -151,7 +151,7 @@ func TestGateRefusal_ReaffirmPending_TellsOwnerToRetryNotEscalate(t *testing.T) 
 
 func TestGateRefusal_RawArmed_TellsOwnerToRetryNotEscalate(t *testing.T) {
 	me := uuid.New()
-	code, msg, updated := runGateRefusal(t, me, ownerInfo(me, "Garfield", false, "raw_armed"))
+	code, msg, updated := runGateRefusal(t, me, ownerInfo(me, "Gary", false, "raw_armed"))
 
 	assert.Equal(t, http.StatusForbidden, code)
 	assert.False(t, updated)
@@ -185,7 +185,7 @@ func TestGateRefusal_NilInfo_FallsBackWithoutPanicking(t *testing.T) {
 	assert.Contains(t, msg, "human-gate-decisions")
 }
 
-// NEGATIVE CONTROL (task #4c448e11 AC4). Withdrawing an ask and APPROVING it
+// NEGATIVE CONTROL (an internal ticket AC4). Withdrawing an ask and APPROVING it
 // are different things, and the second must stay with a human. Whatever the
 // gate's ownership state, an agent's PATCH is refused and the task is never
 // written. If this test ever goes green while asserting 200, the message

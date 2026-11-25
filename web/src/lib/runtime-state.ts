@@ -11,7 +11,7 @@ export interface RuntimeRef {
 
 const GITLAB = "https://gitlab.com";
 
-/** Turns a WAIT ref (`card:#00000000`, `mr:g/p!3`, `pipeline:g/p#9`, `decision:@x`) into a label and a link. */
+/** Turns a WAIT ref (`card:#<id>`, `mr:g/p!3`, `pipeline:g/p#9`, `decision:@x`) into a label and a link. */
 export function parseRuntimeRef(ref: string | null | undefined): RuntimeRef | null {
   if (!ref) return null;
   // A producer may name the card by its 8-hex short id or by the full UUID (the server's own dependency constraints do).
@@ -172,7 +172,7 @@ export interface WaitBrief {
   kind: WaitTargetKind;
   /** Link-or-text of the thing awaited; href is null when there is no safe page. */
   ref: RuntimeRef;
-  /** Short visible label: `#00000000`, `!12`, `#9954`, `@name`. The full label is `ref.label`. */
+  /** Short visible label: an internal ticket, `!1774`, `#9954`, `@name`. The full label is `ref.label`. */
   short: string;
   /** The sanitized ref exactly as the server sent it, for the collapsed technical details. */
   raw: string;

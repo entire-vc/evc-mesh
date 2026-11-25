@@ -2,7 +2,7 @@
  * useBlocker (react-router) must intercept EVERY in-app way of leaving a
  * dirty create-mode draft — not just the Cancel button that the old
  * beforeunload-only guard covered — now that App.tsx mounts a data router
- * (task #7893ab16). Exercised against a REAL data router
+ *. Exercised against a REAL data router
  * (createMemoryRouter + RouterProvider): a declarative <MemoryRouter> can't
  * host useBlocker at all — it throws outside a data router context, which is
  * exactly the gap this migration closes.
@@ -233,7 +233,7 @@ describe("TaskPanel create mode — useBlocker guards every in-app exit", () => 
 /**
  * The overlay/drawer close affordances (header X, footer Cancel, Escape)
  * never navigate — they call onClose directly — so useBlocker above never
- * fires for them by construction (task #4eb72e3e). requestClose is the
+ * fires for them by construction. requestClose is the
  * separate guard that covers this class of exit.
  */
 describe("TaskPanel create mode — requestClose guards every overlay-close affordance", () => {

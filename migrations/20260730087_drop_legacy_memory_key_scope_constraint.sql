@@ -1,5 +1,5 @@
 -- +goose Up
--- Task #2c0154db, finding F1 point 3. This legacy constraint (workspace_id,
+-- Finding F1 point 3. This legacy constraint (workspace_id,
 -- project_id, agent_id, key, scope) is NOT partial -- it counts rows of every
 -- status. Once GetByKey (migration-adjacent code fix, task F1) resolves
 -- ambiguity with a deterministic ORDER BY instead of relying on a predicate-
@@ -9,7 +9,7 @@
 -- in exactly this position (retired rows with non-null project_id+agent_id).
 --
 -- It is not needed for correctness any more -- it is fully superseded by the
--- three partial unique indexes from #4edf3fb5 (uq_mem_ws_key / uq_mem_proj_key
+-- three partial unique indexes from an internal ticket (uq_mem_ws_key / uq_mem_proj_key
 -- / uq_mem_agent_key), each scoped to `status='active'` and to the identity
 -- dimensions that actually apply per declared scope. Application code never
 -- references this constraint by name: Upsert (memory_repo.go) conflicts on

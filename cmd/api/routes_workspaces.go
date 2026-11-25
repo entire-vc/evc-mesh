@@ -86,6 +86,9 @@ func registerWorkspaceRoutes(deps *apiDeps) {
 	api.POST("/workspaces/:ws_id/runtime/restore", runtimeHandler.Restore, runtimeCatalogRBAC)
 	api.GET("/workspaces/:ws_id/runtime/revisions", runtimeHandler.Revisions, runtimeCatalogRBAC)
 	api.GET("/workspaces/:ws_id/runtime/capacity", runtimeHandler.Capacity)
+	// Quota history of the Runner pools (analytics widget): same readers as the
+	// Runner catalog, re-checked in the repository.
+	api.GET("/workspaces/:ws_id/analytics/quota", runtimeHandler.QuotaAnalytics)
 	api.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/report", runtimeHandler.Report)
 	api.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/desired", runtimeHandler.Desired)
 	api.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/quota-observations", runtimeHandler.ReportQuota)

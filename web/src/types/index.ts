@@ -272,7 +272,7 @@ export interface CommentViewPage {
   next_cursor: string | null;
   // Tie-breaker paired with next_cursor: created_at alone is not unique (a
   // page boundary landing inside a group of same-timestamp comments would
-  // otherwise silently drop the rest of the group — an internal ticket). Echo both
+  // otherwise silently drop the rest of the group). Echo both
   // back as before/before_id on the next "Load more" request.
   next_cursor_id: string | null;
 }
@@ -804,7 +804,7 @@ export type ViewType = "board" | "list" | "timeline" | "calendar";
  * saved_view_service.go) only accepts board/list/timeline/calendar, so widening
  * ViewType itself would let the UI POST a view_type the API rejects.
  */
-export type ProjectViewTab = ViewType | "docs" | "chat" | "updates" | `ext:${string}`;
+export type ProjectViewTab = ViewType | "docs" | "chat" | "updates" | "stats" | `ext:${string}`;
 
 export interface SavedView {
   id: string;

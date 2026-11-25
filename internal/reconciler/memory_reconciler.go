@@ -15,20 +15,28 @@ import (
 )
 
 const (
-	monitorBatchCap   = 500
-	linkerWindowH     = 24 * time.Hour
-	linkerMaxBatch    = 50 // max memories to process per linker run
-	linkerCandidates  = 20
-	simThreshold      = 0.85
-	autoActThreshold  = 0.70
-	highImportance    = float32(0.8)
-	defaultStaleAfter = 30 * 24 * time.Hour
+	monitorBatchCap  = 500
+	linkerWindowH    = 24 * time.Hour
+	linkerMaxBatch   = 50 // max memories to process per linker run
+	linkerCandidates = 20
+	simThreshold     = 0.85
+	autoActThreshold = 0.70
+	highImportance   = float32(0.8)
+
+	// LinkerSimhashMaxBits is the content simhash distance at which the linker
+	// grants its +0.3 "same text" signal. On the linker corpus (50 unrelated
+	// ru/en texts, 1225 pairs) 4 pairs (0.33%) fall within it and every 1–2 word
+	// edit does (worst 8); TestLinkerSimhashMaxBits_Corpus pins both. The
+	// post-deploy repair of supersedes decided on the old hash uses the same
+	// value (MemoryRepo.RepairLinkerSimhashSupersedes).
+	LinkerSimhashMaxBits = 10
+	defaultStaleAfter    = 30 * 24 * time.Hour
 
 	// reviewTriageBatchCap bounds one nightly runReviewTriage pass, mirroring the
 	// existing monitorBatchCap style: a backlog bigger than the cap drains over
 	// multiple nightly runs rather than in one go.
 	reviewTriageBatchCap = 500
-	// defaultReviewStaleAfter is the "no обращений" window from audit #1b010be6
+	// defaultReviewStaleAfter is the "no обращений" window from an internal ticket
 	// (plan:1.11) — a review_needed memory untouched (no recall hit, no update)
 	// for this long with no newer match is marked stale rather than active.
 	defaultReviewStaleAfter = 60 * 24 * time.Hour
@@ -48,7 +56,7 @@ type Config struct {
 	StaleAfter time.Duration
 	// ReviewStaleAfter is the inactivity window used by the nightly review-triage
 	// phase (runReviewTriage) to decide stale vs. active for a review_needed
-	// memory with no newer match. Defaults to 60 days when zero (audit #1b010be6).
+	// memory with no newer match. Defaults to 60 days when zero.
 	ReviewStaleAfter time.Duration
 }
 
@@ -109,8 +117,8 @@ func (r *MemoryReconciler) Run(ctx context.Context) error {
 	return nil
 }
 
-// RunReviewTriage runs the nightly review_needed triage phase (audit #1b010be6,
-// plan:1.11) and returns its stats — see runReviewTriage's doc for the decision
+// RunReviewTriage runs the nightly review_needed triage phase
+// (plan:1.11) and returns its stats — see runReviewTriage's doc for the decision
 // rules. Deliberately a separate entry point from Run(), on its own ~24h ticker in
 // cmd/api/main.go, rather than folded into the 6-hourly Run(): the two answer
 // different questions over different populations (Run() looks at recently-created
@@ -142,7 +150,7 @@ func (r *MemoryReconciler) runMonitor(ctx context.Context) error {
 }
 
 // ReviewTriageStats reports the disposition of one runReviewTriage pass — the
-// "статистика джоба в лог" requirement from audit #1b010be6 (plan:1.11).
+// "статистика джоба в лог" requirement from an internal ticket (plan:1.11).
 type ReviewTriageStats struct {
 	// Considered is how many review_needed rows this run looked at (bounded by
 	// reviewTriageBatchCap — a backlog larger than the cap needs more than one
@@ -162,7 +170,7 @@ type ReviewTriageStats struct {
 	Errored int
 }
 
-// runReviewTriage is the nightly job for audit #1b010be6 (plan:1.11): the reconciler's
+// runReviewTriage is the nightly job for an internal ticket (plan:1.11): the reconciler's
 // existing linker phase (runLinker, below) only ever compares memories created in the
 // last 24h against similar history — a memory it parks at review_needed is never
 // revisited by that phase once the 24h window passes, no matter what newer evidence
@@ -171,7 +179,8 @@ type ReviewTriageStats struct {
 // as its own ~24h ticker rather than folded into the 6-hourly Run()).
 //
 // Per review_needed memory M, in order:
-//  1. A newer memory sharing the same key or the same content_simhash, in a settled
+//  1. A newer memory sharing the same key, or the same content_simhash AND the same
+//     content (an equal 64-bit hash alone is not a duplicate), in a settled
 //     status (active/stale) → M is superseded by it (reuses the same supersede() path
 //     runLinker's decision engine uses, at confidence 1.0 — this is a direct match, not
 //     a probabilistic one).
@@ -211,7 +220,7 @@ func (r *MemoryReconciler) runReviewTriage(ctx context.Context) (ReviewTriageSta
 // bumps the matching counter in stats on success. On error, stats is left untouched —
 // the caller is responsible for counting the row as errored.
 func (r *MemoryReconciler) triageOne(ctx context.Context, mem domain.Memory, stats *ReviewTriageStats) error {
-	newer, err := r.memRepo.FindNewerMatch(ctx, mem.WorkspaceID, mem.Key, mem.ContentSimhash, mem.ID, mem.CreatedAt)
+	newer, err := r.memRepo.FindNewerMatch(ctx, mem.WorkspaceID, mem.Key, mem.ContentSimhash, mem.Content, mem.ID, mem.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("find newer match: %w", err)
 	}
@@ -261,7 +270,7 @@ func (r *MemoryReconciler) runLinker(ctx context.Context) error {
 	}
 
 	// Batch-embed all memory contents in one API call. Deliberately NOT gated by
-	// memoryService's embedSem (#3d10774e): this reconciler holds its own embedder
+	// memoryService's embedSem: this reconciler holds its own embedder
 	// reference (constructed alongside, not through, memoryService) with no shared
 	// semaphore plumbed in, it runs on a 6h ticker over at most linkerMaxBatch=50
 	// memories, and it is already one round trip rather than one call per memory.
@@ -377,7 +386,7 @@ func (r *MemoryReconciler) markReviewNeeded(ctx context.Context, mem domain.Memo
 func computeConfidence(older, newer domain.Memory) float64 {
 	var conf float64
 
-	// Same key prefix (first 2 segments, e.g. "episode:garfield"): +0.3
+	// Same key prefix (first 2 segments, e.g. "episode:gary"): +0.3
 	if sameKeyPrefix(older.Key, newer.Key, 2) {
 		conf += 0.3
 	}
@@ -387,9 +396,9 @@ func computeConfidence(older, newer domain.Memory) float64 {
 		conf += 0.2
 	}
 
-	// Content simhash Hamming distance <= 10 bits: +0.3
+	// Content simhash Hamming distance <= LinkerSimhashMaxBits: +0.3
 	if older.ContentSimhash != nil && newer.ContentSimhash != nil {
-		if hammingDistance(*older.ContentSimhash, *newer.ContentSimhash) <= 10 {
+		if hammingDistance(*older.ContentSimhash, *newer.ContentSimhash) <= LinkerSimhashMaxBits {
 			conf += 0.3
 		}
 	}

@@ -1,6 +1,6 @@
 -- +goose Up
 
--- #a2368528, follow-up to the codex-review R7 finding on !1083: ListDue
+-- Follow-up to the codex-review R7 finding on !1083: ListDue
 -- selects without a lock, so once the api runs more than one replica two
 -- reconcile passes can work the same pending row at once — a duplicate
 -- system notice, and for a closed root a double-counted reopen slot for one

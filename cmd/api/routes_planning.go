@@ -24,6 +24,19 @@ func registerPlanningRoutes(deps *apiDeps) {
 	// Analytics routes.
 	api.GET("/workspaces/:ws_id/analytics", analyticsHandler.GetMetrics)
 	api.GET("/workspaces/:ws_id/analytics/export", analyticsHandler.ExportMetrics)
+	api.GET("/workspaces/:ws_id/analytics/usage", analyticsHandler.GetUsage)
+	api.GET("/me/analytics/usage", analyticsHandler.GetMyUsage)
+
+	// Memory analytics (widget «Память Mesh»): numbers by analytics rights,
+	// query text and agent-scope keys only for owner/admin and the agent itself.
+	memoryAnalyticsHandler := deps.memoryAnalyticsHandler
+	api.GET("/workspaces/:ws_id/analytics/memory", memoryAnalyticsHandler.Get)
+	api.GET("/workspaces/:ws_id/analytics/memory/empty-queries", memoryAnalyticsHandler.EmptyQueries)
+	api.GET("/workspaces/:ws_id/analytics/memory/top-records", memoryAnalyticsHandler.TopRecords)
+	api.GET("/workspaces/:ws_id/analytics/memory/dead-records", memoryAnalyticsHandler.DeadRecords)
+	api.GET("/workspaces/:ws_id/analytics/memory/duplicates", memoryAnalyticsHandler.Duplicates)
+	api.GET("/workspaces/:ws_id/analytics/memory/unknown-sources", memoryAnalyticsHandler.UnknownSources)
+	api.GET("/workspaces/:ws_id/analytics/memory/export", memoryAnalyticsHandler.Export)
 
 	// Project update routes.
 	api.POST("/projects/:proj_id/updates", projectUpdateHandler.Create, projAccess, connectorRBAC(mw.PermAddComment))

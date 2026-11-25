@@ -143,9 +143,9 @@ describe("accepting a suggestion", () => {
     await mount("ping @gar");
     caretAtEndOfFirstBlock();
 
-    replaceWithText(view, findSuggestion(view)!, "@garfield");
+    replaceWithText(view, findSuggestion(view)!, "@gary");
 
-    expect(markdown().trim()).toBe("ping @garfield");
+    expect(markdown().trim()).toBe("ping @gary");
   });
 
   it("does not double the space when inserting mid-sentence", async () => {

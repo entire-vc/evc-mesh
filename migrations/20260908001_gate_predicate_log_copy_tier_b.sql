@@ -2,7 +2,7 @@
 -- Task 1.17a (§1r.A machine gate): GateArmPredicate gains a fifth, optional field —
 -- copy_tier ("A" or "B"). copy_tier="B" is a new predicate outcome, refused_copy_tier_b,
 -- kept separate from refused_self_serve so the two populations don't get averaged
--- together when the ratio in gate_predicate_log is read (#7084b912). This widens the
+-- together when the ratio in gate_predicate_log is read. This widens the
 -- outcome CHECK constraint to accept it.
 --
 -- The original constraint (20260906003) was an inline column CHECK with no explicit

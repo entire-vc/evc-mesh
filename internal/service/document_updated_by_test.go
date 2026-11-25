@@ -144,7 +144,7 @@ func TestDocumentService_Update_ReturnsTheResolvedNames(t *testing.T) {
 
 	// The mock repository is the read side here, so the names are seeded onto the
 	// stored row the way the enriched SELECT would compute them.
-	creatorName, editorName := "Ada", "howard"
+	creatorName, editorName := "Ada", "harper"
 	f.repo.items[created.ID].CreatedByName = &creatorName
 	f.repo.items[created.ID].UpdatedByName = &editorName
 
@@ -159,6 +159,6 @@ func TestDocumentService_Update_ReturnsTheResolvedNames(t *testing.T) {
 	require.NotNil(t, updated.CreatedByName)
 	assert.Equal(t, "Ada", *updated.CreatedByName)
 	require.NotNil(t, updated.UpdatedByName)
-	assert.Equal(t, "howard", *updated.UpdatedByName)
+	assert.Equal(t, "harper", *updated.UpdatedByName)
 	assert.Equal(t, "v2", updated.Body, "the re-read must not drop the body the caller just wrote")
 }

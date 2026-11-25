@@ -26,10 +26,14 @@ from diff_coverage import instrumented_blocks, parse_profile
 FULL_SUITE = ['./...']
 # -timeout is explicit because go test's 10m default is per package binary and
 # internal/repository/postgres under -race sums to ~600s of DB round-trips on a
-# loaded runner (a review: 598s of test bodies in a 600s budget, 219s when idle).
+# loaded runner (!1395: 598s of test bodies in a 600s budget, 219s when idle).
 # The stall watchdog, not this limit, is what catches a wedge.
-TEST_FLAGS = ['-race', '-timeout=30m', '-coverprofile=coverage.out', '-covermode=atomic']
-TEST_ARGS = [*FULL_SUITE, *TEST_FLAGS]
+# Handler integration tests exercise real services and repositories. Instrument
+# other packages of this module too, so those calls count without duplicating tests.
+# A relative ./... also matches dependencies when GOMODCACHE is inside the
+# checkout (as in CI). Bind instrumentation to the module's import path instead.
+TEST_FLAGS = ['-race', '-timeout=30m', '-coverpkg={module}/...',
+              '-coverprofile=coverage.out', '-covermode=atomic']
 FULL_SUITE_STALL_SECONDS = '420'
 # Keep the target-feature selectors in step with `go help environment`.
 # GOARCH alone does not bind GOARM64, GO386, GORISCV64, etc.; these can change
@@ -50,6 +54,13 @@ def command(*args: str) -> str:
         raise ValueError(f'could not inspect {args[0]} toolchain or checkout') from exc
 
 
+def test_flags() -> list[str]:
+    module = command('go', 'list', '-m', '-f', '{{.Path}}')
+    if not module or any(char.isspace() for char in module):
+        raise ValueError('could not resolve a single module for coverage')
+    return [flag.replace('{module}', module) for flag in TEST_FLAGS]
+
+
 def contract(packages: list[str] | None = None) -> dict:
     sha = os.environ.get('CI_COMMIT_SHA', '')
     pipeline = os.environ.get('CI_PIPELINE_ID', '')
@@ -63,7 +74,7 @@ def contract(packages: list[str] | None = None) -> dict:
         'pipeline_id': pipeline,
         'go_version': command('go', 'version'),
         'go_env': json.loads(command('go', 'env', '-json', *GO_ENV_KEYS)),
-        'test_args': [*(packages or FULL_SUITE), *TEST_FLAGS],
+        'test_args': [*(packages or FULL_SUITE), *test_flags()],
     }
 
 
@@ -152,17 +163,17 @@ def run_full_suite(profile: Path, manifest: Path, packages: list[str] | None = N
     # The invocation and manifest contract share TEST_FLAGS: a CI edit cannot
     # silently remove -race while still claiming it. `packages` is None for the
     # whole suite, or the import paths of a diff-based selection.
-    args = [*(packages or FULL_SUITE), *TEST_FLAGS]
     if profile != Path('coverage.out'):
         raise ValueError('full suite must write coverage.out')
     manifest.unlink(missing_ok=True)
     # A successful runner that fails to emit a profile must not certify bytes
     # left behind by an earlier checkout or invocation.
     profile.unlink(missing_ok=True)
+    args = [*(packages or FULL_SUITE), *test_flags()]
     # `go test ./...` prints a package's result only when that package finishes,
     # so the watchdog's quiet window is "longest package, started alongside its
     # siblings". internal/repository/postgres and internal/handler run ~85s each
-    # on an idle runner but took 140-184s on a loaded one (main #10371, a review
+    # on an idle runner but took 140-184s on a loaded one (main #10371, !1166
     # #10368: stack showed a live DB call in [IO wait] under a minute, not a
     # wedge), and the default 180s window killed healthy runs. A real wedge is
     # minutes of nothing until the job timeout, so 420s still catches it.
@@ -206,7 +217,7 @@ def verify(profile: Path, manifest: Path, base: str | None = None) -> None:
     if not isinstance(recorded, dict):
         raise ValueError('coverage manifest is not an object')
     args = recorded.get('test_args')
-    if not isinstance(args, list) or args[-len(TEST_FLAGS):] != TEST_FLAGS:
+    if not isinstance(args, list) or args[-len(TEST_FLAGS):] != test_flags():
         raise ValueError('coverage manifest test_args differs from this job')
     packages = args[:-len(TEST_FLAGS)]
     if not packages or not all(isinstance(p, str) and p and not p.startswith('-') for p in packages):

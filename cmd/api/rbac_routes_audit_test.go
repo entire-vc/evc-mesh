@@ -135,6 +135,7 @@ var auditAllowList = map[string]string{
 // Changing an entry here is the review moment for that decision.
 var auditConnectorGuards = map[string]string{
 	"PATCH /projects/:proj_id":                     "connectorRBAC(mw.PermManageProject)",
+	"POST /uploads/:upload_id/confirm":             "connectorRBAC(mw.PermUploadArtifact)",
 	"POST /projects/:proj_id/statuses":             "connectorRBAC(mw.PermManageProject)",
 	"PATCH /projects/:proj_id/statuses/:status_id": "connectorRBAC(mw.PermManageProject)",
 	"PUT /projects/:proj_id/statuses/reorder":      "connectorRBAC(mw.PermManageProject)",
@@ -165,6 +166,8 @@ var auditPublicWrites = map[string]string{
 	"refreshGroup POST /refresh":                        "public: authenticated by the refresh token itself",
 	"invitePublicGroup POST /:token/accept":             "public: authenticated by the single-use invite token in the path",
 	"e POST /webhooks/github":                           "authenticated by the GitHub HMAC signature, not a session",
+	"v1 POST /gate-intake":                              "authenticated only by an mgi_ gate-intake token (mw.GateIntakeGuard, Echo-level, + RequireGateIntakePrincipal; any other credential is 401); creates one card at the destination bound to the principal on the server, never one the caller names (docs/gate-intake.md)",
+	"v1 POST /lead-accept-registry/attestations":        "authenticated only by an mlp_ lead-accept publisher token (mw.LeadAcceptGuard, Echo-level, + RequireLeadAcceptPrincipal(publisher); any other credential is 401/403); appends one registry observation row under an advisory lock, changes no card, approval or merge (docs/lead-accept-context.md)",
 	"e POST /api/v1/integrations/github/webhook":        "authenticated by the GitHub HMAC signature, not a session",
 	"e POST /webhooks/gitlab":                           "authenticated by the GitLab secret token header, not a session",
 	"e POST /internal/secrets/materialize":              "DirectOnly plus SpawnerAuth: an allowlisted spawner agent key (MESH_SPAWNER_AGENT_IDS), never a bearer token",
@@ -478,6 +481,7 @@ func TestRBACRouteAudit_NoUnreviewedWriteOutsideTheAuthenticatedGroup(t *testing
 var auditReadRoutes = map[string]string{
 	"GET /me/runtime/agents":                                      "UserRuntimeRepo.OperatorAgents refuses agent keys and OAuth connectors (403) and callers outside ?workspace_id (403); selects that workspace's agents the caller operates, plus, for its owner/admin, those with an enabled admission on its runner integration",
 	"GET /me/runtime/runners":                                     "UserRuntimeRepo.OperatorRunners refuses agent keys, OAuth connectors and callers outside ?workspace_id (403); groups exactly the agents OperatorAgents selects",
+	"GET /me/analytics/usage":                                     "AnalyticsHandler resolves a trusted agent to its current operator, refuses OAuth connectors and missing operators, and every aggregate applies that user's workspace membership, per-workspace admin role and project visibility",
 	"GET /workspaces/:ws_id/runtime":                              "runtimeCatalogRBAC applies rbac(PermManageWebhooks) to people and OAuth connectors unchanged; an X-Agent-Key agent reaches RuntimeRepo.runtimeCatalogEditor, which in the transaction requires a live runtime_manager grant from the agent's own operator, that operator owning or administering :ws_id, and the agent connected to :ws_id (home workspace or live workspace grant); returns the redacted catalog only",
 	"GET /workspaces/:ws_id/runtime/revisions":                    "runtimeCatalogRBAC applies rbac(PermManageWebhooks) to people and OAuth connectors unchanged; an X-Agent-Key agent reaches RuntimeRepo.runtimeCatalogEditor, which in the transaction requires a live runtime_manager grant from the agent's own operator, that operator owning or administering :ws_id, and the agent connected to :ws_id (home workspace or live workspace grant); returns revision numbers, digests and authors only",
 	"GET /agents/me/operator-runtime":                             "UserRuntimeRepo.GetAsManager refuses users and OAuth connectors and requires a live runtime_manager grant from the agent's own operator (403 otherwise); returns only that operator's runtime document",

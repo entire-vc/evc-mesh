@@ -1,9 +1,10 @@
 import { chromium } from "@playwright/test";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const WEB = fileURLToPath(new URL("../../", import.meta.url));
+const WEB = path.resolve(import.meta.dirname, "../..");
+const OUT_DIR = "/tmp/rail-shots";
+mkdirSync(OUT_DIR, { recursive: true });
 const assets = path.join(WEB, "dist/assets");
 const cssFile = readdirSync(assets).filter(f => f.endsWith(".css")).sort((a,b)=>{
   const sa = readFileSync(path.join(assets,a)).length;
@@ -39,7 +40,7 @@ function mr899v2Parts(isActive) {
 const RECIPES = [
   { label: "pre-MR!899 («было все ок»)", fn: preMR899Parts },
   { label: "MR!899 v2 (Pavel отверг 20:26)", fn: mr899v2Parts },
-  { label: "новый фикс (#119078b0)", fn: recipes.projectRailIconParts },
+  { label: "новый фикс", fn: recipes.projectRailIconParts },
 ];
 
 const browser = await chromium.launch({ executablePath: process.env.RAIL_CONTRAST_CHROMIUM });
@@ -62,7 +63,7 @@ for (const dark of [false, true]) {
     `<body style="margin:0"><div class="bg-sidebar" style="padding:24px 24px 6px">${rows}</div></body></html>`,
     { waitUntil: "load" },
   );
-  const out = `/tmp/rail-shots-verne/rail-tile-compare-${dark ? "dark" : "light"}.png`;
+  const out = path.join(OUT_DIR, `rail-tile-compare-${dark ? "dark" : "light"}.png`);
   await page.screenshot({ path: out });
   results.push(out);
   await page.close();

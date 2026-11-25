@@ -55,7 +55,7 @@ func TestTaskWriterActiveConsumedHolderBlocksUntilRelease(t *testing.T) {
 	task := uuid.New()
 	mock.ExpectQuery("FROM runtime_reservations r").WithArgs(task).WillReturnRows(
 		sqlmock.NewRows([]string{"id", "agent_id", "agent_name", "state", "expires_at"}).
-			AddRow(uuid.New(), uuid.New(), "Grace", "consumed", time.Now().Add(-time.Hour)))
+			AddRow(uuid.New(), uuid.New(), "Gwen", "consumed", time.Now().Add(-time.Hour)))
 
 	refusal := asRefusal(t, runtimeTaskWriterActive(context.Background(), db, task))
 	require.Equal(t, "release", refusal.Context["blocks_until"])

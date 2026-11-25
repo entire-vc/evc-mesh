@@ -32,7 +32,7 @@ import (
 // hole between the layers:
 //
 //   - commentService.Create deliberately suppresses task.commented on a
-//     done/cancelled task (incident an internal ticket — the notification used to spawn
+//     done/cancelled task (the notification used to spawn
 //     a session whose prompt reopened shipped work);
 //   - a fiddler-driven lane is woken ONLY by a card assigned to it and sitting
 //     in a todo-category status (CLAUDE-communication.md "How @-mentions
@@ -141,7 +141,7 @@ func commentMetadataSource(raw json.RawMessage) string {
 
 // commentInformationalFlag is the cooperative field an author sets on their OWN
 // comment (metadata.informational) to say "this is a pure acknowledgement, no
-// action needed — don't route it" (an internal ticket, follow-up to an internal ticket).
+// action needed — don't route it" (follow-up to an internal ticket).
 //
 // Deliberately NOT a phrase filter over the body. The audit that raised this
 // card (class B1, 2026-09-07) named the exact reason: this fleet's other
@@ -509,7 +509,7 @@ func (s *commentService) createClosedTaskFollowUp(
 		return
 	}
 
-	// Identity and dedup (an internal ticket, contract approved on an internal ticket). A
+	// Identity and dedup (contract approved). A
 	// finding is the pair (source card, finding_key): an explicit
 	// metadata.finding_id when a detector stamps one, else the normalized
 	// text. One pair → one root for the pair's WHOLE life: an open root
@@ -755,7 +755,7 @@ const (
 // claimAndCreateRoot may create cards through taskSvc.Create, which writes
 // the actor into activity_log.
 //
-// Concurrency (code review round 7 named the window, an internal ticket closed it):
+// Concurrency (codex-review round 7 named the window, an internal ticket closed it):
 // passes were single-flight by construction — the scheduler runs the pass
 // inline in its ticker loop and the deployment runs one api container — but
 // that is a deployment fact, not a mechanism. Every row is now CLAIMED
@@ -806,8 +806,8 @@ func (s *commentService) ReconcileClosedFollowUpPending(ctx context.Context) (de
 		}
 
 		// The row's work runs as one unit and the lease covers the WHOLE
-		// unit — no write inside it releases the row (an internal ticket, code review
-		// round 2 on a review: MarkNoticed clearing the lease mid-row let a
+		// unit — no write inside it releases the row (codex-review
+		// round 2 on !1085: MarkNoticed clearing the lease mid-row let a
 		// second pass claim the row while the first was still delivering).
 		// The release below therefore runs on EVERY exit: a progress write
 		// kept the lease to here, a delete makes the release a no-op, and
@@ -1476,7 +1476,7 @@ var followUpRootRetryBackoff = []time.Duration{
 var followUpRootRetrySleep = time.Sleep
 
 // waitForRootCard reads the root card, retrying while the winner's claim is
-// ahead of its card. Three exits, three meanings (an internal ticket, code review
+// ahead of its card. Three exits, three meanings (codex-review
 // P1): the card → (card, nil); the budget spent where the LAST read
 // succeeded and found nothing → (nil, nil), the honest absent/wedged case
 // the caller resolves by takeover or deferral; and anything else →

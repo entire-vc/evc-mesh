@@ -1,5 +1,5 @@
 /**
- * an internal ticket — an archived project stayed in the sidebar's Projects list as if
+ * An archived project stayed in the sidebar's Projects list as if
  * nothing had happened. The store keeps archived projects (lookups by id still
  * need their names); the sidebar must list only live ones and move the rest
  * under "Archived", with an Unarchive action that hits the dedicated route.

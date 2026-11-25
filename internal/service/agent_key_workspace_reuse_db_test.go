@@ -15,9 +15,9 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
-// Task #2045c890 (parent #93644be7, subtask 2 of 5): now that workspace
+// (subtask 2 of 5): now that workspace
 // deletion frees a workspace's slug for reuse (migration 20260911002 +
-// WorkspaceRepo.Delete's rename-on-delete, task #c164a5df), a NEW workspace
+// WorkspaceRepo.Delete's rename-on-delete), a NEW workspace
 // can legitimately claim a slug a DIFFERENT, now-deleted workspace used to
 // hold. Agent keys are literally shaped `agk_{slug}_{random}` — the slug is
 // baked into the plaintext at issue time and never changes with it. These

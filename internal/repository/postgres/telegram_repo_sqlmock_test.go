@@ -70,7 +70,7 @@ func TestIntegrationRepo_ListByProvider_IncludesInactiveRows(t *testing.T) {
 	cfg, _ := json.Marshal(map[string]string{"token": "enc"})
 
 	// Unlike ListActiveByProvider, no "AND is_active = true" — both rows
-	// come back regardless of state (#33a4bb57 fix: the resolver needs to
+	// come back regardless of state (an internal ticket fix: the resolver needs to
 	// tell "no row anywhere" apart from "a row exists and is inactive").
 	mock.ExpectQuery("FROM integration_configs WHERE provider = \\$1 ORDER BY workspace_id").
 		WithArgs("github").

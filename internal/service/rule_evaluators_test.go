@@ -237,10 +237,10 @@ func makeTodoStatus() *domain.TaskStatus {
 }
 
 // TestEvalRequireSubtasksDone_CancelledSubtask_AllowedWhenConfigured is the POSITIVE
-// case for #204c0311: allow_cancelled:true + a wired taskStatusRepo must let a parent
-// with only a cancelled subtask pass — this is the live shape of task #815f703b /
-// subtask #67f1b3f4, and the config value ("allow_cancelled":true) is the ACTUAL
-// workspace rule config read live off task #204c0311's workspace via get_my_rules.
+// case: allow_cancelled:true + a wired taskStatusRepo must let a parent
+// with only a cancelled subtask pass — this is the live shape of an internal ticket /
+// a subtask, and the config value ("allow_cancelled":true) is the ACTUAL
+// workspace rule config read live off an internal ticket's workspace via get_my_rules.
 func TestEvalRequireSubtasksDone_CancelledSubtask_AllowedWhenConfigured(t *testing.T) {
 	parentID := uuid.New()
 
@@ -315,7 +315,7 @@ func TestEvalRequireSubtasksDone_CancelledSubtask_BlockedWhenTaskStatusRepoNil(t
 	deps := evaluatorDeps{taskRepo: taskRepo, taskStatusRepo: nil}
 	violation, err := evalRequireSubtasksDone(context.Background(), rule, input, deps)
 	require.NoError(t, err)
-	require.NotNil(t, violation, "without taskStatusRepo wired, allow_cancelled cannot be honored — this reproduces the live #815f703b incident")
+	require.NotNil(t, violation, "without taskStatusRepo wired, allow_cancelled cannot be honored — this reproduces the live incident")
 }
 
 // TestEvalRequireSubtasksDone_CancelledSubtask_BlockedWhenAllowCancelledFalse verifies

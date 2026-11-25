@@ -1,7 +1,7 @@
 -- +goose Up
 -- Per-chunk embeddings for long memories (ADR-0002). The prod embedder
 -- silently truncates input at 512 tokens, so a memory longer than that only
--- ever had its first ~15% embedded — see #e8063a65. One row per chunk lets
+-- ever had its first ~15% embedded. One row per chunk lets
 -- VectorSearch score every chunk and take the max per memory_id, and is the
 -- only storage shape that survives an eventual move to pgvector/ANN (which
 -- requires one vector per row; a vector-array column can never be indexed).

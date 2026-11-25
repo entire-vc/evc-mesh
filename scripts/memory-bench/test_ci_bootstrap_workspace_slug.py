@@ -7,7 +7,7 @@ Same convention as the sibling self-checks: stdlib `unittest`, no Mesh, no
 network. `ci_bootstrap._req` is the harness's only I/O boundary — mocked here
 rather than any transport layer underneath it.
 
-Background (#1974ef80): TWO independent guards blocked the branch/ephemeral
+Background: TWO independent guards blocked the branch/ephemeral
 arm, discovered one at a time from live CI logs — fixing only the first still
 left the gate measuring zero questions.
 
@@ -165,7 +165,7 @@ class TestBenchWorkspaceSlugMatchesTheMintedKey(unittest.TestCase):
         )
 
     def test_auto_created_workspace_slug_is_written_and_guard_accepts_it(self):
-        # Registration auto-creates a workspace (the common CI case, #1974ef80):
+        # Registration auto-creates a workspace (the common CI case):
         # GET /workspaces comes back non-empty, so ci_bootstrap never POSTs its
         # own — it must use THIS workspace's slug, not "recall-gate-bench".
         rc = self._invoke([

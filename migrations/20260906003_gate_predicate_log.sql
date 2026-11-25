@@ -1,5 +1,5 @@
 -- +goose Up
--- Task #5d3dc714 (audit §3.2b): 40-45% of asks to Pavel were cases the agent could have
+-- (audit §3.2b): 40-45% of asks to Pavel were cases the agent could have
 -- decided from a rule already written down — an access that was already in keys.env, its
 -- own 403 mistaken for a human decision, an approval Pavel had already declined, waiting
 -- on someone else's card instead of adding a dependency.
@@ -17,7 +17,7 @@ CREATE TABLE gate_predicate_log (
     id                     UUID PRIMARY KEY,
     task_id                UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     -- Who tried to arm. Taken from the authenticated identity, never from the request
-    -- body — same rule as tasks.gate_author (task #4545660b).
+    -- body — same rule as tasks.gate_author.
     actor_id               UUID NOT NULL,
     actor_type             TEXT NOT NULL CHECK (actor_type IN ('user', 'agent', 'system')),
     -- 'allowed' | 'refused_self_serve' | 'refused_use_dependency'.

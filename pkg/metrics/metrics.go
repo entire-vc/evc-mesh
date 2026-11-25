@@ -117,7 +117,7 @@ var (
 	)
 
 	// memoryRecallTopScoreBuckets split the top-1 final-score distribution of
-	// recall. They are not guessed: on 2026-10-05 (#2c44a087) 30 real prod
+	// recall. They are not guessed: on 2026-10-05 30 real prod
 	// queries were replayed read-only through both arms (BM25 with OR-fallback +
 	// dense over the recency pool, RRF 0.3/0.7, freshness applied) and the
 	// resulting top-1 scores were strictly bimodal:
@@ -142,7 +142,7 @@ var (
 	// "returned something useful" are different things: the dense arm always
 	// returns nearest neighbours, so on hybrid an unmatchable query still yields
 	// a non-empty page and mesh_memory_recall_empty_total stays near zero
-	// (#2c44a087: 8 of 30 real prod recalls were dense-only at exactly
+	// (8 of 30 real prod recalls were dense-only at exactly
 	// 0.7/(60+1)). The top-1 score is what separates them — on hybrid,
 	// sum(rate(..._bucket{search_mode="hybrid",le="0.012"}[15m]))
 	// / rate(..._count[15m]) is the useless-recall share.
@@ -170,9 +170,9 @@ var (
 	// polling it can tell "the write backlog has drained" from "4 slots are
 	// merely busy right now" — the two read very differently under a burst.
 	//
-	// Added for #ebd9dc1c: the memory-bench CI harness fires many writes ahead
+	// Added: the memory-bench CI harness fires many writes ahead
 	// of a per-question recall, and recall's query-embed shares embedSem with
-	// those writes (#3d10774e). Recall waits on its own request context rather
+	// those writes. Recall waits on its own request context rather
 	// than blocking forever, but nothing told a caller HOW LONG that wait was
 	// likely to be — this gauge lets the harness wait for a real drain signal
 	// instead of a guessed sleep before issuing a search that would otherwise
@@ -194,7 +194,7 @@ var (
 	// from semantic recall for any fact past the cut — while every health check
 	// stays green and the row looks perfectly embedded in the database.
 	//
-	// Measured 2026-07-27 (#e8063a65): 96% of bench fixtures exceeded a 512-token
+	// Measured 2026-07-27: 96% of bench fixtures exceeded a 512-token
 	// window, and the gold session for one question carried its answer at 75% of
 	// the document — outside the window, so the dense arm ranked it 35/45 instead
 	// of 1/45. Alert on any sustained non-zero rate: it means dense recall is
@@ -282,7 +282,7 @@ var (
 	//   outcome: "revoked_all" (full-account revoke, ErrTokenReused returned) or
 	//     "grace_window" (a fresh pair was minted instead).
 	//
-	// Added for #cfb14ad6: before this, mesh-api never recorded WHY a reuse was
+	// Added: before this, mesh-api never recorded WHY a reuse was
 	// detected, so "does this actually hit real users" could only be guessed from
 	// the revoke pattern in the refresh_tokens table. Alert on any sustained
 	// outcome="revoked_all" for a non-service account.
@@ -415,4 +415,11 @@ func SetEventBusEnabled(enabled bool) {
 		return
 	}
 	EventBusEnabled.Set(0)
+}
+
+// MemoryRecallTopScoreBuckets returns a copy of the mesh_memory_recall_top_score
+// bucket bounds. The SQL histogram of memory_stats_daily.top_score_hist
+// (memory_top_score_bounds) must use the same bounds; a DB test checks it.
+func MemoryRecallTopScoreBuckets() []float64 {
+	return append([]float64(nil), memoryRecallTopScoreBuckets...)
 }

@@ -42,7 +42,7 @@ func wsWithSlug(id uuid.UUID, slug string) *MockWorkspaceService {
 func TestAgentHandler_GetByID_CarriesURL(t *testing.T) {
 	wsID, agentID := uuid.New(), uuid.New()
 	svc := &MockAgentService{GetByIDFunc: func(context.Context, uuid.UUID) (*domain.Agent, error) {
-		return &domain.Agent{ID: agentID, WorkspaceID: wsID, Slug: "daedalus"}, nil
+		return &domain.Agent{ID: agentID, WorkspaceID: wsID, Slug: "dana"}, nil
 	}}
 	h := agentURLHandler(wsWithSlug(wsID, "acme"), svc)
 
@@ -58,7 +58,7 @@ func TestAgentHandler_GetByID_CarriesURL(t *testing.T) {
 
 	var out map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
-	assert.Equal(t, "https://mesh.example/w/acme/team/agent/daedalus", out["url"])
+	assert.Equal(t, "https://mesh.example/w/acme/team/agent/dana", out["url"])
 }
 
 func TestAgentHandler_List_CarriesURLUnderListedWorkspace(t *testing.T) {

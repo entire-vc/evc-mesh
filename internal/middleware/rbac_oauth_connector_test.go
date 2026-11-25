@@ -40,7 +40,7 @@ func newRBACOAuthConnectorContext(agentID, wsID, connectorUserID uuid.UUID) (ech
 
 func TestRBAC_OAuthConnector_MemberCannotManageRules(t *testing.T) {
 	// This is B1 itself: agentPerms grants PermManageRules to every agent
-	// (so a trusted lead agent like Garfield can use it via X-Agent-Key),
+	// (so a trusted lead agent like Gary can use it via X-Agent-Key),
 	// but a member's own workspace role does not hold PermManageRules at
 	// all (permissionMatrix[RoleMember] has no PermManageRules entry). A
 	// connector the member's consent spun up must be denied here even
@@ -122,7 +122,7 @@ func demoteToMember(repo *rbacMockMemberRepo, wsID, userID uuid.UUID) {
 func TestRBAC_TrustedAgent_StillGetsFullAgentPerms(t *testing.T) {
 	// Regression guard: an X-Agent-Key agent (no OAuthConnectorUserID in
 	// context at all) must keep the original fast path unchanged — this is
-	// the Garfield-lead-agent case agentPerms[PermManageRules] exists for.
+	// the Gary-lead-agent case agentPerms[PermManageRules] exists for.
 	repo := newRBACMockMemberRepo()
 	wsID, agentID := uuid.New(), uuid.New()
 

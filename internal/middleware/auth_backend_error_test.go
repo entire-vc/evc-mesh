@@ -22,7 +22,7 @@ import (
 
 // A failed key lookup (DB down, pool exhausted, canceled context) is not a
 // verdict on the key: every agent-key middleware must answer it with a
-// retryable 503, and keep 401 for a real denial (card an internal ticket).
+// retryable 503, and keep 401 for a real denial.
 func TestAgentKeyMiddlewares_BackendErrorIs503_DenialIs401(t *testing.T) {
 	middlewares := map[string]func(*mockAgentService) echo.MiddlewareFunc{
 		"AgentKeyAuth": func(s *mockAgentService) echo.MiddlewareFunc { return AgentKeyAuth(s, nil) },

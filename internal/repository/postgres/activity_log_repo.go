@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -50,6 +51,11 @@ func (r *ActivityLogRepo) Create(ctx context.Context, entry *domain.ActivityLog)
 		INSERT INTO activity_log (id, workspace_id, entity_type, entity_id, action, actor_id, actor_type, changes, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
+	// An unset time would be stored as 0001-01-01: the entry would sort before
+	// every other event and its order against siblings would be undefined.
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = time.Now().UTC()
+	}
 	changes := entry.Changes
 	if changes == nil {
 		changes = json.RawMessage(`{}`)

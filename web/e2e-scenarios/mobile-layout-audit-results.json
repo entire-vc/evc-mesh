@@ -299,7 +299,7 @@
       "files": 7,
       "passed": 114
     },
-    "taskFormMainExemption": "16 targets below 44px; frozen, tracked in #478a37bd",
-    "sessionsTruncation": "tracked in #6b322896"
+    "taskFormMainExemption": "16 targets below 44px; frozen, tracked in an internal ticket",
+    "sessionsTruncation": "tracked in an internal ticket"
   }
 }

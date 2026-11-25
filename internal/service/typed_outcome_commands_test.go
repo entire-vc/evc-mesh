@@ -77,15 +77,15 @@ func TestCommentCreate_WakesFalseDeliversNothing(t *testing.T) {
 			env := setupCommentServiceWithMentions()
 			deliveries := &fakeDeliveryRepo{}
 			env.svc.deliveryRepo = deliveries
-			leo := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "leo", Name: "Leo"}
-			env.agentSvc.AddAgent(env.wsID, leo)
+			liam := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "liam", Name: "Liam"}
+			env.agentSvc.AddAgent(env.wsID, liam)
 			assignee := uuid.New()
 			taskID := uuid.New()
 			env.taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: env.projID, Title: "T",
 				AssigneeType: domain.AssigneeTypeAgent, AssigneeID: &assignee}
 
 			c := &domain.Comment{TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeAgent,
-				Body: "@leo FYI: the pipeline is green", Metadata: tc.metadata}
+				Body: "@liam FYI: the pipeline is green", Metadata: tc.metadata}
 			require.NoError(t, env.svc.Create(context.Background(), c))
 			stored, err := env.commentRepo.GetByID(context.Background(), c.ID)
 			require.NoError(t, err)

@@ -9,7 +9,7 @@ import (
 )
 
 // These mirror <ops-repo>/scripts/test_secret_rotation_gate_e8388213.py's TestClassify
-// case-for-case (task #bb1aaa09, tail of #e8388213) — the Go port must classify the
+// case-for-case (tail) — the Go port must classify the
 // SAME population the same way, not merely "a reasonable subset". The two named traps
 // (an alert about the leak-COUNTER itself, and a `logrotate` alert) are the ones that
 // broke the original naive title-regex proposal on a live 07.09 board snapshot.
@@ -98,7 +98,7 @@ func TestSecretRotationClassify_UnderscoreCredentialNamesAreNouns(t *testing.T) 
 	// character, so there is no boundary. This gap hid two live rotation cards.
 	titles := []string{
 		"[fiddler] Отозвать утёкший CLAUDE_CODE_OAUTH_TOKEN (живой, в git-истории)",
-		"Riker's live Mesh agent_key sits in 63 local transcripts — rotate",
+		"Robin's live Mesh agent_key sits in 63 local transcripts — rotate",
 		"Live GH_TOKEN/GITLAB_TOKEN for lanes printed via pgrep dump",
 	}
 	for _, title := range titles {

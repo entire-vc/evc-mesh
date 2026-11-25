@@ -61,7 +61,7 @@ func TestPredicate_CopyTierB_WinsOverBlockedByOtherTask(t *testing.T) {
 	p := basePredicate()
 	p.CopyTier = domain.CopyTierB
 	p.BlockedByOtherTask = true
-	p.BlockedReason = "waiting on #0104878c"
+	p.BlockedReason = "waiting on #5eed0016"
 
 	err, armed := armWithPredicate(t, &p)
 
@@ -104,7 +104,7 @@ func TestPredicate_CopyTierA_PassesThroughToOrdinaryCheck(t *testing.T) {
 
 // BRANCH 3 — a copy-shaped ask with copy_tier omitted is refused, naming the field, so
 // the caller learns what to write next rather than retrying the identical call. Uses the
-// live #6a0c7ae3 reason verbatim (from Garfield's handoff comment on this task) as the
+// live an internal ticket reason verbatim (from Gary's handoff comment on this task) as the
 // negative control that matters most: this is the actual gate that sat open five days.
 func TestPredicate_CopyTierRequired_OnCopyShapedReason(t *testing.T) {
 	p := basePredicate()
@@ -172,7 +172,7 @@ func TestPredicate_CopyTierRequired_DoesNotApplyToMarkerPath(t *testing.T) {
 
 // gate_predicate_log must record the new outcome under its OWN name, never folded into
 // refused_self_serve — merging the two populations would make the ratio measurement
-// (#7084b912) unreadable, per this file's own package doc.
+// unreadable, per this file's own package doc.
 func TestGatePredicateLog_RecordsCopyTierBUnderItsOwnOutcome(t *testing.T) {
 	svc, logRepo, taskID := newLoggingArmService(t)
 	p := basePredicate()

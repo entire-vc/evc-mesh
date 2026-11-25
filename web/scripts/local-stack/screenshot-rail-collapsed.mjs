@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// #119078b0: collapsed-rail screenshots with 13 projects — the density that
-// actually triggered Pavel's rejection of #bb8f1092's fix (a single project
+// Collapsed-rail screenshots with 13 projects — the density that
+// actually triggered Pavel's rejection of an internal ticket's fix (a single project
 // tile doesn't show the "every tile looks like the workspace logo" effect).
 // Reuses the authed local-stack the same way screenshot-rail-expanded.mjs
 // does; the caller is expected to have already seeded N projects via a
@@ -47,7 +47,7 @@ async function main() {
     ]);
     await page.waitForTimeout(600);
 
-    // Collapse the rail — hamburger toggle in the header, per Bill/Garfield's
+    // Collapse the rail — hamburger toggle in the header, per Bill/Gary's
     // prior measurement: (274, 28) at 1440x900, NOT the neighboring
     // "+ New Project" button at ~(209, 28).
     const toggle = page.locator("header button:has(svg.lucide-menu)").first();

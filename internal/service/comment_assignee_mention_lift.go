@@ -9,13 +9,13 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Assignee-mention lift (#ed60c795).
+// Assignee-mention lift.
 //
 // A PERSON who writes "@<lane>" on a card that lane already owns, while the
 // card is parked in backlog, means "come back to this". Before this, the
 // mention was recorded as skipped — the lane polls only todo — and nothing
-// else happened: Pavel wrote "Дорабатывай программу @howard" on Howard's own
-// parked card (#6d6c101c, 23.09) and it reached nobody, while the recorded
+// else happened: Pavel wrote "Дорабатывай программу @harper" on Harper's own
+// parked card (23.09) and it reached nobody, while the recorded
 // hint told him to assign a card that was already assigned.
 //
 // The lift moves the card backlog → todo so the mention lands in the one feed
@@ -23,14 +23,14 @@ import (
 // is a case where moving the card would be wrong or pointless:
 //
 //   - author is a person. Agent → agent mentions never lift: agents address
-//     each other in-thread all the time ("@garfield принято") and would start
+//     each other in-thread all the time ("@gary принято") and would start
 //     waking each other in a loop;
 //   - the mentioned agent IS the assignee. Naming someone else is a question
 //     of ownership, not of status — the recorded not_assignee verdict and the
 //     UI's assign action cover it;
 //   - status is backlog. Triage has its own human-response exit
 //     (enforceTriageExit); done/cancelled are shipped work that a comment must
-//     not reopen (#56a6d5b2); in_progress/review are not "parked";
+//     not reopen; in_progress/review are not "parked";
 //   - no armed human_gate and no future start_after — the feeder would still
 //     skip the card, so the move would change nothing but the column;
 //   - the comment carries no blocking marker (it is a question to a person,

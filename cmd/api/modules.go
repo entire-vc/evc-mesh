@@ -41,4 +41,8 @@ var apiModules = []func(*apiDeps){
 	startRecurringScheduler,
 	startMemoryJobs,
 	startSweepers,
+	// Before registerGateIntakeRoutes: the lead-accept guard must answer its own
+	// routes for every credential, an mgi_ token included (e.Use runs in order).
+	registerLeadAcceptRoutes,
+	registerGateIntakeRoutes,
 }

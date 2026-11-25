@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The "episodic 17%" trap (#a9752575, audit §4.6): the recall default threshold
+// The "episodic 17%" trap (audit §4.6): the recall default threshold
 // and the score this service assigns to session-checkpoints were set
 // independently, and the checkpoint score sat BELOW the threshold. The result
 // was a default under which the fleet's own session hand-offs — the single class

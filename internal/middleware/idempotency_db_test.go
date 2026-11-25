@@ -321,7 +321,7 @@ func TestIdempotency_PanicReleasesKey_DB(t *testing.T) {
 
 // A handler that returns an error instead of writing one wrote nothing: a 4xx
 // refusal and a 5xx both free the key, so the retry runs the handler again
-// against the current state (an internal ticket: a stored 422 was replayed after the
+// against the current state (a stored 422 was replayed after the
 // caller had met the gate).
 func TestIdempotency_ReturnedErrorsRelease_DB(t *testing.T) {
 	db := idemTestDB(t)

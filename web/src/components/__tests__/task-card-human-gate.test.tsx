@@ -31,7 +31,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 const indicator = () => screen.queryByTestId("human-gate-indicator");
 
 describe("TaskCard human_gate indicator", () => {
-  // Negative control (#098468fa AC4): a card with human_gate=false must carry no
+  // Negative control (an internal ticket AC4): a card with human_gate=false must carry no
   // trace of the badge — this is what proves the indicator discriminates rather
   // than always rendering.
   it("shows nothing when human_gate is false", () => {

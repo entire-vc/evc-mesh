@@ -12,7 +12,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Regression cover for #655c6d12: RecallWithStats armed time decay from
+// Regression cover: RecallWithStats armed time decay from
 // `opts.OrderBy == "decayed_relevance"` — the bare key — while every producer in
 // the tree emits the suffixed "decayed_relevance:desc". The branch could not fire,
 // and nothing said so: the one caller that asks for this ordering (the MCP temporal
@@ -33,7 +33,7 @@ func recallOneAged(t *testing.T, ageDays float64, opts domain.RecallOpts) float6
 			ID:      uuid.New(),
 			Key:     "aged-memory",
 			Content: "decision recorded a while ago",
-			// Above the service's default MinImportance floor (0.3 since #a9752575) — below it the
+			// Above the service's default MinImportance floor (0.3 since that fix) — below it the
 			// row is filtered out before the decay step and every assertion here
 			// becomes vacuous. The require.Len in the caller is what surfaces that.
 			ImportanceScore: 0.8,

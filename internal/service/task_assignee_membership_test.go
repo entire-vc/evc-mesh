@@ -88,7 +88,7 @@ func TestAssigneeEnrolment_SetReviewerRotationEnrolsReviewerAndBuilder(t *testin
 		},
 	}
 	effectiveRules := &domain.EffectiveAssignmentRules{
-		DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "garfield", Source: "project"},
+		DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "gary", Source: "project"},
 	}
 	env := setupMembershipEnv(wfResp, effectiveRules)
 	svc, taskRepo, statusRepo, agentRepo, projRepo, pmRepo := env.svc, env.tasks, env.statuses, env.agents, env.projects, env.members
@@ -98,7 +98,7 @@ func TestAssigneeEnrolment_SetReviewerRotationEnrolsReviewerAndBuilder(t *testin
 	statusRepo.items[reviewID] = &domain.TaskStatus{ID: reviewID, ProjectID: projectID, Category: domain.StatusCategoryReview, Name: "review"}
 	statusRepo.items[todoID] = &domain.TaskStatus{ID: todoID, ProjectID: projectID, Category: domain.StatusCategoryTodo, Name: "todo"}
 	projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
-	agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "garfield"}
+	agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "gary"}
 	// The builder is a real agent too; enrolment now verifies the directory before
 	// writing, so an unseeded id models a row the database would refuse.
 	agentRepo.items[builderID] = &domain.Agent{ID: builderID, WorkspaceID: workspaceID, Slug: "builder"}
@@ -140,7 +140,7 @@ func TestAssigneeEnrolment_MoveTaskWithExplicitAssignee(t *testing.T) {
 	statusRepo.items[fromID] = &domain.TaskStatus{ID: fromID, ProjectID: projectID, Category: domain.StatusCategoryTodo, Name: "todo"}
 	statusRepo.items[toID] = &domain.TaskStatus{ID: toID, ProjectID: projectID, Category: domain.StatusCategoryInProgress, Name: "in_progress"}
 	projRepo.items[projectID] = &domain.Project{ID: projectID}
-	agentRepo.items[newAssignee] = &domain.Agent{ID: newAssignee, Slug: "wally"}
+	agentRepo.items[newAssignee] = &domain.Agent{ID: newAssignee, Slug: "wade"}
 	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projectID, StatusID: fromID, AssigneeType: domain.AssigneeTypeUnassigned}
 
 	require.NoError(t, svc.MoveTask(context.Background(), taskID, MoveTaskInput{
@@ -187,7 +187,7 @@ func TestAssigneeEnrolment_UpdateAndAssignTaskAgree(t *testing.T) {
 			svc, taskRepo, agentRepo, projRepo, pmRepo := env.svc, env.tasks, env.agents, env.projects, env.members
 
 			projRepo.items[projectID] = &domain.Project{ID: projectID}
-			agentRepo.items[agentID] = &domain.Agent{ID: agentID, Slug: "wally"}
+			agentRepo.items[agentID] = &domain.Agent{ID: agentID, Slug: "wade"}
 			taskRepo.items[taskID] = &domain.Task{
 				ID: taskID, ProjectID: projectID, AssigneeType: domain.AssigneeTypeUnassigned,
 			}
@@ -583,7 +583,7 @@ func TestReviewerEnrolment_MistypedAgentReviewerIsResolvedNotTrusted(t *testing.
 	svc, taskRepo, projRepo, agentRepo, pmRepo := env.svc, env.tasks, env.projects, env.agents, env.members
 
 	projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: wsID}
-	agentRepo.items[reviewerID] = &domain.Agent{ID: reviewerID, WorkspaceID: wsID, Slug: "garfield"}
+	agentRepo.items[reviewerID] = &domain.Agent{ID: reviewerID, WorkspaceID: wsID, Slug: "gary"}
 	taskRepo.items[taskID] = &domain.Task{
 		ID: taskID, ProjectID: projectID, Title: "t", AssigneeType: domain.AssigneeTypeUnassigned,
 	}
@@ -610,7 +610,7 @@ func TestReviewerEnrolment_NilReviewerTypeStillResolves(t *testing.T) {
 	svc, taskRepo, projRepo, agentRepo, pmRepo := env.svc, env.tasks, env.projects, env.agents, env.members
 
 	projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: wsID}
-	agentRepo.items[reviewerID] = &domain.Agent{ID: reviewerID, WorkspaceID: wsID, Slug: "garfield"}
+	agentRepo.items[reviewerID] = &domain.Agent{ID: reviewerID, WorkspaceID: wsID, Slug: "gary"}
 	taskRepo.items[taskID] = &domain.Task{
 		ID: taskID, ProjectID: projectID, Title: "t", AssigneeType: domain.AssigneeTypeUnassigned,
 	}
@@ -630,7 +630,7 @@ func TestReviewerEnrolment_ClearAndUnchangedDoNotEnrol(t *testing.T) {
 	svc, taskRepo, projRepo, agentRepo, pmRepo := env.svc, env.tasks, env.projects, env.agents, env.members
 
 	projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: wsID}
-	agentRepo.items[reviewerID] = &domain.Agent{ID: reviewerID, WorkspaceID: wsID, Slug: "garfield"}
+	agentRepo.items[reviewerID] = &domain.Agent{ID: reviewerID, WorkspaceID: wsID, Slug: "gary"}
 	agentType := domain.AssigneeTypeAgent
 	taskRepo.items[taskID] = &domain.Task{
 		ID: taskID, ProjectID: projectID, Title: "t", AssigneeType: domain.AssigneeTypeUnassigned,
@@ -652,7 +652,7 @@ func TestReviewerEnrolment_ClearAndUnchangedDoNotEnrol(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 8. Reviewer set at task creation (task #6bf97281) — the ninth write path.
+// 8. Reviewer set at task creation — the ninth write path.
 //    Same contract as Update's reviewer handling: enrol on set, no-op when
 //    absent.
 // ---------------------------------------------------------------------------
@@ -692,7 +692,7 @@ func TestReviewerEnrolment_MistypedAgentReviewerIsResolvedNotTrustedOnCreate(t *
 	svc, projRepo, agentRepo, pmRepo := env.svc, env.projects, env.agents, env.members
 
 	projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: wsID}
-	agentRepo.items[reviewerID] = &domain.Agent{ID: reviewerID, WorkspaceID: wsID, Slug: "garfield"}
+	agentRepo.items[reviewerID] = &domain.Agent{ID: reviewerID, WorkspaceID: wsID, Slug: "gary"}
 
 	// The caller insists this agent is a user.
 	wrongType := domain.AssigneeTypeUser

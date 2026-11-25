@@ -14,7 +14,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Park-alarm gate (#559270cf).
+// Park-alarm gate.
 //
 // A task parked in backlog under a passive-wait label with no FUTURE due_date has no
 // wake-up path: no agent feed polls backlog, and the promotion sweeper fires on

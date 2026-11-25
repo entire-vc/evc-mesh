@@ -5,7 +5,7 @@
 # several minutes and several steps separate embedder startup from the first
 # step that depends on it, long enough for a crash or an OOM-kill in between
 # to go unnoticed until a scored question fails and the run degrades to
-# INCONCLUSIVE with no named cause (#352a0b11).
+# INCONCLUSIVE with no named cause.
 #
 # Usage: confirm_embedder_alive.sh <healthz-url> <embedder-log-path>
 # Exits 0 and prints a confirmation if the embedder answers; exits 1 with a

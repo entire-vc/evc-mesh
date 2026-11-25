@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Behavioural test for the cache policy of the shipped nginx config:
+# Behavioural test for the cache policy of the shipped nginx config
 # the SPA shell (index.html, served for every extensionless
 # route) and the unhashed files from web/public (sw.js, config.json,
 # instance-theme.js) must carry `Cache-Control: no-cache`, or a browser keeps

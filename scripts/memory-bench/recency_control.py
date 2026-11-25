@@ -211,6 +211,12 @@ def _measure(label: str, *, age_mode: str, decay: bool, top_k: int):
         f"  {label:<22} age_mode={age_mode:<18} apply_recency_decay={str(decay):<5} "
         f"gold_rank={rank} rows={client.rows_returned} served={client.search_mode}"
     )
+    for position, row in enumerate(client.ranked_records, 1):
+        print(
+            f"    rank={position} key={row.get('key')} created_at={row.get('created_at')} "
+            f"score={row.get('score')} recency_score={row.get('recency_score')} "
+            f"dense_score={row.get('dense_score')}"
+        )
     return rank, client
 
 

@@ -9,7 +9,7 @@
 -- second INSERT ... ON CONFLICT DO UPDATE upserts over the first, and the row
 -- that lands is whichever branch ran last. The agent verdict silently
 -- disappears the moment the human verdict is written (live measurement on
--- prod, probe card #d3dbcf37: three rows in, two rows out).
+-- prod, probe an internal ticket: three rows in, two rows out).
 --
 -- This is the same failure the table was built to end, one layer down: an
 -- outcome for one of two addressed parties goes missing with no trace that it

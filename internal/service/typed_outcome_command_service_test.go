@@ -256,21 +256,21 @@ func TestTurnCommandService_WaitForTargets(t *testing.T) {
 // TestDescribeWait_CardReadsAsASentence pins the card-wait comment people read
 // on the board: a #<8hex> card reference and the condition in words, not its slug.
 func TestDescribeWait_CardReadsAsASentence(t *testing.T) {
-	target := uuid.MustParse("00000000-0000-4000-8000-000000000000")
+	target := uuid.MustParse("5eed001a-0000-4000-8000-000000000000")
 	cases := []struct {
 		name      string
 		condition *string
 		criterion *string
 		want      string
 	}{
-		{"no condition", nil, nil, "Waiting on #00000000 to be done."},
-		{"task_done", ptr("task_done"), nil, "Waiting on #00000000 to be done."},
-		{"shipped", ptr("shipped"), nil, "Waiting on #00000000 to ship."},
-		{"deployed", ptr("deployed"), nil, "Waiting on #00000000 to be deployed."},
-		{"accepted", ptr("accepted"), nil, "Waiting on #00000000 to be accepted."},
-		{"artifact_published", ptr("artifact_published"), ptr("X"), "Waiting on #00000000 to publish: X."},
-		{"condition without a phrase", ptr("contract_ready"), nil, "Waiting on #00000000 (contract_ready)."},
-		{"condition newer than the server", ptr("brand_new"), nil, "Waiting on #00000000 (brand_new)."},
+		{"no condition", nil, nil, "Waiting on #5eed001a to be done."},
+		{"task_done", ptr("task_done"), nil, "Waiting on #5eed001a to be done."},
+		{"shipped", ptr("shipped"), nil, "Waiting on #5eed001a to ship."},
+		{"deployed", ptr("deployed"), nil, "Waiting on #5eed001a to be deployed."},
+		{"accepted", ptr("accepted"), nil, "Waiting on #5eed001a to be accepted."},
+		{"artifact_published", ptr("artifact_published"), ptr("X"), "Waiting on #5eed001a to publish: X."},
+		{"condition without a phrase", ptr("contract_ready"), nil, "Waiting on #5eed001a (contract_ready)."},
+		{"condition newer than the server", ptr("brand_new"), nil, "Waiting on #5eed001a (brand_new)."},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

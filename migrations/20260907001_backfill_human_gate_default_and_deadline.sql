@@ -1,6 +1,6 @@
 -- +goose Up
 -- +goose StatementBegin
--- Task 1.4b (#4d61d877): one-shot backfill for gates armed BEFORE this fix landed.
+-- Task 1.4b: one-shot backfill for gates armed BEFORE this fix landed.
 -- ArmHumanGate (internal/service/task_service.go) now auto-fills recommended_default and
 -- (through the same SQL this migration mirrors) gate_deadline for every NEW
 -- marker-sourced arm that names no default — this migration gives the same treatment to
@@ -103,6 +103,6 @@ WHERE t.id = sel.id;
 
 -- +goose Down
 -- no-op: intentionally irreversible — the NULL recommended_default/gate_deadline this
--- migration replaces was itself the bug (task 1.4b, #4d61d877): every one of those rows
+-- migration replaces was itself the bug (task 1.4b): every one of those rows
 -- was a live gate resolvable only by a human finding it by hand. Reverting would
 -- reintroduce that, not fix anything a rollback is supposed to fix.

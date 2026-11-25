@@ -58,7 +58,7 @@ func doExportMetrics(t *testing.T, mockSvc *MockAnalyticsService) *httptest.Resp
 }
 
 // TestAnalyticsHandler_ExportMetrics_RetainedSincePresent covers the branch
-// added for an internal ticket: when the event queue's TTL-floor is known, the
+// added: when the event queue's TTL-floor is known, the
 // CSV must carry a `retained_since` row alongside `total_events` and
 // `period_fully_covered` — the exact condition the audit found silently
 // missing (a closed August report reading the live queue with no coverage

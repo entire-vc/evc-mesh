@@ -3,7 +3,7 @@
 //
 // On a merge request `test:web` is created only when the diff touches one of the
 // paths between the `# BEGIN test-web-scope` / `# END test-web-scope` markers in
-// .gitlab-ci.yml. Everything under web/ is in that list; the risk is a file
+// .gitlab/ci/web.yml. Everything under web/ is in that list; the risk is a file
 // OUTSIDE web/ that the frontend unit suite reads (a JSON contract fixture, a
 // schema), because a merge request touching only that file would get no
 // `test:web` job and a green pipeline without the tests that read it.
@@ -24,6 +24,8 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SELF = "scripts/ci/check_test_web_scope.mjs";
+// The CI file that defines `test:web` (job definitions live in per-area includes).
+const WEB_CI = ".gitlab/ci/web.yml";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const webRoot = join(repoRoot, "web");
 
@@ -35,7 +37,7 @@ const SCAN_EXT = /\.(?:[cm]?[jt]sx?|json)$/;
 const SKIP_DIRS = new Set(["node_modules", "dist", "dist-perf", "coverage"]);
 // Paths every version of the list must keep: the suite itself, the job
 // definition, and this checker.
-const ALWAYS = ["web/**/*", ".gitlab-ci.yml", SELF];
+const ALWAYS = ["web/**/*", ".gitlab-ci.yml", WEB_CI, SELF];
 
 function fail(message) {
   console.error(`[check_test_web_scope] ${message}`);
@@ -69,7 +71,7 @@ export function globToRegExp(glob) {
 /** The globs between the markers, which must sit inside the `test:web` job. */
 export function scopeGlobs(ciText) {
   const job = ciText.match(/\ntest:web:\n([\s\S]*?)(?=\n[^\s#][^\n]*:\n)/);
-  if (!job) fail("job `test:web` not found in .gitlab-ci.yml");
+  if (!job) fail(`job \`test:web\` not found in ${WEB_CI}`);
   const block = job[1].match(/# BEGIN test-web-scope\n([\s\S]*?)\n\s*# END test-web-scope/);
   if (!block) fail("`# BEGIN test-web-scope` / `# END test-web-scope` block not found inside `test:web`");
   const globs = [];
@@ -240,7 +242,7 @@ function selftest() {
 }
 
 function main() {
-  const ciText = readFileSync(join(repoRoot, ".gitlab-ci.yml"), "utf8");
+  const ciText = readFileSync(join(repoRoot, WEB_CI), "utf8");
   const globs = scopeGlobs(ciText);
   const missing = ALWAYS.filter((g) => !globs.includes(g));
   if (missing.length) fail(`the test-web-scope list must keep: ${missing.join(", ")}`);
@@ -279,7 +281,7 @@ function main() {
   if (uncovered.length) {
     fail(
       `${uncovered.length} path(s) read by the web unit suite are not in the test:web rules:changes list: ` +
-        `${uncovered.join(", ")}. Add them between the test-web-scope markers in .gitlab-ci.yml, ` +
+        `${uncovered.join(", ")}. Add them between the test-web-scope markers in ${WEB_CI}, ` +
         "otherwise a merge request touching only them gets no test:web job.",
     );
   }

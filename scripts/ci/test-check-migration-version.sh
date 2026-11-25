@@ -34,7 +34,7 @@ expect_fail "deleting an existing migration"
 git reset -q --hard origin/main && echo x > migrations/20260102001_new.sql && git add . && git commit -qm add
 expect_pass "adding a newer migration"
 # Two branches that each took the next free version and were merged one after the
-# other leave a duplicate on main itself (an internal ticket, 20261025001): the directory check
+# other leave a duplicate on main itself (20261025001): the directory check
 # must go red on that tree even where no base branch is available to compare with.
 git reset -q --hard origin/main && echo x > migrations/20260101003_other.sql && git add . && git commit -qm dup
 expect_fail "duplicate version in the tree"

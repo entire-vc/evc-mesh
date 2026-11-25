@@ -260,17 +260,22 @@ func (in *Installer) update(ctx context.Context, actor *uuid.UUID, id, consentSH
 	}
 	// A release no newer than the Runner its controllers already run is no
 	// update: the bulk pass skips it, an explicit request is refused so the
-	// hidden button cannot be bypassed through the API.
-	_, running, rerr := in.runnerFloor(ctx, row)
+	// hidden button cannot be bypassed through the API. The one exception is
+	// adopting: see runnerAdoptable.
+	reported, running, rerr := in.runnerFloor(ctx, row)
 	if rerr != nil {
 		return nil, rerr
 	}
+	adopt := false
 	if running != "" && !semverNewer(e.Latest.Version, running) {
 		if auto {
 			res.Outcome = repoinstall.OutcomeUpToDate
 			return res, nil
 		}
-		return nil, runnerAhead("updating", e.Latest.Version, running)
+		if !runnerAdoptable(sel, reported, e.Latest.Version) {
+			return nil, runnerAhead("updating", e.Latest.Version, running)
+		}
+		adopt = true
 	}
 	// The Runner is installed separately from the catalog row; moving the row
 	// moves the desired controller version out from under a pinned runtime.
@@ -298,6 +303,8 @@ func (in *Installer) update(ctx context.Context, actor *uuid.UUID, id, consentSH
 	if err != nil {
 		return nil, err
 	}
+	// The journal names the release the row leaves, read before the write.
+	from, fromScope := row.Version, row.CatalogScope
 	upd := &domain.InstalledExtension{
 		ExtensionID: id, Version: e.Latest.Version, Manifest: m.Raw, CommitSHA: e.Latest.CommitSHA,
 		ArtifactSHA256: *e.Latest.ArtifactSHA256, TrustLevel: domain.ExtensionTrustLevel(e.Trust), CatalogScope: nextScope,
@@ -317,10 +324,19 @@ func (in *Installer) update(ctx context.Context, actor *uuid.UUID, id, consentSH
 			}
 		}
 	}
+	outcome := repoinstall.OutcomeUpdated
+	if adopt {
+		outcome = repoinstall.OutcomeAdopted
+	}
 	if in.Journal != nil {
-		details, _ := json.Marshal(map[string]any{"from": row.Version, "to": e.Latest.Version, "commit_sha": e.Latest.CommitSHA,
+		d := map[string]any{"from": from, "to": e.Latest.Version, "commit_sha": e.Latest.CommitSHA,
 			"artifact_sha256": *e.Latest.ArtifactSHA256, "consented_capabilities": res.NewCapabilities, "source": "catalog",
-			"from_catalog_scope": scopeName(row.CatalogScope), "catalog_scope": scopeName(nextScope)})
+			"from_catalog_scope": scopeName(fromScope), "catalog_scope": scopeName(nextScope), "outcome": outcome}
+		if adopt {
+			// What the controllers reported when the row adopted their version.
+			d["reported_versions"] = reported
+		}
+		details, _ := json.Marshal(d)
 		if jerr := in.Journal.AppendJournal(ctx, &domain.InstanceExtensionJournalEntry{ActorID: actor, ExtensionID: id, Action: domain.InstanceJournalUpdated, Details: details}); jerr != nil {
 			log.Printf("[extensions] journal updated %s: %v", id, jerr)
 		}
@@ -328,8 +344,23 @@ func (in *Installer) update(ctx context.Context, actor *uuid.UUID, id, consentSH
 	if in.OnChange != nil {
 		in.OnChange(ctx)
 	}
-	res.Outcome = repoinstall.OutcomeUpdated
+	res.Outcome = outcome
 	return res, nil
+}
+
+// runnerAdoptable is whether an explicit update to target, which is no newer
+// than the Runner the controllers run, only records that version on the row.
+// The Runner is installed on its host apart from the catalog, so its row can
+// lag behind the live version and no newer release exists to move it to. An
+// admin's pinned default-catalogue release (already checked to be in the
+// verified catalog and newer than the row) is adopted only when every
+// controller reports exactly that version: the row then names what already
+// runs, so the desired controller version stays what the controllers run and
+// the runtime is not moved. Anything else, including mixed reports, is still
+// refused by the floor.
+func runnerAdoptable(sel updateSelection, reported []string, target string) bool {
+	return sel.version != "" && sel.scope == ScopeDefault && sel.version == target &&
+		len(reported) == 1 && reported[0] == target
 }
 
 // UpdateAll updates every catalog install that has an update needing no consent.

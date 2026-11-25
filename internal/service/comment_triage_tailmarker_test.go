@@ -14,7 +14,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Task #a84b443c — a Blocking marker at the TAIL of a long report must arm the gate
+// A Blocking marker at the TAIL of a long report must arm the gate
 // ---------------------------------------------------------------------------
 //
 // CLAUDE-communication.md §5a prescribes exactly one ask shape: the analysis, then
@@ -54,13 +54,13 @@ func TestEnforceBlockingTriage_TailMarkerAfterReport_ArmsGate(t *testing.T) {
 	// Two of these bodies are the live losses, quoted from prod, not paraphrased.
 	//
 	// DISCRIMINATING POWER — measured by reverting the fix and re-running (AC #2).
-	// 3 of the 5 fail without the fix: #29a0a879, the table body, and the >4000-byte
+	// 3 of the 5 fail without the fix: an internal ticket, the table body, and the >4000-byte
 	// body. The other two are deliberately NOT discriminators and must not be read as
 	// such:
 	//
 	//   - "marker first line" is the POSITIVE CONTROL — it armed before the fix too.
 	//     It is here to prove the fix did not break the shape that already worked.
-	//   - "#8286e487" (Bill, 2026-08-10T05:44:30Z) is the FIRST live loss, but it no
+	//   - "an internal ticket" (Bill, 2026-08-10T05:44:30Z) is the FIRST live loss, but it no
 	//     longer fails against current main: its keyword hit is "закрыт" INSIDE the
 	//     word "незакрытые", and #548's negation check reads the word's own "не"
 	//     prefix as a negation token, so the guard misses it by accident. Measured
@@ -68,7 +68,7 @@ func TestEnforceBlockingTriage_TailMarkerAfterReport_ArmsGate(t *testing.T) {
 	//     before #548 landed) it does fail. Retained as the documented first loss and
 	//     as a guard against a future change to the negation logic reviving it.
 	//
-	// #29a0a879 (Deadalus, 2026-08-13T23:52:52Z) is the one that still bit after #548 —
+	// (Deadalus, 2026-08-13T23:52:52Z) is the one that still bit after #548 —
 	// "сделан" ⊂ "**Уже сделано**", unnegated, plainly inside the window. A real
 	// MIT-violation escalation from an upstream copyright holder, lost for 8 hours.
 	cases := []struct {
@@ -80,17 +80,17 @@ func TestEnforceBlockingTriage_TailMarkerAfterReport_ArmsGate(t *testing.T) {
 			body: tailMarker + "\n\nПодробный замер с контролями — в комментарии выше.",
 		},
 		{
-			name: "live loss #8286e487 — tail marker after --- rule",
+			name: "an internal ticket — tail marker after --- rule",
 			body: "## Проверил перед тем как нести Pavel'ю\n\n" +
 				"### Немедленное следствие\n\n" +
-				"`#c085b1fe` (WW33 Reddit — 2 коммента в незакрытые треды) и цикл warmup-сессий " +
+				"`#5eed000e` (WW33 Reddit — 2 коммента в незакрытые треды) и цикл warmup-сессий " +
 				"сейчас пишут в невидимый канал. Написал туда отдельно с воспроизводимой пробой, " +
 				"чтобы слот не сгорел до решения.\n\n---\n\n" + tailMarker,
 		},
 		{
-			name: "live loss #29a0a879 — tail marker after a completion line",
+			name: "an internal ticket — tail marker after a completion line",
 			body: "## Расследование — issue легитимен, это не недоразумение\n\n" +
-				"**Уже сделано** (авто-intake, до меня): ACK на issue от daedalus-mb — только " +
+				"**Уже сделано** (авто-intake, до меня): ACK на issue от dana-mb — только " +
 				"«посмотрели, вернёмся с решением», никаких обещаний.\n" +
 				"**Не сделано** и не буду делать без ответа: не трогал LICENSE/код.\n\n---\n\n" + tailMarker,
 		},
@@ -148,7 +148,7 @@ func TestEnforceBlockingTriage_TailMarkerNegativeControls(t *testing.T) {
 		},
 		{
 			name: "Blocking @<agent-slug> — resolves to no user",
-			body: "Разбор готов.\n\n---\n\n❓ **Blocking @linus**: нужен твой вердикт по миграции.",
+			body: "Разбор готов.\n\n---\n\n❓ **Blocking @liam**: нужен твой вердикт по миграции.",
 		},
 	}
 

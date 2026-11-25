@@ -26,6 +26,8 @@ type DependencyHandler struct {
 	proposals BindingProposalStore
 	resolver  service.DependencyResolver
 	vcsLinks  func(ctx context.Context, taskID uuid.UUID) ([]domain.VCSLink, error)
+	// edgeScope backs the blocker-side evidence route; nil answers 404.
+	edgeScope DependentEdgeScopeReader
 }
 
 // NewDependencyHandler creates a new DependencyHandler with the given services.

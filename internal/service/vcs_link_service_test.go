@@ -1,10 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -127,6 +129,13 @@ func (r *fakeVCSLinkRepo) Upsert(_ context.Context, l *domain.VCSLink) (bool, er
 		existing.Title = l.Title
 		existing.Metadata = mergeFakeMetadata(existing.Metadata, l.Metadata)
 		existing.URL = l.URL
+		switch {
+		case l.Status != domain.VCSLinkStatusMerged:
+			existing.MergedAt = nil
+		case existing.MergedAt == nil:
+			existing.MergedAt = l.MergedAt
+		}
+		l.MergedAt = existing.MergedAt
 		// Mirrors real Postgres: id/created_at are never touched by the
 		// update branch — reflect the row's actual values back into l, same
 		// contract as VCSLinkRepo.Upsert.
@@ -155,6 +164,55 @@ func (r *fakeVCSLinkRepo) SetPipelineStatus(_ context.Context, id uuid.UUID, pip
 	meta[domain.VCSLinkMetaPipelineSHA] = strings.TrimSpace(sha)
 	l.Metadata, _ = json.Marshal(meta)
 	return true, nil
+}
+
+func (r *fakeVCSLinkRepo) ConfirmGitLabMR(_ context.Context, taskID, id uuid.UUID, status domain.VCSLinkStatus, headSHA string, mergedAt *time.Time) (*domain.VCSLink, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	l, ok := r.links[id]
+	if !ok || l.TaskID != taskID || l.Provider != domain.VCSProviderGitLab || l.LinkType != domain.VCSLinkTypePR {
+		return nil, nil
+	}
+	patch, _ := json.Marshal(map[string]string{domain.VCSLinkMetaHeadSHA: headSHA})
+	l.Metadata = mergeFakeMetadata(l.Metadata, patch)
+	l.Status = status
+	now := time.Now().UTC()
+	l.StatusSyncedAt = &now
+	if status != domain.VCSLinkStatusMerged {
+		l.MergedAt = nil
+	} else if l.MergedAt == nil {
+		l.MergedAt = mergedAt
+	}
+	return l, nil
+}
+
+func (r *fakeVCSLinkRepo) SetMergedAt(_ context.Context, id uuid.UUID, at time.Time) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	l, ok := r.links[id]
+	if !ok || at.IsZero() || l.MergedAt != nil || l.Status != domain.VCSLinkStatusMerged {
+		return false, nil
+	}
+	u := at.UTC()
+	l.MergedAt = &u
+	return true, nil
+}
+
+func (r *fakeVCSLinkRepo) ListMergedPRLinksWithoutMergedAt(_ context.Context, afterID uuid.UUID, limit int) ([]domain.VCSLink, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []domain.VCSLink
+	for _, l := range r.links {
+		if l.LinkType == domain.VCSLinkTypePR && l.Status == domain.VCSLinkStatusMerged && l.MergedAt == nil &&
+			bytes.Compare(l.ID[:], afterID[:]) > 0 {
+			out = append(out, *l)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].ID[:], out[j].ID[:]) < 0 })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 func (r *fakeVCSLinkRepo) ListOpenTasksWithMergedPR(context.Context, int, int) ([]repository.MergedPROpenTask, error) {
@@ -1313,7 +1371,7 @@ func TestVCSLinkService_Create_ExplicitStatusUpsertsOnExistingLink(t *testing.T)
 // add_vcs_link call is a distinct case from "I'm correcting the status"
 // (that case is Test_ExplicitStatusUpsertsOnExistingLink above).
 //
-// an internal ticket defect 3: this used to succeed silently and insert a SECOND row
+// 3: this used to succeed silently and insert a SECOND row
 // (repo.Create had no notion of "this url already exists under a different
 // provider"). The correct behavior is a loud refusal, and the original row
 // must be left exactly as it was either way.
@@ -1500,7 +1558,7 @@ func (r *fakeTaskRepo) ExtendScopedCheckout(context.Context, uuid.UUID, domain.C
 	return nil, nil
 }
 
-// an internal ticket retry-safety: a delivery whose link upsert succeeded but whose
+// Retry-safety: a delivery whose link upsert succeeded but whose
 // transition failed transiently now gets a 5xx and is redelivered. The
 // redelivery must complete the transition exactly once and post exactly one
 // comment — the failed attempt returns BEFORE any comment is written (every

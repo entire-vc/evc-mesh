@@ -23,7 +23,7 @@ import (
 
 // fakeResolverIntegrationRepo is a minimal repository.IntegrationRepository
 // stub for exercising VCSLinkHandler's dynamic-resolver path
-// (WithVCSIntegrationResolver, #33a4bb57) end-to-end through a real
+// (WithVCSIntegrationResolver) end-to-end through a real
 // service.VCSIntegrationResolver — not a mocked resolver, since
 // VCSIntegrationResolver is a concrete type, not an interface: this mirrors
 // production wiring (main.go constructs the exact same resolver over the
@@ -258,7 +258,7 @@ func TestGitLabWebhook_DynamicResolver_ToggleSequence(t *testing.T) {
 }
 
 // AC6: the existing GitHub path WITHOUT any integration row (the legacy
-// static-secret construction, main.go's pre-#33a4bb57 wiring) must behave
+// static-secret construction, main.go's earlier wiring) must behave
 // byte-identically — this is covered by the pre-existing test suite
 // (TestGitHubWebhook_* / TestGitLabWebhook_NoSecretConfigured_*, unmodified
 // by this change and still green). This test adds the ONE case those don't
@@ -277,11 +277,11 @@ func TestGitHubWebhook_DynamicResolver_NoRowAtAll_FallsToEnvExactlyLikeBefore(t 
 	req := newPullRequestRequest(t, body, "delivery-noRow", envSecret)
 	rec := httptest.NewRecorder()
 	require.NoError(t, h.GitHubWebhook(echo.New().NewContext(req, rec)))
-	assert.Equal(t, http.StatusOK, rec.Code, "no workspace row at all must fall through to env, exactly like the pre-#33a4bb57 static wiring")
+	assert.Equal(t, http.StatusOK, rec.Code, "no workspace row at all must fall through to env, exactly like the earlier static wiring")
 }
 
 // TestGitHubWebhook_DynamicResolver_PropagatesMatchedWorkspaceID and its
-// GitLab counterpart below are #839b9897's handler-level proof: the secret
+// GitLab counterpart below are an internal ticket's handler-level proof: the secret
 // that validates an inbound delivery must have its WorkspaceID threaded all
 // the way into the event handed to the service layer, not just used to
 // decide "accept or refuse". Before this fix the handler discarded which
@@ -345,7 +345,7 @@ func TestGitLabWebhook_DynamicResolver_PropagatesMatchedWorkspaceID(t *testing.T
 // TestGitHubWebhook_DynamicResolver_PropagatesMatchedWorkspaceID — the push
 // handler calls the exported ResolveTaskRef directly rather than going
 // through GitHubWebhookEvent, so it needs its own proof that the matched
-// secret's workspace reaches the resolver call (#839b9897).
+// secret's workspace reaches the resolver call.
 func TestGitHubWebhook_DynamicResolver_Push_PropagatesMatchedWorkspaceID(t *testing.T) {
 	ws := uuid.New()
 	const secret = "workspace-secret"

@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -82,6 +83,12 @@ func (h *TaskContextHandler) GetTaskContext(c echo.Context) error {
 
 	// Cache lookup — skip on miss or unavailability.
 	if cached, ok := h.cache.Get(c.Request().Context(), taskID); ok {
+		var counted struct {
+			Comments []json.RawMessage `json:"comments"`
+		}
+		if json.Unmarshal(cached, &counted) == nil {
+			mw.SetResponseCommentCount(c, len(counted.Comments))
+		}
 		c.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 		return c.JSONBlob(http.StatusOK, cached)
 	}
@@ -104,6 +111,7 @@ func (h *TaskContextHandler) GetTaskContext(c echo.Context) error {
 	commentPg.Normalize()
 	if commentPage, err := h.commentService.ListByTask(c.Request().Context(), taskID, commentFilter, commentPg); err == nil {
 		resp["comments"] = commentPage.Items
+		mw.SetResponseCommentCount(c, len(commentPage.Items))
 	} else {
 		resp["comments"] = []any{}
 	}
@@ -114,7 +122,7 @@ func (h *TaskContextHandler) GetTaskContext(c echo.Context) error {
 	if artifactPage, err := h.artifactService.ListByTask(c.Request().Context(), taskID, artifactPg); err == nil {
 		// Redaction (tr_agent_key etc.) is on domain.Artifact.MarshalJSON now —
 		// this path used to need its own call to a per-handler guard and was
-		// the one that got missed for months (#58a0e7aa, GET /tasks/:id/context,
+		// the one that got missed for months (GET /tasks/:id/context,
 		// the endpoint behind get_task_context, cached in Redis for 60s besides).
 		// Nothing to do here anymore; that's the point.
 		resp["artifacts"] = artifactPage.Items

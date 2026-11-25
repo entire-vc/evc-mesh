@@ -98,8 +98,14 @@ describe("ExternalWidgetFrame (dashboard.widget)", () => {
       method: "POST",
       body: { workspace_id: "ws-1", slot: "dashboard.widget", dashboard_id: "d-1", instance_id: "i-1", widget_id: "ref", project_id: "p-1" },
     });
-    expect(iframe.getAttribute("sandbox")).toBe("allow-scripts allow-forms allow-popups allow-same-origin");
-    expect(iframe.getAttribute("sandbox")).not.toContain("top-navigation");
+    const sandbox = (iframe.getAttribute("sandbox") ?? "").split(/\s+/).filter(Boolean).sort();
+    expect(sandbox).toEqual(
+      ["allow-forms", "allow-popups", "allow-popups-to-escape-sandbox", "allow-same-origin", "allow-scripts"],
+    );
+    expect(sandbox.some((t) => t.includes("top-navigation"))).toBe(false);
+    expect(sandbox).not.toContain("allow-modals");
+    expect(iframe.getAttribute("allow")).toBe("clipboard-write");
+    expect(iframe.getAttribute("allow")).not.toContain("clipboard-read");
     expect(iframe.getAttribute("src")).toBe(`${ORIGIN}/mesh/ui/widget?token=jwt.value.here`);
   });
 

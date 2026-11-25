@@ -22,7 +22,7 @@ const (
 // copyApprovalReasonRegex flags an ask that is ABOUT visible product copy — the shape
 // §1r.A splits into tier A (Pavel decides) and tier B (the lead ships it and Pavel sees
 // it after the fact). When an ask's reason matches, CopyTier is no longer optional:
-// Decide cannot classify a copy ask correctly without it. Motivating case: #6a0c7ae3,
+// Decide cannot classify a copy ask correctly without it. Motivating case: an internal ticket,
 // a real gate that sat open for five days on exactly a tier-B ask ("апрув видимого
 // текста: подписи пунктов меню и диалога") before a human closed it by hand as a false
 // gate — this predicate is what makes that refusal automatic instead.
@@ -51,7 +51,7 @@ func RequiresCopyTier(reason string) bool {
 }
 
 // GateArmPredicate is the four questions an agent must answer before asking a human
-// (task #5d3dc714, audit §3.2b). The audit measured that 40-45% of asks to Pavel were
+// (audit §3.2b). The audit measured that 40-45% of asks to Pavel were
 // cases the agent could have decided from a rule already written down: an access that
 // was already in keys.env, its own 403 read as a human's decision, an approval Pavel had
 // already declined, or waiting on someone else's card instead of adding a dependency.
@@ -101,7 +101,7 @@ const (
 	// after the fact in the weekly digest and corrects it with a follow-up card if
 	// needed. Kept as its own outcome, never merged into refused_self_serve — the two
 	// populations answer different questions and merging them would make the
-	// gate_predicate_log ratio measurement (#7084b912) unreadable.
+	// gate_predicate_log ratio measurement unreadable.
 	GatePredicateRefusedCopyTierB GatePredicateOutcome = "refused_copy_tier_b"
 )
 
@@ -118,7 +118,7 @@ const (
 // that states "the action is reversible, but I do not have the credential" — and an
 // agent with no credential cannot act at all, so the refusal would leave it with no exit:
 // it may not ask, and it cannot do. That is the silently-dropped-ask failure this whole
-// area keeps producing (#58a6f4ff, #f421ad57), manufactured by the very guard meant to
+// area keeps producing, manufactured by the very guard meant to
 // reduce asks.
 //
 // So CredentialExists is included in the conjunction: a missing credential is a genuine

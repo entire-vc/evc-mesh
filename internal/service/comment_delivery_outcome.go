@@ -52,7 +52,7 @@ type deliveryFacts struct {
 
 	// IsAssignee is true when the task is assigned to the recipient agent,
 	// whatever its status. Separates "not theirs" from "theirs but parked" —
-	// two misses with different fixes (#ed60c795). InTaskQueue implies it.
+	// two misses with different fixes. InTaskQueue implies it.
 	IsAssignee bool
 
 	// StatusCategory is the task's status category ("" when unreadable).
@@ -161,7 +161,7 @@ func decideDelivery(f deliveryFacts) (outcome, reason, channel, presence string)
 
 	// Alive and not reached. Which of four situations it is decides which
 	// single action would change the outcome, so each gets its own reason
-	// (#ed60c795: one merged no_queue_path with an "assign it" hint was shown
+	// (one merged no_queue_path with an "assign it" hint was shown
 	// on a card that was already the recipient's own, parked in backlog).
 	// Ordered by what the author must fix FIRST: ownership, then a freeze no
 	// status move can lift, then the status itself.

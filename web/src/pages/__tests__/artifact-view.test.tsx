@@ -76,7 +76,7 @@ afterEach(() => {
 
 describe("ArtifactViewPage — text kinds", () => {
   /**
-   * AC2 of an internal ticket: `json отформатирован`. The assertion is on STRUCTURE:
+   * AC2: `json отформатирован`. The assertion is on STRUCTURE:
    * the stored file is one line, the page must show it indented across
    * lines. A raw dump of the body would contain every character this test
    * could match on and still be exactly the defect.
@@ -108,7 +108,7 @@ describe("ArtifactViewPage — text kinds", () => {
     expect(container.querySelector("pre")?.textContent).toContain('{"broken": ');
   });
 
-  /** AC2 of an internal ticket: `csv таблицей`, including quoted commas. */
+  /** AC2: `csv таблицей`, including quoted commas. */
   it("renders CSV as a table and honours quoted commas", async () => {
     stubMeta(artifact({ name: "costs.csv", mime_type: "text/csv" }));
     stubStorage('item,cost\n"laptop, used",100\nmouse,5');

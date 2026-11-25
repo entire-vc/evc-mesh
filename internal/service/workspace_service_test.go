@@ -98,7 +98,7 @@ func TestWorkspaceService_Create(t *testing.T) {
 			errCode: http.StatusBadRequest,
 		},
 		{
-			// Regression test for #85fd1ef2: a zero OwnerID used to be
+			// Regression test: a zero OwnerID used to be
 			// persisted as-is, producing a workspace nothing could
 			// subsequently read, write, or delete (the auto-add-membership
 			// step below is gated on the same OwnerID and silently no-ops).

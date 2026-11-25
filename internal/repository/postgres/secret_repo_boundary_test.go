@@ -16,7 +16,7 @@ import (
 // growing this list requires a deliberate edit, not that the list itself is
 // clever.
 //
-// an internal ticket (S6, epic an internal ticket): the parent task's explicit warning is
+// (S6): the parent task's explicit warning is
 // that a test proving only "wrote it, read it back through the same layer"
 // proves nothing about the OTHER surfaces — get_task/recall payloads, the
 // activity feed, any SSE emission. This test takes the complementary

@@ -126,12 +126,26 @@ func wireHandlers(deps *apiDeps) {
 	commentHandler := handler.NewCommentHandler(commentService, taskService)
 	humanGateDecisionHandler := handler.NewHumanGateDecisionHandler(commentService, taskService)
 	artifactHandler := handler.NewArtifactHandler(deps.artifactService, taskService).WithMaxFileBytes(cfg.ArtifactMaxBytes)
+	// A nil *S3Client must not become a non-nil interface: the handler answers
+	// 503 on a nil store.
+	var uploadStore handler.UploadStore
+	if s3Client != nil {
+		uploadStore = s3Client
+	}
+	uploadSessionRepo := postgres.NewUploadSessionRepo(db)
+	uploadSessionHandler := handler.NewUploadSessionHandler(handler.UploadSessionDeps{
+		Sessions: uploadSessionRepo, Store: uploadStore,
+		Documents: deps.documentRepo, Attachments: deps.documentAttachmentRepo,
+		AttachmentSvc: deps.documentAttachmentService, ArtifactSvc: deps.artifactService,
+		TaskBytes: deps.artifactRepo, TaskSvc: taskService, Members: workspaceMemberRepo,
+		MaxArtifactBytes: cfg.ArtifactMaxBytes, MaxTaskBytes: cfg.ArtifactTaskMaxBytes,
+	})
 	documentHandler := handler.NewDocumentHandler(documentService)
 	documentExportHandler := handler.NewDocumentExportHandler(documentExportService)
 	documentAttachmentHandler := handler.NewDocumentAttachmentHandler(documentAttachmentService)
 	documentCommentHandler := handler.NewDocumentCommentHandler(documentCommentService)
 	documentWatchHandler := handler.NewDocumentWatchHandler(documentWatchService)
-	depHandler := handler.NewDependencyHandler(deps.depService, taskService).WithGraphReader(taskDependencyRepo).WithVCSLinks(vcsLinkRepo.ListByTask).WithBindingProposals(postgres.NewBindingProposalRepo(db)).WithConditionResolver(autoTransitionSvc)
+	depHandler := handler.NewDependencyHandler(deps.depService, taskService).WithGraphReader(taskDependencyRepo).WithVCSLinks(vcsLinkRepo.ListByTask).WithBindingProposals(postgres.NewBindingProposalRepo(db)).WithConditionResolver(autoTransitionSvc).WithDependentEdgeScope(taskDependencyRepo)
 	agentHandler := handler.NewAgentHandlerWithEvents(agentService, taskService, taskStatusService, agentNotifyRedis, agentEventsRepo, sessionRepo)
 	agentControllerRepo := postgres.NewAgentControllerRepo(db)
 	agentHandler.SetControllerRepo(agentControllerRepo)
@@ -234,6 +248,7 @@ func wireHandlers(deps *apiDeps) {
 	chatRunnerEventsHandler := handler.NewChatRunnerEventsHandler(chatTurnEventsService)
 	chatTurnStartHandler := handler.NewChatTurnStartHandler(postgres.NewChatRunnerRepo(db), chatSessionService)
 	analyticsHandler := handler.NewAnalyticsHandler(analyticsService)
+	memoryAnalyticsHandler := handler.NewMemoryAnalyticsHandler(service.NewMemoryAnalyticsService(db))
 	projectUpdateHandler := handler.NewProjectUpdateHandler(projectUpdateService)
 	initiativeHandler := handler.NewInitiativeHandler(initiativeService)
 	triageHandler := handler.NewTriageHandler(triageService)
@@ -284,6 +299,8 @@ func wireHandlers(deps *apiDeps) {
 	deps.documentHandler = documentHandler
 	deps.documentExportHandler = documentExportHandler
 	deps.documentAttachmentHandler = documentAttachmentHandler
+	deps.uploadSessionHandler = uploadSessionHandler
+	deps.uploadSessionRepo = uploadSessionRepo
 	deps.documentCommentHandler = documentCommentHandler
 	deps.documentWatchHandler = documentWatchHandler
 	deps.depHandler = depHandler
@@ -321,6 +338,7 @@ func wireHandlers(deps *apiDeps) {
 	deps.chatRunnerEventsHandler = chatRunnerEventsHandler
 	deps.chatTurnStartHandler = chatTurnStartHandler
 	deps.analyticsHandler = analyticsHandler
+	deps.memoryAnalyticsHandler = memoryAnalyticsHandler
 	deps.projectUpdateHandler = projectUpdateHandler
 	deps.initiativeHandler = initiativeHandler
 	deps.triageHandler = triageHandler

@@ -221,6 +221,32 @@ func (s *S3Client) StatObject(ctx context.Context, key string) (int64, error) {
 	return st.Size, nil
 }
 
+// StatObjectInfo reports a stored object's size and ETag. A missing object is
+// ErrNotFound.
+func (s *S3Client) StatObjectInfo(ctx context.Context, key string) (ObjectInfo, error) {
+	st, err := s.client.StatObject(ctx, s.bucket, key, minio.StatObjectOptions{})
+	if err != nil {
+		return ObjectInfo{}, classify(err)
+	}
+	return ObjectInfo{Size: st.Size, ContentType: st.ContentType, ETag: st.ETag, LastModified: st.LastModified}, nil
+}
+
+// DownloadIfMatch opens an object for reading only while its ETag is still
+// etag. An object replaced since the ETag was read fails the read (the
+// storage answers 412 Precondition Failed), so two reads pinned to one ETag
+// see the same bytes. The caller must close the returned ReadCloser.
+func (s *S3Client) DownloadIfMatch(ctx context.Context, key, etag string) (io.ReadCloser, error) {
+	opts := minio.GetObjectOptions{}
+	if err := opts.SetMatchETag(etag); err != nil {
+		return nil, err
+	}
+	obj, err := s.client.GetObject(ctx, s.bucket, key, opts)
+	if err != nil {
+		return nil, classify(err)
+	}
+	return obj, nil
+}
+
 // addCharset appends "; charset=utf-8" to text/* and application/json types
 // when they don't already carry a charset parameter.
 func addCharset(ct string) string {

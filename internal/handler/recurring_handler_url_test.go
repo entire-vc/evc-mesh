@@ -114,7 +114,7 @@ func TestRecurringHandler_GetByID_URL(t *testing.T) {
 }
 
 // TestRecurringHandler_GetByID_URLRespectsForwardedHeaders pins the same rule
-// computeTaskURL established (#fe507dc9): behind Caddy the URL must carry the
+// computeTaskURL established: behind Caddy the URL must carry the
 // public scheme/host from X-Forwarded-Proto/X-Forwarded-Host, never the
 // internal one the request actually arrived on.
 func TestRecurringHandler_GetByID_URLRespectsForwardedHeaders(t *testing.T) {
@@ -168,7 +168,7 @@ func TestRecurringHandler_List_URL(t *testing.T) {
 	require.Len(t, page.Items, 2)
 	// Every item of a list response carries its own deep-link — a field the
 	// handler computes on some paths only reads as absent on the others (the
-	// #fc032545 lesson on tasks).
+	// Lesson on tasks).
 	for _, item := range page.Items {
 		assert.Equal(t, expectedScheduleURL("http://example.com", "acme", "growth", item.ID), item.URL)
 	}
@@ -220,7 +220,7 @@ func TestRecurringHandler_Update_URL(t *testing.T) {
 	var result domain.RecurringSchedule
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
 	// Update answers with the deep-link too, not just Get/List/Create — a
-	// field some paths compute and others skip reads as absent (#fc032545).
+	// field some paths compute and others skip reads as absent.
 	assert.Equal(t, expectedScheduleURL("http://example.com", "acme", "growth", schedID), result.URL)
 }
 

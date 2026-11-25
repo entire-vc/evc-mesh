@@ -23,13 +23,13 @@ func agentWithHeartbeat(age time.Duration) *domain.Agent {
 // neither, which is only marginally better than today's silence.
 func TestDecideDelivery_AsleepAndNotInQueueAreDifferentReasons(t *testing.T) {
 	asleep := deliveryFacts{
-		Slug:        "gandalf",
+		Slug:        "gwen",
 		Agent:       agentWithHeartbeat(3 * time.Hour),
 		InTaskQueue: false,
 		Presence:    domain.ComputedStatusOffline,
 	}
 	notTheirCard := deliveryFacts{
-		Slug:        "gandalf",
+		Slug:        "gwen",
 		Agent:       agentWithHeartbeat(30 * time.Second),
 		InTaskQueue: false,
 		Presence:    domain.ComputedStatusOnline,
@@ -81,7 +81,7 @@ func TestDecideDelivery_BothSkipReasonsAreReachable(t *testing.T) {
 // only inverted.
 func TestDecideDelivery_AsleepButCardIsTheirsIsDelivered(t *testing.T) {
 	out, reason, channel, presence := decideDelivery(deliveryFacts{
-		Slug:        "linus",
+		Slug:        "liam",
 		Agent:       agentWithHeartbeat(8 * time.Hour),
 		InTaskQueue: true,
 		Presence:    domain.ComputedStatusOffline,
@@ -143,7 +143,7 @@ func TestDecideDelivery_OpenStreamDoesNotMaskAQueueDelivery(t *testing.T) {
 // publishes, the name renders highlighted, and the sender believes the handoff
 // happened. This is the row that ends that.
 func TestDecideDelivery_UnknownHandleIsRecordedNotDropped(t *testing.T) {
-	out, reason, channel, _ := decideDelivery(deliveryFacts{Slug: "daedalus"})
+	out, reason, channel, _ := decideDelivery(deliveryFacts{Slug: "dana"})
 	assert.Equal(t, domain.DeliverySkipped, out)
 	assert.Equal(t, domain.ReasonRecipientUnknown, reason)
 	assert.Equal(t, domain.ChannelNone, channel)
@@ -151,7 +151,7 @@ func TestDecideDelivery_UnknownHandleIsRecordedNotDropped(t *testing.T) {
 
 func TestDecideDelivery_SelfMentionIsSkippedNotFailed(t *testing.T) {
 	out, reason, _, _ := decideDelivery(deliveryFacts{
-		Slug:        "garfield",
+		Slug:        "gary",
 		Agent:       agentWithHeartbeat(time.Second),
 		SelfMention: true,
 		InTaskQueue: true,
@@ -233,7 +233,7 @@ func TestNewOutcomeRow_CarriesRecipientIdentityOrHonestlyNothing(t *testing.T) {
 
 	ag := agentWithHeartbeat(time.Second)
 	agentRow := newOutcomeRow(commentID, deliveryFacts{
-		Slug: "linus", Agent: ag, InTaskQueue: true, Presence: domain.ComputedStatusOnline,
+		Slug: "liam", Agent: ag, InTaskQueue: true, Presence: domain.ComputedStatusOnline,
 	}, at)
 	require.NotNil(t, agentRow.RecipientID)
 	assert.Equal(t, ag.ID, *agentRow.RecipientID)

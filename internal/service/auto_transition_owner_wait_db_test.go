@@ -15,7 +15,11 @@ import (
 // A parent whose owner waits on its subtask through wait_for on=card (a blocks
 // edge owned by the typed wait) is not finished when that subtask closes: the
 // released wait must wake the owner instead of all_subtasks_done handing the
-// unfinished parent to review.
+// unfinished parent to review (seen live).
+//
+// Any other wait of the owner still in force holds the parent as well, whatever
+// its target or kind (a live parent waited on=card for a card that was not its
+// subtask, and was handed to review with that wait cancelled).
 func TestAutoTransitionAllSubtasksDone_OwnerWaitOnSubtask(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -26,13 +30,19 @@ func TestAutoTransitionAllSubtasksDone_OwnerWaitOnSubtask(t *testing.T) {
 		waitResolved bool
 		// edgeOnOutsider: the owned edge points at a card that is not a subtask.
 		edgeOnOutsider bool
-		wantHold       bool
+		// mrWait: an extra wait on=mr without an edge, declared by the parent's
+		// owner ("owner") or by an agent the card was taken from ("former").
+		mrWait   string
+		wantHold bool
 	}{
 		{name: "owner_wait_on_subtask", edge: "owned", wantHold: true},
 		{name: "owner_wait_resolved_edge_kept", edge: "owned", waitResolved: true, wantHold: true},
 		{name: "no_edge_moves_to_review", edge: "none"},
 		{name: "manual_edge_without_owner_moves", edge: "manual"},
-		{name: "owner_wait_on_non_subtask_moves", edge: "owned", edgeOnOutsider: true},
+		{name: "owner_wait_on_non_subtask_holds", edge: "owned", edgeOnOutsider: true, wantHold: true},
+		{name: "owner_mr_wait_holds", edge: "none", mrWait: "owner", wantHold: true},
+		{name: "resolved_wait_on_non_subtask_moves", edge: "owned", edgeOnOutsider: true, waitResolved: true},
+		{name: "former_owner_wait_moves", edge: "none", mrWait: "former"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newRecurringActorTypeFixture(t)
@@ -82,7 +92,7 @@ func TestAutoTransitionAllSubtasksDone_OwnerWaitOnSubtask(t *testing.T) {
 				waitID, depID := uuid.New(), uuid.New()
 				_, err = f.db.Exec(`INSERT INTO task_waits(id,task_id,agent_id,kind,target_task_id,target_condition,server_observed) VALUES($1,$2,$3,'card',$4,'task_done',true)`, waitID, parent.ID, owner, blocker)
 				require.NoError(t, err)
-				_, err = f.db.Exec(`INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type,condition,owner_wait_id) VALUES($1,$2,$3,'blocks','task_done',$4)`, depID, parent.ID, blocker, waitID)
+				_, err = f.db.Exec(`INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type,condition,owner_wait_id,wait_agent_id) VALUES($1,$2,$3,'blocks','task_done',$4,$5)`, depID, parent.ID, blocker, waitID, owner)
 				require.NoError(t, err)
 				if tc.waitResolved {
 					_, err = f.db.Exec(`UPDATE task_waits SET resolved_at=now(), resolution='met' WHERE id=$1`, waitID)
@@ -91,6 +101,27 @@ func TestAutoTransitionAllSubtasksDone_OwnerWaitOnSubtask(t *testing.T) {
 			case "manual":
 				require.NoError(t, deps.Create(ctx, &domain.TaskDependency{ID: uuid.New(), TaskID: parent.ID, DependsOnTaskID: blocker, DependencyType: domain.DependencyTypeBlocks}))
 			}
+			if tc.mrWait != "" {
+				waiter := owner
+				if tc.mrWait == "former" {
+					waiter = uuid.New()
+					_, err = f.db.Exec(`INSERT INTO agents(id,workspace_id,name,slug,api_key_hash,api_key_prefix) VALUES($1,$2,'former owner',$3,'fixture-hash','test')`, waiter, f.workspaceID, waiter.String())
+					require.NoError(t, err)
+				}
+				_, err = f.db.Exec(`INSERT INTO task_waits(id,task_id,agent_id,kind,provider,project_path,mr_iid,until_state) VALUES($1,$2,$3,'mr','gitlab','entire-vc/evc-mesh',1,'merged')`, uuid.New(), parent.ID, waiter)
+				require.NoError(t, err)
+			}
+			var activeBefore int
+			require.NoError(t, f.db.Get(&activeBefore, `SELECT count(*) FROM task_waits WHERE task_id=$1 AND resolved_at IS NULL`, parent.ID))
+			// The fixture waits are in force exactly when the case says so.
+			wantActive := 0
+			if tc.edge == "owned" && !tc.waitResolved {
+				wantActive++
+			}
+			if tc.mrWait != "" {
+				wantActive++
+			}
+			require.Equal(t, wantActive, activeBefore, "fixture active waits")
 			if tc.edge != "none" {
 				// The fixture edge is what the hold reads: owned exactly when expected.
 				edges, listErr := deps.ListByTask(ctx, parent.ID)
@@ -111,9 +142,18 @@ func TestAutoTransitionAllSubtasksDone_OwnerWaitOnSubtask(t *testing.T) {
 				require.NotNil(t, fresh.AssigneeID)
 				require.Equal(t, owner, *fresh.AssigneeID, "parent keeps its assignee")
 				require.Zero(t, moves)
+				var dropped int
+				require.NoError(t, f.db.Get(&dropped, `SELECT count(*) FROM task_waits WHERE task_id=$1 AND resolution IN ('cancelled','invalid','superseded')`, parent.ID))
+				require.Zero(t, dropped, "the owner's wait is not cancelled")
+				if tc.edgeOnOutsider || tc.mrWait != "" {
+					// A wait on something other than the closed subtask stays in force.
+					var activeAfter int
+					require.NoError(t, f.db.Get(&activeAfter, `SELECT count(*) FROM task_waits WHERE task_id=$1 AND resolved_at IS NULL`, parent.ID))
+					require.Equal(t, activeBefore, activeAfter, "the owner's wait stays active")
+				}
 				return
 			}
-			require.Equal(t, review.ID, fresh.StatusID, "parent without an owner wait on a subtask still goes to review")
+			require.Equal(t, review.ID, fresh.StatusID, "parent without an active owner wait still goes to review")
 			require.Equal(t, 1, moves)
 		})
 	}

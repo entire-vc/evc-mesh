@@ -13,7 +13,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
-// an internal ticket: the fleet outcome line «⏳ WAIT decision:@<person>» arms the same
+// The fleet outcome line «⏳ WAIT decision:@<person>» arms the same
 // human_gate as «❓ Blocking @<person>». Only as the last non-empty line, only for a
 // user handle, never from a quote.
 
@@ -44,13 +44,13 @@ func TestWaitDecision_HumanHandle_ArmsGate(t *testing.T) {
 
 func TestWaitDecision_NegativeControls(t *testing.T) {
 	for name, body := range map[string]string{
-		"agent handle":    "Итог.\n⏳ WAIT decision:@linus: нужен вердикт",
+		"agent handle":    "Итог.\n⏳ WAIT decision:@liam: нужен вердикт",
 		"unknown handle":  "Итог.\n⏳ WAIT decision:@nobody-here: ?",
 		"backticks":       "Маркер пишется `⏳ WAIT decision:@pavel: вопрос` — это шаблон.",
 		"blockquote":      "Шаблон:\n\n> ⏳ WAIT decision:@pavel: вопрос\n\nКонец.",
 		"fenced":          "Шаблон:\n\n```\n⏳ WAIT decision:@pavel: вопрос\n```\n\nКонец.",
 		"not the tail":    "⏳ WAIT decision:@pavel: вопрос\n\nА дальше обычный текст.",
-		"other wait kind": "Итог.\n⏳ WAIT card:#00000000",
+		"other wait kind": "Итог.\n⏳ WAIT card:#5eed0011",
 	} {
 		t.Run(name, func(t *testing.T) {
 			env := postWaitDecision(t, body)
@@ -80,8 +80,8 @@ func TestWaitDecision_HumanReplyReleasesGate(t *testing.T) {
 	assert.False(t, calls[0].value, "a human reply must clear the gate")
 }
 
-// an internal ticket: a slug shared by a workspace agent and a same-named human login
-// (hana, rita) addresses the agent — the marker must not arm a human gate. The
+// A slug shared by a workspace agent and a same-named human login
+// (hugh, ralph) addresses the agent — the marker must not arm a human gate. The
 // control (no agent registered under that slug) still arms, so the test is not vacuous.
 func TestWaitDecision_AgentSlugSharedWithUser_DoesNotArmGate(t *testing.T) {
 	for name, body := range map[string]string{

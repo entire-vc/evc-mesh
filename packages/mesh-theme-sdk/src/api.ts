@@ -237,7 +237,7 @@ export interface Task {
    */
   false_open?: FalseOpenSignal | null;
   /**
-   * Live state of the work behind the card (an internal ticket, parent an internal ticket).
+   * Live state of the work behind the card.
    * Separate from the Mesh status on purpose: a todo card can be worked on right
    * now and an in_progress card can be waiting. Absent/null until the server
    * (or fiddler) has a value.

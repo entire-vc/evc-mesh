@@ -147,7 +147,7 @@ func (h *WorkspaceHandler) List(c echo.Context) error {
 // workspace with owner_id all-zero and zero rows in workspace_members. Every
 // subsequent call (read, write, delete) against that workspace 403'd,
 // including for its own creator: a write-only orphan reachable by nothing
-// (task #85fd1ef2; live instance repaired by hand, see that task's comments).
+// (live instance repaired by hand, see that task's comments).
 func (h *WorkspaceHandler) Create(c echo.Context) error {
 	if mw.IsAgent(c) {
 		return c.JSON(http.StatusForbidden, apierror.Forbidden("agents cannot create workspaces"))

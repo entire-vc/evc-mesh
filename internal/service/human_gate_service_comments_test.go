@@ -15,7 +15,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
-// Task #a36fa51d (analysis of #6443ff98): the gate flickered because fiddler
+// (analysis): the gate flickered because fiddler
 // comments posted under the author's key counted as a withdrawal, and a marker
 // after Pavel's "ок" re-armed the gate silently.
 

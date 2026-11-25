@@ -12,7 +12,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
-// Task #edd71d44, live on #9888e5ed (comment c2585967): the agent protocol makes
+// Live on an internal ticket (comment c2585967): the agent protocol makes
 // the LAST paragraph of a comment a routing line (`↻ NEXT: …`, `⏳ WAIT …`), and
 // the withdrawal reader looked only at the last paragraph, so a withdrawal
 // written by the book never counted (gate_still_raised) and the lane that owned
@@ -22,23 +22,23 @@ import (
 // mandatory handoff line, wrapped onto a second line.
 const routingLineWithdrawal = "Вопрос снят, Павел не нужен (не блокирует). Вариант «нет» уже записан в описании карточки.\n\n" +
 	"Причина: заливка каталога в canary-workspace — не деньги, не личный вход и не юридическое решение.\n\n" +
-	"↻ NEXT: Riker (Мини) — закрыть приёмку по офлайн-тестам, стенд снять teardown.\n" +
+	"↻ NEXT: Robin (Мини) — закрыть приёмку по офлайн-тестам, стенд снять teardown.\n" +
 	"Эту карточку закрыть."
 
 func TestLastParagraph_RoutingLines(t *testing.T) {
 	tests := []struct {
 		name, body, want string
 	}{
-		{"NEXT paragraph skipped", "Гейт снят.\n\n↻ NEXT: Riker — закрыть.", "Гейт снят."},
+		{"NEXT paragraph skipped", "Гейт снят.\n\n↻ NEXT: Robin — закрыть.", "Гейт снят."},
 		{"WAIT paragraph skipped", "Гейт снят.\n\n⏳ WAIT 2h: проверить деплой", "Гейт снят."},
-		{"arrow NEXT skipped", "Гейт снят.\n\n→ NEXT: Riker", "Гейт снят."},
-		{"multi-line routing tail in one paragraph", "Гейт снят.\n\n↻ NEXT: Riker —\nзакрыть карточку.", "Гейт снят."},
-		{"signature then routing", "Гейт снят.\n\n— Khan\n\n↻ NEXT: Riker", "Гейт снят."},
-		{"routing then signature", "Гейт снят.\n\n↻ NEXT: Riker\n\n— Khan", "Гейт снят."},
-		{"routing line glued to the statement paragraph", "Вопрос не нужен.\n↻ NEXT: Riker — закрыть.", "Вопрос не нужен."},
-		{"routing only", "↻ NEXT: Riker", ""},
-		{"routing in the middle is not a tail", "Первое.\n\n↻ NEXT: Riker\n\nВторое.", "Второе."},
-		{"NEXT not at line start is just prose", "Дальше будет ↻ NEXT: Riker", "Дальше будет ↻ NEXT: Riker"},
+		{"arrow NEXT skipped", "Гейт снят.\n\n→ NEXT: Robin", "Гейт снят."},
+		{"multi-line routing tail in one paragraph", "Гейт снят.\n\n↻ NEXT: Robin —\nзакрыть карточку.", "Гейт снят."},
+		{"signature then routing", "Гейт снят.\n\n— Khan\n\n↻ NEXT: Robin", "Гейт снят."},
+		{"routing then signature", "Гейт снят.\n\n↻ NEXT: Robin\n\n— Khan", "Гейт снят."},
+		{"routing line glued to the statement paragraph", "Вопрос не нужен.\n↻ NEXT: Robin — закрыть.", "Вопрос не нужен."},
+		{"routing only", "↻ NEXT: Robin", ""},
+		{"routing in the middle is not a tail", "Первое.\n\n↻ NEXT: Robin\n\nВторое.", "Второе."},
+		{"NEXT not at line start is just prose", "Дальше будет ↻ NEXT: Robin", "Дальше будет ↻ NEXT: Robin"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -54,7 +54,7 @@ func TestLastParagraph_RoutingLines(t *testing.T) {
 // variant below pins that.
 const routingLineWithdrawalAdjacent = "Разбор: вариант «нет» уже записан в описании карточки.\n\n" +
 	"Вопрос снят, Павел не нужен (не блокирует).\n\n" +
-	"↻ NEXT: Riker (Мини) — закрыть приёмку по офлайн-тестам.\nЭту карточку закрыть."
+	"↻ NEXT: Robin (Мини) — закрыть приёмку по офлайн-тестам.\nЭту карточку закрыть."
 
 func TestHasNegatorInScope_RoutingLine(t *testing.T) {
 	assert.True(t, hasNegatorInScope(routingLineWithdrawalAdjacent), "withdrawal before the routing line counts")
@@ -63,10 +63,10 @@ func TestHasNegatorInScope_RoutingLine(t *testing.T) {
 	// (3) negator in the middle, routing at the end, withdrawal not in the nearest paragraph.
 	assert.False(t, hasNegatorInScope(routingLineWithdrawal), "withdrawal two paragraphs before the routing line must not count")
 	// (5) signature + routing back to back.
-	assert.True(t, hasNegatorInScope("Вопрос снят, ответ не нужен.\n\n↻ NEXT: Riker — закрыть.\n\n— Khan"))
+	assert.True(t, hasNegatorInScope("Вопрос снят, ответ не нужен.\n\n↻ NEXT: Robin — закрыть.\n\n— Khan"))
 	assert.True(t, hasNegatorInScope("Вопрос снят, ответ не нужен.\n\n— Khan\n\n⏳ WAIT card:#abcd1234"))
 	// routing text itself is not scanned: a negator inside the handoff does not count.
-	assert.False(t, hasNegatorInScope("Смотрю логи.\n\n↻ NEXT: Riker — ответ не нужен, закрыть."))
+	assert.False(t, hasNegatorInScope("Смотрю логи.\n\n↻ NEXT: Robin — ответ не нужен, закрыть."))
 }
 
 func routingLineEnv(t *testing.T) (env triageTestEnv, taskID, askerID uuid.UUID, ctx context.Context) {
@@ -115,7 +115,7 @@ func TestReleaseHumanGateOnWithdrawal_NegatorMidBodyNoRouting_StillGated(t *test
 func TestReleaseHumanGateOnWithdrawal_OwnMarkerWithRouting_NotAWithdrawal(t *testing.T) {
 	env, taskID, askerID, ctx := routingLineEnv(t)
 	postRouting(ctx, t, env, taskID, askerID,
-		"Прошлый вопрос снят, ответ не нужен.\n\n❓ **Blocking @pavel**: нужен выбор канала.\n↻ NEXT: Riker — ждём решения.")
+		"Прошлый вопрос снят, ответ не нужен.\n\n❓ **Blocking @pavel**: нужен выбор канала.\n↻ NEXT: Robin — ждём решения.")
 	for _, c := range env.taskMover.humanGateCalls() {
 		assert.True(t, c.value, "a new ask may (re)arm the gate, it must never release it")
 	}
@@ -124,7 +124,7 @@ func TestReleaseHumanGateOnWithdrawal_OwnMarkerWithRouting_NotAWithdrawal(t *tes
 // (5) signature and routing in a row after the withdrawal.
 func TestReleaseHumanGateOnWithdrawal_SignatureAndRoutingAfterWithdrawal_Releases(t *testing.T) {
 	env, taskID, askerID, ctx := routingLineEnv(t)
-	postRouting(ctx, t, env, taskID, askerID, "Вопрос снят, ответ не нужен.\n\n↻ NEXT: Riker — закрыть.\n\n— Khan")
+	postRouting(ctx, t, env, taskID, askerID, "Вопрос снят, ответ не нужен.\n\n↻ NEXT: Robin — закрыть.\n\n— Khan")
 	require.Len(t, env.taskMover.humanGateCalls(), 1)
 }
 
@@ -132,6 +132,6 @@ func TestReleaseHumanGateOnWithdrawal_SignatureAndRoutingAfterWithdrawal_Release
 // keeps the gate even with a routing tail.
 func TestReleaseHumanGateOnWithdrawal_StillOpenVetoSurvivesRoutingLine(t *testing.T) {
 	env, taskID, askerID, ctx := routingLineEnv(t)
-	postRouting(ctx, t, env, taskID, askerID, "Отвечать не нужно, но гейт остаётся (not withdrawing).\n\n↻ NEXT: Riker — ждём Павла.")
+	postRouting(ctx, t, env, taskID, askerID, "Отвечать не нужно, но гейт остаётся (not withdrawing).\n\n↻ NEXT: Robin — ждём Павла.")
 	assert.Empty(t, env.taskMover.humanGateCalls())
 }

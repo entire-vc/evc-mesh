@@ -13,7 +13,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// ensureMentionDelivery (#4e1d249f)
+// ensureMentionDelivery
 //
 // Root cause measured on prod 2026-08-23: notification_preferences had no row
 // for any of the humans being @-mentioned in "❓ Blocking" comments, so every
@@ -135,7 +135,7 @@ func TestEnsureMentionDelivery_AlreadyReachableViaAnotherChannel_NoEmailAdded(t 
 }
 
 // TestEnsureMentionDelivery_ExistingEmailRowMissingEvent_NotWidened pins the
-// fix for the regression found live on #4e1d249f (2026-09-06): this used to
+// fix for the regression found live on an internal ticket (2026-09-06): this used to
 // union task.mentioned into ANY existing email row that didn't cover it. That
 // silently undid Pavel's own "только блокеры" narrowing (events pared down to
 // {task.blocking_triage}) within hours of setting it — the very next plain

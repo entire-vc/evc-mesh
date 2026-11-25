@@ -7,7 +7,7 @@
 # native (non-Casdoor) Mesh login has no agent-usable credential on the Mac
 # Mini — agent keys authorize REST, not a browser session, and the CI E2E
 # user is a viewer that can't seed data. This was worked out live during D7
-# (#fd2bfec6) and independently again by Garfield (#62e58c9d) the same day;
+# and independently again by Gary the same day;
 # this script is that recipe made reusable instead of re-derived per task.
 #
 # Usage:
@@ -38,8 +38,8 @@ S3_PORT="${LOCAL_STACK_S3_PORT:-59002}"
 # Container names used to be fixed constants regardless of port — so a second
 # agent picking a free PG_PORT/REDIS_PORT (exactly what check_port_free's own
 # error message told them to do) still collided on `docker rm -f` at the
-# start of `up`, silently nuking the first agent's running stand (#5729d210,
-# measured live 2026-08-21: stand A's containers were recreated out from
+# start of `up`, silently nuking the first agent's running stand
+# (measured live 2026-08-21: stand A's containers were recreated out from
 # under it at new ports by stand B, A's API then failed every DB call while
 # `status` kept reporting green — see the reachability rewrite below).
 # Scoping the name to the stack identifier means two stands never share a
@@ -172,7 +172,7 @@ cmd_up() {
     # the whole AND-list, so $! names the throwaway bash wrapper running the
     # list, not the server — api.pid then points at a process whose death
     # leaves the real server orphaned on the port, and `kill $(cat api.pid)`
-    # is a silent no-op (#4b1131f7, measured live: pidfile 48210 = wrapper,
+    # is a silent no-op (measured live: pidfile 48210 = wrapper,
     # listener 48212 = mesh-api). With cd as a separate statement, $! is the
     # nohup'ed mesh-api process itself.
     cd "$ROOT_DIR"
@@ -379,7 +379,7 @@ cmd_selftest() {
 cmd_status() {
   # Checks REACHABILITY, not "does a pid/container exist" — the latter stayed
   # green on a stand whose postgres container had been ripped out from under
-  # it by another agent (#5729d210: `status` said "running" / "Up" on every
+  # it by another agent (`status` said "running" / "Up" on every
   # line while the API was 500ing on every request, only api.log showed the
   # truth). A container that exists but refuses connections, or a pid that's
   # alive but wedged, must print red here.

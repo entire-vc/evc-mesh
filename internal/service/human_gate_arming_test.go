@@ -12,7 +12,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Task #4545660b — one implementation of "this card is waiting on a human".
+// One implementation of "this card is waiting on a human".
 //
 // The defect these tests pin down is not "the gate does not work". `human_gate` has
 // been correct all along. The defect is that the REST of the answer — who asked, what
@@ -20,15 +20,15 @@ import (
 // separate places across the fleet re-derived it by grepping, each with its own marker
 // dictionary. That is what made class-C3 phantom gates possible at all: a driver printed
 // the marker as instructional boilerplate and the next driver read its own output back
-// as a raised blocker (#84ab54fd).
+// as a raised blocker.
 //
 // So the assertions below are deliberately about the TASK ROW, never about a message or
 // a call count: after arming, everything a client needs must be readable from the task,
 // because that is the only property that lets `is_human_gated` collapse to one field.
 
 // allowingPredicate is a four-answer set that legitimately needs a human: the action is
-// NOT reversible, so the "just do it" refusal does not apply (task #5d3dc714). Used by
-// the pre-existing #4545660b tests, which predate the predicate requirement and are
+// NOT reversible, so the "just do it" refusal does not apply. Used by
+// the pre-existing an internal ticket tests, which predate the predicate requirement and are
 // about a different property — they must keep testing THAT property, not accidentally
 // become predicate tests.
 func allowingPredicate() *domain.GateArmPredicate {
@@ -58,7 +58,7 @@ func newArmingTestService(t *testing.T) (TaskService, *MockTaskRepository, uuid.
 // newArmingTestServiceWithComments is newArmingTestService plus a wired
 // MockCommentRepository, for tests that need to observe the WARNING comment
 // ArmHumanGate posts when it auto-fills recommended_default on a marker-sourced arm
-// (task 1.4b, #4d61d877). The plain helper above leaves commentRepo nil, which is
+// (task 1.4b). The plain helper above leaves commentRepo nil, which is
 // exactly the "not wired" state postMarkerDefaultAppliedComment's own nil guard exists
 // for — every pre-existing test using it stays a no-op on this new code path.
 func newArmingTestServiceWithComments(t *testing.T) (TaskService, *MockTaskRepository, *MockCommentRepository, uuid.UUID) {
@@ -184,10 +184,10 @@ func TestArmHumanGate_RejectsIncompleteAsk(t *testing.T) {
 
 // TestArmHumanGate_MarkerSourceAllowsMissingDefault pins the ONE deliberate asymmetry.
 // Refusing a marker with no stated default would be silent to its author — they post the
-// question, believe it was handed over, and the card keeps being fed. That is #58a6f4ff
-// and #f421ad57, i.e. strictly worse than the bug being fixed.
+// question, believe it was handed over, and the card keeps being fed. That is an internal ticket
+// and an internal ticket, i.e. strictly worse than the bug being fixed.
 //
-// Task 1.4b (#4d61d877) changed WHAT "allows through" means, but not the asymmetry
+// Task 1.4b changed WHAT "allows through" means, but not the asymmetry
 // itself: a marker with no stated default is still armed (never refused), but no longer
 // leaves recommended_default NULL forever — it is auto-filled with
 // domain.DefaultMarkerRecommendedDefault so the gate gets a computed gate_deadline and
@@ -231,7 +231,7 @@ func TestArmHumanGate_MarkerSourceAllowsMissingDefault(t *testing.T) {
 }
 
 // TestArmHumanGate_MarkerWithNoDefault_PostsWarningComment is the positive control for
-// task 1.4b (#4d61d877): a marker-sourced arm that names no recommended_default posts a
+// task 1.4b: a marker-sourced arm that names no recommended_default posts a
 // task comment naming the auto-applied system default AND the computed deadline — the
 // pre-existing log-only WARNING reached nobody in practice.
 func TestArmHumanGate_MarkerWithNoDefault_PostsWarningComment(t *testing.T) {
@@ -303,7 +303,7 @@ func TestArmHumanGate_APISourceWithDefault_DoesNotPostWarningComment(t *testing.
 		Predicate: allowingPredicate(),
 	}))
 
-	// The arm-time "which door lifts this gate" hint (#fc63d720) is expected; the
+	// The arm-time "which door lifts this gate" hint is expected; the
 	// auto-fill notice is what must be absent.
 	found := firstCommentOn(commentRepo, taskID)
 	require.NotNil(t, found)
@@ -315,7 +315,7 @@ func TestArmHumanGate_APISourceWithDefault_DoesNotPostWarningComment(t *testing.
 	assert.NotContains(t, found.Body, "дефолт")
 }
 
-// Task #fc63d720: an API/button arm leaves no marker comment, so a human reply
+// An API/button arm leaves no marker comment, so a human reply
 // cannot lift it — the card must say so at arm time, naming the door that works.
 func TestArmHumanGate_APISource_PostsHowToClearHint(t *testing.T) {
 	svc, _, commentRepo, taskID := newArmingTestServiceWithComments(t)

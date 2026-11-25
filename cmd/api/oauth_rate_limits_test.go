@@ -8,7 +8,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/config"
 )
 
-// token/revoke are sized by their own setting (#23579e6b), not by APIRPM; the
+// token/revoke are sized by their own setting, not by APIRPM; the
 // other three endpoints keep the budgets they had.
 func TestOAuthRateLimits_TokenUsesItsOwnSetting(t *testing.T) {
 	cfg := &config.Config{RateLimit: config.RateLimitConfig{

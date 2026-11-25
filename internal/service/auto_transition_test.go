@@ -217,7 +217,7 @@ func TestAutoTransition_NoSubtasks_NoTransition(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// review -> done for a labeled umbrella (an internal ticket, 2026-09-07)
+// review -> done for a labeled umbrella (2026-09-07)
 // ---------------------------------------------------------------------------
 
 func TestAutoTransition_ReviewParentLabeledUmbrella_AllSubtasksTerminal_ClosesToDone(t *testing.T) {
@@ -266,8 +266,8 @@ func TestAutoTransition_ReviewParentUnlabeled_AllSubtasksTerminal_NoTransition(t
 	doneStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryDone, "Done")
 
 	// Parent in review, own evidence obligation implied by having no umbrella label —
-	// e.g. a plain task with subtasks and its own AC, not a captain/epic (an internal ticket,
-	// an internal ticket, an internal ticket, an internal ticket, an internal ticket in the live measurement — none of
+	// e.g. a plain task with subtasks and its own AC, not a captain/epic
+	// (In the live measurement — none of
 	// them carried kind:epic/kind:umbrella). Must stay exactly as before this change.
 	parent := seedTask(taskRepo, projectID, reviewStatus.ID, nil, "Real task with subtasks")
 	seedTask(taskRepo, projectID, doneStatus.ID, &parent.ID, "Subtask A")

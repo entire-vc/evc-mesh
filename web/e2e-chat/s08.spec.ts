@@ -7,7 +7,7 @@ import { agentId, history, newChatViaUi, sendVia, waitAssistantDone } from "./li
 import { type ThreadRuntime, assertIdleHistory, assertIdleResources, assertIdleResumed, assertNotReleasedEarly, resourcesFromRuntime } from "./lib/idle";
 
 /**
- * S08, once per harness: a settled chat with no active
+ * S08 (Mesh Doc e2e/agent-chat), once per harness: a settled chat with no active
  * turn sits idle for the fixture runners' session_idle_minutes (N = 10, runner.toml of both, set on
  * e2e-ci-sandbox only; prod is not touched). Then: history unchanged; the runner snapshot read from
  * GET /chat/threads/{id}/runtime says process_alive=false and slot_held=false by

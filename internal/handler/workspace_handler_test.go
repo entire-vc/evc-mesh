@@ -59,7 +59,7 @@ func TestWorkspaceHandler_Create_Success(t *testing.T) {
 }
 
 // TestWorkspaceHandler_Create_AgentRefused is the regression test for
-// #85fd1ef2: an agent-key caller used to reach the service with no user_id to
+// An agent-key caller used to reach the service with no user_id to
 // set as owner, producing a workspace with owner_id all-zero and no
 // membership row — reachable by nothing, including its own creator. The fix
 // refuses the request before the service is ever called.

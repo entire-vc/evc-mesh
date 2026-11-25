@@ -1,9 +1,9 @@
 -- +goose NO TRANSACTION
 -- +goose Up
--- Hot-path query fixes from the slow-query log.
+-- Hot-path query fixes from the prod slow-query log.
 --
 -- 1. JIT off. The merged-MR close-on-merge sweep (vcs_link_repo) plans above
---    jit_above_cost, and on a 2-vCPU VM JIT compilation alone took
+--    jit_above_cost, and on the 2-vCPU prod VM JIT compilation alone took
 --    1.5s of a 1.9s run. Every OLTP query here is short; JIT never pays back.
 -- 2. random_page_cost 1.1 (SSD). At the default 4 the planner seq-scanned
 --    document_chunks for doc full-text recall instead of using the GIN index,

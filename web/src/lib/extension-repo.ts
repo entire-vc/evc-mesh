@@ -60,7 +60,7 @@ export interface RepoUpdate {
   error?: string;
 }
 
-export type UpdateOutcome = "updated" | "up_to_date" | "pending_consent";
+export type UpdateOutcome = "updated" | "up_to_date" | "pending_consent" | "adopted";
 
 export interface UpdateResult {
   extension_id: string;

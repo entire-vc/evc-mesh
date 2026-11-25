@@ -13,7 +13,7 @@ import (
 )
 
 // Covers agents.short_tag (Mesh aa1b4845). Same hazard as agents.model
-// (#5548367d), same shape of proof: every reader names its columns and Update
+// same shape of proof: every reader names its columns and Update
 // writes the whole row, so a reader that forgets short_tag hands Update a nil
 // and silently wipes the label on the next unrelated edit. VALUE asserts on
 // every reader, not row counts.

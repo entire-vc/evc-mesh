@@ -14,12 +14,12 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
-// #ed60c795 — "@<lane>" from a person on the lane's own parked card.
+// "@<lane>" from a person on the lane's own parked card.
 //
-// Live case 23.09: Pavel wrote "Дорабатывай программу @howard" on Howard's own
+// Live case 23.09: Pavel wrote "Дорабатывай программу @harper" on Harper's own
 // card, parked in backlog 20 minutes earlier. The recorded verdict was
 // skipped/no_queue_path with the hint "this task isn't assigned to them —
-// assign it", on a card that WAS assigned to him. Nothing reached Howard.
+// assign it", on a card that WAS assigned to him. Nothing reached Harper.
 //
 // These tests drive the real Create path end to end (lift → notifyMentions →
 // read-back into the response), with only the task mover faked.
@@ -33,7 +33,7 @@ type liftEnv struct {
 	todoID      uuid.UUID
 	doneID      uuid.UUID
 	projID      uuid.UUID
-	howard      *domain.Agent
+	harper      *domain.Agent
 	other       *domain.Agent
 	pavelID     uuid.UUID
 }
@@ -58,9 +58,9 @@ func setupLiftEnv(t *testing.T) liftEnv {
 
 	// Alive (recent heartbeat), so a miss is never recipient_offline.
 	hb := time.Now()
-	howard := &domain.Agent{ID: uuid.New(), WorkspaceID: wsID, Slug: "howard", LastHeartbeat: &hb}
+	harper := &domain.Agent{ID: uuid.New(), WorkspaceID: wsID, Slug: "harper", LastHeartbeat: &hb}
 	other := &domain.Agent{ID: uuid.New(), WorkspaceID: wsID, Slug: "other", LastHeartbeat: &hb}
-	agentSvc.AddAgent(wsID, howard)
+	agentSvc.AddAgent(wsID, harper)
 	agentSvc.AddAgent(wsID, other)
 
 	timeNow = func() time.Time { return frozenTime }
@@ -74,15 +74,15 @@ func setupLiftEnv(t *testing.T) liftEnv {
 		WithCommentTaskService(mover),
 	).(*commentService)
 
-	return liftEnv{svc, mover, taskRepo, commentRepo, backlogID, todoID, doneID, projID, howard, other, uuid.New()}
+	return liftEnv{svc, mover, taskRepo, commentRepo, backlogID, todoID, doneID, projID, harper, other, uuid.New()}
 }
 
-// seed puts a card assigned to howard into statusID.
+// seed puts a card assigned to harper into statusID.
 func (e liftEnv) seed(statusID uuid.UUID, mut func(*domain.Task)) *domain.Task {
 	id := uuid.New()
 	task := &domain.Task{
 		ID: id, ProjectID: e.projID, Title: "T", StatusID: statusID,
-		AssigneeType: domain.AssigneeTypeAgent, AssigneeID: &e.howard.ID,
+		AssigneeType: domain.AssigneeTypeAgent, AssigneeID: &e.harper.ID,
 	}
 	if mut != nil {
 		mut(task)
@@ -118,14 +118,14 @@ func TestAssigneeMentionLift_PersonOnOwnBacklogCard_LiftsAndDelivers(t *testing.
 	e := setupLiftEnv(t)
 	task := e.seed(e.backlogID, nil)
 
-	c := e.comment(t, task.ID, domain.ActorTypeUser, "Дорабатывай программу @howard")
+	c := e.comment(t, task.ID, domain.ActorTypeUser, "Дорабатывай программу @harper")
 
 	moves := e.mover.calls()
 	require.Len(t, moves, 1, "the parked card must be lifted")
 	require.NotNil(t, moves[0].input.StatusID)
 	assert.Equal(t, e.todoID, *moves[0].input.StatusID)
 
-	row := deliveryFor(c, "howard")
+	row := deliveryFor(c, "harper")
 	require.NotNil(t, row)
 	assert.Equal(t, domain.DeliveryDelivered, row.Outcome)
 	assert.Equal(t, domain.ReasonTaskQueue, row.Reason)
@@ -149,10 +149,10 @@ func TestAssigneeMentionLift_AgentAuthor_NoLift_HintNamesBacklog(t *testing.T) {
 	e := setupLiftEnv(t)
 	task := e.seed(e.backlogID, nil)
 
-	c := e.comment(t, task.ID, domain.ActorTypeAgent, "@howard дорабатывай")
+	c := e.comment(t, task.ID, domain.ActorTypeAgent, "@harper дорабатывай")
 
 	assert.Empty(t, e.mover.calls(), "agent → agent must not lift a parked card")
-	row := deliveryFor(c, "howard")
+	row := deliveryFor(c, "harper")
 	require.NotNil(t, row)
 	assert.Equal(t, domain.DeliverySkipped, row.Outcome)
 	assert.Equal(t, domain.ReasonStatusNotFed, row.Reason)
@@ -179,14 +179,14 @@ func TestAssigneeMentionLift_DoesNotFire(t *testing.T) {
 			name:   "armed human gate — the feeder skips it anyway",
 			status: func(e liftEnv) uuid.UUID { return e.backlogID },
 			mut:    func(t *domain.Task) { t.HumanGate = true },
-			body:   "@howard дорабатывай", slug: "howard",
+			body:   "@harper дорабатывай", slug: "harper",
 			wantOut: domain.DeliverySkipped, wantReason: domain.ReasonTaskGated,
 		},
 		{
 			name:   "start_after in the future",
 			status: func(e liftEnv) uuid.UUID { return e.backlogID },
 			mut:    func(t *domain.Task) { t.StartAfter = &future },
-			body:   "@howard дорабатывай", slug: "howard",
+			body:   "@harper дорабатывай", slug: "harper",
 			wantOut: domain.DeliverySkipped, wantReason: domain.ReasonTaskScheduled,
 		},
 		{
@@ -198,14 +198,14 @@ func TestAssigneeMentionLift_DoesNotFire(t *testing.T) {
 		{
 			name:   "fyi-exempt handle is addressing, not a go",
 			status: func(e liftEnv) uuid.UUID { return e.backlogID },
-			body:   "fyi: @howard запарковано, не трогай", slug: "howard",
+			body:   "fyi: @harper запарковано, не трогай", slug: "harper",
 			wantOut: domain.DeliverySkipped, wantReason: domain.ReasonStatusNotFed,
 		},
 		{
 			// AC control: the same comment on a todo card is delivered, no plate.
 			name:   "control: todo card — already in the queue, nothing to lift",
 			status: func(e liftEnv) uuid.UUID { return e.todoID },
-			body:   "@howard дорабатывай", slug: "howard",
+			body:   "@harper дорабатывай", slug: "harper",
 			wantOut: domain.DeliveryDelivered, wantReason: domain.ReasonTaskQueue,
 		},
 	}
@@ -238,10 +238,10 @@ func TestAssigneeMentionLift_MoveFails_VerdictStaysHonest(t *testing.T) {
 	e.mover.err = errors.New("transition refused")
 	task := e.seed(e.backlogID, nil)
 
-	c := e.comment(t, task.ID, domain.ActorTypeUser, "@howard дорабатывай")
+	c := e.comment(t, task.ID, domain.ActorTypeUser, "@harper дорабатывай")
 
 	require.Len(t, e.mover.calls(), 1, "the lift was attempted")
-	row := deliveryFor(c, "howard")
+	row := deliveryFor(c, "harper")
 	require.NotNil(t, row)
 	assert.Equal(t, domain.DeliverySkipped, row.Outcome)
 	assert.Equal(t, domain.ReasonStatusNotFed, row.Reason)
@@ -251,7 +251,7 @@ func TestAssigneeMentionLift_MoveFails_VerdictStaysHonest(t *testing.T) {
 // reaching path, because the feeder drops it before the lane sees it.
 func TestDecideDelivery_FrozenTodoCardIsNotDelivered(t *testing.T) {
 	base := deliveryFacts{
-		Slug: "howard", Agent: agentWithHeartbeat(time.Second),
+		Slug: "harper", Agent: agentWithHeartbeat(time.Second),
 		InTaskQueue: true, IsAssignee: true, StatusCategory: "todo",
 		Presence: domain.ComputedStatusOnline,
 	}
@@ -279,12 +279,12 @@ func TestAssigneeMentionLift_OnlyBacklogQualifies(t *testing.T) {
 	ctx := context.Background()
 	for _, st := range []uuid.UUID{e.todoID, e.doneID} {
 		task := e.seed(st, nil)
-		c := &domain.Comment{TaskID: task.ID, AuthorType: domain.ActorTypeUser, Body: "@howard дорабатывай"}
+		c := &domain.Comment{TaskID: task.ID, AuthorType: domain.ActorTypeUser, Body: "@harper дорабатывай"}
 		_, ok := e.svc.assigneeMentionLiftTarget(ctx, c, task, e.projectWS(t))
 		assert.False(t, ok, "only a backlog card is lifted")
 	}
 	task := e.seed(e.backlogID, nil)
-	c := &domain.Comment{TaskID: task.ID, AuthorType: domain.ActorTypeUser, Body: "@howard дорабатывай"}
+	c := &domain.Comment{TaskID: task.ID, AuthorType: domain.ActorTypeUser, Body: "@harper дорабатывай"}
 	to, ok := e.svc.assigneeMentionLiftTarget(ctx, c, task, e.projectWS(t))
 	assert.True(t, ok, "positive control: the same predicate fires on backlog")
 	assert.Equal(t, e.todoID, to)
@@ -292,5 +292,5 @@ func TestAssigneeMentionLift_OnlyBacklogQualifies(t *testing.T) {
 
 func (e liftEnv) projectWS(t *testing.T) uuid.UUID {
 	t.Helper()
-	return e.howard.WorkspaceID
+	return e.harper.WorkspaceID
 }

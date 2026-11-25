@@ -160,7 +160,7 @@ export function TaskPanel({
 
   // Arriving from a mention: `?comment=<id>` names the comment somebody was
   // tagged in — mirrors docs.tsx's read of the same param for document
-  // threads (D6/an internal ticket). TaskPanel is only ever mounted at the real task
+  // threads (D6). TaskPanel is only ever mounted at the real task
   // route (task-detail.tsx) or in create mode (task-create.tsx, where this is
   // simply absent), so reading the page's own location here is safe — there
   // is no other caller whose unrelated query string this could pick up.
@@ -2003,7 +2003,7 @@ export function TaskPanel({
   // Task templates are a per-project feature that stayed editable in Project
   // Settings the whole time but lost its only consumer when the create modal was
   // replaced by this route: create-task-dialog.tsx had the picker, the /new page
-  // shipped without it, and the dialog was later deleted. Restored
+  // shipped without it, and the dialog was later deleted (3b6108fa). Restored
   // here, and it now applies every field the template carries, not just four.
   const templateSelector = templates.length > 0 && (
     <Select

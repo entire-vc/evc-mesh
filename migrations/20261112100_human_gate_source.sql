@@ -1,5 +1,5 @@
 -- +goose Up
--- Regression: which door armed the live human gate. A gate the server armed from a
+-- Which door armed the live human gate. A gate the server armed from a
 -- "❓ Blocking" marker may be reclassified hard→soft by the rule that marker gets now
 -- (ReconcileMarkerGateClasses); a gate armed through the API (set_human_gate, explicit
 -- class) never may. Author and reason alone cannot tell the two apart: an API arm may

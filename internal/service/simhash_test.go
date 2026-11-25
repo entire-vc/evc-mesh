@@ -14,8 +14,8 @@ func TestComputeSimhash_Stability(t *testing.T) {
 }
 
 func TestComputeSimhash_NearDups(t *testing.T) {
-	a := "Deployment to prod — Spark v2.1 shipped 2026-07-01 by Howard"
-	b := "Deployment to prod — Spark v2.1 shipped 2026-07-01 by Howard."
+	a := "Deployment to prod — Spark v2.1 shipped 2026-07-01 by Harper"
+	b := "Deployment to prod — Spark v2.1 shipped 2026-07-01 by Harper."
 	ha := ComputeSimhash(a)
 	hb := ComputeSimhash(b)
 	d := HammingDistance(ha, hb)

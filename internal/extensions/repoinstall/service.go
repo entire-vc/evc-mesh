@@ -382,6 +382,10 @@ const (
 	OutcomeUpdated        Outcome = "updated"
 	OutcomeUpToDate       Outcome = "up_to_date"
 	OutcomePendingConsent Outcome = "pending_consent"
+	// OutcomeAdopted is a pinned Agent Runner update to the version its
+	// controllers already run: the row and its snapshot moved as on an update,
+	// the runtime did not.
+	OutcomeAdopted Outcome = "adopted"
 )
 
 // UpdateResult reports one update attempt.

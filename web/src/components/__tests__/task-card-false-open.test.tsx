@@ -30,7 +30,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 
 const indicators = () => screen.queryAllByTestId("false-open-indicator");
 
-// Task #c80fe88f: priority/created_at describe the card, not whether the
+// Priority/created_at describe the card, not whether the
 // graph underneath it is still moving. These tests exercise the board's
 // rendering of the false_open field the server now sends.
 describe("TaskCard false-open indicator", () => {
@@ -81,7 +81,7 @@ describe("TaskCard false-open indicator", () => {
     expect(el.getAttribute("title")).toContain("80");
   });
 
-  // #65dc5949's own shape (task #c80fe88f review, 2026-08-20): one open
+  // Own shape (an internal ticket review, 2026-08-20): one open
   // backlog child left. Must render the weak-signal badge, never the
   // all-children-closed one -- the two are mutually exclusive by
   // construction, but this pins the board never merges them visually either.

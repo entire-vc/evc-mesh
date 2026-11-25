@@ -16,7 +16,7 @@ import (
 
 // The guards that refuse a link before GitLab is asked; no store involved.
 func TestSyncGitLabLinkEvidence_RefusesBeforeAskingGitLab(t *testing.T) {
-	base := domain.VCSLink{ID: uuid.New(), TaskID: uuid.New(), Provider: domain.VCSProviderGitLab, LinkType: domain.VCSLinkTypePR, ExternalID: "42", URL: syncMRURL, Metadata: []byte("{}")}
+	base := domain.VCSLink{ID: uuid.New(), TaskID: uuid.New(), Provider: domain.VCSProviderGitLab, LinkType: domain.VCSLinkTypePR, ExternalID: "4242", URL: syncMRURL, Metadata: []byte("{}")}
 	cases := map[string]struct {
 		mut    func(l *domain.VCSLink)
 		reason string
@@ -27,8 +27,8 @@ func TestSyncGitLabLinkEvidence_RefusesBeforeAskingGitLab(t *testing.T) {
 		"not an MR url":     {func(l *domain.VCSLink) { l.URL = "https://git.example.org/example/product/-/commit/abc" }, GitLabSyncReasonUnparseableURL},
 		"diffs suffix":      {func(l *domain.VCSLink) { l.URL = syncMRURL + "/diffs" }, GitLabSyncReasonUnparseableURL},
 		"other iid in row":  {func(l *domain.VCSLink) { l.ExternalID = "17" }, GitLabSyncReasonExternalID},
-		"bang prefixed iid": {func(l *domain.VCSLink) { l.ExternalID = "!42" }, GitLabSyncReasonExternalID},
-		"padded iid":        {func(l *domain.VCSLink) { l.ExternalID = " 42 " }, GitLabSyncReasonExternalID},
+		"bang prefixed iid": {func(l *domain.VCSLink) { l.ExternalID = "!4242" }, GitLabSyncReasonExternalID},
+		"padded iid":        {func(l *domain.VCSLink) { l.ExternalID = " 4242 " }, GitLabSyncReasonExternalID},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -46,9 +46,9 @@ func TestSyncGitLabLinkEvidence_RefusesBeforeAskingGitLab(t *testing.T) {
 }
 
 func TestSameMRWebURL(t *testing.T) {
-	assert.True(t, sameMRWebURL(syncMRURL, "http://GIT.EXAMPLE.ORG/example/product/-/merge_requests/42/?x=1#n"))
-	assert.False(t, sameMRWebURL(syncMRURL, "https://gitlab.example.com/example/product/-/merge_requests/42"))
-	assert.False(t, sameMRWebURL(syncMRURL, "https://git.example.org/example/other-product/-/merge_requests/42"))
+	assert.True(t, sameMRWebURL(syncMRURL, "http://GIT.EXAMPLE.ORG/example/product/-/merge_requests/4242/?x=1#n"))
+	assert.False(t, sameMRWebURL(syncMRURL, "https://gitlab.example.com/example/product/-/merge_requests/4242"))
+	assert.False(t, sameMRWebURL(syncMRURL, "https://git.example.org/example/other-product/-/merge_requests/4242"))
 	assert.False(t, sameMRWebURL("", syncMRURL))
 	assert.False(t, sameMRWebURL("::bad", syncMRURL))
 }
@@ -68,10 +68,10 @@ func TestSyncGitLabLinkEvidence_PipelineOutcomes(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			repo := newFakeVCSLinkRepo()
-			l := &domain.VCSLink{ID: uuid.New(), TaskID: uuid.New(), Provider: domain.VCSProviderGitLab, LinkType: domain.VCSLinkTypePR, ExternalID: "42", URL: syncMRURL, Status: domain.VCSLinkStatusMerged, Metadata: []byte("{}"), CreatedAt: time.Now(), PipelineID: tc.stored}
+			l := &domain.VCSLink{ID: uuid.New(), TaskID: uuid.New(), Provider: domain.VCSProviderGitLab, LinkType: domain.VCSLinkTypePR, ExternalID: "4242", URL: syncMRURL, Status: domain.VCSLinkStatusMerged, Metadata: []byte("{}"), CreatedAt: time.Now(), PipelineID: tc.stored}
 			require.NoError(t, repo.Create(context.Background(), l))
 			hp := tc.hp
-			src := &fakeMREvidence{byRef: map[string]gitlabapi.MergeRequestEvidence{"example/product!42": mergedEvidence(syncMRURL, syncHeadSHA, &hp)}}
+			src := &fakeMREvidence{byRef: map[string]gitlabapi.MergeRequestEvidence{"example/product!4242": mergedEvidence(syncMRURL, syncHeadSHA, &hp)}}
 			s := &vcsLinkService{repo: repo}
 			written, reason, err := syncGitLabLinkEvidence(context.Background(), s, src, *l)
 			require.NoError(t, err)
@@ -86,7 +86,7 @@ func ptrInt64(v int64) *int64 { return &v }
 func TestSyncLink_WithoutStoreDependencies(t *testing.T) {
 	repo := newFakeVCSLinkRepo()
 	gh := &domain.VCSLink{ID: uuid.New(), TaskID: uuid.New(), Provider: domain.VCSProviderGitHub, LinkType: domain.VCSLinkTypePR, ExternalID: "1", URL: "https://github.com/o/r/pull/1", Metadata: []byte("{}"), CreatedAt: time.Now()}
-	gl := &domain.VCSLink{ID: uuid.New(), TaskID: uuid.New(), Provider: domain.VCSProviderGitLab, LinkType: domain.VCSLinkTypePR, ExternalID: "42", URL: syncMRURL, Metadata: []byte("{}"), CreatedAt: time.Now()}
+	gl := &domain.VCSLink{ID: uuid.New(), TaskID: uuid.New(), Provider: domain.VCSProviderGitLab, LinkType: domain.VCSLinkTypePR, ExternalID: "4242", URL: syncMRURL, Metadata: []byte("{}"), CreatedAt: time.Now()}
 	require.NoError(t, repo.Create(context.Background(), gh))
 	require.NoError(t, repo.Create(context.Background(), gl))
 	svc := NewVCSLinkService(repo)
@@ -102,7 +102,7 @@ func TestSyncLink_WithoutStoreDependencies(t *testing.T) {
 	assert.Equal(t, 503, apiErr.StatusCode(), "no GitLab source wired")
 
 	// Create with no source wired stores the merged link untouched.
-	link, created, err := svc.Create(context.Background(), domain.CreateVCSLinkInput{TaskID: uuid.New(), Provider: domain.VCSProviderGitLab, LinkType: domain.VCSLinkTypePR, ExternalID: "42", URL: syncMRURL, Status: domain.VCSLinkStatusMerged})
+	link, created, err := svc.Create(context.Background(), domain.CreateVCSLinkInput{TaskID: uuid.New(), Provider: domain.VCSProviderGitLab, LinkType: domain.VCSLinkTypePR, ExternalID: "4242", URL: syncMRURL, Status: domain.VCSLinkStatusMerged})
 	require.NoError(t, err)
 	assert.True(t, created)
 	assert.Empty(t, link.HeadSHA())

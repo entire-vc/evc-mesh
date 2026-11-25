@@ -6,7 +6,7 @@ import { TaskPanel } from "@/components/task-panel";
 import type { Task } from "@/types";
 
 // Full-screen task-creation page, mounted at
-// /w/:wsSlug/p/:projectSlug/new (contract fixed on subtask #26217917).
+// /w/:wsSlug/p/:projectSlug/new (contract fixed on a subtask).
 // Mirrors TaskDetailPage's container/chrome exactly — same route family,
 // same AppLayout <main> wrapper, same TaskPanel host — just a different
 // `mode`. AppLayout already resolves `:projectSlug` into
@@ -23,7 +23,7 @@ export function TaskCreatePage() {
 
   // Optional pre-fill from board/calendar "create in this status/date" flows
   // (?status=<id>&due=<date>). Reading them is this task's scope; wiring
-  // board.tsx/calendar.tsx to actually pass them is subtask #73b449ea.
+  // board.tsx/calendar.tsx to actually pass them is a separate subtask.
   const statusParam = searchParams.get("status");
   const dueParam = searchParams.get("due");
   const createDefaults = useMemo(

@@ -24,7 +24,7 @@ import (
 // No //go:build integration tag — same convention as
 // memory_handler_reserved_tag_db_test.go; skips without a reachable Postgres.
 //
-// Acceptance control for an internal ticket, AC1: an issuance through the real
+// Acceptance control, AC1: an issuance through the real
 // handler, real SecretRefRepo and real ActivityLogRepo lands as a row in
 // activity_log, and the row's raw JSON does not contain the value. The unit
 // tests pin the entry's shape against a recorder; this proves the same holds
@@ -150,7 +150,7 @@ func TestMaterializeAuditDB_IssuanceIsJournaledWithoutTheValue(t *testing.T) {
 	assert.NotContains(t, rows[1].Changes, "DBAUDITCANARY")
 }
 
-// an internal ticket: a spawner that logs in with its own key through the real
+// A spawner that logs in with its own key through the real
 // DirectOnly -> SpawnerAuth chain and the production agent auth is the actor
 // of the journal row it causes.
 func TestMaterializeAuditDB_SpawnerKeyLoginIsTheActor(t *testing.T) {

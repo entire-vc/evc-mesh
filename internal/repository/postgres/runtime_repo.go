@@ -929,6 +929,9 @@ func (r *RuntimeRepo) Report(ctx context.Context, ws uuid.UUID, ref string, acto
 		if observation.State == "threshold" && (catalog.Pools[canonical].ThresholdRef == "" || observation.ThresholdRef != catalog.Pools[canonical].ThresholdRef || observation.EvidenceKind != "configured_threshold") {
 			return apierror.BadRequest("threshold requires an explicitly configured matching adapter rule")
 		}
+		if !domain.ValidRuntimePoolErrorKind(observation.ErrorKind) {
+			return apierror.BadRequest("invalid pool observation error_kind")
+		}
 		canonicalPools[canonical] = observation
 	}
 	if len(report.Profiles) > 256 {
@@ -1359,9 +1362,12 @@ func (r *RuntimeRepo) Preview(ctx context.Context, owner, receiver uuid.UUID, re
 			}
 			// Never turn contradictory host observations into extra quota.
 			// Conservative conflicts remain unknown until a fresh common fact.
-			if previous.State != fact.State || previous.Verified != fact.Verified || previous.ThresholdRef != fact.ThresholdRef {
+			// A stale-carrier cause survives only when every host reports it:
+			// a conflict never yields a passable credential_stale.
+			if previous.State != fact.State || previous.Verified != fact.Verified || previous.ThresholdRef != fact.ThresholdRef || previous.ErrorKind != fact.ErrorKind {
 				fact.State = "unknown"
 				fact.Verified = false
+				fact.ErrorKind = ""
 			}
 			if previous.ObservedAt.Before(fact.ObservedAt) {
 				fact.ObservedAt = previous.ObservedAt

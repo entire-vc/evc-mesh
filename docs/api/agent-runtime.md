@@ -109,6 +109,17 @@ more headroom. Several agents may share the preference; capacity remains global.
 Only confirmed quota exhaustion or a verified configured threshold opens quota
 reserve edges. Unknown/auth/network/manual pause/grant denial never masquerade as
 quota events. Exhausted pool aliases exclude all profiles sharing that pool.
+A report pool observation may carry optional `error_kind`: absent, `""` or
+`credential_stale` (anything else rejects the whole report with 400 `invalid pool
+observation error_kind`). Only a fresh `state=unknown, verified=false,
+error_kind=credential_stale` fact means the reporting credential carrier expired.
+A profile whose every unresolved window is such a fact (no `auth_error`, other
+unknown, quota or threshold) is traced `credential_stale`. It is never selected and
+never a quota trigger as a primary or a `quota_reserve` source; only when it was
+reached through a quota edge of an already open fallback does the walk continue
+into its own `quota_edges` (spending an attempt). A later primary is inspected as
+a primary even when it is also some edge's target, so it stays closed. Hosts that disagree on the cause
+merge to plain unknown.
 Independent API pools on the same account may be eligible: account inequality is
 not the resource-independence check. API must be an explicit primary or an opted-in
 reserve for this agent and provider. No task/project/workspace token quota or

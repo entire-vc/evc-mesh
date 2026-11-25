@@ -11,7 +11,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// an internal ticket: merging an MR of an unrelated repository moved another project's
+// Merging an MR of an unrelated repository moved another project's
 // review card to done because the MR description quoted its id. A merge moves
 // only the task the MR belongs to — an existing link to it, or a title/branch
 // reference from a repository the task's project works in. Everything else is

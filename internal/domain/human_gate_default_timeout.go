@@ -8,7 +8,7 @@ import (
 
 // HumanGateDefaultTimeoutCandidate is one row returned by
 // TaskRepository.FindExpiredDefaultGates — the minimal shape the default-on-timeout
-// sweep (task #060ccaae) needs to apply a gate's own stated fallback and explain the
+// sweep needs to apply a gate's own stated fallback and explain the
 // application in a recorded decision. Deliberately not domain.Task, same reasoning as
 // HumanGateSoftTimeoutCandidate: the sweep has no use for the rest of the task.
 type HumanGateDefaultTimeoutCandidate struct {

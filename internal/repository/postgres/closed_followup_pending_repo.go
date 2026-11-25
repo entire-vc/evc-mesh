@@ -13,7 +13,7 @@ import (
 )
 
 // ClosedFollowUpPendingRepo implements repository.ClosedFollowUpPendingRepository
-// with PostgreSQL (#db1c6c7a).
+// with PostgreSQL.
 type ClosedFollowUpPendingRepo struct {
 	db *sqlx.DB
 }
@@ -63,7 +63,7 @@ func (r *ClosedFollowUpPendingRepo) ListDue(ctx context.Context, maxAttempts, li
 }
 
 // ClaimForReconcile atomically leases a row to one reconcile pass
-// (#a2368528): the single UPDATE either takes the lease (row unleased, or
+// the single UPDATE either takes the lease (row unleased, or
 // the holder's TTL expired) or refuses it (someone else holds it), and
 // RowsAffected is the answer — there is no read-then-write window for two
 // replicas to both win. Rows are probed by PK, so no index is needed.
@@ -107,7 +107,7 @@ func (r *ClosedFollowUpPendingRepo) ReleaseClaim(ctx context.Context, commentID 
 // due set. Idempotent: a second stamp never moves the first landing time.
 // Does NOT touch the lease: a stamp is progress INSIDE the row's unit, and
 // the unit — not the write — is what the lease covers; the loop's end-of-row
-// release hands the row back (#a2368528).
+// release hands the row back.
 func (r *ClosedFollowUpPendingRepo) MarkEscalated(ctx context.Context, commentID uuid.UUID, at time.Time) error {
 	const q = `
 		UPDATE closed_followup_pending
@@ -126,7 +126,7 @@ func (r *ClosedFollowUpPendingRepo) MarkEscalated(ctx context.Context, commentID
 // lands BEFORE the delivery attempt on the normal path, and a lease released
 // here is the overlap window reopening mid-row — a second pass claims the
 // row while the first is still delivering (codex-review round 2 on !1085).
-// The row comes back at its unit's end, via the loop's release (#a2368528).
+// The row comes back at its unit's end, via the loop's release.
 func (r *ClosedFollowUpPendingRepo) MarkNoticed(ctx context.Context, commentID uuid.UUID, at time.Time) error {
 	const q = `
 		UPDATE closed_followup_pending
@@ -143,7 +143,7 @@ func (r *ClosedFollowUpPendingRepo) MarkNoticed(ctx context.Context, commentID u
 // attempts, never lose one or clobber the counter. Does NOT touch the lease:
 // the failed pass still owns the row until its unit ends — the loop's
 // release hands it back right after, so the next tick's cadence is unchanged
-// without a mid-row window (#a2368528).
+// without a mid-row window.
 func (r *ClosedFollowUpPendingRepo) MarkAttempt(ctx context.Context, commentID uuid.UUID, lastErr string) (int, error) {
 	const q = `
 		UPDATE closed_followup_pending

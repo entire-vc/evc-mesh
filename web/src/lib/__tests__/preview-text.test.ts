@@ -47,7 +47,7 @@ describe("toPreviewText", () => {
     expect(toPreviewText("- one\n- two")).toBe("one two");
     expect(toPreviewText("1. first\n2. second")).toBe("first second");
     // A hash mid-sentence is not a heading.
-    expect(toPreviewText("see task #172cad33")).toBe("see task #172cad33");
+    expect(toPreviewText("see task #5eed0023")).toBe("see task #5eed0023");
   });
 
   it("keeps code contents, drops fences and ticks", () => {

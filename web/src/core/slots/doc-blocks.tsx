@@ -121,7 +121,7 @@ function CommentsRailBlock() {
 function CommentsToggleBlock() {
   const p = usePage();
   // Hidden below `lg`, where the rail itself never renders: a visible control for a surface that
-  // cannot open is worse than no control at all (AC2).
+  // cannot open is worse than no control at all (an internal ticket AC2).
   if (p.isMobile) return null;
   return <DocCommentToggle controller={p.comments} open={p.railOpen} onToggle={p.toggleRail} />;
 }

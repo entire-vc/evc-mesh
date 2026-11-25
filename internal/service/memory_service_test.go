@@ -363,7 +363,7 @@ func (m *mockMemoryRepo) ListReviewNeeded(_ context.Context, _ int) ([]domain.Me
 	return nil, nil
 }
 
-func (m *mockMemoryRepo) FindNewerMatch(_ context.Context, _ uuid.UUID, _ string, _ *int64, _ uuid.UUID, _ time.Time) (*domain.Memory, error) {
+func (m *mockMemoryRepo) FindNewerMatch(_ context.Context, _ uuid.UUID, _ string, _ *int64, _ string, _ uuid.UUID, _ time.Time) (*domain.Memory, error) {
 	return nil, nil
 }
 
@@ -640,7 +640,7 @@ func TestRemember_InvalidKey(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestRemember_ReservedTags — an internal ticket
+// TestRemember_ReservedTags
 // ---------------------------------------------------------------------------
 
 // newMemoryServiceWithWorkspaceRepo wires the reserved-tag guard the way
@@ -761,7 +761,7 @@ func TestRemember_ReservedTag_FleetTagsUnaffected(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestReservedTag_OtherWritePaths — an internal ticket. enforceReservedTags was
+// TestReservedTag_OtherWritePaths. enforceReservedTags was
 // wired to Remember only; ExtractFromEvent and ImportMemories are
 // the other two internal callers of memRepo.Upsert and were bypassing it
 // entirely. Same red/green shape as the Remember tests above, on the other
@@ -862,7 +862,7 @@ func TestImportMemories_ReservedTag_AllowedInBenchWorkspace(t *testing.T) {
 }
 
 // TestEnforceReservedTags_CaseInsensitiveMatch covers the second half of
-// an internal ticket: the map lookup used to be an exact match, so `LME-Bench` passed
+// The map lookup used to be an exact match, so `LME-Bench` passed
 // straight through outside the bench workspace. The comparison is now
 // case-insensitive on the lookup key only.
 func TestEnforceReservedTags_CaseInsensitiveMatch(t *testing.T) {
@@ -956,7 +956,7 @@ func TestRecall_BasicSearch(t *testing.T) {
 // ---------------------------------------------------------------------------
 // TestRecall_TouchAccessed_OnlyFinalTrimmedSet
 //
-// Regression test for an internal ticket: TouchAccessed (the last_accessed_at
+// Regression test: TouchAccessed (the last_accessed_at
 // signal runReviewTriage's 60-day stale branch keys off) used to run INSIDE
 // FullTextSearchRanked, over that arm's own oversized pre-fusion candidate
 // pool (poolSize = limit*candidateMultiplier). That counted "was a candidate"
@@ -2442,7 +2442,7 @@ func TestResolveProjectSlugForTags_MatchesUnexported(t *testing.T) {
 // ---------------------------------------------------------------------------
 // TestRemember_ExplicitProjectIDNormalizedByScope
 //
-// an internal ticket/F3 gated BOTH known project_id auto-stamp sources (server
+// F3 gated BOTH known project_id auto-stamp sources (server
 // resolveProjectSlug, MCP client active-task auto-populate) to scope=project
 // only. Neither gate stops a CALLER from passing project_id explicitly
 // alongside scope=workspace/agent — measured live: 4 fresh rows got exactly
@@ -3107,7 +3107,7 @@ func TestSetProjectKnowledge_Amendment4_CanonicalSupersede(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestSetProjectKnowledge_KeyLimitIsBytesNotCharacters — an internal ticket, same
+// TestSetProjectKnowledge_KeyLimitIsBytesNotCharacters, same
 // class of fix as the value limit below, applied to the 80-byte key cap.
 // ---------------------------------------------------------------------------
 
@@ -3131,7 +3131,7 @@ func TestSetProjectKnowledge_KeyLimitIsBytesNotCharacters(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestRemember_TagLimitIsBytesNotCharacters — an internal ticket, same class of
+// TestRemember_TagLimitIsBytesNotCharacters, same class of
 // fix applied to the 64-byte-per-tag cap.
 // ---------------------------------------------------------------------------
 
@@ -3160,7 +3160,7 @@ func TestRemember_TagLimitIsBytesNotCharacters(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestSetProjectKnowledge_ValueLimitIsBytesNotCharacters — an internal ticket
+// TestSetProjectKnowledge_ValueLimitIsBytesNotCharacters
 //
 // The limit is enforced on len(input.Value), i.e. UTF-8 bytes. The error
 // message used to say "characters", which is wrong on any non-ASCII text
@@ -4050,7 +4050,7 @@ func TestEmbedConcurrencyUnboundedByDefault(t *testing.T) {
 	}
 }
 
-// TestRecallEmbedConcurrencyBound is the regression guard for an internal ticket: the recall
+// TestRecallEmbedConcurrencyBound is the regression guard: the recall
 // query-embed call (RecallWithStats' vector-arm goroutine) previously ignored
 // embedSem entirely, so EMBEDDING_CONCURRENCY bounded only embedAndStore and every
 // concurrent recall fired its own unbounded embed call straight at the embedder.
@@ -4206,7 +4206,7 @@ func (e *countingBatchEmbedder) Model() string   { return "counting-batch" }
 func (e *countingBatchEmbedder) Dimensions() int { return e.dim }
 
 // TestEmbedAndStore_Chunked_UsesOneBatchedCallNotOnePerChunk is the load half of
-// an internal ticket. Before the fix a memory of N chunks issued N sequential embedder calls
+// Before the fix a memory of N chunks issued N sequential embedder calls
 // inside one flat 30s budget, so under concurrent load the budget ran out mid-document
 // (538 deadline failures at chunk 12-15 of 18-24) and the memory was lost entirely —
 // silently, because the goroutine only logs.
@@ -4260,7 +4260,7 @@ func (e *transientThenOKEmbedder) Model() string   { return "transient-then-ok" 
 func (e *transientThenOKEmbedder) Dimensions() int { return e.dim }
 
 // TestEmbedAndStore_Chunked_TransientEmbedFailureIsRetried is the retry half of
-// an internal ticket: before the fix there was no retry at all, so one blip against the shared
+// Before the fix there was no retry at all, so one blip against the shared
 // embedder lost the memory permanently — the goroutine logged and exited, and nothing
 // re-embeds it until someone runs reindex by hand. RED on the pre-fix code.
 func TestEmbedAndStore_Chunked_TransientEmbedFailureIsRetried(t *testing.T) {
@@ -4307,7 +4307,7 @@ func (r *fkViolationChunkRepo) ReplaceChunks(_ context.Context, _ uuid.UUID, _ [
 
 // TestEmbedAndStore_Chunked_ForeignKeyViolationIsNotAnEmbedFailure pins the distinction
 // that kept the real errors hidden: 34 FK races appeared alongside 538 genuine deadline
-// failures in the an internal ticket window, and counting the races as embedding failures is what
+// failures in the window, and counting the races as embedding failures is what
 // makes the counter useless for alerting.
 func TestEmbedAndStore_Chunked_ForeignKeyViolationIsNotAnEmbedFailure(t *testing.T) {
 	before := testutilCounterValue(t, "store")
@@ -4391,11 +4391,11 @@ func TestRecall_EmbedFailureIncrementsCounter(t *testing.T) {
 	require.NoError(t, err, "an embedder failure on recall must fail OPEN to bm25, not surface as an error")
 	assert.Equal(t, domain.SearchModeBM25Only, mode, "the dense arm did not run — the served mode must say so")
 	assert.Greater(t, testutilCounterValue(t, "recall"), before,
-		"a recall-path embed failure must increment mesh_memory_embed_failures_total{op=\"recall\"} — this is the exact counter the Grafana alert in an internal ticket watches")
+		"a recall-path embed failure must increment mesh_memory_embed_failures_total{op=\"recall\"} — this is the exact counter the Grafana alert watches")
 }
 
 // TestRecall_EmbedSemaphoreTimeoutIncrementsCounter covers the OTHER recall-path call
-// site: a recall queued behind a full embedSem (an internal ticket/a PR) whose own context
+// site: a recall queued behind a full embedSem (PR #611) whose own context
 // deadline expires before a slot frees. acquireEmbedSem returns ctx.Err() WITHOUT ever
 // calling Embed — a distinct code path from the one above, and the one #611's fix
 // actually introduced. Reuses concurrencyTrackingEmbedder (already used by the
@@ -4434,7 +4434,7 @@ func TestRecall_EmbedSemaphoreTimeoutIncrementsCounter(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// B2 key+tags-per-chunk prefix fix (an internal ticket measurement, an internal ticket)
+// B2 key+tags-per-chunk prefix fix (an internal ticket measurement)
 // ---------------------------------------------------------------------------
 
 // capturingPrefixEmbedder records every text handed to EmbedBatch/Embed, across calls,
@@ -4479,7 +4479,7 @@ func (e *capturingPrefixEmbedder) allTexts() []string {
 }
 
 // TestEmbedChunked_KeyTagsPrefix_PresentInEveryChunk is AC1 of the B2 fix (task
-// an internal ticket, measurement closed on an internal ticket): before this fix, `key + " " + content +
+// e11fe15e, measurement closed): before this fix, `key + " " + content +
 // " " + tags` was built as ONE composite string and THAT was chunked — so the key
 // survived only in chunk 0 and tags only in the last chunk. On a multi-chunk memory,
 // ~94% of chunks were searchable without the memory's own key. B2 chunks content alone

@@ -22,7 +22,7 @@ func runScoped(db *sqlx.DB, c echo.Context) error {
 }
 
 // TestRequireWorkspaceMemberScoped_TaskID_NotFound_Returns404 is the primary
-// regression test for #a49500c5: a task_id that resolves to no row — because
+// regression test: a task_id that resolves to no row — because
 // it is soft-deleted or never existed, the two are indistinguishable by
 // design (deleted_at IS NULL in the resolver query, untouched by this fix) —
 // must answer 404, not the old 403 "workspace access denied" that read as a
@@ -128,7 +128,7 @@ func TestRequireWorkspaceMemberScoped_TaskID_Live_Returns200(t *testing.T) {
 }
 
 // TestRequireWorkspaceMemberScoped_TaskID_ForeignWorkspace_Not200 is the
-// mandatory negative control from #a49500c5's acceptance criteria: a task
+// mandatory negative control from an internal ticket's acceptance criteria: a task
 // that DOES exist, in a workspace the caller does NOT belong to, must still
 // be refused. Without this control, a 404-on-not-found fix is
 // indistinguishable from "removed the membership check" — this proves the
@@ -151,7 +151,7 @@ func TestRequireWorkspaceMemberScoped_TaskID_ForeignWorkspace_Not200(t *testing.
 		WillReturnRows(sqlmock.NewRows([]string{"set_config"}).AddRow(foreignWS.String()))
 	// The agent's presented key authenticated into its OWN workspace, not
 	// foreignWS — the equality check refuses regardless of what other grants
-	// the agent might separately hold (#7661fc5d).
+	// the agent might separately hold.
 
 	e := echo.New()
 	c := e.NewContext(httptest.NewRequest(http.MethodGet, "/", http.NoBody), httptest.NewRecorder())

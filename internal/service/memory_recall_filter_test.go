@@ -13,7 +13,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Recall eligibility filters reach BOTH arms (task #2c087b2a)
+// Recall eligibility filters reach BOTH arms
 //
 // The defect these cover: scope and tags were applied to the vector arm only, and
 // tags_any to neither — it ran as a post-filter over whatever the two arms had

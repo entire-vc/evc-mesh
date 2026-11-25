@@ -1,5 +1,5 @@
 -- +goose Up
--- Task #ce1bc187 (audit §1.6): agent_sessions.tool_breakdown has been a column since
+-- (audit §1.6): agent_sessions.tool_breakdown has been a column since
 -- 20260315042_create_agent_sessions.sql, but nothing has ever written to it — every one
 -- of the 5,595 sessions on record shows it empty. Every R:W (recall-vs-remember), read-
 -- before-action, and compliance measurement that wants "which tools did this session

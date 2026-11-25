@@ -20,7 +20,7 @@ import (
 // untagged `go test ./...` runs these against a migrated DATABASE_URL, and
 // skip()s rather than fails when no database is reachable.
 //
-// Regression tests for task #2c0154db, finding F1: after cmd/collapse-memories
+// Regression tests, finding F1: after cmd/collapse-memories
 // leaves a winner `active` and a loser `superseded` under the SAME natural
 // key, Remember() on that key must resolve to the WINNER (via GetByKey's now
 // status-aware, deterministically-ordered lookup) — not silently resurrect
@@ -77,7 +77,7 @@ func TestRemember_CollapsedKey_ResolvesToWinnerNotRetired(t *testing.T) {
 	// remember() call that should have upserted onto it but forked instead),
 	// so the loser has the physically-earlier heap position. Without an
 	// ORDER BY, that is exactly the condition under which Postgres's scan
-	// returned the retired row first in every group Garfield measured on
+	// returned the retired row first in every group Gary measured on
 	// prod — insert order alone reproduces it; a same-transaction UPDATE
 	// does not reliably relocate a row's scan position the way a distinct,
 	// earlier INSERT does.

@@ -20,7 +20,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
-// Task #f933dc05 — DELETE /tasks/:id/human-gate opens for exactly ONE new caller: the
+// DELETE /tasks/:id/human-gate opens for exactly ONE new caller: the
 // agent that armed this gate through the API and that therefore owns the ask nobody
 // else could take down.
 //

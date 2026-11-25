@@ -1,6 +1,6 @@
 -- +goose Up
 
--- Workspace secrets live in Keep only (W3.6b step 3, an internal ticket).
+-- Workspace secrets live in Keep only (W3.6b step 3).
 --
 -- After step 2 every current row of `secrets` carries keep_ref and is served
 -- from Keep; the builtin ciphertext is no longer read. This migration drops the

@@ -1,5 +1,5 @@
 // @vitest-environment node
-// Cold-reopen recovery (card boot recovery): the service worker must never cache or
+// Cold-reopen recovery: the service worker must never cache or
 // replay an error response, and must retry a failed asset once past the HTTP
 // cache; the boot guard in index.html must be bounded and must not touch storage.
 import { readFileSync } from "node:fs";
@@ -157,7 +157,7 @@ describe("boot guard (index.html)", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(g.reload).not.toHaveBeenCalled();
     const texts = g.created.map((c) => c.text).join("|");
-    expect(texts).toContain("asset-load-failed /assets/index-1.js HTTP 200");
+    expect(texts).toContain("asset-load-failed /assets/index-1.js HTTP 200".replace("200", "200"));
     expect(texts).not.toContain("secret");
   });
 

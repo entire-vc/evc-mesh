@@ -13,8 +13,8 @@ import (
 )
 
 // This file holds the "was this backlog card deliberately parked by a status
-// demotion?" check shared by BacklogPromotionAdvisoryService (#9f3f4064) and
-// MonitorPromotionService (#1eb4fd7d). Extracted rather than duplicated: both callers
+// demotion?" check shared by BacklogPromotionAdvisoryService and
+// MonitorPromotionService. Extracted rather than duplicated: both callers
 // need the identical activity-log read + interpretation, and a guard correct in one
 // copy and stale in the other is exactly the kind of drift this package already warns
 // about elsewhere (see monitor_promotion.go's absoluteNoPromoteLabels doc comment on
@@ -34,7 +34,7 @@ type activityStatusChange struct {
 // leaseReaperSourcePrefix marks moves written by checkoutLeaseReaper.parkTask
 // (Source "lease_reaper.unleased" / "lease_reaper.expired"). That park is a
 // system idle-park whose own comment promises "monitor-promotion lifts it back to
-// todo when the due_date arrives" (explicit park fix), so it is not a deliberate demotion.
+// todo when the due_date arrives", so it is not a deliberate demotion.
 const leaseReaperSourcePrefix = "lease_reaper."
 
 // deliberateParkActivityPageSize bounds how far back wasDeliberatelyParkedFromBacklog
@@ -43,7 +43,7 @@ const leaseReaperSourcePrefix = "lease_reaper."
 // uses a generous but bounded window instead — a card demoted long ago with many
 // intervening activity-log entries (assignment changes, further moves) since could, in
 // principle, fall outside it and read as "never moved" (not parked) where the sweep
-// would still see the demotion. Accepted as a known gap: the #f928e5af parallel run is
+// would still see the demotion. Accepted as a known gap: the parallel run is
 // what would surface such a case as a named divergence to investigate, not something to
 // guess a bigger number against up front.
 const deliberateParkActivityPageSize = 50
@@ -57,7 +57,7 @@ const deliberateParkActivityPageSize = 50
 // it — see monitor_promotion.go's skipReason and backlog_promotion_advisory.go's
 // evaluate(), both of which check this ONLY when the relevant dependency set is empty.
 // mesh-intake-sweep.py's was_deliberately_parked() deliberately returns false the
-// moment dep_ids is non-empty, before ever looking at the activity log (#bbf3db92: a
+// moment dep_ids is non-empty, before ever looking at the activity log (a
 // demoted, parented, dependency-bearing card was re-promoted twice over 7.5h by the
 // live sweep once its dependency cleared — the live sweep's "all deps cleared, and
 // deps existed" IS the informative event for that class of card, and a demotion-check

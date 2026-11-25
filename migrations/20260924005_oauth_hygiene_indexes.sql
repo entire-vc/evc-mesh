@@ -1,6 +1,6 @@
 -- +goose Up
 
--- MCP-OAuth hygiene (#23579e6b), additive only — two indexes, no data change.
+-- MCP-OAuth hygiene, additive only — two indexes, no data change.
 --
 -- ListGrantsByUser ("your connected apps") filters on user_id and sorts
 -- created_at DESC over ALL of the user's grants, revoked ones included. The

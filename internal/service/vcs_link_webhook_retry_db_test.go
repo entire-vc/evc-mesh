@@ -16,7 +16,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
-// an internal ticket: a GitLab "closed" MR delivery whose link upsert failed was
+// A GitLab "closed" MR delivery whose link upsert failed was
 // answered 200 and never retried, so the link stayed open forever. The
 // handler now answers 5xx so the provider redelivers; this proves the
 // redelivery is SAFE end to end on real Postgres: the first attempt fails at

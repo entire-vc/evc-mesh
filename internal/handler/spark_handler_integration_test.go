@@ -99,7 +99,7 @@ func fakeSparkCatalogServer(t *testing.T) *httptest.Server {
 // doSparkGET builds and runs a GET request. auth, when non-nil, authenticates
 // the request context before the handler method runs — required whenever the
 // path carries a workspace_id, since requireWorkspaceAccess now checks it
-// (#4a3195a5's own query-tenant guard: a workspace's spark row can point at a
+// (an internal ticket's own query-tenant guard: a workspace's spark row can point at a
 // different catalog host, so an unauthorized caller must be refused before
 // clientFor ever resolves a foreign workspace_id, not just get an empty
 // answer).
@@ -126,7 +126,7 @@ func memberOf(ws, userID uuid.UUID) *mockWorkspaceMemberRepo {
 }
 
 // ---------------------------------------------------------------------------
-// #4a3195a5 acceptance §5: positive control BEFORE negative, then re-enable.
+// Acceptance §5: positive control BEFORE negative, then re-enable.
 // ---------------------------------------------------------------------------
 
 func TestSparkHandler_Search_WorkspaceRowEnabled_ReachesResolvedCatalog(t *testing.T) {

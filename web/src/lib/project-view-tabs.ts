@@ -1,4 +1,5 @@
 import {
+  BarChart3,
   Calendar,
   Columns3,
   FileText,
@@ -52,6 +53,7 @@ export const BUILTIN_PROJECT_TABS: readonly ProjectViewTabDescriptor[] = [
   builtin("calendar", Calendar, 0),
   builtin("docs", NotebookText, 10),
   builtin("updates", FileText, 5),
+  builtin("stats", BarChart3, 4),
 ];
 
 /**

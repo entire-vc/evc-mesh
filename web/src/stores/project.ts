@@ -33,6 +33,8 @@ interface ProjectState {
   isLoading: boolean;
   /** A project list has been answered (possibly empty, possibly with an error): "not found" is final. */
   loaded: boolean;
+  /** The workspace the answered list belongs to: a list left from another workspace says nothing about this one. */
+  loadedWorkspaceId: string | null;
   error: string | null;
 
   fetchProjects: (workspaceId: string) => Promise<void>;
@@ -73,6 +75,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   statuses: [],
   isLoading: false,
   loaded: false,
+  loadedWorkspaceId: null,
   error: null,
 
   fetchProjects: async (workspaceId: string) => {
@@ -81,13 +84,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const page = await api<PaginatedResponse<Project>>(
         `/api/v1/workspaces/${workspaceId}/projects`,
       );
-      set({ projects: page.items ?? [], isLoading: false, loaded: true, error: null });
+      set({ projects: page.items ?? [], isLoading: false, loaded: true, loadedWorkspaceId: workspaceId, error: null });
     } catch (error) {
       set({
         projects: [],
         currentProject: null,
         isLoading: false,
         loaded: true,
+        loadedWorkspaceId: workspaceId,
         error: getErrorMessage(error),
       });
     }

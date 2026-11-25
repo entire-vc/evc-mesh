@@ -17,12 +17,12 @@ func TestRequiresCopyTier(t *testing.T) {
 		want   bool
 	}{
 		{
-			// #6a0c7ae3, Garfield's own comment on task 1.17a, verbatim: the live gate
+			// Gary's own comment on task 1.17a, verbatim: the live gate
 			// that sat open for five days before a human closed it by hand as a false
 			// gate. This is the negative control that matters most — the regex was
 			// written by someone reading THIS sentence, not the other way round, so if
 			// it fails to match, the regex is wrong and needs fixing, not the test.
-			name:   "the actual #6a0c7ae3 reason",
+			name:   "the actual reason",
 			reason: "апрув видимого текста: подписи пунктов меню и диалога",
 			want:   true,
 		},

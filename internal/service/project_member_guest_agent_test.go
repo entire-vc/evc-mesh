@@ -2,7 +2,7 @@ package service
 
 // Tests for AddAgentMember recognizing a GUEST agent (invited into the
 // project's workspace via agent_workspace_grants, task U1/U3) in addition to
-// a HOME one (agent.WorkspaceID == project.WorkspaceID). Task #80dfb336: the
+// a HOME one (agent.WorkspaceID == project.WorkspaceID). an internal ticket: the
 // U1-U3 invite/grant epic produced agents that can authenticate into a
 // workspace but could never be added to any of its projects — every guest
 // agent was refused with "agent does not belong to this workspace" because

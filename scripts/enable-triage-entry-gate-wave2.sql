@@ -4,10 +4,10 @@
 --
 -- Wave 1 (Lab, Mesh dev) is scripts/enable-triage-entry-gate.sql (task 2495b694).
 -- This is the deferred "other projects follow after a week of observation" step
--- that script's own header anticipated — brought forward because #2648d91c
+-- that script's own header anticipated — brought forward because an internal ticket
 -- (removing triage-drain.py) would otherwise strand orphan-triage cards on
 -- every project that doesn't have this gate (incident class: 2026-06-21, 13 in
--- triage / 10 not on Pavel / 9 cards 99-137h stale before #aca99f88).
+-- triage / 10 not on Pavel / 9 cards 99-137h stale before that fix).
 --
 -- WHAT THIS TURNS ON — same two keys as wave 1, see that script's header for
 -- the full explanation. Short version: a move into the `triage` status

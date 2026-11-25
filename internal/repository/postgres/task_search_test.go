@@ -7,21 +7,21 @@ import (
 )
 
 func TestListTasksSearch_ByShortID(t *testing.T) {
-	mode, clean := searchMode("#66418dda")
+	mode, clean := searchMode("#5eed0008")
 	assert.Equal(t, "prefix", mode)
-	assert.Equal(t, "66418dda", clean)
+	assert.Equal(t, "5eed0008", clean)
 }
 
 func TestListTasksSearch_ByUUID(t *testing.T) {
-	mode, clean := searchMode("66418dda-cecc-4a38-9895-23eef44536a5")
+	mode, clean := searchMode("5eed0008-cecc-4a38-9895-23eef44536a5")
 	assert.Equal(t, "uuid", mode)
-	assert.Equal(t, "66418dda-cecc-4a38-9895-23eef44536a5", clean)
+	assert.Equal(t, "5eed0008-cecc-4a38-9895-23eef44536a5", clean)
 }
 
 func TestListTasksSearch_ByHexNoHash(t *testing.T) {
-	mode, clean := searchMode("66418dda")
+	mode, clean := searchMode("5eed0008")
 	assert.Equal(t, "prefix", mode)
-	assert.Equal(t, "66418dda", clean)
+	assert.Equal(t, "5eed0008", clean)
 }
 
 func TestListTasksSearch_TextRegression(t *testing.T) {
@@ -31,9 +31,9 @@ func TestListTasksSearch_TextRegression(t *testing.T) {
 }
 
 func TestListTasksSearch_UppercaseHex(t *testing.T) {
-	mode, clean := searchMode("#66418DDA")
+	mode, clean := searchMode("#5EED0008")
 	assert.Equal(t, "prefix", mode)
-	assert.Equal(t, "66418dda", clean)
+	assert.Equal(t, "5eed0008", clean)
 }
 
 func TestListTasksSearch_ShortHexTooShort(t *testing.T) {

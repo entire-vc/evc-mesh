@@ -8,7 +8,7 @@ import { agentId, history, newChatViaUi, sendVia, waitAssistantDone } from "./li
 import { TestRunner } from "./lib/runner";
 
 /**
- * S07 to the end (Mesh Doc e2e/agent-chat, an internal ticket): a message to the offline agent waits in
+ * S07 to the end (Mesh Doc e2e/agent-chat): a message to the offline agent waits in
  * the queue; when the agent's runner comes back it is claimed exactly once and answered exactly once
  * (S07-recovery); a message nobody takes within the offline TTL becomes expired, the UI says "not
  * delivered", and a runner that comes later neither gets it nor may act on it (S07-expiry).

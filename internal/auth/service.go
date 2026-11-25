@@ -326,7 +326,7 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 // nonexistent (or active) account returned ErrInvalidCredentials — a
 // distinguishable body for free, no rate limit or brute force needed. On
 // our prod, where self-registration is closed, "an account exists here"
-// is itself the sensitive fact (see an internal ticket).
+// is itself the sensitive fact.
 //
 // Checking the password first closes that: a WRONG password against a
 // deactivated account now returns the same ErrInvalidCredentials as a
@@ -353,14 +353,14 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 // TestAuthHandler_Login_InactiveAccount_WrongPassword_CountsAgainstLockoutBudget.
 //
 // Second, ORTHOGONAL timing side-channel this function must also close
-// (an internal ticket, found on the an internal ticket review): before this fix, the
+// (found on the review): before this fix, the
 // user==nil branch returned ErrInvalidCredentials immediately, BEFORE
 // bcrypt ever ran, while the found-user branch always ran bcrypt in full
 // (cost=bcryptCost, ~45ms measured). That made a nonexistent account
 // ~950ns and an existing one ~45ms — a ~4.5-order-of-magnitude gap an
 // attacker can use to enumerate which emails have accounts purely from
 // response LATENCY, independent of the response body/headers (which the
-// an internal ticket fix above already made identical). It is a different channel
+// Above already made identical). It is a different channel
 // than the one that fix closed: that one distinguished "deactivated" from
 // "active or none" in the response body; this one distinguishes "exists"
 // from "doesn't", for every account state and every password, in time.

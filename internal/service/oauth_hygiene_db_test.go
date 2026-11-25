@@ -13,7 +13,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// OAuth hygiene (#23579e6b): periodic purge, grant_type enforcement on
+// OAuth hygiene: periodic purge, grant_type enforcement on
 // /oauth/token, the mot_ authentication cache, and the single invalid-code
 // description. Real Postgres throughout, like the rest of the *_db_test.go
 // files in this package; the fake clock is oauthSvcEnv.advance.

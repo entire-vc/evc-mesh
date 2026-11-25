@@ -15,7 +15,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Cross-project dependencies (#559270cf, scope addition by Riker 2026-09-07).
+// Cross-project dependencies (scope addition by Robin 2026-09-07).
 //
 // The tenancy boundary on a dependency edge is the WORKSPACE, not the project. It was
 // written as same-project because that is trivially inside the same workspace and no

@@ -176,8 +176,8 @@ const workspaceDeletedSlugMaxLen = 100 - 26
 // projects.deleted_at (or now do, see the fixes alongside this one), so once
 // this cascade runs there is nothing left for them to find.
 //
-// The delete also RENAMES the row's own slug (task #c164a5df, parent
-// #93644be7) rather than leaving it in place. A soft-deleted row that keeps
+// The delete also RENAMES the row's own slug (parent
+// an internal ticket) rather than leaving it in place. A soft-deleted row that keeps
 // its slug holds it forever — idx_workspaces_slug_unique_live (migration
 // 20260911002) only enforces uniqueness among LIVE rows, so a dead row with
 // its original slug would silently block recreating a workspace at that

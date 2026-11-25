@@ -21,7 +21,7 @@ import (
 // authWsID is the workspace the agent's PRESENTED KEY actually authenticated
 // into (see ContextKeyAgentAuthWorkspaceID) — pass the same value as wsID to
 // model "the caller's own key, own resource"; pass a different one to model a
-// key scoped elsewhere being pointed at wsID (the an internal ticket cross-workspace case).
+// key scoped elsewhere being pointed at wsID (the cross-workspace case).
 // agentID is the authenticated agent's UUID.
 func setupAgentCtx(e *echo.Echo, wsID, authWsID, agentID uuid.UUID) (echo.Context, *httptest.ResponseRecorder) {
 	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
@@ -178,7 +178,7 @@ func TestRequireWorkspaceMember_Agent_CrossWorkspace_IDOR(t *testing.T) {
 }
 
 // TestRequireWorkspaceMember_Agent_MultiWorkspace_GrantElsewhereDoesNotGrantAccess
-// is the direct regression test for an internal ticket: an agent that legitimately
+// is the direct regression test: an agent that legitimately
 // holds an ACTIVE grant in the target workspace must still be refused when
 // the key PRESENTED on this particular request authenticated into a
 // different one. Membership somewhere is necessary but not sufficient — this

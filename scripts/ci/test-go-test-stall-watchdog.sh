@@ -14,7 +14,7 @@
 #   GREEN  a slow-but-talking test    -> must NOT fire while output keeps arriving
 #   GREEN  a silent CPU-busy test     -> must NOT fire while CPU keeps being used
 #                                        (a package `go test` reports only at its end,
-#                                        on a starved runner: Mesh #362289cb)
+#                                        on a starved runner: an internal ticket)
 #
 # The last one matters as much as the first: a watchdog that kills healthy long
 # runs is worse than none, because it teaches everyone to raise the limit until

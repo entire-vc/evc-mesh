@@ -1,4 +1,4 @@
-// PDF rendering has one hard constraint, set by the parent card (#2a467980):
+// PDF rendering has one hard constraint, set by the parent card:
 // pure Go, zero external binaries. There is no headless Chrome on the prod-host
 // prod host (verified: `ssh prod-host 'which chromium chromium-browser
 // google-chrome'` — empty) and mesh-api ships as a bare Go binary under

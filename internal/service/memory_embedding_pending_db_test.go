@@ -20,7 +20,7 @@ import (
 // runs these against a migrated DATABASE_URL and skip()s rather than fails
 // when no database is reachable.
 //
-// Regression test for #a2e00afd: Remember() commits the memory row
+// Regression test: Remember() commits the memory row
 // synchronously but fires embedding via `go s.embedAndStore(...)` — a
 // fire-and-forget goroutine with no completion signal. Until that goroutine
 // finishes, the row fails vectorCandidateIDs's predicate and is invisible to
@@ -127,7 +127,7 @@ func TestRemember_EmbeddingPending_SignaledWhileGoroutineInFlight(t *testing.T) 
 	// Eventual consistency: once the goroutine is unblocked, the row must
 	// become dense-findable (proves the gate wasn't just permanently broken).
 	//
-	// Why 20s and not the original 2s (#da03cd09). After the release the only
+	// Why 20s and not the original 2s. After the release the only
 	// work left is one Embed that returns at once and one UPDATE
 	// (embedAndStore → MemoryRepo.UpdateEmbedding); there is no backoff, lease
 	// or second goroutine on this path, and -race -count=20 shows no race.

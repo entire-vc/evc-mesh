@@ -65,8 +65,8 @@ Open points for the publisher (not decided here):
 ## 3. Not promised in the listing
 
 Same limits as protocol §10: no guaranteed live streaming, no capacity reporting, no
-write-workspace in a chat, cancel is polled (≤ 60 s). Until E3 an internal ticket, E4 an internal ticket and
-E5 an internal ticket are accepted, the listing must not claim them.
+write-workspace in a chat, cancel is polled (≤ 60 s). Until E3, E4 and
+E5 are accepted, the listing must not claim them.
 
 ## 4. Before publishing
 

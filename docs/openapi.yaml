@@ -595,7 +595,7 @@ components:
         mention_wakes:
           type: boolean
           description: >-
-            Dedicated column, not a Capabilities key — see an internal ticket.
+            Dedicated column, not a Capabilities key.
         status:
           type: string
           enum: [online, offline, busy, error]
@@ -4570,8 +4570,17 @@ paths:
                 tool_breakdown: {type: object, additionalProperties: {type: integer}}
                 unknown:
                   type: array
-                  items: {type: string, enum: [tokens_in, tokens_out, estimated_cost]}
+                  items: {type: string, enum: [tokens_in, tokens_out, estimated_cost, cache_read, cache_write]}
                   description: Measures the caller has no figure for, each separately. A listed measure adds nothing and marks the total incomplete for good; a non-zero number for it is 400. Absent = every measure is a known figure (as before).
+                turn_id: {type: string, maxLength: 200, description: "The runner's id of this turn. The report is also one row of the usage journal (agent_usage_turns); a repeat with the same turn_id adds nothing anywhere and answers turn.repeat=true."}
+                started_at: {type: string, format: date-time}
+                ended_at: {type: string, format: date-time, description: Picks the UTC hour the turn counts in; without it the report time does}
+                provider: {type: string, maxLength: 64, description: Omitted = derived from the model}
+                account_ref: {type: string, maxLength: 200, description: "Opaque limit-pool label <harness>/<account>, e.g. claude/bob-team; never a secret or an email (an @ is 400)"}
+                billing_mode: {type: string, enum: [subscription, api]}
+                cache_read: {type: integer, minimum: 0, description: Part of tokens_in read from the cache}
+                cache_write: {type: integer, minimum: 0, description: Part of tokens_in written to the cache}
+                cache_write_1h: {type: integer, minimum: 0, description: Part of cache_write written with the 1 h TTL; needs cache_write and must not exceed it}
       responses:
         "200":
           description: Totals of the session after this report (additive)
@@ -4591,8 +4600,14 @@ paths:
                       tokens_out_incomplete: {type: boolean}
                       estimated_cost_incomplete: {type: boolean}
                       model_used: {type: string}
+                  turn:
+                    type: object
+                    description: The usage journal row of this report (agent_usage_turns). A field not sent is stored as null, never 0.
+                    properties:
+                      id: {type: string, format: uuid}
+                      repeat: {type: boolean, description: "true: this turn_id was already reported; nothing was added and session_id/totals are the first report's session"}
         "400":
-          description: Unknown measure name in `unknown`, or a figure sent for a measure listed there
+          description: Unknown measure name in `unknown`, a figure sent for a measure listed there, or a malformed turn field (negative cache figure, cache_write_1h above cache_write, ended_at before started_at, billing_mode outside the set, account_ref that is an email)
           content:
             application/json:
               schema:
@@ -4678,7 +4693,7 @@ paths:
                   description: >-
                     Dedicated column, not a Capabilities key — flags that a
                     plain @-mention already has a fleet-side path to wake
-                    this agent (see an internal ticket). Omit to leave unchanged.
+                    this agent. Omit to leave unchanged.
                 zone:
                   type: string
                 max_tasks:

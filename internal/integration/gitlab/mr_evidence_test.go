@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,3 +51,45 @@ func TestClient_GetMergeRequestEvidence(t *testing.T) {
 		})
 	}
 }
+
+// GitLab's merged_at is the only source of the merge time for a
+// GitLab MR: it is returned in UTC, and an absent, null or unparseable value
+// stays nil rather than becoming a zero or current time.
+func TestClient_GetMergeRequestEvidence_MergedAt(t *testing.T) {
+	want := time.Date(2026, 11, 20, 15, 3, 4, 512000000, time.UTC)
+	cases := []struct {
+		name     string
+		mergedAt any // omitted from the body when absentMarker
+		want     *time.Time
+	}{
+		{"offset normalised to utc", "2026-11-20T18:03:04.512+03:00", &want},
+		{"zulu", "2026-11-20T15:03:04.512Z", &want},
+		{"null", nil, nil},
+		{"absent", absentMarker{}, nil},
+		{"garbage", "yesterday", nil},
+		{"zero time", "0001-01-01T00:00:00Z", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := map[string]any{"iid": 1753, "state": "merged", "sha": "abc"}
+			if _, absent := tc.mergedAt.(absentMarker); !absent {
+				body["merged_at"] = tc.mergedAt
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(body)
+			}))
+			defer srv.Close()
+			got, err := NewClient(srv.URL, "tok").GetMergeRequestEvidence(context.Background(), "entire-vc/evc-mesh", 1753)
+			require.NoError(t, err)
+			if tc.want == nil {
+				assert.Nil(t, got.MergedAt)
+				return
+			}
+			require.NotNil(t, got.MergedAt)
+			assert.True(t, got.MergedAt.Equal(*tc.want), "merged_at %v, want %v", got.MergedAt, tc.want)
+			assert.Equal(t, time.UTC, got.MergedAt.Location())
+		})
+	}
+}
+
+type absentMarker struct{}

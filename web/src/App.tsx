@@ -19,7 +19,7 @@ import { miscT } from "@/lib/misc-t";
 
 // Everything below is route-split: none of it should ship in the JS that
 // /login or /register load before first paint (perf·Б1, fleet-epic
-// an internal ticket — see web/perf/budget.json for the gated ceiling). Named
+// See web/perf/budget.json for the gated ceiling). Named
 // exports need the `.then(m => ({ default: m.X }))` wrapper because
 // React.lazy only resolves a default export.
 const AcceptInvitePage = lazy(() =>
@@ -111,6 +111,16 @@ const TaskDetailPage = lazy(() =>
 const WorkspaceSettingsPage = lazy(() =>
   import("@/pages/workspace-settings").then((m) => ({
     default: m.WorkspaceSettingsPage,
+  })),
+);
+const ProjectStatsPage = lazy(() =>
+  import("@/pages/project-stats").then((m) => ({
+    default: m.ProjectStatsPage,
+  })),
+);
+const AgentStatsPage = lazy(() =>
+  import("@/pages/agent-stats").then((m) => ({
+    default: m.AgentStatsPage,
   })),
 );
 const NotificationSettingsPage = lazy(
@@ -308,6 +318,14 @@ const router = createBrowserRouter(
           }
         />
         <Route
+          path="w/:wsSlug/stats"
+          element={
+            <LazyPage>
+              <AgentStatsPage />
+            </LazyPage>
+          }
+        />
+        <Route
           path="w/:wsSlug/extensions"
           element={
             <LazyPage>
@@ -479,6 +497,14 @@ const router = createBrowserRouter(
           element={
             <LazyPage>
               <ProjectUpdatesPage />
+            </LazyPage>
+          }
+        />
+        <Route
+          path="w/:wsSlug/p/:projectSlug/stats"
+          element={
+            <LazyPage>
+              <ProjectStatsPage />
             </LazyPage>
           }
         />

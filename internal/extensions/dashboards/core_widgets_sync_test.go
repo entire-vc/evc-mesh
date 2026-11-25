@@ -144,10 +144,13 @@ var prd58 = []struct {
 	{"cost-by-project", "agents", size(6, 4, 3, 3, 12, 8)},
 	{"cost-by-day", "agents", size(6, 4, 4, 3, 12, 8)},
 	{"agent-leaderboard", "agents", size(6, 4, 3, 3, 12, 8)},
+	// Statistics plan §4 extends the original §5.8 catalog.
+	{"agent-usage", "agents", size(12, 6, 6, 4, 12, 12)},
 	{"metric", "analytics", size(3, 2, 2, 2, 6, 3)},
 	{"tasks-breakdown", "analytics", size(6, 4, 4, 3, 12, 8)},
 	{"tasks-timeline", "analytics", size(12, 4, 6, 3, 12, 8)},
 	{"events-breakdown", "analytics", size(6, 4, 4, 3, 12, 8)},
+	{"memory-usage", "analytics", size(12, 10, 6, 4, 12, 12)},
 	{"event-feed", "events", size(12, 6, 6, 4, 12, 12)},
 	{"initiatives", "initiatives", size(12, 4, 4, 3, 12, 10)},
 	{"initiative", "initiatives", size(6, 3, 4, 2, 12, 6)},

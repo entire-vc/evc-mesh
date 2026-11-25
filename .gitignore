@@ -89,6 +89,8 @@ web/e2e-tabs/shots/
 web/e2e-tabs/view-tab-bar.before.tsx
 web/e2e-widget-settings/results/
 web/e2e-widget-settings/shots/
+web/e2e-memory/results/
+web/e2e-memory/shots/
 web/agent-chat-e2e/
 extension-authorship-logs/
 keep-metadata-404-logs/

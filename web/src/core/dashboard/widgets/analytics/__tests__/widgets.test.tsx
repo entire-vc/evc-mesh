@@ -8,7 +8,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import type { AnalyticsMetrics } from "@/types";
 import { buildRegistry, createViewCache, type WidgetViewsLoader } from "../../../registry";
 import { clearAnalyticsCache } from "../use-analytics";
-import { formatTokens } from "../ui";
+import { formatCost, formatTokens } from "../ui";
 import { descriptors } from "../index";
 import { METRIC_OPTIONS } from "../metrics";
 import CATALOG from "../../../core-widgets.json";
@@ -21,6 +21,7 @@ import { api, apiBlob } from "@/lib/api";
 const IDS = [
   "metric", "tasks-breakdown", "tasks-timeline", "events-breakdown", "agent-leaderboard",
   "cost-kpis", "cost-by-agent", "cost-top-tasks", "cost-by-project", "cost-by-day",
+  "memory-usage",
 ];
 
 function metrics(over: { task?: Partial<AnalyticsMetrics["task_metrics"]>; event?: Partial<AnalyticsMetrics["event_metrics"]>; cost?: Partial<AnalyticsMetrics["cost_metrics"]> } = {}): AnalyticsMetrics {
@@ -32,7 +33,7 @@ function metrics(over: { task?: Partial<AnalyticsMetrics["task_metrics"]>; event
       created_this_period: 8,
       completed_this_period: 5,
       by_assignee: [
-        { assignee_id: "a1", assignee_type: "agent", name: "Linus", count: 6 },
+        { assignee_id: "a1", assignee_type: "agent", name: "Liam", count: 6 },
         { assignee_id: "u1", assignee_type: "user", name: "Pat Example", count: 3 },
         { assignee_id: null, assignee_type: "unassigned", name: "", count: 1 },
       ],
@@ -42,7 +43,7 @@ function metrics(over: { task?: Partial<AnalyticsMetrics["task_metrics"]>; event
       ],
       ...over.task,
     },
-    agent_metrics: { total_agents: 4, active_agents: 2, tasks_by_agent: [{ agent_id: "a1", agent_name: "Linus", completed: 5 }] },
+    agent_metrics: { total_agents: 4, active_agents: 2, tasks_by_agent: [{ agent_id: "a1", agent_name: "Liam", completed: 5 }] },
     event_metrics: { total_events: 12, by_type: { "task.created": 8, "task.moved": 4 }, retained_since: "2026-01-01T00:00:00Z", period_fully_covered: true, ...over.event },
     timeline: [
       { date: "2026-11-12", created: 3, completed: 1 },
@@ -54,7 +55,7 @@ function metrics(over: { task?: Partial<AnalyticsMetrics["task_metrics"]>; event
       total_tokens_out: 500,
       session_count: 4,
       reported_session_count: 3,
-      by_agent: [{ agent_id: "a1", agent_name: "Linus", cost: 9, tokens_in: 1500, tokens_out: 500 }],
+      by_agent: [{ agent_id: "a1", agent_name: "Liam", cost: 9, tokens_in: 1500, tokens_out: 500 }],
       by_project: [{ project_id: "p1", project_name: "Core", cost: 9, tokens_in: 1500, tokens_out: 500 }],
       by_day: [{ date: "2026-11-13", cost: 9, tokens_in: 1500, tokens_out: 500 }],
       top_tasks: [
@@ -99,7 +100,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("analytics widget group", () => {
-  it("registers all ten descriptors, each with a lazily loaded view, a period and a project filter, and only contract actions", async () => {
+  it("registers every descriptor with a lazily loaded view, period, project filter and only contract actions", async () => {
     const r = buildRegistry(
       import.meta.glob("../index.ts", { eager: true }) as Parameters<typeof buildRegistry>[0],
       true,
@@ -278,7 +279,7 @@ describe("tasks-breakdown", () => {
     await waitFor(() => expect(screen.getByText("Pat Example")).toBeTruthy());
     expect(rowsOf(container)).toEqual(["a1", "u1", "unassigned:2"]);
     expect(screen.getByText("Unassigned")).toBeTruthy();
-    fireEvent.click(screen.getByTitle("Linus"));
+    fireEvent.click(screen.getByTitle("Liam"));
     expect(openAgent).toHaveBeenCalledWith("a1");
   });
 
@@ -365,7 +366,7 @@ describe("cost-top-tasks", () => {
     await waitFor(() => expect(rowsOf(second.container)).toEqual(["tB", "tC", "tA"]));
     expect(calls()[calls().length - 1]).toMatchObject({ top_tasks_sort: "tokens" });
     // tokens and sessions of each task are shown
-    expect(second.container.querySelector("[data-row=tB]")!.textContent).toMatch(/\$3\.00.*900.*2/);
+    expect(second.container.querySelector("[data-row=tB]")!.textContent).toMatch(/≈\$3\.00.*900.*2/);
   });
 });
 
@@ -386,6 +387,27 @@ describe("Download CSV", () => {
       format: "csv",
     });
     click.mockRestore();
+  });
+});
+
+describe("cost is the API list price, not money spent", () => {
+  it.each(["cost-kpis", "cost-by-agent", "cost-by-project", "cost-by-day", "cost-top-tasks"])(
+    "%s shows ≈ before the dollars and the API-price caption with its explanation",
+    async (type) => {
+      const { container } = mount(view(type));
+      await waitFor(() => expect(screen.getByTestId("cost-api-price")).toBeTruthy());
+      const note = screen.getByTestId("cost-api-price");
+      expect(note.textContent).toBe("at API list price");
+      expect(note.getAttribute("title")).toBe("Notional cost at the API price list. A subscription spends window limits, not money");
+      expect(container.textContent).toMatch(/≈\$\d/);
+      expect(container.textContent).not.toMatch(/(^|[^≈<])\$[1-9]/);
+    },
+  );
+
+  it("formatCost: ≈ on a figure, zero, and the sub-cent bound", () => {
+    expect(formatCost(9)).toBe("≈$9.00");
+    expect(formatCost(0)).toBe("≈$0.00");
+    expect(formatCost(0.004)).toBe("≈<$0.01");
   });
 });
 

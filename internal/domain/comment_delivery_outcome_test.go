@@ -80,7 +80,7 @@ func TestApplyHints(t *testing.T) {
 	assert.Empty(t, rows[1].Hint, "delivered row must not carry a hint")
 }
 
-// TestApplyHint_StatusNotFedNamesTheStatus pins #ed60c795 AC1: on the author's
+// TestApplyHint_StatusNotFedNamesTheStatus pins an internal ticket AC1: on the author's
 // own parked card the hint names where the card sits — never "not assigned".
 func TestApplyHint_StatusNotFedNamesTheStatus(t *testing.T) {
 	cat := "backlog"
@@ -90,7 +90,7 @@ func TestApplyHint_StatusNotFedNamesTheStatus(t *testing.T) {
 	assert.NotContains(t, row.Hint, "assign", "a parked own card must not be told to assign")
 }
 
-// TestApplyHint_StatusNotFedNeverSuggestsResettingActiveWork pins #81ab35b3:
+// TestApplyHint_StatusNotFedNeverSuggestsResettingActiveWork pins an internal ticket:
 // an in_progress/review card is the assignee's live work, so its hint must not
 // tell the author to move it to todo.
 func TestApplyHint_StatusNotFedNeverSuggestsResettingActiveWork(t *testing.T) {

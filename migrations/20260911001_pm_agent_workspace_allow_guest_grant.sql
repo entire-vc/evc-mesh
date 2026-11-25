@@ -5,7 +5,7 @@
 -- now: task U1/U3 (agent_workspace_grants, migration 20260909001) added a
 -- second, legitimate way for an agent to belong to a workspace other than the
 -- one it started in (a "guest" grant), and a plain FOREIGN KEY has no way to
--- express that OR. Every guest-agent project invite (task #80dfb336's whole
+-- express that OR. Every guest-agent project invite (an internal ticket's whole
 -- point) hit this constraint with a bare foreign_key_violation
 -- UNCONDITIONALLY, regardless of what internal/service.AddAgentMember decided
 -- — the application-layer fix landing in the same change is necessary but not

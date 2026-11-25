@@ -7,7 +7,7 @@ vi.mock("@/lib/api", () => ({
 }));
 import { api } from "@/lib/api";
 
-// Regression coverage for task #85714565: a human registering an agent
+// Regression coverage: a human registering an agent
 // through the UI and touching nothing but Name must not end up with a lane
 // that reads max_concurrent_tasks=0 ("takes no tasks") or an unset
 // accepts_from — that is exactly what happened to the Verity lane.
@@ -66,7 +66,7 @@ describe("RegisterAgentDialog", () => {
       target: { value: "Mesh — QA" },
     });
     fireEvent.change(screen.getByLabelText("Accepts from"), {
-      target: { value: "Garfield, Linus" },
+      target: { value: "Gary, Liam" },
     });
     fireEvent.change(screen.getByLabelText("Max concurrent tasks"), {
       target: { value: "12" },
@@ -86,7 +86,7 @@ describe("RegisterAgentDialog", () => {
 
     expect(body.role).toBe("reviewer");
     expect(body.responsibility_zone).toBe("Mesh — QA");
-    expect(body.accepts_from).toEqual(["Garfield", "Linus"]);
+    expect(body.accepts_from).toEqual(["Gary", "Liam"]);
     expect(body.max_concurrent_tasks).toBe(12);
     expect(body.escalation_to).toBe("Pavel");
     expect(body.capabilities).toEqual({ "code-review": true, docs: true });

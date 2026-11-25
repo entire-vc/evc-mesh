@@ -27,6 +27,14 @@ from pathlib import Path
 args = sys.argv[1:]
 fault = os.environ.get('COVERAGE_TEST_FAULT', '')
 if args[:1] == ['list']:
+    if args[1:2] == ['-m']:
+        if fault == 'module_unavailable':
+            sys.exit(23)
+        if fault == 'module_empty':
+            sys.exit(0)
+        if fault == 'module_multiple':
+            print('example.test/gate\\nexample.test/other')
+            sys.exit(0)
     if fault == 'changed_list' and '-f' not in args and args[-1].startswith('./'):
         print('ERROR: injected changed-package resolution failure', file=sys.stderr)
         sys.exit(23)
@@ -95,7 +103,7 @@ class TestCoverageGate(unittest.TestCase):
             script = runner.read_text()
         else:
             # Execute the historical inline gate with isolated scratch paths.
-            job = (SOURCE / '.gitlab-ci.yml').read_text().split('\ncoverage-gate:\n', 1)[1]
+            job = (SOURCE / '.gitlab/ci/go.yml').read_text().split('\ncoverage-gate:\n', 1)[1]
             script = job.split('  script:\n    - |\n', 1)[1].split('\n  artifacts:', 1)[0]
             script = '\n'.join(line[6:] for line in script.splitlines())
             script = script.replace('/tmp/', str(self.root / 'tmp') + '/')
@@ -142,7 +150,7 @@ class TestCoverageGate(unittest.TestCase):
         """Model a successful upstream full-suite race run at this exact commit."""
         sha = self.git('rev-parse', 'HEAD').stdout.strip()
         self.env.update(CI_COMMIT_SHA=sha, CI_PIPELINE_ID='12345')
-        run = subprocess.run([REAL_GO, 'test', './...', '-race', '-timeout=30m',
+        run = subprocess.run([REAL_GO, 'test', './...', '-race', '-timeout=30m', '-coverpkg=example.test/gate/...',
                               '-coverprofile=coverage.out', '-covermode=atomic'],
                              cwd=self.root, env=self.env, capture_output=True,
                              text=True, timeout=120)
@@ -168,9 +176,11 @@ class TestCoverageGate(unittest.TestCase):
                         CI_PIPELINE_ID='12345', POLL_SECONDS='1')
         invocation = [sys.executable, 'scripts/ci/coverage_artifact.py', 'run',
                       'coverage.out', 'coverage-manifest.json']
-        self.write('coverage-manifest.json', '{"stale": true}\n')
-        for fault, expected in (('test_fail', False), ('', True)):
+        for fault, expected in (('module_unavailable', False), ('module_empty', False),
+                                ('module_multiple', False), ('test_fail', False), ('', True)):
             with self.subTest(fault=fault):
+                self.write('coverage.out', 'mode: atomic\nstale\n')
+                self.write('coverage-manifest.json', '{"stale": true}\n')
                 result = subprocess.run(invocation, cwd=self.root,
                                         env=dict(self.env, COVERAGE_TEST_FAULT=fault),
                                         capture_output=True, text=True, timeout=120)
@@ -179,6 +189,12 @@ class TestCoverageGate(unittest.TestCase):
                 self.assertEqual((self.root / 'coverage-manifest.json').exists(),
                                  expected)
         self.assertEqual(self.run_reuse_gate('test_fail').returncode, 0)
+
+    def test_fallback_requires_one_available_module(self):
+        self.good_diff()
+        for fault in ('module_unavailable', 'module_empty', 'module_multiple'):
+            with self.subTest(fault=fault):
+                self.rejects(self.run_gate(fault))
 
     def test_full_suite_runner_cannot_certify_stale_profile_after_no_output_success(self):
         self.good_diff()

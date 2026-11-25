@@ -11,7 +11,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// S3 of the card-hang epic (#da77a9df, item 6). A mention of the card's own
+// S3 of the card-hang epic (item 6). A mention of the card's own
 // assignee while the card is in_progress/review used to be recorded as
 // skipped/status_not_fed: the author read "not delivered" on a comment that
 // sits in the recipient's own thread. The verdict now says what is true —
@@ -46,9 +46,9 @@ func TestThreadOnlyDelivery_ActiveCardOfRecipient(t *testing.T) {
 			task := e.seed(e.addStatus(tc.cat), nil)
 			before := task.StatusID
 
-			c := e.comment(t, task.ID, tc.author, "@howard посмотри, пожалуйста")
+			c := e.comment(t, task.ID, tc.author, "@harper посмотри, пожалуйста")
 
-			row := deliveryFor(c, "howard")
+			row := deliveryFor(c, "harper")
 			require.NotNil(t, row)
 			assert.Equal(t, domain.DeliveryDelivered, row.Outcome)
 			assert.Equal(t, domain.ReasonThreadOnly, row.Reason,
@@ -65,19 +65,19 @@ func TestThreadOnlyDelivery_ActiveCardOfRecipient(t *testing.T) {
 // Negative controls: the new verdict must not leak onto cases that are not
 // "recipient's own active card".
 func TestThreadOnlyDelivery_DoesNotApplyElsewhere(t *testing.T) {
-	// Backlog from an agent stays skipped (Garfield's decision on #da77a9df).
+	// Backlog from an agent stays skipped (Gary's decision).
 	e := setupLiftEnv(t)
 	task := e.seed(e.backlogID, nil)
-	c := e.comment(t, task.ID, domain.ActorTypeAgent, "@howard дорабатывай")
-	row := deliveryFor(c, "howard")
+	c := e.comment(t, task.ID, domain.ActorTypeAgent, "@harper дорабатывай")
+	row := deliveryFor(c, "harper")
 	require.NotNil(t, row)
 	assert.Equal(t, domain.DeliverySkipped, row.Outcome)
 	assert.Equal(t, domain.ReasonStatusNotFed, row.Reason)
 
 	// Done stays skipped: shipped work is not reopened or "read" by a comment.
 	task = e.seed(e.doneID, nil)
-	c = e.comment(t, task.ID, domain.ActorTypeAgent, "@howard дорабатывай")
-	row = deliveryFor(c, "howard")
+	c = e.comment(t, task.ID, domain.ActorTypeAgent, "@harper дорабатывай")
+	row = deliveryFor(c, "harper")
 	require.NotNil(t, row)
 	assert.Equal(t, domain.ReasonStatusNotFed, row.Reason)
 
@@ -85,8 +85,8 @@ func TestThreadOnlyDelivery_DoesNotApplyElsewhere(t *testing.T) {
 	task = e.seed(e.addStatus(domain.StatusCategoryInProgress), func(tk *domain.Task) {
 		tk.AssigneeID = &e.other.ID
 	})
-	c = e.comment(t, task.ID, domain.ActorTypeUser, "@howard глянь")
-	row = deliveryFor(c, "howard")
+	c = e.comment(t, task.ID, domain.ActorTypeUser, "@harper глянь")
+	row = deliveryFor(c, "harper")
 	require.NotNil(t, row)
 	assert.Equal(t, domain.DeliverySkipped, row.Outcome)
 	assert.Equal(t, domain.ReasonNotAssignee, row.Reason)
@@ -103,7 +103,7 @@ func TestDecideDelivery_ThreadOnly_ActiveStatusesOnly(t *testing.T) {
 		"":            domain.ReasonStatusNotFed,
 	} {
 		_, reason, _, _ := decideDelivery(deliveryFacts{
-			Slug: "howard", Agent: live, IsAssignee: true, StatusCategory: cat,
+			Slug: "harper", Agent: live, IsAssignee: true, StatusCategory: cat,
 			Presence: domain.ComputedStatusOnline,
 		})
 		assert.Equal(t, want, reason, "category %q", cat)

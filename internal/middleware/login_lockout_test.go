@@ -105,7 +105,7 @@ func TestLoginLockout_MaxFailuresNonPositive_Disabled(t *testing.T) {
 
 // TestRateLimitKeyByIP_TwoAccountsSameIP_ShareOneBucket_BEFORE is the "before"
 // contrast the task's acceptance criteria call for: it demonstrates the
-// defect #5d759aad is about using the EXISTING RateLimitKeyByIP mechanism
+// defect an internal ticket is about using the EXISTING RateLimitKeyByIP mechanism
 // /auth/login was (and, when MESH_TRUSTED_PROXIES is unset, still is) keyed
 // by. When every external client resolves to one IP (the incident's actual
 // scenario — Caddy's default trusted_proxies overwrites X-Forwarded-For with

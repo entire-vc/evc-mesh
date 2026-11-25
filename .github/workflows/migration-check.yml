@@ -20,7 +20,7 @@ env:
   # Kept in step with .gitlab-ci.yml's GOOSE_VERSION and go.mod's goose
   # library requirement — @latest resolves at job run time, not pinned to a
   # commit, and broke this job when v3.28.0 raised its go.mod floor to go
-  # 1.26 while these runners are on 1.25 (#b97dfc58).
+  # 1.26 while these runners are on 1.25.
   GOOSE_VERSION: "v3.27.3"
 
 jobs:

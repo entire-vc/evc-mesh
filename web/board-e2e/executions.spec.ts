@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
-// Agent executions (card an internal ticket): configured route vs observed attempts in the org chart and the agent detail
+// Agent executions: configured route vs observed attempts in the org chart and the agent detail
 // "Route & runs" tab, against the loopback fixture (/__fixture {exec}). The fixture stands in for the API: this proves the
 // UI, not a live route switch. Screenshots (1440/393 x light/dark) go to web/executions-shots, a CI artifact.
 const API = "http://127.0.0.1:8019";
@@ -41,13 +41,13 @@ const open = async (page: Page, scheme: Scheme, size: { w: number; h: number }, 
   await page.setViewportSize({ width: size.w, height: size.h });
   await page.addInitScript((t) => localStorage.setItem("theme", t), scheme);
   await page.goto(CHART);
-  await expect(page.getByText("Taylor", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Vera", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
   await freeze(page);
 };
 // The app's Dialog is a plain overlay without role="dialog": find the one that holds the agent tabs.
 const detailOf = (page: Page) => page.locator("div.fixed.inset-0.z-50").filter({ has: page.getByRole("tab", { name: "Route & runs" }) });
 const openDetailRoute = async (page: Page) => {
-  await page.getByText("Taylor", { exact: true }).first().click();
+  await page.getByText("Vera", { exact: true }).first().click();
   await page.getByRole("tab", { name: "Route & runs" }).click();
 };
 

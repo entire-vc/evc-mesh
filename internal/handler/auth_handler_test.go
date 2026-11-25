@@ -441,9 +441,9 @@ func TestAuthHandler_Refresh_RotationWriteFails_LogsCause(t *testing.T) {
 // #562, the httpOnly-cookie + Web Locks migration): a replay of an
 // already-rotated refresh token must still be able to trip full reuse
 // detection and clear the client cookie — the grace window added by
-// an internal ticket is a narrow, time-boxed exception (see the test below), not a
+// Is a narrow, time-boxed exception (see the test below), not a
 // removal of this guarantee. Grace window explicitly disabled here so this
-// test keeps meaning exactly what it meant before an internal ticket existed.
+// test keeps meaning exactly what it meant before that fix existed.
 func TestAuthHandler_Refresh_ReusedToken_ClearsCookieAndReturns401(t *testing.T) {
 	h, e := newAuthHandlerTest(newAuthTestUserRepo(), auth.WithRefreshReuseGraceWindow(0))
 

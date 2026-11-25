@@ -17,7 +17,7 @@ import (
 )
 
 // This file exists because of a defect found in the immediately preceding card
-// (#4545660b): the production UPDATE that persisted gate authorship had NO test pinning
+// the production UPDATE that persisted gate authorship had NO test pinning
 // its column list, so deleting a column from it left the entire 25-package suite green.
 // Every layer above the SQL runs against fakes and cannot see the statement at all.
 //

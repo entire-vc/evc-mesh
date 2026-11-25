@@ -520,7 +520,7 @@ func TestHandleError_GenericError(t *testing.T) {
 	assert.Equal(t, "Internal server error", result.Message)
 }
 
-// --- TestAgentHandler_Me — #606c215e ---
+// --- TestAgentHandler_Me — an internal ticket ---
 //
 // meRespView mirrors meResponse's anonymous struct shape for unmarshalling in
 // tests (domain.Agent's own fields flattened, plus home_workspace_id).
@@ -592,7 +592,7 @@ func TestAgentHandler_Me_HomeKey_WorkspaceIDUnchanged(t *testing.T) {
 	h, _ := setupAgentTest(mockSvc)
 
 	// A home key's auth workspace equals its home workspace — the existing
-	// fleet's behavior must not change (#606c215e explicitly measures this).
+	// fleet's behavior must not change (an internal ticket explicitly measures this).
 	rec := meRequest(t, h, http.MethodGet, agentID, homeWS, "", h.Me)
 	require.Equal(t, http.StatusOK, rec.Code)
 
@@ -710,7 +710,7 @@ func TestAgentHandler_UpdateMe_CallbackURL_ConnectorRefused(t *testing.T) {
 	})
 }
 
-// --- harness (agent_type) + model self-report (#5548367d) ---
+// --- harness (agent_type) + model self-report ---
 
 func TestAgentHandler_UpdateMe_HarnessAndModel(t *testing.T) {
 	agentID, wsID := uuid.New(), uuid.New()
@@ -828,7 +828,7 @@ func TestAgentHandler_Update_AdminSetsModel(t *testing.T) {
 	assert.Equal(t, domain.AgentTypeClaudeCode, saved.AgentType, "agent_type behaviour unchanged")
 }
 
-// --- has_description on the agent task feed (#fc032545) ---
+// --- has_description on the agent task feed ---
 //
 // The feed's task DTOs serialize has_description (the field has no omitempty),
 // so leaving it at the Go zero value made every feed item claim

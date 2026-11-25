@@ -30,7 +30,7 @@ const (
 	RefKindURL         TaskRefKind = "url"          // https://mesh.entire.host/t/<uuid|short>
 	RefKindKeywordUUID TaskRefKind = "keyword-uuid" // Refs <uuid>
 	RefKindShortID     TaskRefKind = "short-id"     // #<8-12 hex> or Refs <8-12 hex>
-	RefKindBranch      TaskRefKind = "branch"       // linus/<8-12 hex>-slug
+	RefKindBranch      TaskRefKind = "branch"       // liam/<8-12 hex>-slug
 )
 
 // TaskRef is one candidate reference. Exactly one of Full / Short is set:
@@ -72,11 +72,11 @@ var (
 	// front of it, so a UUID quoted from a log or a payload is not a reference.
 	reKeywordUUID = regexp.MustCompile(`(?i)\b(?:` + refKeywords + `)\b[\s:=#\-]{0,4}(` + uuidPat + `)\b`)
 
-	// #<8-12 hex> — the form agents write ("Refs #82377a26"). The leading class
+	// #<8-12 hex> — the form agents write ("Refs an internal ticket"). The leading class
 	// rejects a match inside a longer token and inside an HTML entity (&#8212;).
 	reHashShort = regexp.MustCompile(`(?i)(?:^|[^0-9a-z_/&])#([0-9a-f]{8,12})\b`)
 
-	// Refs #82377a26 — a keyword AND the sigil. The sigil is not redundant here:
+	// Refs an internal ticket — a keyword AND the sigil. The sigil is not redundant here:
 	// dropping it makes "Fixes a1b2c3d4" a reference, which is the kernel's
 	// "Fixes: <sha>" trailer naming a commit, and makes "my task abcdef123456"
 	// one too. Both are ordinary English/VCS prose with nothing to do with Mesh,

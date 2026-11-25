@@ -13,7 +13,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// an internal ticket: a review card is a different card from the work it reviews, and
+// A review card is a different card from the work it reviews, and
 // no title/body/branch of the MR names it. It is closed by the merge because a
 // link with role=review ties it to the MR's URL.
 
@@ -60,7 +60,7 @@ func TestHandleMR_Merged_LeavesUnboundOrForeignReviewCards(t *testing.T) {
 		name string
 		bind func(h *harness, review *domain.Task)
 	}{
-		{"no link at all (the an internal ticket defect)", func(*harness, *domain.Task) {}},
+		{"no link at all (the original defect)", func(*harness, *domain.Task) {}},
 		{"link without the review role", func(h *harness, r *domain.Task) { h.bindReview(r, reviewSubjectURL, `{}`) }},
 		{"same iid in another project", func(h *harness, r *domain.Task) {
 			h.bindReview(r, "https://gitlab.example.invalid/entire-vc/evc-keep/-/merge_requests/101", `{"role":"review"}`)
@@ -301,7 +301,7 @@ func TestHandleMR_Merged_DoesNotCloseGatedOrSignalledReviewCard(t *testing.T) {
 	}
 }
 
-// an internal ticket: a card that was not created as a review card can still declare
+// A card that was not created as a review card can still declare
 // its open MR the subject of its review through the metadata PATCH; the
 // gate then treats it exactly as a bound review subject. Without the marker
 // the link keeps blocking, and no other role value is accepted.
@@ -349,7 +349,7 @@ func TestPatchMetadata_RoleReviewLetsDoneGatePass(t *testing.T) {
 	}
 }
 
-// role=review on a link means "the subject this card signs off",
+// Role=review on a link means "the subject this card signs off",
 // not "this card is a review card". A card that also owns its own MR/PR is an
 // implementation card; the merge of the reference MR must not close it — its
 // own links drive its status (applyPRTransitionPolicy).

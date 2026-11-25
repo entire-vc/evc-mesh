@@ -1566,7 +1566,7 @@ func (m *MockCommentRepository) ListByTask(_ context.Context, taskID uuid.UUID, 
 	// not just an inconvenience for one test. Sort here so the mock matches prod.
 	sort.Slice(all, func(i, j int) bool { return all[i].CreatedAt.Before(all[j].CreatedAt) })
 
-	// an internal ticket: this used to hand back the FULL unsliced set regardless of
+	// This used to hand back the FULL unsliced set regardless of
 	// pg.Page/pg.PageSize, with only Page.HasMore computed from the arithmetic —
 	// so a caller that (bug) read only "page 1" still silently saw every comment
 	// through this mock, and a caller that (fix) loops until HasMore is false
@@ -2101,6 +2101,24 @@ func (m *MockAgentRepository) GetBySlug(_ context.Context, workspaceID uuid.UUID
 	return nil, nil
 }
 
+func (m *MockAgentRepository) ListByNameFold(_ context.Context, workspaceID uuid.UUID, name string, limit int) ([]domain.Agent, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.Agent
+	for _, a := range m.items {
+		if a.WorkspaceID == workspaceID && strings.EqualFold(a.Name, name) {
+			out = append(out, *a)
+			if len(out) == limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
 func (m *MockAgentRepository) SearchByPrefix(_ context.Context, _ uuid.UUID, _ string, _ int) ([]domain.Agent, error) {
 	return nil, nil
 }
@@ -2176,6 +2194,8 @@ type MockAgentWorkspaceGrantRepository struct {
 	errToReturn error
 	// slugs lets a test give a granted agent the slug the real JOIN would return.
 	slugs map[uuid.UUID]string
+	// names does the same for the agent name the JOIN reports.
+	names map[uuid.UUID]string
 }
 
 func NewMockAgentWorkspaceGrantRepository() *MockAgentWorkspaceGrantRepository {
@@ -2190,6 +2210,16 @@ func (m *MockAgentWorkspaceGrantRepository) SeedSlug(agentID uuid.UUID, slug str
 		m.slugs = map[uuid.UUID]string{}
 	}
 	m.slugs[agentID] = slug
+}
+
+// SeedName sets the agent name the ListActiveByWorkspace JOIN reports for agentID.
+func (m *MockAgentWorkspaceGrantRepository) SeedName(agentID uuid.UUID, name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.names == nil {
+		m.names = map[uuid.UUID]string{}
+	}
+	m.names[agentID] = name
 }
 
 // Seed adds a connection row directly, bypassing any service-layer logic —
@@ -2388,7 +2418,7 @@ func (m *MockAgentWorkspaceGrantRepository) ListActiveByWorkspace(_ context.Cont
 		if g.WorkspaceID == workspaceID && !g.IsRevoked() {
 			out = append(out, domain.AgentWorkspaceGrantWithAgent{
 				AgentWorkspaceGrant: *g,
-				Agent:               domain.AgentBrief{ID: g.AgentID, Slug: m.slugs[g.AgentID]},
+				Agent:               domain.AgentBrief{ID: g.AgentID, Name: m.names[g.AgentID], Slug: m.slugs[g.AgentID]},
 			})
 		}
 	}
@@ -3385,7 +3415,7 @@ type fakeTaskMover struct {
 	moves        []moveCall
 	gateSetCalls []humanGateCall
 	// armCalls records the full ArmHumanGateInput of every arm. gateSetCalls above
-	// still gets a value:true entry per arm, so the pre assertions ("the
+	// still gets a value:true entry per arm, so the earlier assertions ("the
 	// gate was armed / was not armed") keep asserting exactly what they always did —
 	// the arming CALL changed shape, the delivery it stands for did not.
 	armCalls      []domain.ArmHumanGateInput
@@ -3695,6 +3725,70 @@ func (m *MockVCSLinkRepository) Upsert(_ context.Context, link *domain.VCSLink) 
 	}
 	m.items = append(m.items, *link)
 	return true, nil
+}
+
+func (m *MockVCSLinkRepository) ConfirmGitLabMR(_ context.Context, taskID, id uuid.UUID, status domain.VCSLinkStatus, headSHA string, mergedAt *time.Time) (*domain.VCSLink, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.items {
+		l := &m.items[i]
+		if l.ID != id || l.TaskID != taskID || l.Provider != domain.VCSProviderGitLab || l.LinkType != domain.VCSLinkTypePR {
+			continue
+		}
+		patch, _ := json.Marshal(map[string]string{domain.VCSLinkMetaHeadSHA: headSHA})
+		l.Metadata = mergeFakeMetadata(l.Metadata, patch)
+		l.Status = status
+		now := time.Now().UTC()
+		l.StatusSyncedAt = &now
+		if status != domain.VCSLinkStatusMerged {
+			l.MergedAt = nil
+		} else if l.MergedAt == nil {
+			l.MergedAt = mergedAt
+		}
+		return l, nil
+	}
+	return nil, nil
+}
+
+func (m *MockVCSLinkRepository) SetMergedAt(_ context.Context, id uuid.UUID, at time.Time) (bool, error) {
+	if m.errToReturn != nil {
+		return false, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.items {
+		l := &m.items[i]
+		if l.ID != id || at.IsZero() || l.MergedAt != nil || l.Status != domain.VCSLinkStatusMerged {
+			continue
+		}
+		u := at.UTC()
+		l.MergedAt = &u
+		return true, nil
+	}
+	return false, nil
+}
+
+func (m *MockVCSLinkRepository) ListMergedPRLinksWithoutMergedAt(_ context.Context, afterID uuid.UUID, limit int) ([]domain.VCSLink, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []domain.VCSLink
+	for _, l := range m.items {
+		if l.LinkType == domain.VCSLinkTypePR && l.Status == domain.VCSLinkStatusMerged && l.MergedAt == nil &&
+			l.ID.String() > afterID.String() {
+			out = append(out, l)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID.String() < out[j].ID.String() })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 func (m *MockVCSLinkRepository) MergeMetadata(_ context.Context, taskID, id uuid.UUID, patch json.RawMessage) (*domain.VCSLink, error) {
@@ -4930,8 +5024,8 @@ func (m *MockDocumentRepository) SearchInProject(
 }
 
 // ---------------------------------------------------------------------------
-// MockWorkspaceMemberRepository — human half of GetTeamDirectory (task
-// an internal ticket). Only List/ListWithProjects have real callers today; the rest
+// MockWorkspaceMemberRepository — human half of GetTeamDirectory.
+// Only List/ListWithProjects have real callers today; the rest
 // are stubs so the mock satisfies repository.WorkspaceMemberRepository at
 // compile time without pulling in every path's test fixture up front.
 // ---------------------------------------------------------------------------
@@ -5091,7 +5185,7 @@ func (m *MockWorkspaceMemberRepository) CountOwners(_ context.Context, workspace
 // MockEventBusService records Publish calls so tests can assert a mutation
 // reached the Events feed (event_bus_messages), distinct from the audit-only
 // activity_log write. See an internal ticket: CreateSubtask stopped calling
-// publishTaskEvent after the an internal ticket atomicity fix, and nothing caught it
+// publishTaskEvent after the atomicity fix, and nothing caught it
 // because no test in this package ever wired an EventBusService at all.
 type MockEventBusService struct {
 	mu       sync.Mutex
@@ -5571,7 +5665,7 @@ func (m *MockClosedFollowUpPendingRepository) MarkAttempt(_ context.Context, com
 	p.LastError = lastErr
 	// The lease survives the progress write: it covers the whole row unit,
 	// and only the unit's end (ReleaseClaim / Delete / TTL) gives the row
-	// back (an internal ticket, a review).
+	// back (codex-review round 2 on !1085).
 	return p.Attempts, nil
 }
 

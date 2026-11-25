@@ -8,7 +8,7 @@ import (
 )
 
 // The two Record helpers are the whole `closed_followup_error` and
-// pending-outcome surface of the closed-card follow-up mechanism (#db1c6c7a):
+// pending-outcome surface of the closed-card follow-up mechanism:
 // a delivery that used to vanish silently now has to MOVE a counter, or the
 // fix's own signal is the next silent loss. Pinned per label pair because a
 // CounterVec with the wrong labels silently records nothing — WithLabelValues

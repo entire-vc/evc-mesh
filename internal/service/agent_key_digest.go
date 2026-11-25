@@ -77,7 +77,7 @@ const bcryptMaxInputBytes = 72
 // (agk_{slug}_{48 hex}) — so a long enough slug (empirically: >19 chars; the
 // fixed agk_/_/48-hex overhead is 53 bytes) pushes the whole key past the cap
 // and bcrypt.GenerateFromPassword returns a bare error instead of truncating
-// (#9317fcd0 — measured live: POST /workspaces/:ws/agents and
+// (measured live: POST /workspaces/:ws/agents and
 // .../agent-grants both 500'd on a 27-char slug).
 //
 // Below the cap, rawKey passes through unchanged. That is the path every

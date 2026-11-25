@@ -148,7 +148,7 @@ func (eb *EventBus) publishTransport(ctx context.Context, msg *domain.EventBusMe
 	// the broker, etc.) — every WebSocket client went silently, permanently
 	// dark for that event, while the HTTP request that triggered it still
 	// returned 200/201 as if nothing were wrong. That is the exact defect
-	// #2d73f037 caught as "the workspace owner received no event for a task
+	// Caught as "the workspace owner received no event for a task
 	// created in their own workspace": not a timing flake, an early return
 	// that dropped the WS fan-out whenever JetStream misbehaved.
 	redisChannel := fmt.Sprintf("ws:%s", workspaceSlug)

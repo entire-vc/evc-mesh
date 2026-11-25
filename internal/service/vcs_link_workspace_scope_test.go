@@ -13,7 +13,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
-// These tests are the acceptance criteria of an internal ticket: the GitHub/GitLab
+// These tests are the acceptance criteria: the GitHub/GitLab
 // webhook receiver authenticates an inbound delivery against the UNION of
 // every workspace's configured secret (deliberate — see
 // VCSIntegrationResolver's doc comment, no single workspace is known until

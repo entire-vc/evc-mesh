@@ -317,7 +317,7 @@ describe("DocsPage — open, view and edit", () => {
     renderDocs("doc-1");
 
     expect(await screen.findByTestId("doc-view")).toHaveTextContent("Run the thing.");
-    // Scoped to the measured body, not the whole page: since an internal ticket the
+    // Scoped to the measured body, not the whole page: since that fix the
     // page legitimately carries one textbox outside it — the always-mounted
     // comment composer under the document — and that one is not what this
     // test is about.
@@ -1312,7 +1312,7 @@ describe("DocsPage — the discussion under the page", () => {
   });
 
   it("still renders the section — with its composer — on a page with no comments", async () => {
-    // an internal ticket: the tree used to unmount entirely here. It can't any more —
+    // The tree used to unmount entirely here. It can't any more —
     // it carries the bottom composer, which needs somewhere to render before
     // the first comment exists.
     mockWithComments([]);
@@ -1329,7 +1329,7 @@ describe("DocsPage — the discussion under the page", () => {
    * AC1 — the bottom form is available with NO selection and NO prior click,
    * in both rail states. This is the load-bearing test for the card's whole
    * premise: an internal ticket's fix hid this exact composer whenever the rail was
-   * open, and Alex's decision is specifically that the hiding was wrong.
+   * open, and the product decision is specifically that the hiding was wrong.
    */
   it.each([
     ["closed", "0"],
@@ -1394,12 +1394,12 @@ describe("DocsPage — the discussion under the page", () => {
     }
 
     /**
-     * Alex's reversal of an internal ticket (2026-08-23, an internal ticket): the rail and
+     * Product decision reversing an internal ticket (2026-08-23): the rail and
      * the tree are supposed to show the discussion at the same time, not take
      * turns. So with the rail open, each of the three threads legitimately
      * appears TWICE on screen — once per surface — which is why the count
      * that matters is per-surface, not per-document. Counting unscoped here
-     * would make a correct implementation look like the an internal ticket bug; that
+     * would make a correct implementation look like the bug; that
      * trap is exactly why the card's AC4 asked for this reformulation before
      * any test got written.
      */
@@ -1633,7 +1633,7 @@ describe("DocsPage — the discussion under the page", () => {
       };
     }
 
-    // Scoped to the rail throughout: since an internal ticket the tree carries its own
+    // Scoped to the rail throughout: since that fix the tree carries its own
     // permanently-mounted composer with the identical placeholder and submit
     // label (reused copy, not a coincidence — see an internal ticket's instruction not
     // to invent new strings), so an unscoped query now matches two composers

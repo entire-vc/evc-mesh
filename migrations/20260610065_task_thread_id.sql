@@ -1,4 +1,4 @@
--- Add thread_id to tasks for fiddler continuity (Ф4 / #83a1bc1c).
+-- Add thread_id to tasks for fiddler continuity (Ф4 / an internal ticket).
 -- thread_id is an optional opaque string that groups tasks into a continuation
 -- thread. The fiddler uses it to detect when successive tasks belong to the same
 -- work stream and prepend a continuity hint to the agent prompt so it doesn't

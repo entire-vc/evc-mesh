@@ -7,7 +7,7 @@ import (
 )
 
 // TestHumanGateSoftTimeoutWindow covers AC5 (contract docs/human-gate-decision-recorded.md
-// §5, task #4dc9467b): the sweep window must be externally configurable, not a recompile,
+// §5): the sweep window must be externally configurable, not a recompile,
 // while still refusing a value at or below the sweeper's own 15-minute tick.
 func TestHumanGateSoftTimeoutWindow(t *testing.T) {
 	const envVar = "HUMAN_GATE_SOFT_TIMEOUT"

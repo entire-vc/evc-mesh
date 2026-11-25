@@ -379,17 +379,17 @@ func TestExtractMentionSlugs(t *testing.T) {
 		{"go install ...@latest excluded (no boundary before @)",
 			"go install golang.org/x/tools/cmd/goimports@latest", nil},
 		{"tight code span excluded (backtick is not a boundary char)",
-			"see `@daedalus` for details", nil},
+			"see `@dana` for details", nil},
 		{"hyphenated slug", "@bill-the-cat", []string{"bill-the-cat"}},
 		{"single char (too short)", "@a", nil},
-		// #e0a6ff03 (2026-09-03): before this fix the regex's character class was
+		// (2026-09-03): before this fix the regex's character class was
 		// [a-z0-9] only, so an uppercase-led handle never matched AT ALL — not
 		// "resolved to nobody", it never became a candidate, and this comment used
 		// to read "nil // regex is lowercase only" documenting exactly that. Now
 		// (?i) widens the character class; strings.ToLower normalizes the result,
 		// same as the all-lowercase cases above.
 		{"uppercase handle normalized to lowercase slug", "@BILL", []string{"bill"}},
-		{"leading-capital handle normalized (the live #e0a6ff03 case)", "@Daedalus", []string{"daedalus"}},
+		{"leading-capital handle normalized (the live case)", "@Dana", []string{"dana"}},
 		{"mixed-case hyphenated handle normalized", "@Bill-The-Cat", []string{"bill-the-cat"}},
 		{"no mentions", "plain text here", nil},
 		{"slug starting with hyphen rejected", "@-foo", nil},
@@ -506,7 +506,7 @@ func TestNotifyMentions_UnknownSlugSkipped(t *testing.T) {
 	assert.Empty(t, env.notifySvc.Calls())
 }
 
-// #e0a6ff03 (2026-09-03): AC1 — an uppercase-led handle must resolve IDENTICALLY
+// (2026-09-03): AC1 — an uppercase-led handle must resolve IDENTICALLY
 // to the same handle written lowercase. Before the mentionRegex fix, "@Bill"
 // never even matched the extraction regex — not "resolved to nobody", it never
 // became a candidate at all — so this produced ZERO notify calls where the
@@ -535,7 +535,7 @@ func TestNotifyMentions_UppercaseHandleResolvesLikeLowercase(t *testing.T) {
 	assert.Equal(t, map[string]any{"mentioned_slug": "bill"}, calls[0].Payload)
 }
 
-// #e0a6ff03 AC2 (reverse control) — an uppercase-led handle that resolves to
+// AC2 (reverse control) — an uppercase-led handle that resolves to
 // NOBODY must take the exact same silent-no-crash path as a lowercase unknown
 // handle (TestNotifyMentions_UnknownSlugSkipped), not error or panic. Before the
 // fix this case was invisible in a DIFFERENT way than a lowercase unknown handle:
@@ -584,12 +584,12 @@ func TestNotifyMentions_NoMentionsNoOp(t *testing.T) {
 func TestCommentService_Create_FiresMention(t *testing.T) {
 	env := setupCommentServiceWithMentions()
 
-	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "garfield"}
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "gary"}
 	env.agentSvc.AddAgent(env.wsID, agent)
 
-	// Real queue path: the task is already garfield's and sitting in a
+	// Real queue path: the task is already gary's and sitting in a
 	// todo-category status — the InTaskQueue fact the mention-handoff gate
-	// (#9d8f7606) reuses from the delivery-outcome ledger. Without this the
+	// reuses from the delivery-outcome ledger. Without this the
 	// gate now refuses the comment before it fires anything — see
 	// TestEnforceMentionHandoffGate_PlainMentionWithNoQueuePathIsRefused.
 	statusRepo := NewMockTaskStatusRepository()
@@ -609,7 +609,7 @@ func TestCommentService_Create_FiresMention(t *testing.T) {
 		TaskID:     taskID,
 		AuthorID:   uuid.New(),
 		AuthorType: domain.ActorTypeUser,
-		Body:       "please review @garfield",
+		Body:       "please review @gary",
 	}
 	require.NoError(t, env.svc.Create(context.Background(), comment))
 
@@ -619,7 +619,7 @@ func TestCommentService_Create_FiresMention(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestCommentService_Create_SurfacesDeliveryOutcome (#2489f750)
+// TestCommentService_Create_SurfacesDeliveryOutcome
 // ---------------------------------------------------------------------------
 
 // TestCommentService_Create_SurfacesDeliveryOutcome proves Create's OWN
@@ -745,7 +745,7 @@ func TestCommentService_Create_SurfacesDeliveryOutcome(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestCommentService_Create_NoNotifyOnTerminalTask (incident #56a6d5b2)
+// TestCommentService_Create_NoNotifyOnTerminalTask
 // ---------------------------------------------------------------------------
 
 // TestCommentService_Create_NoNotifyOnTerminalTask verifies that task.commented
@@ -972,7 +972,7 @@ func TestCommentService_ListRecentByWorkspace(t *testing.T) {
 	})
 }
 
-// --- comment.metadata validation (task #13e391d2) ---
+// --- comment.metadata validation ---
 //
 // The acceptance criterion these encode: metadata is either stored as sent, or refused
 // with a reason. The one outcome that is not allowed is 200-and-discarded, which is what

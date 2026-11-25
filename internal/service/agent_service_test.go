@@ -117,7 +117,7 @@ func TestAgentService_Register(t *testing.T) {
 				assert.Equal(t, "developer", agent.Role, "omitted role should default, not land empty")
 				assert.Equal(t, "24/7", agent.WorkingHours, "omitted working_hours should default, not land empty")
 				assert.Equal(t, defaultMaxConcurrentTasks, agent.MaxConcurrentTasks,
-					"omitted max_concurrent_tasks must not silently stay 0 — that reads as \"takes no tasks\" (#85714565)")
+					"omitted max_concurrent_tasks must not silently stay 0 — that reads as \"takes no tasks\"")
 				assert.Equal(t, "", agent.ResponsibilityZone, "zone has no universal default — omitted stays empty, not invented")
 				assert.Nil(t, agent.EscalationTo)
 				// AcceptsFrom is intentionally left nil at the service layer —
@@ -136,8 +136,8 @@ func TestAgentService_Register(t *testing.T) {
 				zone := "Mesh — QA"
 				hours := "9-18 MSK"
 				zero := 0
-				escalation := "Garfield"
-				acceptsFrom := json.RawMessage(`["Linus","Riker"]`)
+				escalation := "Gary"
+				acceptsFrom := json.RawMessage(`["Liam","Robin"]`)
 				return RegisterAgentInput{
 					WorkspaceID:        ws.ID,
 					Name:               "Configured Agent",
@@ -160,8 +160,8 @@ func TestAgentService_Register(t *testing.T) {
 				assert.Equal(t, 0, agent.MaxConcurrentTasks,
 					"an explicit 0 (deliberately paused) must survive, not be upgraded to the default")
 				require.NotNil(t, agent.EscalationTo)
-				assert.JSONEq(t, `"Garfield"`, string(*agent.EscalationTo))
-				assert.JSONEq(t, `["Linus","Riker"]`, string(agent.AcceptsFrom))
+				assert.JSONEq(t, `"Gary"`, string(*agent.EscalationTo))
+				assert.JSONEq(t, `["Liam","Robin"]`, string(agent.AcceptsFrom))
 				require.NotNil(t, agent.Capabilities)
 				assert.JSONEq(t, `{"code-review":true}`, string(agent.Capabilities))
 			},

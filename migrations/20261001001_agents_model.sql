@@ -1,6 +1,6 @@
 -- +goose Up
 
--- Agent "model" (#5548367d): the LLM an agent runs on (e.g. "gpt-6.1-sol"),
+-- Agent "model": the LLM an agent runs on (e.g. "gpt-6.1-sol"),
 -- reported by the agent/dispatcher itself. agent_type stays the harness
 -- (claude_code / codex / ...). Additive and nullable: NULL means "not reported",
 -- deliberately not a default like 'claude' that would be wrong for every

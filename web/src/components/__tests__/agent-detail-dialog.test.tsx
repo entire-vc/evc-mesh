@@ -84,7 +84,7 @@ describe("AgentDetailDialog — profile fields", () => {
   });
 
   it("clearing accepts_from on an existing agent sends an explicit star, not an empty list", async () => {
-    const agentWithAccepts = { ...baseAgent, accepts_from: ["the product lead"] };
+    const agentWithAccepts = { ...baseAgent, accepts_from: ["Gary"] };
     vi.mocked(api).mockImplementation((path: string, opts?: { method?: string }) => {
       if (path === "/api/v1/agents/agent-1/profile" && opts?.method === "PUT") {
         return Promise.resolve(undefined);
@@ -100,7 +100,7 @@ describe("AgentDetailDialog — profile fields", () => {
     );
 
     fireEvent.click(screen.getByTitle("Edit Accepts from"));
-    const editInput = screen.getByDisplayValue("the product lead");
+    const editInput = screen.getByDisplayValue("Gary");
     fireEvent.change(editInput, { target: { value: "" } });
     fireEvent.keyDown(editInput, { key: "Enter" });
 
@@ -158,7 +158,7 @@ describe("AgentDetailDialog — profile fields", () => {
         return Promise.resolve(undefined);
       }
       if (path === "/api/v1/agents/agent-1") {
-        return Promise.resolve({ ...baseAgent, escalation_to: "the product lead" });
+        return Promise.resolve({ ...baseAgent, escalation_to: "Gary" });
       }
       return Promise.reject(new Error(`unexpected call: ${path}`));
     });
@@ -167,7 +167,7 @@ describe("AgentDetailDialog — profile fields", () => {
 
     fireEvent.click(screen.getByTitle("Edit Escalation contact"));
     const editInput = screen.getByLabelText("Escalation contact");
-    fireEvent.change(editInput, { target: { value: "the product lead" } });
+    fireEvent.change(editInput, { target: { value: "Gary" } });
     fireEvent.keyDown(editInput, { key: "Enter" });
 
     await waitFor(() => {
@@ -185,7 +185,7 @@ describe("AgentDetailDialog — profile fields", () => {
     // team-config contract — NOT ["Gary"]. Regression for the type
     // mismatch code review found (rules_service.go ExportConfig silently
     // dropped array-shaped escalation_to on YAML export).
-    expect(body.escalation_to).toBe("the product lead");
+    expect(body.escalation_to).toBe("Gary");
   });
 
   it("refuses to save an invalid max concurrent tasks draft instead of silently committing 0 — Save is disabled, no request is sent", async () => {
@@ -491,8 +491,13 @@ describe("AgentDetailDialog — home runtime tabs stay (invited dialog regressio
   it("keeps the existing tabs and adds Route & runs", () => {
     render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={baseAgent} />);
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
-      "Profile", "Route & runs", "Workspace access", "Execution & routes", "Observed state",
+      "Profile", "Route & runs", "Workspace access", "Execution & routes", "Observed state", "Statistics",
     ]);
+  });
+
+  it("opens on the tab the agent page's URL names", () => {
+    render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={baseAgent} initialTab="state" />);
+    expect(screen.getByRole("tab", { name: "Observed state" })).toHaveAttribute("aria-selected", "true");
   });
 });
 

@@ -1,6 +1,6 @@
 -- +goose Up
 
--- #40cc098e (follow-up to #620bd93a): two measurements three weeks apart found
+-- (follow-up to an internal ticket): two measurements three weeks apart found
 -- fleet-wide `reason` compliance plateaued at 38-64%, nowhere near a bar that
 -- would let MESH_MEMORY_REQUIRE_REASON flip to enforce without breaking most
 -- of the fleet's remember() calls. Both measurements were done with ad-hoc SQL
@@ -49,7 +49,7 @@ GROUP BY 1, 2, 3, 4;
 
 COMMENT ON VIEW memory_reason_compliance_by_agent_daily IS
     'Per-agent, per-day remember()/set_project_knowledge() reason-compliance, '
-    'matching the methodology in Mesh #620bd93a / #40cc098e: excludes '
+    'matching the reason-compliance audit methodology: excludes '
     'lme-bench-runner noise (workspace_id NULL or is_bench workspaces) so the '
     'percentage reflects real fleet activity. Query directly, e.g.: '
     'SELECT * FROM memory_reason_compliance_by_agent_daily '

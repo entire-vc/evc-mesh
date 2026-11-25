@@ -24,7 +24,7 @@ type Workspace struct {
 	// IsBench marks the single dedicated LME-bench workspace. Set only by the
 	// migration backfill (see is_bench migration) — there is deliberately no
 	// API path to toggle it. Gates the reserved `lme-bench` memory tag in
-	// memoryService.Remember (task #0104878c): a workspace where this is false
+	// memoryService.Remember: a workspace where this is false
 	// can never accept a write carrying that tag, regardless of which key a
 	// client process happens to be holding.
 	IsBench bool `json:"is_bench" db:"is_bench"`

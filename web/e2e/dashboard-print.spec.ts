@@ -19,7 +19,7 @@ const SANDBOX_WS_SLUG = "e2e-ci-sandbox";
 const OUT = process.env.DASHBOARD_PRINT_PDF;
 const RUN = `e2e-print-${Date.now().toString(36)}`;
 /** The analytics template (internal/extensions/dashboards/templates.go). */
-const WIDGETS = 11;
+const WIDGETS = 12;
 const BOTTOM_TITLES = ["Events by type", "Cost by project"];
 const PAPER = { width: 1047, height: 718 };
 
@@ -82,7 +82,7 @@ test.describe.serial("Print dashboard: the whole Analytics layout on paper", () 
         mkdirSync(OUT, { recursive: true });
         writeFileSync(`${OUT}/analytics-${width}.pdf`, pdf);
       }
-      // The template is 18 rows: more than one landscape sheet. One sheet is the old viewport-only print.
+      // The template is 24 rows: more than one landscape sheet. One sheet is the old viewport-only print.
       const pages = (pdf.toString("latin1").match(/\/Type\s*\/Page[^s]/g) ?? []).length;
       expect(pages, "the printed dashboard runs onto more than one sheet").toBeGreaterThan(1);
 

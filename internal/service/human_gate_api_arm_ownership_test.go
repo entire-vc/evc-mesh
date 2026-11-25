@@ -14,12 +14,12 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
-// Task #f933dc05. A gate armed through POST /tasks/:id/human-gate leaves no marker
+// A gate armed through POST /tasks/:id/human-gate leaves no marker
 // comment, so scanHumanGateOwnership — which reads the THREAD — found nothing and
 // reported "no_live_marker", which every caller (and the refusal message itself) took
 // to mean "armed without an ask an author could withdraw — there is no withdrawal path
 // here by construction". That sentence is true of a raw PATCH/UI arm and was never true
-// of an API arm: since task #4545660b the author of an API arm is written onto the task
+// of an API arm: since that fix the author of an API arm is written onto the task
 // row as gate_author, from the caller's AUTHENTICATED identity. The server knew the
 // author and looked in the wrong column.
 //
@@ -133,7 +133,7 @@ func TestGetHumanGateOwner_MarkerArmed_KeepsWithdrawPath(t *testing.T) {
 	taskID := env.seedGatedTask(env.inProgressID)
 	askerID := uuid.New()
 	env.seedAgentBlockingComment(taskID, askerID)
-	// The gate ALSO carries a recorded gate_author, as any post-#4545660b marker arm
+	// The gate ALSO carries a recorded gate_author, as any post-an internal ticket marker arm
 	// does — so this test proves the marker branch wins over the fallback, rather
 	// than merely never reaching it.
 	agent := domain.ActorTypeAgent
@@ -197,7 +197,7 @@ func TestGetHumanGateOwner_TaskMissing_FailsClosed(t *testing.T) {
 // TestGetHumanGateOwner_MarkerPastFirstPage_NowFound below for the other
 // side of the same coin, now that the scan CAN read the whole thread.
 //
-// Fixed 2026-09-09 (task #3b921ba7): scanHumanGateOwnership now walks every
+// Fixed 2026-09-09: scanHumanGateOwnership now walks every
 // page until the repository says there is nothing left, so "no marker found"
 // on a long thread is a real fact about the thread again, not an artefact of
 // where page 1 happened to end. The fallback below is the direct
@@ -276,7 +276,7 @@ func TestGetHumanGateOwner_TruncatedThread_MarkerFoundOnFirstPage_Unaffected(t *
 }
 
 // ---------------------------------------------------------------------------
-// The mandatory red leg (task #3b921ba7): a marker sitting PAST comment 100
+// The mandatory red leg: a marker sitting PAST comment 100
 // ---------------------------------------------------------------------------
 
 // seedMarkerPastPageOne builds a thread of n ordinary comments (chronologically
@@ -297,7 +297,7 @@ func seedMarkerPastPageOne(env triageTestEnv, taskID, authorID uuid.UUID, n int)
 
 // TestGetHumanGateOwner_MarkerPastFirstPage_NowFound is the acceptance test's own
 // non-negotiable red leg: "тест с тредом >100 комментов, где маркер стоит ЗА сотым,
-// должен падать на текущем коде и проходить после" (#3b921ba7). Without the loop in
+// должен падать на текущем коде и проходить после". Without the loop in
 // scanHumanGateOwnership this marker sits at position 151 of a 151-comment thread —
 // entirely outside the single PageSize=100 page the old code read — so the scan
 // found nothing, GetHumanGateOwner reported marker_scan_truncated, and the marker's
@@ -324,7 +324,7 @@ func TestGetHumanGateOwner_MarkerPastFirstPage_NowFound(t *testing.T) {
 }
 
 // TestReleaseHumanGateOnWithdrawal_MarkerPastFirstPage_StillReleases is acceptance
-// criterion 2 from #3b921ba7: the withdrawal path itself (not just the read-only
+// criterion 2: the withdrawal path itself (not just the read-only
 // report) must reach a marker sitting past comment 100. Before the fix this failed
 // SILENTLY — the withdrawal comment published normally, scanHumanGateOwnership
 // found no owner past page 1, and releaseHumanGateOnWithdrawal's own !scan.found

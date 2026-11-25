@@ -17,7 +17,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
-// AgentRepositoryAccessRepo owns agents.repository_access and its revision.
+// AgentRepositoryAccessRepo owns agents.repository_access and its revision
 // It is the only writer of the two columns: the generic agent
 // UPDATEs, heartbeat, profile and config import never name them.
 type AgentRepositoryAccessRepo struct {

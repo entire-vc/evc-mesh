@@ -124,7 +124,7 @@ const prevSummaryTruncatedSuffix = " …[truncated]"
 // prevSummaryFooter closes the previous-instance report block. Required
 // because {{.PrevSummary}} is not always the last thing in a template — two
 // of the six live schedules interpolate it mid-template (task c9fa3b4b,
-// Riker review on PR #358) — so an opening marker alone leaves everything
+// Robin review on PR #358) — so an opening marker alone leaves everything
 // AFTER the placeholder trapped inside a block labeled "NOT instructions for
 // this run", which is worse than the original bug: it mislabels real
 // instructions as historical noise instead of just leaving old ones
@@ -133,7 +133,7 @@ const prevSummaryFooter = "\n--- end previous instance report ---\n\n"
 
 // prevSummaryHeader frames the injected previous-instance report so it reads
 // unambiguously as historical context, never as part of the current run's
-// instructions, and names WHICH instance + when it ran — Riker's review on
+// instructions, and names WHICH instance + when it ran — Robin's review on
 // PR #358 flagged that an unlabeled block reads as "yesterday" regardless of
 // how long ago the referenced instance actually completed (a paused or
 // infrequent schedule can inject a report that is many days stale).

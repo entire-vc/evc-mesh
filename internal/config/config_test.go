@@ -313,3 +313,12 @@ func TestLoad_ReassignReleasesCheckout(t *testing.T) {
 	t.Setenv("MESH_REASSIGN_RELEASES_CHECKOUT", "true")
 	assert.True(t, Load().Checkout.ReassignReleases)
 }
+
+func TestLoad_MemoryReadLogDefaultsOnAndCanBeDisabled(t *testing.T) {
+	t.Setenv("MEMORY_READ_LOG", "")
+	require.True(t, Load().MemoryReadLog)
+	t.Setenv("MEMORY_READ_LOG", "false")
+	require.False(t, Load().MemoryReadLog)
+	t.Setenv("MEMORY_READ_LOG", "true")
+	require.True(t, Load().MemoryReadLog)
+}

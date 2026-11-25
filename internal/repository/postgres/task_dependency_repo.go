@@ -381,3 +381,25 @@ func (r *TaskDependencyRepo) DeployedTasks(ctx context.Context, taskIDs []uuid.U
 	}
 	return out, nil
 }
+
+// DependentEdgeScope answers, for an edge named from its blocker, whether the
+// edge hangs off that blocker at all, whether its two ends live in different
+// workspaces, and whether it carries a typed card wait's provenance
+// (wait_agent_id). Nothing about the dependent task is returned: the blocker side
+// may learn the edge exists, not what waits on it.
+func (r *TaskDependencyRepo) DependentEdgeScope(ctx context.Context, blockerID, edgeID uuid.UUID) (domain.DependentEdgeScope, error) {
+	var s domain.DependentEdgeScope
+	err := r.db.GetContext(ctx, &s, `SELECT true AS found,
+			dp.workspace_id <> bp.workspace_id AS cross_workspace,
+			d.wait_agent_id IS NOT NULL AS server_observed
+		FROM task_dependencies d
+		JOIN tasks dt ON dt.id = d.task_id AND dt.deleted_at IS NULL
+		JOIN projects dp ON dp.id = dt.project_id
+		JOIN tasks bt ON bt.id = d.depends_on_task_id AND bt.deleted_at IS NULL
+		JOIN projects bp ON bp.id = bt.project_id
+		WHERE d.id = $1 AND d.depends_on_task_id = $2 AND d.dependency_type = 'blocks'`, edgeID, blockerID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.DependentEdgeScope{}, nil
+	}
+	return s, err
+}

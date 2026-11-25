@@ -11,7 +11,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Task #5d3dc714, audit §3.2b. 40-45% of asks to Pavel were cases the agent could have
+// Audit §3.2b. 40-45% of asks to Pavel were cases the agent could have
 // decided from a rule already written down: an access already sitting in keys.env, its
 // own 403 read as a human's decision, an approval Pavel had already declined, or waiting
 // on someone else's card instead of adding a dependency.
@@ -73,7 +73,7 @@ func TestPredicate_ReversibleAndSafe_RefusesToArm(t *testing.T) {
 func TestPredicate_BlockedByOtherTask_DemandsDependencyNotGate(t *testing.T) {
 	p := basePredicate()
 	p.BlockedByOtherTask = true
-	p.BlockedReason = "waiting on #0104878c, which Linus owns"
+	p.BlockedReason = "waiting on #5eed0016, which Liam owns"
 
 	err, armed := armWithPredicate(t, &p)
 
@@ -89,7 +89,7 @@ func TestPredicate_BlockedByOtherTask_DemandsDependencyNotGate(t *testing.T) {
 func TestPredicate_BlockedWins_WhenAlsoReversible(t *testing.T) {
 	p := basePredicate()
 	p.BlockedByOtherTask = true
-	p.BlockedReason = "waiting on #0104878c"
+	p.BlockedReason = "waiting on #5eed0016"
 	p.Reversible = true
 	p.ReversibleReason = "revertible by a migration down"
 
@@ -170,7 +170,7 @@ func TestPredicate_ReasonRequiredPerAnswer(t *testing.T) {
 
 // TestPredicate_MarkerPathExempt: a "❓ Blocking @pavel" comment carries no predicate and
 // must still arm. Refusing it would be silent to its author — they post the question,
-// believe it was handed over, and the card keeps being fed (#58a6f4ff, #f421ad57). The
+// believe it was handed over, and the card keeps being fed. The
 // same asymmetry recommended_default already carries, and for the same reason.
 func TestPredicate_MarkerPathExempt(t *testing.T) {
 	svc, repo, taskID := newArmingTestService(t)

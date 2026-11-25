@@ -159,7 +159,7 @@ var declaredQueryTenantParams = map[string]string{
 
 	// GET /spark/agents(/popular|/:agent_id) — an optional workspace_id lets a
 	// caller ask "what does MY workspace's spark integration resolve to"
-	// (an internal ticket: the catalog base URL and on/off state are now workspace-scoped,
+	// (the catalog base URL and on/off state are now workspace-scoped,
 	// where previously they were a single instance-wide env value nothing could
 	// override per workspace). NOT eligible for narrows: — an authorized
 	// workspace's row can point Mesh's server at a DIFFERENT catalog host than
@@ -193,6 +193,9 @@ var declaredQueryTenantParams = map[string]string{
 	"analytics_handler.go:ExportMetrics.project_id": "narrows: AND t.project_id = $2 — pinned by WHERE p.workspace_id = $1",
 	// The widget handler also refuses a project_id outside the viewer's GitLab-bound projects.
 	"gitlab_widget_handler.go:FailedPipelines.project_id": "narrows: AND p.id = ANY($2::uuid[]) — pinned by WHERE p.workspace_id = $1",
+	// GET /workspaces/:ws_id/analytics/memory[/...] — checkProject refuses a project outside
+	// :ws_id or invisible to the viewer (403); every query is also pinned by workspace_id.
+	"memory_analytics_handler.go:memoryFilter.project_id": "narrows: \"e.project_id = \"+a.add(*f.ProjectID) — pinned by \"e.workspace_id = \" + a.add(f.WorkspaceID)",
 
 	// GET /me/comments — the pin is authorship, not tenancy. Both filters below
 	// narrow a set that already contains only rows the caller wrote, so passing a

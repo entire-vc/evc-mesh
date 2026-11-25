@@ -75,10 +75,10 @@ func TestTypedOutcomeCommandHandler_StatusCodes(t *testing.T) {
 	h := NewTypedOutcomeCommandHandler(cmds, nil)
 	task, req := uuid.New(), uuid.New()
 
-	rec, _ := callCommand(t, h.AskAgent, "task_id", task.String(), `{"to":"carol","question":"v1 or v2?","session_id":"s1"}`)
+	rec, _ := callCommand(t, h.AskAgent, "task_id", task.String(), `{"to":"gary","question":"v1 or v2?","session_id":"s1"}`)
 	assert.Equal(t, http.StatusCreated, rec.Code)
 	assert.Equal(t, task, cmds.taskID)
-	assert.Equal(t, "carol", cmds.ask.To)
+	assert.Equal(t, "gary", cmds.ask.To)
 	require.NotNil(t, cmds.ask.SessionID)
 	assert.Equal(t, "s1", *cmds.ask.SessionID)
 

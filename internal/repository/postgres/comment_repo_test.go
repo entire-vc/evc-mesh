@@ -163,7 +163,7 @@ func TestCommentRepo_ListByTask_ManyComments_TailIsReachable(t *testing.T) {
 }
 
 // TestCommentRepo_ListByTask_AuthorNameJSONShape is the regression + negative
-// control for #444502cb: a system-authored comment's author_name CASE branch
+// control: a system-authored comment's author_name CASE branch
 // (commentEnrichedSelect in comment_repo.go) falls to its ELSE NULL arm, and
 // domain.Comment.AuthorName used to carry `json:"author_name,omitempty"` — a
 // nil *string is "empty" under Go's omitempty rule, so the key vanished from

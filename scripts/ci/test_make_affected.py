@@ -18,6 +18,7 @@ how they were called. What is checked:
   - a failing `compose up`: non-zero, and the half-started stack is removed;
   - SIGINT (Ctrl+C) or SIGTERM (a limiter timeout) during the tests: the stack is
     still removed, within the 15 s before a follow-up SIGKILL;
+  - a second SIGTERM while compose down is running cannot interrupt cleanup;
   - two checkouts with the same directory name (every lane's `slot-2`) get
     different compose projects, and up/down address this checkout's own one;
   - host ports are docker's choice (`up` with port 0) and the tests and the
@@ -52,6 +53,10 @@ if [ -z "$proj" ] && [ -f deploy/docker/mesh/.env ]; then
 fi
 echo "docker $* project=$proj db=$DB_PORT" >> "$STUB_LOG"
 case "$*" in
+  *" down -v")
+    echo "down-started" >> "$STUB_LOG"
+    if [ -n "$STUB_DOWN_DELAY" ]; then sleep "$STUB_DOWN_DELAY"; fi
+    echo "down-completed" >> "$STUB_LOG" ;;
   *" port postgres 5432") echo "0.0.0.0:41001" ;;
   *" port redis 6379") echo "0.0.0.0:41002" ;;
   *" port nats 4222") echo "0.0.0.0:41003" ;;
@@ -207,10 +212,13 @@ def cases(makefile: Path, prefix: str = '') -> None:
         # SIGTERM: a run limiter's timeout or a killed session terminates the group
         # and follows with SIGKILL after a grace period (15 s on our hosts), so the
         # removal has to start at once, not after the tests would have finished.
-        for name, sig in (('Ctrl+C', signal.SIGINT), ('SIGTERM', signal.SIGTERM)):
+        for name, sig in (('Ctrl+C', signal.SIGINT), ('SIGTERM', signal.SIGTERM),
+                          ('SIGTERM during cleanup', signal.SIGTERM)):
             e.selection.write_text('example.com/m/internal/a\n')
             e.log.write_text('')
-            p = subprocess.Popen(e.args('test-affected'), env=e.env(STUB_GO_SLEEP='60'), text=True,
+            repeated = name == 'SIGTERM during cleanup'
+            p = subprocess.Popen(e.args('test-affected'),
+                                 env=e.env(STUB_GO_SLEEP='60', STUB_DOWN_DELAY='0.5' if repeated else ''), text=True,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  start_new_session=True)
             deadline = time.time() + 60
@@ -219,6 +227,19 @@ def cases(makefile: Path, prefix: str = '') -> None:
             started = 'go-test-started' in e.log.read_text()
             sent = time.time()
             os.killpg(p.pid, sig)
+            second_sent = False
+            if repeated:
+                # GNU make also forwards termination to its recipe: a second
+                # signal can arrive while the EXIT trap is running compose down.
+                deadline = time.monotonic() + 2
+                while 'down-started' not in e.log.read_text() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                if 'down-started' in e.log.read_text():
+                    try:
+                        os.killpg(p.pid, sig)
+                        second_sent = True
+                    except ProcessLookupError:
+                        pass
             try:
                 out, _ = p.communicate(timeout=60)
             except subprocess.TimeoutExpired:
@@ -228,7 +249,10 @@ def cases(makefile: Path, prefix: str = '') -> None:
             calls = e.calls()
             check(f'{prefix}{name}: tests had started', started, '\n'.join(calls))
             check(f'{prefix}{name}: exit non-zero', p.returncode != 0, out)
-            check(f'{prefix}{name}: stack removed', downs(calls) == 1, '\n'.join(calls) + '\n' + out)
+            if repeated:
+                check(f'{prefix}{name}: second signal sent', second_sent, out)
+            check(f'{prefix}{name}: stack removed', downs(calls) == 1 and 'down-completed' in calls,
+                  '\n'.join(calls) + '\n' + out)
             check(f'{prefix}{name}: done within the 15 s grace ({took:.1f} s)', took < 15, out)
         other = Env(makefile)
         try:
@@ -249,7 +273,7 @@ def main() -> int:
 
     # Red control: the same recipe without its cleanup trap must fail the removal checks.
     text = makefile.read_text()
-    broken, n = re.subn(r"@trap '\$\(TEST_PKG_COMPOSE\) down -v;[^']*' EXIT; \\\n",
+    broken, n = re.subn(r"@trap '[^']*\$\(TEST_PKG_COMPOSE\) down -v;[^']*' EXIT; \\\n",
                         '@', text, count=1)
     if n != 1:
         print('FAIL red control: could not find the test-pkg cleanup trap to strip')

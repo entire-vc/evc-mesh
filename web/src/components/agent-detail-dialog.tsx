@@ -27,7 +27,7 @@ import { AgentRepositoryAccess } from "@/components/agent-repository-access";
 import { api } from "@/lib/api";
 import type { OperatorAgent } from "@/lib/my-runner";
 import { useAuthStore } from "@/stores/auth";
-import { AgentRuntimeTabs } from "@/components/agent-runtime-tabs";
+import { AgentRuntimeTabs, type AgentTabId } from "@/components/agent-runtime-tabs";
 import { ApiKeyRevealPanel } from "@/components/api-key-reveal";
 import type { Agent, AgentProfileUpdateRequest, AgentType } from "@/types";
 import { inlineLabel } from "@/lib/user-display";
@@ -39,6 +39,8 @@ interface AgentDetailDialogProps {
   agent: Agent | null;
   /** Derived presence from the org-chart payload (GET /agents does not carry it). */
   computedStatus?: string | null;
+  /** The tab the dialog opens with (the agent page's `?tab=`). */
+  initialTab?: AgentTabId;
 }
 
 type DialogMode = "detail" | "regenerate-confirm" | "regenerate-key" | "delete-confirm";
@@ -48,6 +50,7 @@ export function AgentDetailDialog({
   onOpenChange,
   agent,
   computedStatus,
+  initialTab,
 }: AgentDetailDialogProps) {
   const { t } = useTranslation("integrations");
   const { agents, updateAgent, updateAgentProfile, deleteAgent, regenerateKey } = useAgentStore();
@@ -581,6 +584,8 @@ export function AgentDetailDialog({
 
         <AgentRuntimeTabs
           agent={agent}
+          initialTab={initialTab}
+          showStats
           workspaceId={currentWorkspace?.id ?? null}
           canReadRuntime={privilegedRead}
           profile={
@@ -1219,7 +1224,7 @@ function DetailRow({
 
 /**
  * Inline-editable row for one of the five profile fields added in task
- * an internal ticket. `label` renders as visible text when set; when omitted, `icon`
+ * `label` renders as visible text when set; when omitted, `icon`
  * + `ariaLabel` carry the field's identity instead (input aria-label/title
  * and "Edit …" tooltip). Field-label copy is tier B (§1r.A) — the lead ships
  * it directly, no Alex approval gate — so all five profile fields now pass
@@ -1264,7 +1269,7 @@ function ProfileFieldRow({
     // narrow viewport, editing max_concurrent_tasks/escalation_to squeezes
     // the label span down to ~80px, and its uppercase tracking-wider text
     // wrapped to THREE lines with the edit Input floating unanchored beside
-    // it (an internal ticket, second pass — found live at 393px in edit mode).
+    // it (second pass — found live at 393px in edit mode).
     // Letting the row wrap moves the value/editor to its own line instead
     // of shrinking the label — the label then renders on one line at the
     // row's full width, which is always enough room for these labels.

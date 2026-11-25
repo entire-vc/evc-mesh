@@ -72,8 +72,8 @@ func TestArtifactHandler_GetByID_StripsTrAgentKey(t *testing.T) {
 
 // TestArtifactHandler_GetByID_CarriesDownloadPath proves the response carries
 // the stable machine-readable download path alongside tr_public_url, and
-// that tr_public_url itself is unchanged by this addition (an internal ticket:
-// tr_public_url must stay exactly as-is on shares where it already works).
+// that tr_public_url itself is unchanged by this addition
+// (tr_public_url must stay exactly as-is on shares where it already works).
 func TestArtifactHandler_GetByID_CarriesDownloadPath(t *testing.T) {
 	artifactID := uuid.New()
 	wsID := uuid.New()

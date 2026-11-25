@@ -150,7 +150,7 @@ class CaptureStepCallsTheGuard(unittest.TestCase):
 
         The required arm got version attribution in #410; this arm kept none of
         it, and the gap is worse here rather than milder: `baseline.json` is what
-        the advisory arm is judged against for weeks, and until #f0e655e7 it was
+        the advisory arm is judged against for weeks, and until that fix it was
         a file that stated neither its retrieval mode nor its binary. A capture
         straddling a deploy would have become that floor with nothing in the file
         saying so.

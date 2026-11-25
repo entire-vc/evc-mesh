@@ -1,12 +1,12 @@
 """Normalise the LongMemEval-S corpus so it survives the memory write-path gate.
 
-Since `1f803fd` (PR #660, task #f78232c4) `remember` refuses content that
+Since `1f803fd` (PR #660) `remember` refuses content that
 carries an invisible/direction-altering character or an instruction-override
 phrase. The bench corpus contains both — measured against
 `data/lme_s_24.json`: 6 sessions carry `U+200B`, 3 carry a literal
 "ignore all previous"-shaped phrase, out of 1150 sessions total.
 
-The policy decision (task #82e42882) was to normalise here rather than to grant
+The policy decision was to normalise here rather than to grant
 the bench agent an exemption on the write path. The reasoning, in short: an
 exemption would add a fourth way into `memories` that bypasses the gate, whose
 only check is "is this the right agent" — and the bench agent's key lives in

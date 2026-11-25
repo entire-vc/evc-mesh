@@ -12,7 +12,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Task #4545660b. enforceBlockingTriage is now a CALLER of the one arming
+// EnforceBlockingTriage is now a CALLER of the one arming
 // implementation, not a second implementation of it. These tests assert the thing that
 // makes that true: the input it builds carries a gate_author taken from the comment's
 // AUTHENTICATED author, plus whatever the marker itself stated.
@@ -79,7 +79,7 @@ func TestArmInputFromMarker_ExtractsStatedDefaultAndDeadline(t *testing.T) {
 		{
 			// NEGATIVE CONTROL. A post-mortem explaining the convention must not have
 			// its own example harvested as a real default — the exact shape that made
-			// phantom gates possible (#84ab54fd: a probe that emits the token it probes
+			// phantom gates possible (a probe that emits the token it probes
 			// for is a latch, not a gate).
 			name: "quoted example is not a real default",
 			body: "❓ **Blocking @pavel**: вопрос по существу.\n\n" +

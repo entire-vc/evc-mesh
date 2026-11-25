@@ -359,7 +359,7 @@ func TestMoveTask_ImplicitCASRetriesOverInterleavedWrite(t *testing.T) {
 	require.ErrorAs(t, svc.MoveTask(ctx, id, MoveTaskInput{StatusID: &other, ExpectedStatusID: &cur.StatusID}), &conflict)
 }
 
-// an internal ticket: a caller that read (status, assignee) and moves on that snapshot
+// A caller that read (status, assignee) and moves on that snapshot
 // must get a 409 when the owner changes between its read and the move, and the
 // card must keep the new owner's state; on an unchanged card the move lands.
 func TestMoveTask_PostgresExpectedAssigneeLosesToReassign(t *testing.T) {

@@ -1,4 +1,4 @@
-# Mesh #5fe7fb4b — `.github/` IS scanned.
+# `.github/` IS scanned.
 #
 # It used to be excluded here, with the exclusion carrying a note that the 87
 # findings inside it (75 `github-actions-mutable-action-tag`, 12

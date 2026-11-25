@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/url"
@@ -44,7 +43,7 @@ type VCSLinkSyncResult struct {
 	Reason  string          `json:"reason,omitempty"`
 }
 
-// WithVCSMREvidenceSource lets SyncLink and Create read a merged MR's state,
+// WithVCSMREvidenceSource lets SyncLink and Create read an MR's state,
 // head commit and head pipeline from GitLab, so a link added after the merge
 // (no webhook will ever reach it) still gets the HEAD and CI result the
 // delivery-proof gate reads.
@@ -70,12 +69,12 @@ func sameMRWebURL(a, b string) bool {
 		strings.TrimRight(ua.Path, "/") == strings.TrimRight(ub.Path, "/")
 }
 
-// syncGitLabLinkEvidence asks GitLab about the exact MR the link names and,
-// when GitLab says it is merged, stores its head commit as head_sha and its
+// syncGitLabLinkEvidence asks GitLab about the exact MR the link names and
+// stores its confirmed status, head commit as head_sha and its
 // head pipeline as pipeline_status/pipeline_sha — the pipeline only when it
-// ran on that same head. Only the sync fields are written: status, ship_sha,
+// ran on that same head. Only the sync fields are written: ship_sha,
 // ci_verdict, acceptance, deployed, implementation_sha and the manual status
-// declaration stay as they are. A repeat with nothing new writes nothing.
+// declaration stay as they are. No card moves. A repeat with nothing new writes nothing.
 // Returns whether the row was written and, when something was not stored, why.
 func syncGitLabLinkEvidence(ctx context.Context, s *vcsLinkService, src gitlabapi.MergeRequestEvidenceSource, l domain.VCSLink) (written bool, reason string, err error) {
 	if !gitlabLinkIsDelivery(l) {
@@ -100,22 +99,40 @@ func syncGitLabLinkEvidence(ctx context.Context, s *vcsLinkService, src gitlabap
 	if !sameMRWebURL(ev.WebURL, l.URL) {
 		return false, GitLabSyncReasonURLMismatch, nil
 	}
-	if ev.State != "merged" {
+	if ev.State != "merged" && ev.State != "opened" && ev.State != "closed" && ev.State != "locked" {
 		return false, GitLabSyncReasonNotMerged, nil
 	}
+	// GitLab's merged_at is written before the head/pipeline checks below, so
+	// a link with nothing else to sync still gets its merge time. Set once:
+	// a known time is kept, an unreported one stays NULL.
+	if ev.State == "merged" && l.MergedAt == nil && ev.MergedAt != nil {
+		w, mErr := s.repo.SetMergedAt(ctx, l.ID, *ev.MergedAt)
+		if mErr != nil {
+			return false, "", fmt.Errorf("store gitlab merged_at: %w", mErr)
+		}
+		if w {
+			t := ev.MergedAt.UTC()
+			l.MergedAt = &t
+			written = true
+		}
+	}
 	if ev.SHA == "" {
-		return false, GitLabSyncReasonNoHeadSHA, nil
+		return written, GitLabSyncReasonNoHeadSHA, nil
 	}
 
-	if l.HeadSHA() != ev.SHA {
-		patch, _ := json.Marshal(map[string]string{domain.VCSLinkMetaHeadSHA: ev.SHA}) // a string map cannot fail to marshal
-		updated, mErr := s.repo.MergeMetadata(ctx, l.TaskID, l.ID, patch)
+	status := gitlabLinkStatus(ev.State)
+	if l.HeadSHA() != ev.SHA || l.Status != status || l.StatusSyncedAt == nil {
+		// Confirm the exact ID: Upsert may deduplicate equivalent URLs and
+		// discard this row's evidence. The repository patches stored metadata
+		// atomically, preserving concurrent review/acceptance writes too.
+		updated, mErr := s.repo.ConfirmGitLabMR(ctx, l.TaskID, l.ID, status, ev.SHA, ev.MergedAt)
 		if mErr != nil {
-			return false, "", fmt.Errorf("store gitlab head sha: %w", mErr)
+			return written, "", fmt.Errorf("store gitlab head and status: %w", mErr)
 		}
-		if updated != nil {
-			l = *updated
+		if updated == nil {
+			return written, "", apierror.NotFound("vcs link")
 		}
+		l = *updated
 		written = true
 	}
 
@@ -126,18 +143,18 @@ func syncGitLabLinkEvidence(ctx context.Context, s *vcsLinkService, src gitlabap
 	if hp.SHA != ev.SHA {
 		return written, GitLabSyncReasonPipelineMismatch, nil
 	}
-	status, ok := domain.NormalizePipelineStatus(hp.Status)
+	pipelineStatus, ok := domain.NormalizePipelineStatus(hp.Status)
 	if !ok {
 		return written, GitLabSyncReasonUnknownStatus, nil
 	}
 	if l.PipelineID != nil && *l.PipelineID == hp.ID &&
-		l.PipelineStatus != nil && *l.PipelineStatus == status && l.PipelineSHA() == hp.SHA {
+		l.PipelineStatus != nil && *l.PipelineStatus == pipelineStatus && l.PipelineSHA() == hp.SHA {
 		if written {
 			return true, "", nil
 		}
 		return false, GitLabSyncReasonUnchanged, nil
 	}
-	w, sErr := s.repo.SetPipelineStatus(ctx, l.ID, hp.ID, status, hp.SHA)
+	w, sErr := s.repo.SetPipelineStatus(ctx, l.ID, hp.ID, pipelineStatus, hp.SHA)
 	if sErr != nil {
 		return written, "", fmt.Errorf("store gitlab head pipeline: %w", sErr)
 	}
@@ -168,7 +185,7 @@ func (s *vcsLinkService) gitlabEvidenceSourceFor(ctx context.Context, taskID uui
 // SyncLink re-reads one GitLab MR link of taskID from GitLab and stores its
 // HEAD and head pipeline (see syncGitLabLinkEvidence). The link must belong to
 // taskID; any other link is NotFound. It never creates links, never changes a
-// link's status and never moves the card.
+// card's status. The link's own status is confirmed by GitLab.
 func (s *vcsLinkService) SyncLink(ctx context.Context, taskID, linkID uuid.UUID) (*VCSLinkSyncResult, error) {
 	l, err := s.repo.GetByID(ctx, linkID)
 	if err != nil {

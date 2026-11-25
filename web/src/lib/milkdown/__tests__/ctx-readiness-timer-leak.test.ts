@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeDocEditor } from "@/lib/milkdown/editor";
 
 /**
- * REGRESSION (evc-mesh #c4112e5e): `@milkdown/ctx`'s internal readiness
+ * REGRESSION: `@milkdown/ctx`'s internal readiness
  * `Timer` (used by every `ctx.wait(...)`, e.g. InitReady/SchemaReady/
  * EditorViewReady) races an event listener against a `setTimeout` fallback,
  * but only ever cancels the LISTENER on early success — the `setTimeout` was

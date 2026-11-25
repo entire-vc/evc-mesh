@@ -17,7 +17,7 @@
 --
 -- ⚠️ NESTED MERGE, NOT A TOP-LEVEL ONE — READ BEFORE COPY-PASTING THIS PATTERN.
 -- Both Lab and Mesh dev already carry a `mid_pipeline` object from
--- scripts/enable-mid-pipeline-guard.sql (task #80182d18):
+-- scripts/enable-mid-pipeline-guard.sql:
 --   {"review_evidence_strict":true,"auto_park_stalled":true,"auto_park_due_hours":24}
 -- Mesh dev additionally carries a 7-entry `transitions` matrix and
 -- `enforcement_mode` at the TOP level of `config`. A top-level
@@ -64,7 +64,7 @@ SET app.current_workspace_id = 'df814cd2-ca4b-47d6-9522-820e4eb47dc3';
 BEGIN;
 
 -- Lab and Mesh dev. Other projects follow after a week of observation; adding one
--- is another row here, not a release — same rollout shape as #80182d18.
+-- is another row here, not a release — same rollout shape as an internal ticket.
 INSERT INTO project_rules (project_id, rule_type, config, enforcement_mode)
 VALUES
   ('e93b8e1a-ee44-4399-8e8a-0bdda460b4a0', 'workflow',

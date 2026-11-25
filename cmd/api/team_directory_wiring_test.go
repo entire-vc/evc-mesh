@@ -18,7 +18,7 @@ import (
 //
 // GetTeamDirectory (internal/service/rules_service.go) reads s.agentGrantRepo
 // to list GUEST agents — home workspace elsewhere, reached into this one via
-// an active agent_workspace_grants connection (task U3/an internal ticket). Unwired,
+// an active agent_workspace_grants connection (task U3). Unwired,
 // GET /workspaces/:ws_id/team reverts to home-only: a correctly invited,
 // actively-granted agent is simply missing from the directory, with no error
 // to notice — the exact "не видно" repro an internal ticket was filed against, not an
@@ -84,7 +84,7 @@ func TestRulesServiceWiresAgentWorkspaceGrantRepo(t *testing.T) {
 		t.Errorf("%s is not passed to %s in main.go.\n\n"+
 			"GetTeamDirectory (internal/service/rules_service.go) reads s.agentGrantRepo to "+
 			"list GUEST agents — home workspace elsewhere, reached into this one via an active "+
-			"agent_workspace_grants connection (task U3/#71627c5a). Unwired, GET "+
+			"agent_workspace_grants connection (task U3). Unwired, GET "+
 			"/workspaces/:ws_id/team reverts to home-only, silently: a correctly invited, "+
 			"actively-granted agent is just missing, with no error to notice. The "+
 			"service-package tests cannot catch this: they wire their own grant repo, so they "+

@@ -159,7 +159,7 @@ func TestHumanGateDecisionHandler_Create_ServiceErrorMapped(t *testing.T) {
 }
 
 // TestHumanGateDecisionHandler_Create_ValidationError_400NotAny500 pins the
-// #62560d6d fix end-to-end at the handler layer: when the service rejects the
+// End-to-end at the handler layer: when the service rejects the
 // input (e.g. missing question_ref/canonical_key — the live repro's exact
 // shape), Create must answer 400, not fall through to the generic 500. Before
 // the fix, every handler test here stubbed RecordHumanGateDecisionFunc to

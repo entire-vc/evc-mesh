@@ -48,7 +48,7 @@ func TestPolicyPinsAndFrozenFiles(t *testing.T) {
 	require.ElementsMatch(t, schema.Required, keys)
 }
 
-func TestSenderAllowlistIsTheFixedReceiverOnly(t *testing.T) {
+func TestSenderAllowlistIsTheFixedOperatorOnly(t *testing.T) {
 	p := loadPolicy(t)
 	require.Equal(t, 1, len(p.AllowedSenderAgents))
 	require.True(t, p.SenderAllowed(p.AgentID))
@@ -250,8 +250,8 @@ var conformanceCoverage = map[string]string{
 	"concurrency":        "receiver: one shared lock and ledger live in evc-mesh-runner; backend serialisation is TestHostLocalQAAssignmentFlow/races",
 	"disable":            "handler: TestHostLocalQAAssignmentFlow/disable",
 	"ack-is-not-install": "handler: TestHostLocalQAAssignmentFlow/ack-is-not-install",
-	"mutation-guard":     "handler: TestHostLocalQAAssignmentFlow/check; the guard call before each mutation belongs to the receiver and Receiver's reviewed integration",
-	"mini-readback":      "receiver/Receiver: install receipt and Mini readback are source-owned, not backend",
+	"mutation-guard":     "handler: TestHostLocalQAAssignmentFlow/check; the guard call before each mutation belongs to the receiver and the operator's reviewed integration",
+	"mini-readback":      "receiver/operator: install receipt and Mini readback are source-owned, not backend",
 }
 
 func TestConformanceCasesAreAllMapped(t *testing.T) {

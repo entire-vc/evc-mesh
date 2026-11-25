@@ -14,7 +14,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// bcrypt's 72-byte input cap vs. agk_{slug}_{48 hex} agent keys (#9317fcd0).
+// bcrypt's 72-byte input cap vs. agk_{slug}_{48 hex} agent keys.
 // Key format overhead is fixed: "agk_" (4) + "_" (1) + 48 hex chars = 53
 // bytes, so a slug of 19 chars produces exactly a 72-byte key (still
 // bcrypt-legal) and 20 chars produces 73 (the first illegal length) — these
@@ -69,7 +69,7 @@ func slugOfKeyLength(totalKeyLen int) string {
 
 // The exact boundary from generateAPIKey's own math: a 19-char slug produces
 // a 72-byte key (bcrypt-legal), a 20-char slug produces 73 (the first
-// illegal length, and exactly what #9317fcd0 reproduced live).
+// illegal length, and exactly what an internal ticket reproduced live).
 func TestAgentService_Register_SlugAtBcryptBoundary(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -77,7 +77,7 @@ func TestAgentService_Register_SlugAtBcryptBoundary(t *testing.T) {
 	}{
 		{"exactly 72 bytes (19-char slug) — must have worked before this fix too", bcryptMaxInputBytes},
 		{"73 bytes (20-char slug) — the first length that used to 500", bcryptMaxInputBytes + 1},
-		{"27-char slug — the exact live repro from the task (verifier-throwaway-71627c5a)", 53 + 27},
+		{"27-char slug — the exact live repro from the task (verifier-throwaway-5eed0002)", 53 + 27},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

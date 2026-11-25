@@ -481,7 +481,7 @@ class MeshMemoryClient:
             # Log HERE, not just raise: the real message does not survive the
             # ClientSession/stdio_client __aexit__ unwind (anyio TaskGroup collapses
             # it into "unhandled errors in a TaskGroup (1 sub-exception)" with no
-            # detail — same defect class as an internal ticket/an internal ticket). This is the only
+            # detail — same defect class as an internal ticket). This is the only
             # place the actual payload["error"] is still known.
             logger.error(
                 "remember failed for %s-s%d (qid=%s): %s",

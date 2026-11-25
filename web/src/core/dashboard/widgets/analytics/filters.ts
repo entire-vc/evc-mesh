@@ -60,13 +60,17 @@ export function firstDay(q: AnalyticsQuery, now = new Date()): string {
 
 /** Downloads the CSV export of the widget's filter (same parameters as its data request). */
 export async function downloadAnalyticsCsv(wsId: string, q: AnalyticsQuery): Promise<void> {
-  const { path, params } = analyticsExportRequest(wsId, q);
+  return downloadCsv(analyticsExportRequest(wsId, q), "analytics");
+}
+
+/** Downloads one CSV export request; the file is named by the server, else `<prefix>-<from>.csv`. */
+export async function downloadCsv({ path, params }: { path: string; params: Record<string, string> }, prefix: string): Promise<void> {
   const { blob, filename } = await apiBlob(path, params);
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   // apiBlob names a response without Content-Disposition "download".
-  a.download = filename && filename !== "download" ? filename : `analytics-${params.from ?? "export"}.csv`;
+  a.download = filename && filename !== "download" ? filename : `${prefix}-${params.from ?? "export"}.csv`;
   document.body.appendChild(a);
   a.click();
   a.remove();

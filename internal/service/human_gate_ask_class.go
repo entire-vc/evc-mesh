@@ -8,8 +8,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Hard or soft: the class a "❓ Blocking @person" ask arms its human gate with
-//
+// Hard or soft: the class a "❓ Blocking @person" ask arms its human gate.
 //
 // Before this, the class came only from a "[soft]" tag on the marker line, so almost
 // every ask armed hard and its recommended default never applied: the

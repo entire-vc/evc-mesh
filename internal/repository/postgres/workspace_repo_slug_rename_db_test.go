@@ -20,7 +20,7 @@ import (
 // Proves what the sqlmock tests next door cannot: that Postgres itself now
 // enforces uniqueness only among LIVE workspaces (migration 20260911002),
 // and that WorkspaceRepo.Delete's rename really lands a value the table's
-// own chk_workspaces_slug_format CHECK still accepts. Task #c164a5df.
+// own chk_workspaces_slug_format CHECK still accepts.
 //
 // Untagged — same convention as the other *_db_test.go files in this
 // package. Skips when no DB is reachable.
@@ -60,7 +60,7 @@ func slugRenameGetSlug(t *testing.T, db *sqlx.DB, id uuid.UUID) string {
 	return slug
 }
 
-// AC1 (task #c164a5df): delete workspace A (slug=foo) → create a NEW
+// AC1: delete workspace A (slug=foo) → create a NEW
 // workspace with the SAME slug=foo → succeeds. Before the partial unique
 // index this failed outright — the dead row still held the slug.
 func TestWorkspaceRepo_DeleteThenRecreate_SameSlug_Succeeds(t *testing.T) {
@@ -134,7 +134,7 @@ func TestWorkspaceRepo_PreFixBehavior_DuplicateSlugAcrossLiveAndDead_StillReject
 
 	// Simulate the OLD schema inline: a second, table-wide unique constraint
 	// that ignores deleted_at, layered on top of today's partial one. This
-	// reproduces exactly the failure Pavel hit (#93644be7) without requiring
+	// reproduces exactly the failure Pavel hit without requiring
 	// a second DB pointed at a pre-migration schema.
 	_, err := db.ExecContext(ctx, `ALTER TABLE workspaces ADD CONSTRAINT chk_slug_rename_test_old_style_unique UNIQUE (slug)`)
 	require.NoError(t, err)

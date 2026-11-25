@@ -14,7 +14,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
-// Document paths that survive a move (#ed10e6aa), exercised through the real
+// Document paths that survive a move, exercised through the real
 // service on a real Postgres: the alias write lives in the same transaction as
 // the move and the fallback lookups are recursive CTEs, neither of which an
 // in-memory repository can prove. Object storage is the only fake — it is the

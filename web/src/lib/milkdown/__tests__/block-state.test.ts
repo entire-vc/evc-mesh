@@ -9,11 +9,15 @@ import {
   blockStatePlugin,
   computeBlockState,
   createBlockStateStore,
+  cursorToCell,
   deleteTableColumn,
   deleteTableRow,
   deleteWholeTable,
+  selectCellForMenu,
   setColumnAlignment,
+  tableStartAt,
 } from "@/lib/milkdown/block-state";
+import { CellSelection } from "@milkdown/kit/prose/tables";
 
 /**
  * The table edits the toolbar menu runs, against the real schema from the
@@ -226,5 +230,62 @@ describe("computeBlockState and the store", () => {
     await editor!.destroy();
     editor = null;
     expect(store.get()).toEqual(EMPTY_BLOCK_STATE);
+  });
+});
+
+/** Position just inside the cell whose text is `text`. */
+function posIn(view: EditorView, text: string): number {
+  let at = -1;
+  view.state.doc.descendants((node, pos) => {
+    if (at < 0 && node.isText && node.text === text) at = pos + 1;
+    return at < 0;
+  });
+  if (at < 0) throw new Error(`no cell "${text}"`);
+  return at;
+}
+
+const cursorText = (view: EditorView) => view.state.selection.$from.parent.textContent;
+
+describe("pointing the selection at a cell (right-click menu, + handles)", () => {
+  it("tableStartAt finds the table around a position, and nothing outside one", async () => {
+    const { view } = await open(`Intro\n\n${T}`);
+    const start = tableStartAt(view.state, posIn(view, "b1"));
+    expect(start).not.toBeNull();
+    expect(view.state.doc.nodeAt(start!)?.type.name).toBe("table");
+    expect(tableStartAt(view.state, posIn(view, "Intro"))).toBeNull();
+  });
+
+  it("cursorToCell counts from the end with negative indices", async () => {
+    const { view } = await open(T);
+    const start = tableStartAt(view.state, posIn(view, "A"))!;
+    cursorToCell(start, -1, -1)(view.state, view.dispatch);
+    expect(cursorText(view)).toBe("c2");
+    cursorToCell(start, 0, -1)(view.state, view.dispatch);
+    expect(cursorText(view)).toBe("C");
+    expect(cursorToCell(start, 5, 0)(view.state, view.dispatch)).toBe(false);
+  });
+
+  it("selectCellForMenu moves the cursor into a cell outside the selection", async () => {
+    const { view } = await open(T);
+    caretIn(view, "A");
+    expect(selectCellForMenu(posIn(view, "b2"))(view.state, view.dispatch)).toBe(true);
+    expect(cursorText(view)).toBe("b2");
+  });
+
+  it("selectCellForMenu keeps a multi-cell selection that covers the clicked cell", async () => {
+    const { view } = await open(T);
+    const $a = view.state.doc.resolve(posIn(view, "a1") - 3);
+    const $b = view.state.doc.resolve(posIn(view, "c2") - 3);
+    view.dispatch(view.state.tr.setSelection(new CellSelection($a, $b)));
+    const before = view.state.selection;
+    expect(selectCellForMenu(posIn(view, "b2"))(view.state, view.dispatch)).toBe(true);
+    expect(view.state.selection.eq(before)).toBe(true);
+    // Both rows go at once, as the person selected them.
+    expect(computeBlockState(view.state).selectedRows).toBe(2);
+  });
+
+  it("selectCellForMenu refuses a position outside any table", async () => {
+    const { view } = await open(`Intro\n\n${T}`);
+    expect(selectCellForMenu(posIn(view, "Intro"))(view.state, view.dispatch)).toBe(false);
   });
 });

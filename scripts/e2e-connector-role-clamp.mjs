@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Black-box check that an OAuth connector (mot_ token) is held to its user's
- * workspace role on routes that carry no rbac() — MCP-OAuth sec, #266eae6a.
+ * workspace role on routes that carry no rbac() — MCP-OAuth sec.
  *
  * Real API, real Postgres, real OAuth flow (DCR → authorize → consent → code →
  * token). Nothing is mocked. Every assertion is about a RESULT (a status code

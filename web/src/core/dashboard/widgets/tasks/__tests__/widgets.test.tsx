@@ -133,6 +133,34 @@ describe("my-tasks and task-list on the dashboard", () => {
   });
 });
 
+describe("project icon next to the project name", () => {
+  const withIcons = () =>
+    useProjectStore.setState({ projects: [{ id: "p1", slug: "core", name: "Billing", icon: "🏦" }, { id: "p2", slug: "ops", name: "CRM", icon: "" }] as never });
+  const labels = (row: HTMLElement) => Array.from(row.querySelectorAll<HTMLElement>("[data-project-label]"));
+
+  it("my-tasks: the emoji and the name are two boxes with a gap; an iconless project is the bare name", async () => {
+    withIcons();
+    vi.mocked(api).mockResolvedValue({ items: [task("a"), task("b", { project_id: "p2" })], total_count: 2 });
+    mount(instance("my-tasks"));
+    const a = labels((await screen.findByText("Task a")).closest("li")!)[0]!;
+    expect(a.className).toMatch(/\bgap-1\b/);
+    expect(Array.from(a.children).map((c) => c.textContent)).toEqual(["🏦", "Billing"]);
+    const b = labels(screen.getByText("Task b").closest("li")!)[0]!;
+    expect(b.className).not.toMatch(/\bgap-/);
+    expect(Array.from(b.children).map((c) => c.textContent)).toEqual(["CRM"]);
+  });
+
+  it("triage-queue: the same label, centred on the meta line", async () => {
+    withIcons();
+    vi.mocked(api).mockImplementation(async (url: string) => (url === "/api/v1/workspaces/ws1/triage" ? { items: [task("a")], total_count: 1 } : {}));
+    mount(instance("triage-queue"));
+    const a = labels((await screen.findByText("Task a")).closest("li")!)[0]!;
+    expect(a.className).toMatch(/\bitems-center\b/);
+    expect(a.className).toMatch(/\bgap-1\b/);
+    expect(Array.from(a.children).map((c) => c.textContent)).toEqual(["🏦", "Billing"]);
+  });
+});
+
 describe("triage-queue on the dashboard", () => {
   const serveQueue = (rows: () => unknown[]) =>
     vi.mocked(api).mockImplementation(async (url: string, opts?: { method?: string }) => {

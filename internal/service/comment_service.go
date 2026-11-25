@@ -27,7 +27,7 @@ import (
 // Slug pattern mirrors agents.slug and users.username: starts/ends with alnum, middle may contain hyphens, 2-40 chars total.
 // The leading boundary allows start-of-string, whitespace, or open bracket/paren/brace.
 //
-// Case-insensitive (an internal ticket, 2026-09-03): `agents.slug`/`users.username` are
+// Case-insensitive (2026-09-03): `agents.slug`/`users.username` are
 // stored lowercase and looked up exact-match, but a HANDLE as written in prose
 // is not — "@Dana", "@Liam" are ordinary capitalized words to a human or an
 // agent typing naturally, same as `blockingMarkerRegex`/`blockingMarkerClassRegex`
@@ -38,7 +38,7 @@ import (
 // the failure invisible from both ends: `notifyMentions` only ever writes a
 // delivery-outcome row for a slug it extracted, so an uppercase handle produced
 // no comment_mentions row AND no `recipient_unknown` outcome row — a silent miss
-// indistinguishable from "nobody was mentioned", live-measured in production (`@Liam`
+// indistinguishable from "nobody was mentioned", live-measured on prod (`@Liam`
 // vs `@liam` on an identical fixture, 0 delivery records vs 1). `(?i)` widens
 // only the two `[a-z0-9]` character classes to `[A-Za-z0-9]`; the boundary
 // anchors (`\s`, brackets, `\b`) are untouched by it.
@@ -81,7 +81,7 @@ func hasBlockingMarker(body string) bool {
 // code spans (`…`). Everything else is preserved verbatim, and every input line yields
 // exactly one output line — so line-anchored regexes keep their meaning on the residue.
 //
-// Why this exists (an internal ticket, live probe an internal ticket): both the blocking marker and
+// Why this exists: both the blocking marker and
 // the triage-exit negator vocabulary are matched against the whole comment body, the
 // negators as bare substrings. A comment that DESCRIBES the mechanism — a post-mortem
 // quoting `не нужен` in backticks — therefore performed it: a live human_gate was
@@ -237,7 +237,7 @@ func suppressHumanCommentNotifications(comment *domain.Comment) bool {
 // handler posts whenever human_gate transitions false→true via a raw PATCH or
 // UI request — i.e. NOT through a "❓ Blocking @user" comment marker.
 //
-// an internal ticket (follow-up to an internal ticket): releaseHumanGateOnWithdrawal grants
+// (follow-up to an internal ticket): releaseHumanGateOnWithdrawal grants
 // an instant, zero-gap self-clear whenever the withdrawing agent is the ask's
 // soleMarkerAuthor (the only agent to have EVER posted a marker on this
 // thread). That is correct when the marker is what raised the ask. But a gate
@@ -258,7 +258,7 @@ const rawArmMarkerSubstringEN = "human_gate armed directly"
 // hasRawArmMarker reports whether a comment IS task_handler.go's raw PATCH/UI
 // arm system comment. See rawArmMarkerSubstring for why this exists.
 //
-// Fixed 2026-07-31 (an internal ticket, found in cross-verification of #486): the
+// Fixed 2026-07-31 (found in cross-verification of #486): the
 // original version matched on body substring alone, with no author check.
 // task_handler.go's Create/comment_handler.go always derives a comment's
 // AuthorType from the caller's OWN authenticated identity (agent or user) for
@@ -282,7 +282,7 @@ func hasRawArmMarker(body string, authorType domain.ActorType) bool {
 // triageExitNegators are lower-cased substrings that, when present in a blocking comment,
 // indicate the block was cancelled — so the comment is NOT a live gate.
 //
-// Extended 2026-08-24 (an internal ticket, live incident an internal ticket): the
+// Extended 2026-08-24: the
 // vocabulary was Russian-only apart from "resolved"/"async",
 // which read as process jargon rather than general negation. A genuine
 // withdrawal written in English ("Retracting the gate marker... not as a
@@ -310,8 +310,8 @@ var triageExitNegators = []string{
 // READ THAT SECOND HALF BEFORE THE HISTORY BELOW. The marker-less case is the
 // ordinary shape of a real withdrawal, and the scope there is the last
 // paragraph — NOT the whole body. An earlier revision of this comment said
-// "the whole body is used", and the paragraph that superseded it (an internal ticket,
-// four paragraphs down) was easy to stop short of: an agent whose withdrawal
+// "the whole body is used", and the paragraph that superseded it
+// (four paragraphs down) was easy to stop short of: an agent whose withdrawal
 // silently failed came here to find out why, read the older sentence as
 // current, and concluded the mechanism agreed with them. Measured live
 // 2026-08-20 on an internal ticket Beth): three withdrawals by the
@@ -322,7 +322,7 @@ var triageExitNegators = []string{
 // produced it is still the reasoning behind the marker case — but it no
 // longer describes the marker-less one. Filed as an internal ticket.
 //
-// Fixed 2026-07-30 (an internal ticket, live incident on an internal ticket, found by Robin):
+// Fixed 2026-07-30 (live incident, found by Robin):
 // a whole-body strings.Contains search let a comment self-negate its OWN marker
 // via unrelated prose. Robin's comment raised a fresh "❓ Blocking @alex" as its
 // final line, but earlier paragraphs discussed a DIFFERENT, already-resolved ask
@@ -337,7 +337,7 @@ var triageExitNegators = []string{
 // NOT been true since 2026-07-30; a marker-less body is scoped to its last
 // paragraph.]
 //
-// Extended 2026-07-30 (an internal ticket, live probe an internal ticket): the body is first
+// Extended 2026-07-30: the body is first
 // passed through stripQuotedSpans, so only text the comment ASSERTS is searched —
 // never a negator it merely QUOTES in inline code, a fenced block or a blockquote.
 // Marker-scoping alone does not cover this: the comment that disarmed a live gate
@@ -530,7 +530,7 @@ const (
 	// blockerStillOpenMarkers phrase, which overrides it. A
 	// thorough withdrawal that also says what is "не закрыт" kills its own
 	// negator this way. NOTE an internal ticket named this as the second cause of the
-	// an internal ticket failure; measuring it showed otherwise — the phrase there was
+	// Failure; measuring it showed otherwise — the phrase there was
 	// "не закрытая", and containsNegatorWholeWord needs a word boundary, so no
 	// veto ran and paragraph scope alone explains that miss. The trap is real
 	// but only for the short forms. See TestDiagnoseNegatorMiss.
@@ -676,7 +676,7 @@ func stripRoutingTail(p string) string {
 // single-paragraph withdrawal comment (the documented ordinary shape)
 // behaving exactly as before.
 //
-// Fixed 2026-08-24 (an internal ticket, live incident an internal ticket): a genuine
+// Fixed 2026-08-24: a genuine
 // withdrawal — "Гейт на Павла снят ... нового решения от него не требуется."
 // — sat in the SECOND-to-last paragraph of a comment that closed with a
 // trailing "— Name" sign-off on its own line. This function returned the
@@ -702,7 +702,7 @@ func lastParagraph(body string) string {
 		if p == "" || isSignatureOnlyParagraph(p) {
 			continue
 		}
-		// Fixed 2026-10-14 (an internal ticket, live on an internal ticket): the protocol makes
+		// Fixed 2026-10-14 (live): the protocol makes
 		// the LAST paragraph of an agent comment a routing line (`↻ NEXT: …`,
 		// `⏳ WAIT …`), so a withdrawal written by the book ended in a paragraph that
 		// can never hold the withdrawal word and the gate stayed up
@@ -976,13 +976,13 @@ func WithCommentTaskService(ts TaskService) CommentServiceOption {
 }
 
 // WithCommentRulesService supplies the team directory / assignment rules used to confirm
-// that a decision comes from the project's lead (task dependency delivery fix). Nil refuses the lead path.
+// that a decision comes from the project's lead. Nil refuses the lead path.
 func WithCommentRulesService(r RulesService) CommentServiceOption {
 	return func(s *commentService) { s.rulesSvc = r }
 }
 
 // WithHumanGateDecisionRepo injects the repository backing the third
-// human_gate exit — "decision recorded" (an internal ticket, contract
+// human_gate exit — "decision recorded" (contract
 // docs/human-gate-decision-recorded.md). Optional — if unset,
 // RecordHumanGateDecision/RevokeHumanGateDecision return an error and
 // enforceBlockingTriage's repeat-check is skipped (arms as before this
@@ -1174,7 +1174,7 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 	// handoff gate below has nothing to protect.
 	wakes := domain.CommentWakes(comment.Metadata)
 
-	// Mention-handoff gate (audit §3.1, an internal ticket): refuse to persist a
+	// Mention-handoff gate (audit §3.1): refuse to persist a
 	// comment that @-mentions a fiddler-driven agent lane with no real path
 	// for them to see it. Must run before commentRepo.Create — the whole
 	// point is that the dead-letter comment never gets written, not merely
@@ -1267,7 +1267,7 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 			s.liftParkedCardOnAssigneeMention(ctx, comment, task, wsID)
 			s.notifyMentions(ctx, comment, task, "", wsID)
 		}
-		// Task dependency delivery fix: an addressee's answer reaches the gate owner whether or not it
+		// An addressee's answer reaches the gate owner whether or not it
 		// @-mentions them; record that receipt here, independent of the mention path.
 		if wakes {
 			s.recordGateOwnerDelivery(ctx, comment, task)
@@ -1300,7 +1300,7 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 		comment.Delivery = withOutcomes[0].Delivery
 	}
 
-	// Closed-card follow-up (audit 1.14, an internal ticket). The suppression a few
+	// Closed-card follow-up (audit 1.14). The suppression a few
 	// lines above is correct and stays — a task.commented on a closed card used
 	// to reopen shipped work. But suppressing the only channel left
 	// the remark with no recipient at all: a comment on a done card reaches
@@ -1591,7 +1591,7 @@ func (s *commentService) notifyMentions(
 	taskInTodo := statusCategory == string(domain.StatusCategoryTodo)
 	taskGated := task.HumanGate
 	taskScheduled := task.StartAfter != nil && task.StartAfter.After(now)
-	// Task dependency delivery fix: on a gated card the owner of the live ask is reachable by one
+	// On a gated card the owner of the live ask is reachable by one
 	// path only — an answer from the ask's addressee. Resolved once per comment.
 	var gateInfo *domain.HumanGateInfo
 	if taskGated {
@@ -1871,7 +1871,7 @@ func (s *commentService) userHasMentionSubscription(ctx context.Context, userID 
 // userHasSubscriptionForAnyEvent reports whether the mentioned person has any
 // enabled notification preference row that lists at least one of wantEvents.
 //
-// Generalized from a task.mentioned-only check (an internal ticket, found by an
+// Generalized from a task.mentioned-only check (found by an
 // independent verifier 2026-09-06): a comment's own recorded delivery outcome
 // — the field agents actually look at to tell whether an @-mention landed —
 // used to hardcode task.mentioned regardless of what the comment actually
@@ -1930,7 +1930,7 @@ const mentionEmailChannel = "email"
 // ensureMentionDelivery gives a person who has never configured notification
 // preferences somewhere for an @-mention to actually arrive, instead of
 // silently recording them as delivered-or-skipped while every channel stays
-// empty either way. Root cause measured in production 2026-08-23:
+// empty either way. Root cause measured on prod 2026-08-23:
 // notification_preferences had rows for none of the humans being @-mentioned
 // in "❓ Blocking" comments, so every one of them landed as skipped/
 // no_subscription regardless of how the mention itself was handled.
@@ -2124,7 +2124,7 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 		return
 	}
 
-	// Repeat-question prevention (contract §6, an internal ticket): if this marker
+	// Repeat-question prevention (contract §6): if this marker
 	// is a reply to an already-answered marker thread (comment.ParentCommentID
 	// matches a recorded decision's question_ref), or explicitly cites an
 	// already-decided canonical_key in its metadata, do NOT arm — point at the
@@ -2158,7 +2158,7 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 	// set_human_gate API uses, with gate_author taken from the comment's authenticated
 	// author — so the marker path is one CALLER of the single arming implementation,
 	// not a second implementation of it. Class is included in that one call (contract
-	// §5, an internal ticket): computed from userSlug's own marker line rather than the
+	// §5): computed from userSlug's own marker line rather than the
 	// whole body (see blockingMarkerClassForSlug), and always set — never only when
 	// soft — so a later hard marker on an unreleased task correctly downgrades it back.
 	armIn := armInputFromMarker(comment, task, userSlug)
@@ -2194,7 +2194,7 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 	// triage move) has nothing to do with whether the person it names should hear about
 	// it. Before this moved here, the notify lived after the triage MOVE below and never
 	// fired for auto-mode tasks — which was 103 of 107 currently-armed human_gate tasks
-	// in production (measured 2026-09-06, an internal ticket), i.e. the notification this whole
+	// in prod (measured 2026-09-06), i.e. the notification this whole
 	// mechanism exists for essentially never reached anyone.
 	if s.notifySvc != nil {
 		targetUser, uErr := s.userRepo.GetByUsername(ctx, wsID, userSlug)
@@ -2604,7 +2604,7 @@ func (s *commentService) releaseHumanGate(ctx context.Context, comment *domain.C
 // comment for the full rationale. 30 minutes is long enough
 // that a scripted two-comment sequence in one turn cannot satisfy it, and
 // short enough not to meaningfully delay a genuine hand-off that actually
-// did the work (the an internal ticket case took real investigation, not seconds).
+// did the work (the case took real investigation, not seconds).
 const minReaffirmToWithdrawalGap = 30 * time.Minute
 
 // releaseHumanGateOnWithdrawal is the AGENT-side counterpart to releaseHumanGate,
@@ -2632,7 +2632,7 @@ const minReaffirmToWithdrawalGap = 30 * time.Minute
 //     text at-or-after the body's own LAST blocking marker, or, for the marker-less
 //     comment that a real withdrawal usually is, the body's LAST PARAGRAPH. A
 //     thorough withdrawal whose negator sits in a heading or a first paragraph is
-//     a no-op — measured live on an internal ticket, 2026-08-20. A second, narrower trap
+//     a no-op — measured live, 2026-08-20. A second, narrower trap
 //     sits next to it: blockerStillOpenMarkers in the SAME scope override the
 //     negator, so "…не нужен, но регресс-тест не закрыт" withdraws nothing.
 //     That one matches only the short forms; the inflected "не закрытая" does
@@ -2640,7 +2640,7 @@ const minReaffirmToWithdrawalGap = 30 * time.Minute
 //     TestDiagnoseNegatorMiss. Since an internal ticket neither miss is silent — see
 //     reportWithdrawalMiss;
 //   - of all prior comments that hasBlockingMarker, the CHRONOLOGICALLY LAST one
-//     must be authored by this SAME agent (an internal ticket: that marker's OWN body
+//     must be authored by this SAME agent (that marker's OWN body
 //     may itself carry a negator — e.g. it doubled as an FYI aside — and that no
 //     longer disqualifies it as the live ask; see scanHumanGateOwnership's doc).
 //     A live ask with no marker found at all, or one raised/most-recently
@@ -2661,8 +2661,8 @@ const minReaffirmToWithdrawalGap = 30 * time.Minute
 // the first — do not copy the break-on-first-match idiom other scans in this
 // file use for simple existence checks.
 // humanGateMarkerScan is the raw result of scanning a task's comment thread
-// for who owns its currently-live human_gate ask. Extracted 2026-07-31 (task
-// an internal ticket) so releaseHumanGateOnWithdrawal (which GATES clearing on this)
+// for who owns its currently-live human_gate ask. Extracted 2026-07-31
+// so releaseHumanGateOnWithdrawal (which GATES clearing on this)
 // and GetHumanGateOwner (which only REPORTS it) share ONE predicate — the
 // same reason fleet_gate_labels.py is a single imported module rather than
 // two copies: two independently-maintained copies of "who owns this ask"
@@ -2684,7 +2684,7 @@ type humanGateMarkerScan struct {
 	threadTruncated bool
 
 	// markerSlugs are the handles the live marker itself addresses (the people or
-	// agents whose answer the ask waits for) — task dependency delivery fix.
+	// agents whose answer the ask waits for).
 	markerSlugs []string
 	// afterMarker holds, in thread order, every comment posted AFTER the live marker.
 	// A later marker resets it, so it only ever answers "what happened since the
@@ -2710,7 +2710,7 @@ type gateAnswerCandidate struct {
 // is judged by the same rule that actually armed it — see the fixed defect
 // below for what happens when the two rules disagree.
 //
-// Fixed 2026-08-05 (an internal ticket, found by Gary reproducing an internal ticket):
+// Fixed 2026-08-05 (found by Gary reproducing an internal ticket):
 // this scan used to skip a marker-bearing comment when hasNegatorInScope(c.Body)
 // found a negator AFTER the marker WITHIN THAT SAME COMMENT — e.g. "❓ Blocking
 // @alex: … отвечать не нужно, отзову сам". enforceBlockingTriage arms on
@@ -2737,9 +2737,9 @@ type gateAnswerCandidate struct {
 //
 // While iterating, also tracks (a) that marker's own CreatedAt, for the
 // time-gap guard callers apply, and (b) whether every marker-bearing comment
-// on the whole thread shares ONE author (soleMarkerAuthor, an internal ticket) —
+// on the whole thread shares ONE author (soleMarkerAuthor) —
 // both computed from the same page fetched once, no second query — and (c)
-// whether a raw PATCH/UI arm (hasRawArmMarker, an internal ticket) predates the
+// whether a raw PATCH/UI arm (hasRawArmMarker) predates the
 // live marker, meaning the marker did not establish anything new.
 //
 // excludeCommentID, if non-nil, skips that one comment — used by
@@ -2752,7 +2752,7 @@ type gateAnswerCandidate struct {
 // recent" here means the LAST qualifying match found while iterating in that
 // real ascending order, not the first.
 //
-// Fixed 2026-09-09 (an internal ticket, found by Liam reviewing an internal ticket): this
+// Fixed 2026-09-09 (found by Liam reviewing an internal ticket): this
 // scan used to read ONLY page 1 (PageSize 100) of the thread. On a thread
 // longer than 100 comments a live marker sitting past comment 100 was
 // invisible to it — both to the legitimate withdrawal path
@@ -2785,7 +2785,7 @@ func (s *commentService) scanHumanGateOwnership(ctx context.Context, taskID uuid
 				if excludeCommentID != nil && c.ID == *excludeCommentID {
 					continue
 				}
-				// an internal ticket: track the most recent raw PATCH/UI arm marker
+				// Track the most recent raw PATCH/UI arm marker
 				// regardless of whether this comment also happens to carry a
 				// blocking marker (it never does — see hasRawArmMarker's doc —
 				// but the two checks are independent on principle).
@@ -2804,7 +2804,7 @@ func (s *commentService) scanHumanGateOwnership(ctx context.Context, taskID uuid
 				}
 				scan.markerSlugs = blockingMarkerSlugs(c.Body)
 				scan.afterMarker = nil
-				// an internal ticket's soleMarkerAuthor scan intentionally counts EVERY
+				// SoleMarkerAuthor scan intentionally counts EVERY
 				// marker-bearing comment ever posted on this thread, negated or not —
 				// unlike the "who owns it right now" scan just below, which only cares
 				// about the live one. A negated marker still PROVES someone else once
@@ -2836,7 +2836,7 @@ func (s *commentService) scanHumanGateOwnership(ctx context.Context, taskID uuid
 		pg.Page++
 	}
 
-	// an internal ticket: was the currently-live marker itself what armed the gate,
+	// Was the currently-live marker itself what armed the gate,
 	// or was the gate already true (raw PATCH/UI, no comment) before this
 	// marker was ever posted? soleMarkerAuthor alone cannot tell — a bystander
 	// who fabricates one marker onto an already-armed gate is, by that check
@@ -2884,7 +2884,7 @@ func (s *commentService) GetHumanGateOwner(ctx context.Context, taskID uuid.UUID
 		// blind spot merely misreported such a gate as unclearable, i.e. it failed
 		// CLOSED; it must keep failing closed now that the answer grants a right.
 		//
-		// Found by adversarial verification of an internal ticket, not in production.
+		// Found by adversarial verification, not in production.
 		// The underlying single-page scan is pre-existing and unchanged — it is
 		// its own defect (a marker past 100 also blocks the legitimate withdrawal
 		// path) and is deliberately NOT widened here.
@@ -2989,12 +2989,12 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 	if comment.AuthorType != domain.ActorTypeAgent {
 		return
 	}
-	// an internal ticket: fiddler/balancer/no-stall comments are posted under the
+	// Fiddler/balancer/no-stall comments are posted under the
 	// author's key but carry none of their intent — never a withdrawal.
 	if isServiceComment(comment.Body) {
 		return
 	}
-	// an internal ticket (an internal ticket, twice): the author's own «⏳ WAIT …» / «↻ NEXT …»
+	// (twice): the author's own «⏳ WAIT …» / «↻ NEXT …»
 	// line means "state kept", not "ask withdrawn" — a negator word in its prose
 	// ("resolved mapping paths") must not lift the gate.
 	if isHoldMarkerComment(comment.Body) {
@@ -3005,7 +3005,7 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 		return
 	}
 
-	// an internal ticket: a comment that withdraws a prior ask AND raises a fresh
+	// A comment that withdraws a prior ask AND raises a fresh
 	// "❓ Blocking @user" marker of its own is genuinely ambiguous — negatorScope
 	// anchors to this comment's OWN last marker when one is present, so a
 	// negator word anywhere at-or-after that marker reads as "in scope"
@@ -3055,7 +3055,7 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 	// the guard above only checked that the WITHDRAWING agent matches the CURRENT
 	// live marker's author — but ownership of "the current live marker" transfers
 	// to WHOEVER posts the next fresh, non-negated marker (enforceBlockingTriage's
-	// own arm criterion, deliberately reused here so an internal ticket-style orphaned asks
+	// own arm criterion, deliberately reused here so orphaned asks
 	// stay withdrawable once their original raiser is gone). That is correct and
 	// load-bearing on its own. Composed with an UNCONDITIONAL self-negate, it is
 	// not: any agent could arm the SAME gate as "themselves" in one comment, then
@@ -3069,10 +3069,10 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 	// IS recoverable: whether this agent has EVER shared this ask with a different
 	// author (soleMarkerAuthor, computed above). If nobody else has ever posted a
 	// marker here, this agent has always been the sole owner — self-clear stays
-	// immediate, exactly AC1 of an internal ticket, unaffected. If ownership was transferred
+	// immediate, exactly AC1, unaffected. If ownership was transferred
 	// via a reaffirm, require the reaffirming marker and this negator to be
 	// genuinely separated in time — a same-turn hijack cannot satisfy that; a real
-	// hand-off (the an internal ticket case: read the thread, check Alertmanager, THEN
+	// hand-off (the case: read the thread, check Alertmanager, THEN
 	// withdraw) always does.
 	//
 	// This is a mitigation, not a semantic proof of good faith — an attacker who is
@@ -3100,7 +3100,7 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 		return
 	}
 
-	// AC4 of an internal ticket: make every release of this specific path visible in the
+	// AC4: make every release of this specific path visible in the
 	// task's activity log — before this, /activity carried no human_gate signal at
 	// all (only created/checkout/moved), so a withdrawal — legitimate or not — left
 	// no audit trail distinguishing it from any other cause of human_gate=false.
@@ -3189,7 +3189,7 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 // than addressed to a bystander who never had that power.
 //
 // It deliberately does NOT claim the author intended a withdrawal. Intent is not
-// recoverable from comment text — that is the whole finding of an internal ticket, where a
+// recoverable from comment text — that is the whole finding, where a
 // genuine status update carried mid-body negators about other topics while its
 // final paragraph reaffirmed the ask. So the notice states two facts that hold in
 // BOTH readings: the gate is still up, and here is the region the server read.
@@ -3518,7 +3518,7 @@ func hasImmediateNegationBefore(lower string, pos int) bool {
 // hasUnnegatedKeyword reports whether kw occurs anywhere in lower WITHOUT an
 // immediately-preceding negation token. A completion keyword that only ever
 // appears negated ("AC не выполнен") must not count as a completion report —
-// see the an internal ticket live regression this closes.
+// see the live regression this closes.
 func hasUnnegatedKeyword(lower, kw string) bool {
 	searchFrom := 0
 	for {
@@ -3541,7 +3541,7 @@ func hasUnnegatedKeyword(lower, kw string) bool {
 // "❓ Blocking @user" marker as citation/context, without false-positiving on
 // unrelated (or negated) completion words used elsewhere in a longer comment.
 //
-// SCOPE (an internal ticket, 2026-08-14): this heuristic must NEVER gate SetHumanGate.
+// SCOPE (2026-08-14): this heuristic must NEVER gate SetHumanGate.
 // It is a keyword scan over a 500-byte window, and the canonical ask shape from
 // CLAUDE-communication.md §5a — a work report, then "---", then the marker at the
 // tail — puts a completion word in that window as a matter of course. Whenever it

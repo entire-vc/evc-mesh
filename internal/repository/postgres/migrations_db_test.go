@@ -10,15 +10,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Nothing in CI ever ran a goose Down before #5194afd4: the repo-integration
+// Nothing in CI ever ran a goose Down before that fix: the repo-integration
 // job applies `goose up` and the whole suite runs on a fully-migrated
 // schema, so a migration whose Down is broken or a silent no-op shipped
 // green. This test round-trips the NEWEST migration on the same real
 // Postgres the suite runs on: down one version, the goose version must
 // actually drop; up, the exact version must be restored. For the newest
-// table-creating migration (20261013003, document_path_aliases, #ed10e6aa)
+// table-creating migration (20261013003, document_path_aliases)
 // the schema is asserted too — the table must be gone after down and back
-// after up (AC3 of #5194afd4: up+down on real Postgres in CI). A future branch whose newest migration is something else
+// after up (AC3: up+down on real Postgres in CI). A future branch whose newest migration is something else
 // still gets the version round-trip; it should extend the schema block for
 // its own table.
 func TestNewestMigrationDownUpRoundTrip(t *testing.T) {

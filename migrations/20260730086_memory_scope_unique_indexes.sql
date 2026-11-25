@@ -1,5 +1,5 @@
 -- +goose NO TRANSACTION
--- Release 2 (contract) of the memory scope-identity fix (task #4edf3fb5).
+-- Release 2 (contract) of the memory scope-identity fix.
 -- Applied manually on prod 2026-07-30 after the collapse script (cmd/collapse-memories,
 -- PR #448) confirmed zero duplicate groups in all three scopes. This migration exists
 -- so self-hosted instances and future prod rebuilds pick up the same constraint —

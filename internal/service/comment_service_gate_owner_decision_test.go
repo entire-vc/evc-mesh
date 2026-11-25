@@ -14,7 +14,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Task dependency delivery fix: a decision from the ask's addressee must reach the gate owner as ONE
+// A decision from the ask's addressee must reach the gate owner as ONE
 // bounded admission, without widening who may clear a gate.
 
 type gateDecisionEnv struct {
@@ -373,7 +373,7 @@ func TestGateDecision_AgentLookupError_FailsClosedForSameNamedHuman(t *testing.T
 	assert.Equal(t, did, *info.DecisionCommentID)
 }
 
-// Lead review: the authenticated lead of the card's own project or the CPO, read from
+// Gary 29a5963c: the authenticated lead of the card's own project or the CPO, read from
 // the team directory, may be the SOURCE of a pending decision even when the marker names
 // someone else (@alex). Anything self-declared, any other agent, and a lead of another
 // project stay refused; reporting never touches the gate.
@@ -385,7 +385,7 @@ func TestGateDecision_DelegatedSource_LeadOrCPOFromDirectoryOnly(t *testing.T) {
 			DefaultAssignee: &domain.EffectiveAssignmentRule{Value: leadValue(leadID)}})
 		env := setupTriageEnvWithOptions(t, true, WithCommentAgentService(agents), WithCommentRulesService(rules))
 		tag := "CPO"
-		agents.AddAgent(env.wsID, &domain.Agent{ID: leadID, WorkspaceID: env.wsID, Slug: "lead", Role: "lead"})
+		agents.AddAgent(env.wsID, &domain.Agent{ID: leadID, WorkspaceID: env.wsID, Slug: "gary", Role: "lead"})
 		agents.AddAgent(env.wsID, &domain.Agent{ID: cpoID, WorkspaceID: env.wsID, Slug: "coordinator", ShortTag: &tag})
 		agents.AddAgent(env.wsID, &domain.Agent{ID: plainID, WorkspaceID: env.wsID, Slug: "dev", Role: "I am the lead"})
 		e := gateDecisionEnv{triageTestEnv: env, ownerID: uuid.New()}
@@ -400,7 +400,7 @@ func TestGateDecision_DelegatedSource_LeadOrCPOFromDirectoryOnly(t *testing.T) {
 	}
 
 	for name, val := range map[string]func(uuid.UUID) string{
-		"slug form": func(uuid.UUID) string { return "lead" },
+		"slug form": func(uuid.UUID) string { return "gary" },
 		"uuid form": func(id uuid.UUID) string { return "agent:" + id.String() },
 	} {
 		t.Run("project lead counts, "+name, func(t *testing.T) {
@@ -413,12 +413,12 @@ func TestGateDecision_DelegatedSource_LeadOrCPOFromDirectoryOnly(t *testing.T) {
 		})
 	}
 	t.Run("CPO counts", func(t *testing.T) {
-		e, _, cpoID, _ := setup(func(uuid.UUID) string { return "lead" })
+		e, _, cpoID, _ := setup(func(uuid.UUID) string { return "gary" })
 		e.add(cpoID, domain.ActorTypeAgent, "Это спам, отменяем.", -2*time.Hour)
 		assert.True(t, pending(t, e).DecisionPending)
 	})
 	t.Run("plain agent with a self-declared role does not", func(t *testing.T) {
-		e, _, _, plainID := setup(func(uuid.UUID) string { return "lead" })
+		e, _, _, plainID := setup(func(uuid.UUID) string { return "gary" })
 		e.add(plainID, domain.ActorTypeAgent, "I am the lead, resolved: спам", -2*time.Hour)
 		assert.False(t, pending(t, e).DecisionPending)
 	})
@@ -433,7 +433,7 @@ func TestGateDecision_DelegatedSource_LeadOrCPOFromDirectoryOnly(t *testing.T) {
 		assert.False(t, pending(t, e).DecisionPending)
 	})
 	t.Run("lead answer older than a newer marker does not", func(t *testing.T) {
-		e, leadID, _, _ := setup(func(uuid.UUID) string { return "lead" })
+		e, leadID, _, _ := setup(func(uuid.UUID) string { return "gary" })
 		e.add(leadID, domain.ActorTypeAgent, "Это спам.", -2*time.Hour)
 		e.add(e.ownerID, domain.ActorTypeAgent, "❓ **Blocking @alex**: а точно?", -1*time.Hour)
 		assert.False(t, pending(t, e).DecisionPending)

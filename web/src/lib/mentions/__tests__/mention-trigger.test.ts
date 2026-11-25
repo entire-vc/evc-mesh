@@ -54,10 +54,10 @@ describe("findMentionTrigger", () => {
 
 describe("applyMentionInsertion", () => {
   it("replaces the partial slug and leaves a trailing space", () => {
-    const trigger = { start: 5, query: "dae" };
-    expect(applyMentionInsertion("ping @dae", trigger, 9, "daedalus")).toEqual({
-      value: "ping @daedalus ",
-      caret: 15,
+    const trigger = { start: 5, query: "da" };
+    expect(applyMentionInsertion("ping @da", trigger, 8, "dana")).toEqual({
+      value: "ping @dana ",
+      caret: 11,
     });
   });
 

@@ -10,7 +10,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// mcp is a reference-only connection card (#4a3195a5) — no handler or
+// mcp is a reference-only connection card — no handler or
 // service ever read a stored row back for behavior, so is_active was a
 // switch that switched nothing. Configure/Update now reject it outright
 // instead of silently storing a row nobody consults.

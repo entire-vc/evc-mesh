@@ -8,7 +8,7 @@
 // That rules out the other tempting shortcut too: writing a `.doc` file that
 // is actually HTML with a Word-compatible MIME wrapper. Word opens that with
 // a "file may be corrupted" recovery prompt — to a user it looks exactly like
-// the product is broken, and the parent card (#2a467980) names this failure
+// the product is broken, and the parent card names this failure
 // mode explicitly as the one NOT to ship.
 //
 // So this generates real OOXML directly: a .docx is a zip archive of a

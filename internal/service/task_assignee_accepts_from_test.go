@@ -118,7 +118,7 @@ func TestAcceptsFromEmpty_AssignTaskAllowsWildcard(t *testing.T) {
 func TestAcceptsFromEmpty_AssignTaskAllowsSpecificList(t *testing.T) {
 	env := setupTenancyEnv(t, nil)
 	taskID, _ := env.seedTask(t)
-	listedAgent := env.seedAcceptsFromAgent(t, "listed-agent", json.RawMessage(`["bill","garfield"]`))
+	listedAgent := env.seedAcceptsFromAgent(t, "listed-agent", json.RawMessage(`["bill","gary"]`))
 
 	require.NoError(t, env.svc.AssignTask(context.Background(), taskID, AssignTaskInput{
 		AssigneeID: &listedAgent, AssigneeType: domain.AssigneeTypeAgent,
@@ -234,7 +234,7 @@ func TestAcceptsFromRefusesAll_UnitTable(t *testing.T) {
 		{"explicit empty array with whitespace", json.RawMessage(`[ ]`), true},
 		{"wildcard", json.RawMessage(`["*"]`), false},
 		{"specific single-item list", json.RawMessage(`["bill"]`), false},
-		{"specific multi-item list", json.RawMessage(`["bill","garfield"]`), false},
+		{"specific multi-item list", json.RawMessage(`["bill","gary"]`), false},
 		{"malformed JSON — not this check's job", json.RawMessage(`not json`), false},
 		{"wrong shape (object, not array) — not this check's job", json.RawMessage(`{}`), false},
 	}
@@ -254,3 +254,26 @@ func TestAcceptsFromRefusesAll_UnitTable(t *testing.T) {
 // assertAssigneeAcceptsAssignments into a writer trips the real invariant test
 // instead of silently drifting.
 // ---------------------------------------------------------------------------
+
+// A project reader is refused as an assignee even when its accepts_from was
+// edited back to ["*"]: the reader_project_id column is the marker, not the
+// editable profile field. Positive control: the same agent without the
+// column is accepted.
+func TestProjectReader_AssignTaskRefusedRegardlessOfAcceptsFrom(t *testing.T) {
+	env := setupTenancyEnv(t, nil)
+	taskID, _ := env.seedTask(t)
+	reader := env.seedAcceptsFromAgent(t, "consent-reader", json.RawMessage(`["*"]`))
+	pid := env.projectID
+	env.agents.items[reader].ReaderProjectID = &pid
+
+	err := env.svc.AssignTask(context.Background(), taskID, AssignTaskInput{
+		AssigneeID: &reader, AssigneeType: domain.AssigneeTypeAgent,
+	})
+	env.assertRefusedAssignments(t, err, reader, "assign_task to a project reader")
+	assert.Nil(t, env.tasks.items[taskID].AssigneeID)
+
+	env.agents.items[reader].ReaderProjectID = nil
+	require.NoError(t, env.svc.AssignTask(context.Background(), taskID, AssignTaskInput{
+		AssigneeID: &reader, AssigneeType: domain.AssigneeTypeAgent,
+	}), "positive control: the same agent without reader_project_id is assignable")
+}

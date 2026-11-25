@@ -11,7 +11,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Task #44f461a9 — agents.* and agent_workspace_grants must not diverge.
+// Agents.* and agent_workspace_grants must not diverge.
 // These prove the half a mock cannot: that CreateWithHomeGrant/
 // RotateHomeGrantKey really are atomic against real Postgres (a failed
 // second statement leaves no partial row from the first), and that the
@@ -112,7 +112,7 @@ func TestAgentRepo_CreateWithHomeGrant_FailedAgentInsertLeavesNoOrphanGrant(t *t
 	assert.Equal(t, agent.APIKeyPrefix, grantInA.APIKeyPrefix)
 }
 
-// This is task #44f461a9's rotation half, reproduced at the repository
+// This is an internal ticket's rotation half, reproduced at the repository
 // level: after RotateHomeGrantKey, the OLD prefix must no longer resolve
 // through agent_workspace_grants — that lookup is exactly what
 // agentService.Authenticate runs on every request. Before the fix (plain
@@ -159,7 +159,7 @@ func TestAgentRepo_RotateHomeGrantKey_OldPrefixNoLongerResolvesInGrantsTable(t *
 	assert.Equal(t, rotated.APIKeyHash, fresh.APIKeyHash)
 }
 
-// Positive control (Garfield's repro): an agent with NO home grant row at
+// Positive control (Gary's repro): an agent with NO home grant row at
 // all — the legacy, never-backfilled state — must still rotate cleanly
 // through the agents-table side, with zero grant rows created as a side
 // effect. This already worked before the fix; it must keep working.

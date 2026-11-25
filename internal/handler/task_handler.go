@@ -145,7 +145,7 @@ func (f startAfterField) write(origin string, ev *domain.StartAfterEvidence) *do
 // field cannot distinguish "field omitted" from "field explicitly set to
 // null" (both unmarshal to a nil pointer), which matters here: omitted means
 // "leave parent_task_id alone", explicit null means "detach this task from
-// its parent" (an internal ticket — detaching a subtask was the only workaround for a
+// its parent" (detaching a subtask was the only workaround for a
 // parent stuck behind a broken governance rule, and the PATCH silently
 // no-op'd instead of detaching).
 type flexUUID struct {
@@ -198,7 +198,7 @@ type updateTaskRequest struct {
 	ExpectedUpdatedAt *time.Time `json:"expected_updated_at,omitempty"`
 	ExpectedVersion   *int64     `json:"expected_version,omitempty"`
 
-	// an internal ticket: NOT applied to task.Status anywhere below — their only job is
+	// NOT applied to task.Status anywhere below — their only job is
 	// to be seen. Before these fields existed, encoding/json's default
 	// unknown-field tolerance meant Bind() silently dropped status_id/
 	// status_slug/status here and Update still answered 200: a caller asking
@@ -474,7 +474,7 @@ func (h *TaskHandler) attachStatusCategory(ctx context.Context, task *domain.Tas
 // human_gate true→false. It NEVER changes the outcome — the refusal stands
 // either way; it only decides what the refusal SAYS.
 //
-// Why this exists (an internal ticket, P1). The refusal used to be the bare string
+// Why this exists (P1). The refusal used to be the bare string
 // "clearing human_gate requires user authentication", which names no
 // alternative. An agent that reads human_gate_info.clearable_by_owner=true,
 // tries the obvious endpoint, and is told only that it needs to be a user
@@ -517,7 +517,7 @@ func (h *TaskHandler) gateClearRefusal(ctx context.Context, task *domain.Task, a
 	switch {
 	case info.OwnerAgentID != nil && *info.OwnerAgentID == actorID && info.ClearableByOwner &&
 		info.ClearPath == domain.HumanGateClearPathClearEndpoint:
-		// an internal ticket: an API-armed gate has no marker comment, so the negator
+		// An API-armed gate has no marker comment, so the negator
 		// advice below would send its owner to a door that does not open — and
 		// fails silently when they try it. Name the one that does.
 		return base + ". You armed this gate through the API and you still own it, so you " +
@@ -547,7 +547,7 @@ func (h *TaskHandler) gateClearRefusal(ctx context.Context, task *domain.Task, a
 			"Otherwise, " + recordDecision + "."
 
 	case info.ReasonIfNot == "marker_scan_truncated":
-		// an internal ticket: not "there is no owner", but "this thread is longer than
+		// Not "there is no owner", but "this thread is longer than
 		// the one page the marker scan reads, so no-marker cannot be trusted".
 		// Saying "no withdrawal path by construction" here would be a false
 		// statement about the world dressed as a statement about the caller.
@@ -778,7 +778,7 @@ func (h *TaskHandler) Update(c echo.Context) error {
 		return c.JSON(apiErr.StatusCode(), apiErr)
 	}
 
-	// an internal ticket: status is not a PATCH field — reject before touching the
+	// Status is not a PATCH field — reject before touching the
 	// service at all, rather than silently dropping it and answering 200.
 	if req.StatusID != nil || req.StatusSlug != nil || req.Status != nil {
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
@@ -815,7 +815,7 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	if req.Priority != nil {
 		task.Priority = *req.Priority
 	}
-	// an internal ticket: parent_task_id used to be silently dropped here — updateTaskRequest
+	// Parent_task_id used to be silently dropped here — updateTaskRequest
 	// had no field for it at all, so Bind() ignored the JSON key, task.ParentTaskID
 	// kept whatever GetByID fetched, and the PATCH round-tripped it unchanged while
 	// still answering 200. flexUUID's wasSet distinguishes "field omitted" (leave
@@ -912,7 +912,7 @@ func (h *TaskHandler) Update(c echo.Context) error {
 		})
 	}
 
-	// an internal ticket: a false→true PATCH (or UI, same endpoint) carries no
+	// A false→true PATCH (or UI, same endpoint) carries no
 	// "❓ Blocking @user" comment at all — unlike enforceBlockingTriage's arm
 	// path, nothing here records WHO raised this ask or WHY. Without this,
 	// releaseHumanGateOnWithdrawal's soleMarkerAuthor check
@@ -923,7 +923,7 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	// that check has something to look for; see hasRawArmMarker in
 	// comment_service.go for the matching read side.
 	//
-	// Fixed 2026-07-31 (an internal ticket, found in cross-verification of #486):
+	// Fixed 2026-07-31 (found in cross-verification of #486):
 	// this MUST be authored as ActorTypeSystem / systemActorID (uuid.Nil), not
 	// the real actor — comment_handler.go's Create always derives AuthorType
 	// from the caller's OWN authenticated identity (agent or user, NEVER

@@ -18,7 +18,7 @@ import { ApiKeyRevealPanel } from "@/components/api-key-reveal";
 import type { AgentType } from "@/types";
 import { apiErrorMessage } from "@/lib/api-error";
 
-// Defaults deliberately non-empty (task #85714565): a freshly registered
+// Defaults deliberately non-empty: a freshly registered
 // agent that goes untouched by its creator must not read as "takes no
 // tasks" (max_concurrent_tasks=0) or "not configured" (accepts_from empty).
 const DEFAULT_MAX_CONCURRENT_TASKS = 5;
@@ -227,7 +227,7 @@ export function RegisterAgentDialog({
                   wraps to. Aligning by the top (the old default) does not
                   self-correct: found live when "Max concurrent tasks"
                   wrapped to two lines and its input landed ~12px below
-                  "Working hours"'s (task #1ffb67b5, second pass). */}
+                  "Working hours"'s (second pass). */}
               <div className="flex items-end gap-3">
                 <div className="flex-1 space-y-2">
                   <label

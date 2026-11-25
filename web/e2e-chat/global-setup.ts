@@ -14,7 +14,7 @@ export default async function globalSetup() {
   mkdirSync(OUT_DIR, { recursive: true });
   const missing = missingEnv();
   if (missing.length > 0) {
-    throw new SetupFail(`missing CI variables: ${missing.join(", ")} (fixtures A/B/C/V and agents: an internal ticket, variables: Robin)`);
+    throw new SetupFail(`missing CI variables: ${missing.join(", ")} (fixtures A/B/C/V and agents)`);
   }
   const c = cfg();
 

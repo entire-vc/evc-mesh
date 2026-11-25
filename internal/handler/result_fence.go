@@ -12,8 +12,8 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
-// Request headers of the result-write precondition (
-// docs/extensions/agents-me-contract.md "Fencing a stale worker"). Headers, not
+// Request headers of the result-write precondition
+// (docs/extensions/agents-me-contract.md "Fencing a stale worker"). Headers, not
 // body fields, so a multipart artifact upload carries them the same way as a
 // JSON comment, move or finish, and the Idempotency-Key fingerprint (the body)
 // is unchanged.

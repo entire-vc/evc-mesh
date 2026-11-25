@@ -23,7 +23,7 @@
 //
 // Independence is an assumption, and CI broke it: runs of ONE job share the
 // runner's load and the ephemeral API's latency, and the counters follow that
-// latency (board.drag before #da03cd09: a slow POST /move put every run of the
+// latency (board.drag before that fix: a slow POST /move put every run of the
 // job in the 448/16/~100 mode). On 303 reports from 04–10.10 the model put the
 // joint false red at 0.28%; 2.0% of those jobs actually went red on code that
 // passed on retry. So every row also carries the OBSERVED job-level rate — the

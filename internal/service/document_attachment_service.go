@@ -22,6 +22,10 @@ import (
 // bucket the tenant does not pay for per-request.
 const maxAttachmentBytes = 25 << 20 // 25 MiB
 
+// MaxDocumentAttachmentBytes is maxAttachmentBytes for callers that check a
+// declared size before any byte is sent (a two-step upload).
+const MaxDocumentAttachmentBytes int64 = maxAttachmentBytes
+
 type documentAttachmentService struct {
 	attachmentRepo repository.DocumentAttachmentRepository
 	documentRepo   repository.DocumentRepository
@@ -103,7 +107,10 @@ func (s *documentAttachmentService) Upload(ctx context.Context, input UploadDocu
 		return nil, apierror.NotFound("Document")
 	}
 
-	id := uuid.New()
+	id := input.ID
+	if id == uuid.Nil {
+		id = uuid.New()
+	}
 	storageKey := documentAttachmentStorageKey(doc.ProjectID, doc.ID, id, name)
 
 	// input.Size is the client's claim, and the check above trusted it. This is

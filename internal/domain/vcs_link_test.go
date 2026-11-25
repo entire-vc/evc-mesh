@@ -128,7 +128,7 @@ func TestNormalizeVCSURL(t *testing.T) {
 	}
 }
 
-// an internal ticket defect 2's negative control: a GitHub PR and a GitLab MR that
+// 2's negative control: a GitHub PR and a GitLab MR that
 // happen to share the same number must NEVER normalize to the same string —
 // folding that far is what silently collapsed two distinct objects into one.
 func TestNormalizeVCSURL_DifferentProvidersSameNumberStayDistinct(t *testing.T) {

@@ -174,12 +174,12 @@ func TestBuildPath_ArtifactNameWithDatePrefix(t *testing.T) {
 		"mesh-dev",
 		true,
 		"7367f205",
-		"2026-06-11-roundtrip-test-riker.md",
+		"2026-06-11-roundtrip-test-robin.md",
 		"text/markdown",
 		date,
 	)
 	// Date must not be duplicated.
-	assert.Equal(t, "artifacts/mesh-dev/7367f205/2026-06-11-roundtrip-test-riker.md", result)
+	assert.Equal(t, "artifacts/mesh-dev/7367f205/2026-06-11-roundtrip-test-robin.md", result)
 }
 
 func TestExt(t *testing.T) {

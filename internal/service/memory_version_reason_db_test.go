@@ -23,7 +23,7 @@ import (
 // untagged `go test ./...` runs these against a migrated DATABASE_URL and
 // skip()s when no database is reachable.
 //
-// Covers Mesh #0ba5e66a acceptance 1-3: a conditional write refuses to
+// Covers an internal ticket acceptance 1-3: a conditional write refuses to
 // overwrite a version it did not expect, a reason is required when enforcement
 // is on, and prior revisions stay readable with the reasons that produced them.
 

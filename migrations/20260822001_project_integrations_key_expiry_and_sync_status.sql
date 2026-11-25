@@ -4,14 +4,14 @@
 -- The mount-point "single switch" (settings.docs_mount_path, added by R3 / PR #697)
 -- needs NO schema change here — it already lives in the settings JSONB and is
 -- orthogonal to subfolder/include_project_slug (those power Team Relay
--- *publishing*, a separate feature; see task #002d6ad6 comment for the trace).
+-- *publishing*, a separate feature; see an internal ticket comment for the trace).
 --
 -- key_expiry_source is NULL until an expiry is known at all; 'manual' means a
 -- human typed the date into our settings screen (no guarantee it is accurate);
 -- 'source' is reserved for a future value fetched from Team Relay's own
 -- key-introspection endpoint (not built yet — task bc11d499 in evc-team-relay).
 -- The UI MUST show provenance whenever key_expires_at is set, per the spec
--- decision recorded on the parent task (#218d5847): an unverifiable manual
+-- decision recorded on the parent task: an unverifiable manual
 -- date is only safe to display labeled as such.
 ALTER TABLE project_integrations
     ADD COLUMN key_expires_at TIMESTAMPTZ NULL,

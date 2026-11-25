@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- DescribeAgentKey (an internal ticket AC4, evc-team-relay#230/an internal ticket) --------
+// --- DescribeAgentKey (an internal ticket AC4, evc-team-relay#230) --------
 
 func TestDescribeAgentKey_ReadsExpiryScopesAndHitsTheWebRouter(t *testing.T) {
 	var gotPath string

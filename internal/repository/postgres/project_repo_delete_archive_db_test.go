@@ -14,7 +14,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
-// Task #ddd219f4: a project Pavel archived and then deleted stayed in his
+// A project Pavel archived and then deleted stayed in his
 // sidebar, because DELETE only archived and the list never filtered the
 // archive. These run ProjectRepo against a live Postgres — what a mock can't
 // show is that the rows really are gone from the reads that matter.

@@ -181,7 +181,7 @@ class FailsTowardAlerting(unittest.TestCase):
 class ReplayTheIncident(unittest.TestCase):
     """The positive control: reproduce the OLD numbers, not just produce new ones.
 
-    Ground truth as established by hand in #3ce651a0 — the canary of a run whose
+    Ground truth as established by hand in an internal ticket — the canary of a run whose
     own advisory sibling queued behind it is a DEFECT; the canary of a run that a
     genuinely newer run superseded is EXPECTED.
     """
@@ -266,7 +266,7 @@ class CrossRefContention(unittest.TestCase):
     def test_evicted_by_another_ref_is_contended_not_superseded(self):
         verdict, reason, rows = _classify(
             _jobs(_job(CANARY, "cancelled")),
-            _runs((200, "2026-07-28T06:22:28Z"), branch="riker/some-experiment"),
+            _runs((200, "2026-07-28T06:22:28Z"), branch="robin/some-experiment"),
             100,
             ref="main",
         )
@@ -410,7 +410,7 @@ def _epoch(stamp: str) -> float:
 
 
 class PayloadFreshness(unittest.TestCase):
-    """The race that made this watchdog's FIRST LIVE FIRING wrong (#13fb482b).
+    """The race that made this watchdog's FIRST LIVE FIRING wrong.
 
     Run 30341031059's canary died at 08:08:18Z, evicted from the repo-scoped
     group by run 30341157927 — a `workflow_dispatch` on a feature branch,

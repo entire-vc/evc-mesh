@@ -88,6 +88,8 @@
     "colRight": "Insert column right",
     "copyParagraphLink": "Copy link to this paragraph",
     "deleteColumn": "Delete column",
+    "addColumnEnd": "Add a column at the end",
+    "addRowEnd": "Add a row at the end",
     "deleteColumnLast": "This is the only column — delete the table instead",
     "deleteRow": "Delete row",
     "deleteRowLast": "A table keeps its header and at least one row — delete the table instead",

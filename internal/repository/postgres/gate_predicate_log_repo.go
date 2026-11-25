@@ -11,7 +11,7 @@ import (
 )
 
 // GatePredicateLogRepo records every predicate evaluation behind gate arming
-// (task #5d3dc714). Append-only by construction: there is no Update and no Delete, so a
+// Append-only by construction: there is no Update and no Delete, so a
 // refusal cannot be edited into an allow after the fact.
 type GatePredicateLogRepo struct {
 	db *sqlx.DB

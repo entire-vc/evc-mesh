@@ -50,6 +50,7 @@ import { uploadDocumentAttachment } from "@/lib/document-attachments";
 import { makeDocEditor } from "@/lib/milkdown/editor";
 import { blockStatePlugin, createBlockStateStore } from "@/lib/milkdown/block-state";
 import { BlockTypeSelect, TableMenu } from "@/components/editor-block-controls";
+import { TableAffordances } from "@/components/editor-table-affordances";
 import {
   type AnchorMatch,
   type DocAnchor,
@@ -795,6 +796,15 @@ function MilkdownDoc({
         className={cn("mesh-doc-editor-body flex flex-1 flex-col", !readOnly && "px-3 py-2")}
       >
         <Milkdown />
+        {!readOnly && (
+          <TableAffordances
+            ns="docs"
+            store={blockStore}
+            runCommand={runCommand}
+            withView={withView}
+            containerRef={containerRef}
+          />
+        )}
       </div>
 
       {menu && (

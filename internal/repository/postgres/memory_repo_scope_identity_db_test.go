@@ -12,7 +12,7 @@ import (
 )
 
 // No //go:build integration tag on purpose — see userRepoTestDB's doc comment
-// in user_repo_test.go. These are the regression tests for task #4edf3fb5
+// in user_repo_test.go. These are the regression tests for an internal ticket
 // (memory identity must follow declared scope): they exercise GetByKey
 // directly against real Postgres, since the identity contract lives in SQL,
 // not in Go the mocked service-level tests can meaningfully verify.

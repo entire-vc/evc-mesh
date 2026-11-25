@@ -1,4 +1,4 @@
-"""Tests for the bench corpus write-path normaliser (task #82e42882).
+"""Tests for the bench corpus write-path normaliser.
 
 Three things are worth stating about what these cover, because each one is a
 way this module could look correct and not be:

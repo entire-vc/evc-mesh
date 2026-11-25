@@ -165,7 +165,7 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
         {
           timeout: 5_000,
           message:
-            "GET never reflected the PATCH within 5s — either the write did not land, or the object-storage read-after-write gap has grown well past the ~1.4s measured for #659b9f32",
+            "GET never reflected the PATCH within 5s — either the write did not land, or the object-storage read-after-write gap has grown well past the ~1.4s measured earlier",
         },
       )
       .toBe(expectedBody);
@@ -191,7 +191,7 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
       }
       if (Date.now() > deadline) {
         throw new Error(
-          `page kept rendering stale content after repeated reloads — marker not found: "${freshMarker}" (#659b9f32)`,
+          `page kept rendering stale content after repeated reloads — marker not found: "${freshMarker}"`,
         );
       }
       await page.reload({ waitUntil: "networkidle" });
@@ -365,7 +365,7 @@ test.describe.serial("Docs — paragraph link survives edits (docs-paragraph-lin
     });
   });
 
-  // Was QUARANTINED (test.fixme) for an internal ticket: after PATCHing the document
+  // Was QUARANTINED (test.fixme): after PATCHing the document
   // body, a full page.goto used to still render the PREVIOUS text — the
   // highlighted paragraph held a string no longer anywhere in the document.
   // Root cause, found by timing a PATCH's own `updated_at` against a polled

@@ -14,7 +14,7 @@ import (
 
 // No //go:build integration tag on purpose — see userRepoTestDB's doc comment in
 // user_repo_test.go: the "Go coverage" gate's untagged `go test $pkg` must see
-// this behavior, since it is exactly the fix for task #c5b5fb48.
+// this behavior, since it is exactly the fix for an internal ticket.
 
 func setupTouchAccessedDBTest(t *testing.T) (*MemoryRepo, uuid.UUID) {
 	t.Helper()
@@ -79,8 +79,7 @@ func TestMemoryRepoDB_FullTextSearchRanked_DoesNotTouchLastAccessedAt(t *testing
 	}
 	require.True(t, found, "sanity: the memory must actually be a hit for this query")
 
-	// Read the raw column directly — NOT via GetByID, which itself touches
-	// last_accessed_at as documented behavior and would mask what we're testing.
+	// Re-read the stored column directly to assert the absence of feedback.
 	var lastAccessedAt *time.Time
 	require.NoError(t, repo.db.GetContext(ctx, &lastAccessedAt,
 		`SELECT last_accessed_at FROM memories WHERE id = $1`, mem.ID))

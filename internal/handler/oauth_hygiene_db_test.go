@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// OAuth hygiene (#23579e6b): the request-body cap on POST /oauth/register and
+// OAuth hygiene: the request-body cap on POST /oauth/register and
 // the /oauth/token grant_type check, both driven through
 // RegisterOAuthPublicRoutes — the routes production mounts.
 

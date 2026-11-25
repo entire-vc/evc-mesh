@@ -20,8 +20,8 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
-// Contract of the result-write precondition (
-// docs/extensions/agents-me-contract.md "Fencing a stale worker"): the four
+// Contract of the result-write precondition
+// (docs/extensions/agents-me-contract.md "Fencing a stale worker"): the four
 // result writes read the same headers, and a refusal is 409 with a stable
 // error_code. A failure here is a breaking change for external workers.
 

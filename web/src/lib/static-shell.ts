@@ -1,4 +1,4 @@
-// Static shell hand-off (perf·Б2, #2417383b).
+// Static shell hand-off (perf·Б2).
 //
 // index.html paints a static copy of the login form into #root before the
 // bundle loads. Its inputs are live — a person (or a password manager) can

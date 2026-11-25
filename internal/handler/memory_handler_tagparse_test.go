@@ -14,7 +14,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Tag params must survive BOTH wire encodings (task #2c087b2a).
+// Tag params must survive BOTH wire encodings.
 //
 // The MCP REST client emits repeated params (params.Add per tag) while the handler
 // bound `query:"tags_any"` into a plain string — echo fills that from the FIRST

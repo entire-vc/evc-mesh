@@ -49,8 +49,8 @@ const reportPath = resolve(webRoot, "perf-bundle-report.json");
 const deltaReportPath = resolve(webRoot, "perf-bundle-delta.json");
 
 /** Growth an MR may add over main's measurement at its merge-base without a
- * signature, KB gz. Changing them is a change of its own, like the absolute
- * ceilings. */
+ * signature, KB gz. Decided on an internal ticket; changing them is a card of its
+ * own, like the absolute ceilings. */
 const DELTA_LIMITS = {
   "login.initial_js_kb_gz": { name: "Δlogin", max: 0.5 },
   total_js_kb_gz: { name: "Δtotal", max: 2.0 },
@@ -542,19 +542,19 @@ if (process.argv.includes("--selftest")) {
   const base = { commit: MAIN, metrics: { "login.initial_js_kb_gz": 174.29, total_js_kb_gz: 758.75, "dashboard.landing_js_kb_gz": 248.39 } };
   const m = (login, total, landing = 248.39) => ({ "login.initial_js_kb_gz": login, total_js_kb_gz: total, "dashboard.landing_js_kb_gz": landing });
   // The raise label counts only when a listed signer was the last to add it.
-  const SIGNERS = ["garfield"];
+  const SIGNERS = ["gary"];
   const ev = (id, action, username, name = RAISE_LABEL) => ({ id, action, user: { username }, label: { name }, created_at: `t${id}` });
   const LBL = parseLabels("frontend, Perf-Budget-Raise");
   const none = labelSignature([], [], SIGNERS);
-  const byLead = labelSignature(LBL, [ev(1, "add", "Garfield")], SIGNERS);
+  const byLead = labelSignature(LBL, [ev(1, "add", "Gary")], SIGNERS);
   const sigCases = [
     ["signer adds the label -> signed", byLead.signed, true],
-    ["developer adds the label -> not signed", labelSignature(LBL, [ev(1, "add", "verne")], SIGNERS).signed, false],
-    ["lead removed, developer re-added -> not signed", labelSignature(LBL, [ev(1, "add", "garfield"), ev(2, "remove", "garfield"), ev(3, "add", "verne")], SIGNERS).signed, false],
-    ["last event is remove -> not signed", labelSignature(LBL, [ev(1, "add", "garfield"), ev(2, "remove", "verne")], SIGNERS).signed, false],
-    ["only another label's events -> not signed", labelSignature(LBL, [ev(1, "add", "garfield", "frontend")], SIGNERS).signed, false],
+    ["developer adds the label -> not signed", labelSignature(LBL, [ev(1, "add", "vera")], SIGNERS).signed, false],
+    ["lead removed, developer re-added -> not signed", labelSignature(LBL, [ev(1, "add", "gary"), ev(2, "remove", "gary"), ev(3, "add", "vera")], SIGNERS).signed, false],
+    ["last event is remove -> not signed", labelSignature(LBL, [ev(1, "add", "gary"), ev(2, "remove", "vera")], SIGNERS).signed, false],
+    ["only another label's events -> not signed", labelSignature(LBL, [ev(1, "add", "gary", "frontend")], SIGNERS).signed, false],
     ["label events unreadable -> not signed", labelSignature(LBL, new Error("label events API: HTTP 404"), SIGNERS).signed, false],
-    ["no signers file -> not signed", labelSignature(LBL, [ev(1, "add", "garfield")], []).signed, false],
+    ["no signers file -> not signed", labelSignature(LBL, [ev(1, "add", "gary")], []).signed, false],
     ["label absent -> not signed", none.signed, false],
   ];
   for (const [name, got, want] of sigCases) {
@@ -563,10 +563,10 @@ if (process.argv.includes("--selftest")) {
     console.log(`${pass ? "ok  " : "FAIL"} ${name}`);
   }
   {
-    const parsed = parseSigners("# who signs\nGarfield  # lead\n\n");
-    const fromMain = readSigners((a) => (a[1] === `B:${SIGNERS_FILE}` ? "garfield\n" : (() => { throw new Error("no file"); })()), "B");
+    const parsed = parseSigners("# who signs\nGary  # lead\n\n");
+    const fromMain = readSigners((a) => (a[1] === `B:${SIGNERS_FILE}` ? "gary\n" : (() => { throw new Error("no file"); })()), "B");
     const missing = readSigners(() => { throw new Error("fatal: path does not exist"); }, "B");
-    const pass = parsed.join() === "garfield" && fromMain.join() === "garfield" && missing.length === 0;
+    const pass = parsed.join() === "gary" && fromMain.join() === "gary" && missing.length === 0;
     if (!pass) bad++;
     console.log(`${pass ? "ok  " : "FAIL"} signers read from main's file, missing file -> none`);
   }
@@ -574,14 +574,14 @@ if (process.argv.includes("--selftest")) {
     // The reader itself, on a fake API: a short last page ends the history;
     // pages that never end are a truncated history, which signs nothing.
     const env = { CI_API_V4_URL: "x", CI_PROJECT_ID: "1", CI_MERGE_REQUEST_IID: "2", CI_JOB_TOKEN: "t" };
-    const page = (n, from) => Array.from({ length: n }, (_, i) => ev(from + i, "add", "verne"));
+    const page = (n, from) => Array.from({ length: n }, (_, i) => ev(from + i, "add", "vera"));
     const pages = (lens) => async (url) => {
       const p = Number(new URL(url, "http://h/").searchParams.get("page"));
       return { ok: true, json: async () => page(lens[p - 1] ?? 0, (p - 1) * 100) };
     };
     const ended = await gitlabLabelEvents(env, async (url) => {
       const p = Number(new URL(url, "http://h/").searchParams.get("page"));
-      return { ok: true, json: async () => (p === 3 ? [ev(1000, "add", "garfield")] : page(100, (p - 1) * 100)) };
+      return { ok: true, json: async () => (p === 3 ? [ev(1000, "add", "gary")] : page(100, (p - 1) * 100)) };
     });
     const endless = await gitlabLabelEvents(env, pages(Array(LABEL_EVENT_PAGES + 5).fill(100)));
     const denied = await gitlabLabelEvents(env, async () => ({ ok: false, status: 401 }));
@@ -595,12 +595,12 @@ if (process.argv.includes("--selftest")) {
       console.log(`${pass ? "ok  " : "FAIL"} ${name}`);
     }
   }
-  const forged = labelSignature(LBL, [ev(1, "add", "verne")], SIGNERS);
+  const forged = labelSignature(LBL, [ev(1, "add", "vera")], SIGNERS);
   const deltaCases = [
     ["growth within limits", evaluateDelta(m(174.59, 760.25), base, none), true, null],
     ["Δtotal +2.5", evaluateDelta(m(174.29, 761.25), base, none), false, /Δtotal \+2\.5 KB gz > \+2\.0/],
     ["Δtotal +2.5 with perf-budget-raise set by the lead", evaluateDelta(m(174.29, 761.25), base, byLead), true, null],
-    ["Δtotal +2.5 with perf-budget-raise set by a developer", evaluateDelta(m(174.29, 761.25), base, forged), false, /Δtotal \+2\.5 .*not a signature: .*verne, who is not a signer/],
+    ["Δtotal +2.5 with perf-budget-raise set by a developer", evaluateDelta(m(174.29, 761.25), base, forged), false, /Δtotal \+2\.5 .*not a signature: .*vera, who is not a signer/],
     ["Δtotal +2.5, label events unreadable", evaluateDelta(m(174.29, 761.25), base, labelSignature(LBL, new Error("label events API: HTTP 404"), SIGNERS)), false, /cannot verify who set/],
     ["Δlogin +0.51", evaluateDelta(m(174.8, 758.75), base, none), false, /Δlogin \+0\.51 KB gz > \+0\.5/],
     ["exactly +0.5 / +2.0", evaluateDelta(m(174.79, 760.75), base, none), true, null],

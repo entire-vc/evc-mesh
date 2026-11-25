@@ -12,6 +12,15 @@ func TestResolveMCPToolName_NamedInAcceptanceCriteria(t *testing.T) {
 		{"GET", "/api/v1/memories/search", "recall"},
 		{"POST", "/api/v1/memories", "remember"},
 		{"GET", "/api/v1/tasks/:task_id", "get_task"},
+		// Memory-widget U1: every memory read route resolves to its tool.
+		{"GET", "/api/v1/memories/recall-final/v1", "recall"},
+		{"GET", "/api/v1/memories/recall_graph", "recall_with_graph"},
+		{"GET", "/api/v1/memories/by-key", "get_memory"},
+		{"GET", "/api/v1/memories/:id", "get_memory"},
+		{"GET", "/api/v1/projects/:proj_id/knowledge", "get_project_knowledge"},
+		{"GET", "/api/v1/projects/:proj_id/updates", "get_project_updates"},
+		{"GET", "/api/v1/projects/:proj_id/updates/latest", "get_project_updates"},
+		{"POST", "/api/v1/projects/:proj_id/updates", "post_project_update"},
 	}
 	for _, tc := range cases {
 		got := resolveMCPToolName(tc.method, tc.path)

@@ -22,7 +22,7 @@ import (
 // No //go:build integration tag — same convention as agent_key_rotate_db_test.go;
 // skips without a reachable Postgres.
 //
-// an internal ticket: POST /internal/secrets/materialize behind DirectOnly ->
+// POST /internal/secrets/materialize behind DirectOnly ->
 // SpawnerAuth, wired as cmd/api/main.go wires it, with the production agent
 // auth (cached service, grants, additional keys) against real Postgres — so
 // "deleted agent" and "rotated key" are real deletions and rotations, not a
@@ -167,7 +167,7 @@ func TestSpawnerAuthDB_GarbageInAllowlistIsIgnored(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, f.post(key(f.spawner.APIKey)))
 }
 
-// an internal ticket: the shared token is gone. Even with the old env var set to the
+// The shared token is gone. Even with the old env var set to the
 // value sent, a token-only request is 401, and a token alongside a key does
 // not change what the key decides.
 func TestSpawnerAuthDB_SpawnTokenNoLongerAccepted(t *testing.T) {

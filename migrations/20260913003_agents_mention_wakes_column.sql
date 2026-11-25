@@ -1,5 +1,5 @@
 -- +goose Up
--- #33b7d4b7: agents.capabilities is written by two incompatible consumers —
+-- Agents.capabilities is written by two incompatible consumers —
 -- the mention-handoff gate expects an object ({"mention_wakes": true}),
 -- UpdateAgentProfile's config export/import expects a plain string array.
 -- UpdateAgentProfile blind-replaces rather than merges, so whichever write
@@ -12,17 +12,17 @@
 -- shares a write path with the array-shaped capabilities consumers.
 --
 -- DEFAULT false, no backfill: as of 2026-09-13 no lane in the fleet has a
--- live mention-wake path (Riker moved from mesh-dispatcher, the only runtime
+-- live mention-wake path (Robin moved from mesh-dispatcher, the only runtime
 -- that ever listened, to fiddler — see canon
--- canon-riker-mention-wake-closed-fiddler-migration). Restoring true for
--- Riker here would re-introduce the exact "documented guarantee that
+-- canon-robin-mention-wake-closed-fiddler-migration). Restoring true for
+-- Robin here would re-introduce the exact "documented guarantee that
 -- guarantees nothing" defect this fix exists to prevent. Whoever re-enables
 -- a live fleet-side listener for some agent in the future sets this column
 -- true on that agent's row then.
 ALTER TABLE agents ADD COLUMN mention_wakes boolean NOT NULL DEFAULT false;
 
 -- Drop the now-dead key from any row that still carries it as a jsonb
--- object (in practice: riker, restored by 20260913002). Scoped to
+-- object (in practice: robin, restored by 20260913002). Scoped to
 -- jsonb_typeof=='object' so an array-shaped capabilities value (the other,
 -- incompatible consumer) is left untouched.
 UPDATE agents

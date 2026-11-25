@@ -49,7 +49,7 @@ MESH_MCP_COMMAND = os.environ.get("MESH_MCP_BIN") or os.path.expanduser("~/bin/m
 MESH_MCP_ARGS = ["--transport", "stdio"]
 
 STORE_SCOPE = "workspace"
-# Overridable for the same reason BENCH_WORKSPACE_SLUG is (#1974ef80): "lme-bench"
+# Overridable for the same reason BENCH_WORKSPACE_SLUG is: "lme-bench"
 # is a server-side RESERVED tag (memory_service.go's reservedMemoryTags) — a write
 # carrying it is only accepted into the one workspace flagged is_bench=true in the
 # database (migration 20260906001, backfilled for exactly one prod workspace ID).
@@ -67,13 +67,13 @@ INIT_TIMEOUT = 60.0
 STORE_CONCURRENCY = 1
 
 # ---------------------------------------------------------------------------
-# Client-side workspace guard (task #0104878c, layer 1 of 2).
+# Client-side workspace guard (layer 1 of 2).
 #
 # Isolation from a live workspace is held by which workspace MESH_AGENT_KEY
 # resolves to — a VALUE, not code. This CI harness had no check on that value
 # at all: the local bench harness (metronix-memory/benchmarks/longmemeval/
 # scripts/mesh_client.py) has carried this exact guard since the July leak
-# (#4045f449, 32 fixtures landed in prod), but this file — the one that runs
+# (32 fixtures landed in prod), but this file — the one that runs
 # on a schedule against prod and gates merges — never got the port. A wrong
 # secret, or someone hand-running this script with a prod key, would silently
 # write ~49 fixtures per question straight into a live workspace, and the only
@@ -120,24 +120,43 @@ def assert_bench_workspace() -> str:
         )
     return slug
 
-# The measurement window: how many rows one `recall` may return, and therefore
-# the CEILING on `rows_returned`. It has to clear the LARGEST haystack in the
-# dataset, or those questions are unreachable by construction — no filter and no
-# ranking change can make a 54-session fixture fit in a 50-row page, and the
-# shortfall reads in the artifact exactly like a retrieval miss.
-#
-# At 50 that ceiling was real and measured: run 30525387007 (main @ b94b90a)
-# returned EXACTLY 50 rows for all four 52/52/53/54-session questions and could
-# not have returned more, so 100% was unreachable for them by construction.
-#
-# The window is NOT this constant when graph boost is on — the graph arm reserves
-# `graphBoostReserve(limit)` = limit/4 of the page for neighbours, so the base
-# retrieval window is limit*3/4. That fraction lives in evc-mesh-mcp, NOT here;
-# `test_bench_window.py` mirrors it and says so, because a mirror is the most this
-# repo can check. At 80 the effective window is 60, clearing max(haystack)=54 with
-# 6 rows of headroom.
-RECALL_CANDIDATE_LIMIT = 80
+# One page is bounded by the real MCP contract. The measurement window spans
+# overlapping pages instead: a single page cannot hold the 54-session corpus.
+RECALL_CANDIDATE_LIMIT = 50
+# Overlap covers the graph reserve, including when it displaces base rows.
+# Keep the first page's order (and therefore recall@10) intact; continuation
+# pages only append previously unseen IDs. API final recall permits offset<=150.
+RECALL_PAGE_STRIDE = 38
+RECALL_PAGE_OFFSETS = (0, 38, 76)
+RECALL_EFFECTIVE_WINDOW = len(RECALL_PAGE_OFFSETS) * RECALL_PAGE_STRIDE
 RECALL_ORDER_BY = "relevance:desc"
+_preflight_checked = False
+
+
+def recall_arguments(query, tag, apply_recency_decay=None, offset=0):
+    if float(os.environ.get("BENCH_RECENCY_WEIGHT", "0") or 0) != 0:
+        raise ValueError("recall contract: recency_weight is not supported by MCP")
+    args = {
+        "query": query, "tags_any": [tag], "scope": STORE_SCOPE,
+        "limit": RECALL_CANDIDATE_LIMIT, "offset": offset,
+        "order_by": RECALL_ORDER_BY, "min_importance": 0,
+        # Compact MCP responses omit IDs and timestamps. The harness needs the
+        # stable ID for deduplication and uncut content for the advisory arm.
+        "full": True,
+    }
+    if apply_recency_decay is not None:
+        args["apply_recency_decay"] = apply_recency_decay
+    return args
+
+
+def append_unique(ranked, seen, items, tag):
+    for item in items:
+        mid = item.get("id")
+        if not mid:
+            raise ValueError("recall contract: result has no memory ID")
+        if tag in (item.get("tags") or []) and mid not in seen:
+            seen.add(mid)
+            ranked.append(_to_record(item))
 
 # ---------------------------------------------------------------------------
 # Per-RUN isolation.
@@ -149,7 +168,7 @@ RECALL_ORDER_BY = "relevance:desc"
 # miss, indistinguishable from a real recall failure. Concurrency is the normal
 # case, not the exotic one: two open PRs, or a push to main overlapping an open
 # PR, or the nightly landing on top of either. The recall gate is a REQUIRED
-# check, so that silent corruption sits directly on the merge path (#eb1c5617).
+# check, so that silent corruption sits directly on the merge path.
 #
 # The nonce goes at the FRONT of the key: `sanitize_key_component` keeps its two
 # branches disjoint by reserving a trailing `-<8 hex>` shape for folded ids, and
@@ -209,9 +228,10 @@ def _parse_ts(raw: Any) -> float | None:
 ORPHAN_GC_MIN_AGE_HOURS = float(os.environ.get("BENCH_ORPHAN_GC_MIN_AGE_HOURS", "2") or 2)
 
 # Pages of RECALL_CANDIDATE_LIMIT the collector will walk before giving up.
+# Final recall's maximum offset is 150; never send an invalid hygiene request.
 # Bounded so a pathological backlog cannot turn a hygiene pass into the longest
 # step of the run; whatever is left is collected on the next run.
-ORPHAN_GC_MAX_PAGES = 10
+ORPHAN_GC_MAX_PAGES = 1 + 150 // RECALL_CANDIDATE_LIMIT
 
 # Set once the orphan sweep has run in this process — it is a whole-workspace
 # pass, not per-question work.
@@ -271,7 +291,7 @@ SEARCH_SETTLE_DELAY_SECS = 0.5
 # `SEARCH_SETTLE_*` above closes a SMALL, per-question gap: this question's own
 # write landing before this question's own search. It does not — and by design
 # cannot — close a much bigger one: EVERY prior question's writes still queued
-# for embedSem (#3d10774e, shared by embedAndStore and the recall query-embed)
+# for embedSem (shared by embedAndStore and the recall query-embed)
 # when this question's search fires. `remember()` returns the instant the API
 # accepts the write, long before the write's embed goroutine has even started,
 # so a harness that ingests question after question with no pacing can queue a
@@ -279,7 +299,7 @@ SEARCH_SETTLE_DELAY_SECS = 0.5
 # backlog is deep enough, a later question's query-embed can wait behind it for
 # longer than the REST client's own timeout, surfacing as `context deadline
 # exceeded` with no server-side error at all (measured live on PR #739,
-# #ebd9dc1c: 17-20/24 questions, 120s+ each, after the timeout itself had
+# 17-20/24 questions, 120s+ each, after the timeout itself had
 # already been raised 30s -> 120s).
 #
 # EMBED_DRAIN_* below waits for that backlog specifically, using
@@ -459,7 +479,7 @@ def _mesh_env() -> dict[str, str]:
     #467 gave `RecallGraphResult` key/scope/tags, and the very next run on main
     (30525387007) showed the cap gone: `rows_returned` spread over [41..50]
     instead of sitting at 38. So disabling the boost here — the first fix
-    attempted for #1e4bd289 — became the wrong change while it was in review: it
+    attempted for an internal ticket — became the wrong change while it was in review: it
     would have been reverting a defect that no longer existed, and it also
     bundled a second, unrelated variable into one measurement.
 
@@ -473,6 +493,14 @@ def _mesh_env() -> dict[str, str]:
         if val is not None:
             env[key] = val
     return env
+
+
+def _mcp_input_schema(tool: Any) -> dict[str, Any]:
+    # SDK 2 uses snake_case Python fields; SDK 1 used the wire aliases.
+    schema = getattr(tool, "input_schema", getattr(tool, "inputSchema", None))
+    if not isinstance(schema, dict):
+        raise ValueError("recall tool input schema is not an object")
+    return schema
 
 
 def _parse_tool_payload(result: Any) -> dict[str, Any]:
@@ -505,7 +533,7 @@ def _parse_tool_payload(result: Any) -> dict[str, Any]:
         if block_text:
             text = block_text
             break
-    if getattr(result, "isError", False):
+    if getattr(result, "is_error", getattr(result, "isError", False)):
         return {"error": text or "tool call failed (isError, no text content)"}
     if not text:
         return {}
@@ -515,7 +543,7 @@ def _parse_tool_payload(result: Any) -> dict[str, Any]:
         # 200 chars cut this off mid-URL on a recall/remember call (long
         # workspace_id + query + tags_any query string), silently discarding
         # the transport-layer cause that follows the URL in a Go url.Error
-        # ("...": dial tcp ...: connection refused) — see #352a0b11, where
+        # ("...": dial tcp ...: connection refused), where
         # every gate run for 5+ days reported a truncated, undiagnosable
         # error. 4000 comfortably covers the longest URL this harness
         # constructs plus its trailing cause, while still bounding an
@@ -547,7 +575,15 @@ def _to_record(item: dict[str, Any]) -> dict[str, Any]:
         score = item.get("relevance", item.get("decayed_relevance"))
     return {
         "record": {"content": content},
+        "id": item.get("id"),
         "score": _coerce_score(score),
+        # Diagnostics from the server; never used to reorder or score results.
+        "dense_score": _coerce_score(item.get("dense_score")),
+        "recency_score": _coerce_score(item.get("recency_score")),
+        "created_at": item.get("created_at"),
+        "provenance": item.get("provenance"),
+        "graph_boost": item.get("graph_boost"),
+        "composite_score": _coerce_score(item.get("composite_score")),
         # Carried so the retrieval-only gate can map a hit back to its haystack
         # session: stores are keyed `bench-<sanitized-qid>-s<idx>` and tagged
         # `session-<idx>`. Only the `-s<idx>` suffix is parsed, so sanitizing the
@@ -592,7 +628,7 @@ def _read_embed_inflight(base_url: str) -> float | None:
             _embed_drain_warned = True
             logger.warning(
                 "embed-drain wait: mesh_memory_embed_inflight not found in %s "
-                "— server predates #ebd9dc1c or exposition changed; proceeding "
+                "— server predates that fix or exposition changed; proceeding "
                 "without waiting for the embed backlog to drain",
                 url,
             )
@@ -638,6 +674,22 @@ class MeshMemoryClient:
 
     # Shared across questions in a run: see BREAKER_TRIP_AFTER.
     _exhausted_questions = 0
+
+    async def preflight(self):
+        """Read-only contract probe; never ingest or retry an invalid request."""
+        assert_bench_workspace()
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
+        params = StdioServerParameters(command=MESH_MCP_COMMAND,
+                                       args=MESH_MCP_ARGS, env=_mesh_env())
+        try:
+            async with stdio_client(params) as (read_stream, write_stream):
+                async with ClientSession(read_stream, write_stream) as session:
+                    await asyncio.wait_for(session.initialize(), INIT_TIMEOUT)
+                    await self._preflight_session(session)
+        except BaseException as exc:
+            raise self._surfaced(exc) from None
 
     def __init__(
         self,
@@ -702,7 +754,7 @@ class MeshMemoryClient:
         # top_k slice. `ingest_and_search` returns only the scored window, so
         # without this the rank of a gold session that lands outside top_k is
         # unrecoverable from any artifact — which is exactly what forced a live
-        # prod probe to answer "rank 12 or not retrieved at all?" (#c6b1ecee).
+        # prod probe to answer "rank 12 or not retrieved at all?".
         # `rows_returned` is the count of the same list: it is how many of this
         # question's fixtures survived the workspace-wide candidate pool, and it
         # is the number that exposed the post-filter truncation (32/45, 27/50).
@@ -911,6 +963,7 @@ class MeshMemoryClient:
         async with stdio_client(params) as (read_stream, write_stream):
             async with ClientSession(read_stream, write_stream) as session:
                 await asyncio.wait_for(session.initialize(), timeout=INIT_TIMEOUT)
+                await self._preflight_session(session)
                 sem = asyncio.Semaphore(STORE_CONCURRENCY)
 
                 async def _one(idx, turns, date):
@@ -1014,7 +1067,7 @@ class MeshMemoryClient:
         # the window at all. Measured after the isolation fix landed: 10 pre-fix
         # orphans, ~10h old, survived four consecutive runs of the collector.
         #
-        # Same shape of bug as #2c087b2a: filtering after the candidate cut cannot
+        # Same shape of bug as an internal ticket: filtering after the candidate cut cannot
         # recover what the cut already dropped. Ask for old rows; do not ask for
         # rows and then look for the old ones.
         #
@@ -1039,6 +1092,7 @@ class MeshMemoryClient:
                             "limit": RECALL_CANDIDATE_LIMIT,
                             "offset": page * RECALL_CANDIDATE_LIMIT,
                             "min_importance": 0,
+                            "full": True,
                         },
                     )
                 payload = _parse_tool_payload(found)
@@ -1142,6 +1196,7 @@ class MeshMemoryClient:
                             "tags_any": [self.bench_tag],
                             "scope": STORE_SCOPE,
                             "limit": RECALL_CANDIDATE_LIMIT,
+                            "full": True,
                             "min_importance": 0,
                         },
                     )
@@ -1168,10 +1223,10 @@ class MeshMemoryClient:
 
     async def _store(self, session, content, idx, date):
         # The write path refuses invisible characters and instruction-override
-        # phrases (memory_sanitizer.go, task #f78232c4), and the corpus carries
+        # phrases (memory_sanitizer.go), and the corpus carries
         # both — 9 distractor sessions out of 1150. Normalising here rather than
         # exempting the bench agent keeps the gate as the single write path into
-        # `memories`; the policy and its measurement are on task #82e42882.
+        # `memories`; the policy and its measurement are on an internal ticket.
         #
         # The pre-flight audit in run_ci has already proven that no
         # answer-bearing session is touched, so this cannot move recall@k. It is
@@ -1208,30 +1263,54 @@ class MeshMemoryClient:
             return mem.get("id")
         return None
 
-    async def _search(self, session, query, top_k):
-        args = {
-            "query": query,
-            "tags_any": [self.bench_tag],
-            "scope": STORE_SCOPE,
-            "limit": RECALL_CANDIDATE_LIMIT,
-            "order_by": RECALL_ORDER_BY,
-            "min_importance": 0,
-        }
-        _rw = float(os.environ.get("BENCH_RECENCY_WEIGHT", "0") or 0)
-        if _rw > 0:
-            args["recency_weight"] = _rw
-        # Only sent when the caller named it. mesh-mcp's own default is `false`,
-        # AND a query-matched profile can force it to `true` over an explicit
-        # `false` — so "unset" is a genuine third state (let the server's policy
-        # stand) rather than a synonym for either value. The recency controls
-        # need to name both, and would prove nothing if this collapsed.
-        if self.apply_recency_decay is not None:
-            args["apply_recency_decay"] = self.apply_recency_decay
-        result = await session.call_tool("recall", args)
-        payload = _parse_tool_payload(result)
-        if isinstance(payload, dict) and payload.get("error"):
-            raise self._tool_failure("recall", payload["error"])
+    async def _preflight_session(self, session):
+        global _preflight_checked
+        if _preflight_checked:
+            return
+        tools = await session.list_tools()
+        tool = next((t for t in tools.tools if t.name == "recall"), None)
+        if tool is None:
+            raise self._tool_failure("preflight", "recall schema missing")
+        properties = _mcp_input_schema(tool).get("properties", {})
+        for offset in RECALL_PAGE_OFFSETS:
+            args = recall_arguments("bench contract preflight", self.bench_tag,
+                                    self.apply_recency_decay, offset)
+            unknown = set(args) - set(properties)
+            if unknown:
+                raise self._tool_failure("preflight", f"schema lacks {sorted(unknown)}")
+            payload = _parse_tool_payload(await session.call_tool("recall", args))
+            if not isinstance(payload, dict) or payload.get("error"):
+                raise self._tool_failure("preflight", payload)
+            if not isinstance(payload.get("items"), list):
+                raise self._tool_failure("preflight", "recall response has no items array")
+        _preflight_checked = True
 
+    async def _search(self, session, query, top_k):
+        ranked, seen = [], set()
+        first_payload = None
+        self.recall_pages = []
+        for offset in RECALL_PAGE_OFFSETS:
+            args = recall_arguments(query, self.bench_tag,
+                                    self.apply_recency_decay, offset)
+            payload = _parse_tool_payload(await session.call_tool("recall", args))
+            if isinstance(payload, dict) and payload.get("error"):
+                raise self._tool_failure("recall", payload["error"])
+            if first_payload is None:
+                first_payload = payload
+            elif payload.get("search_mode") != first_payload.get("search_mode"):
+                raise self._tool_failure("recall", "search mode changed between pages")
+            items = payload.get("items") or payload.get("results") or []
+            if not isinstance(items, list):
+                raise self._tool_failure("recall", "items is not an array")
+            self.recall_pages.append({"offset": offset, "ids": [it.get("id") for it in items]})
+            append_unique(ranked, seen, items, self.bench_tag)
+            # A short page ends this query, never a full page with duplicates.
+            if len(items) < RECALL_CANDIDATE_LIMIT:
+                break
+
+        # Metadata describes the first page, which supplies the scored top ten.
+        # A later page must never hide a failed arm in that measurement.
+        payload = first_payload
         # Which arms actually served this recall. The MCP layer copies the REST
         # envelope verbatim, so these keys arrive untouched — when present.
         mode = payload.get("search_mode") if isinstance(payload, dict) else None
@@ -1241,15 +1320,10 @@ class MeshMemoryClient:
         self.dense_rows = _envelope_int(payload, "dense_rows")
         self.sparse_rows = _envelope_int(payload, "sparse_rows")
 
-        items = payload.get("items") or payload.get("results") or []
-        if not isinstance(items, list):
-            items = []
-        mine = [it for it in items if self.bench_tag in (it.get("tags") or [])]
         # Retained BEFORE the slice, and reassigned on every attempt so a retry
         # never reports a dead attempt's list. The window the caller scores is a
         # prefix of this, so `hit` and `gold_rank` cannot disagree by
         # construction: a hit is exactly a gold row at a rank <= top_k.
-        ranked = [_to_record(it) for it in mine]
         self.ranked_records = ranked
         self.rows_returned = len(ranked)
         return ranked[:top_k]

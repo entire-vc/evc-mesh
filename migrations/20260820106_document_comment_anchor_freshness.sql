@@ -6,7 +6,7 @@
 -- quote is kept either way, it is what a re-anchoring pass searches with" — and
 -- described a pass that did not exist. Nothing ever nulled anchor_start, so the
 -- orphaned state was unreachable and every row claimed a position forever.
--- Measured on prod (#90dd31f9): three consecutive edits to one document, and
+-- Measured on prod: three consecutive edits to one document, and
 -- three times the stored anchor addressed a paragraph the comment was not about
 -- while the API reported orphaned:false. 20260820104 fixed what the numbers
 -- MEAN; this is about how long they stay true.

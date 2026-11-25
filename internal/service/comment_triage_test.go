@@ -49,7 +49,7 @@ func TestHasBlockingMarker(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// blockingMarkerClassForSlug (contract §5, an internal ticket)
+// blockingMarkerClassForSlug (contract §5)
 // ---------------------------------------------------------------------------
 
 func TestBlockingMarkerClassForSlug(t *testing.T) {
@@ -71,7 +71,7 @@ func TestBlockingMarkerClassForSlug(t *testing.T) {
 		},
 		{
 			"tag on a DIFFERENT marker's line does not soften this one",
-			"❓ **Blocking @pavel**: need decision X\n❓ **Blocking @garfield** [soft]: fyi too",
+			"❓ **Blocking @pavel**: need decision X\n❓ **Blocking @gary** [soft]: fyi too",
 			"pavel", domain.HumanGateClassHard,
 		},
 		{
@@ -265,7 +265,7 @@ func TestEnforceBlockingTriage_BlockingHuman_MovesToTriage(t *testing.T) {
 	assert.Contains(t, sys[0].Body, "@pavel")
 }
 
-// TestEnforceBlockingTriage_SoftTag_SetsClassSoft is AC1 (contract §5, an internal ticket):
+// TestEnforceBlockingTriage_SoftTag_SetsClassSoft is AC1 (contract §5):
 // the ONLY input this task adds — a "[soft]" tag on the marker's own line — must reach
 // SetHumanGateClass as domain.HumanGateClassSoft.
 func TestEnforceBlockingTriage_SoftTag_SetsClassSoft(t *testing.T) {
@@ -446,7 +446,7 @@ func TestEnforceBlockingTriage_AgentMentionOnly_NoTriage(t *testing.T) {
 		TaskID:     taskID,
 		AuthorID:   uuid.New(),
 		AuthorType: domain.ActorTypeAgent,
-		Body:       "❓ **Blocking @linus**: help debug",
+		Body:       "❓ **Blocking @liam**: help debug",
 	}
 	require.NoError(t, env.svc.Create(context.Background(), comment))
 
@@ -458,7 +458,7 @@ func TestEnforceBlockingTriage_AgentMentionOnly_NoTriage(t *testing.T) {
 // names a slug that does not resolve to any user — typo, unregistered account, or an
 // agent slug all land here. This is a safe no-op: no triage move, no human_gate, no
 // system comment. (It now also emits a [comment-triage] WARNING log for observability —
-// an internal ticket — but the no-op behavior itself is unchanged and intentional.)
+// But the no-op behavior itself is unchanged and intentional.)
 func TestEnforceBlockingTriage_TypoSlug_NoOp(t *testing.T) {
 	env := setupTriageEnv(t, true)
 	taskID := env.seedTask(env.inProgressID)
@@ -478,7 +478,7 @@ func TestEnforceBlockingTriage_TypoSlug_NoOp(t *testing.T) {
 }
 
 // TestEnforceBlockingTriage_UnrelatedEarlierMention_DoesNotMisattribute is the regression
-// test for an internal ticket: before the fix, the human-gate check scanned ALL @-mentions
+// test: before the fix, the human-gate check scanned ALL @-mentions
 // anywhere in the comment body (in order) and used the first one that resolved to a
 // user — NOT specifically the slug the "Blocking" marker names. A comment that cc's a
 // real, registered user earlier in the text while the actual Blocking target is an
@@ -510,7 +510,7 @@ func TestEnforceBlockingTriage_MultiMentionWithHuman_MovesToTriage(t *testing.T)
 		TaskID:     taskID,
 		AuthorID:   uuid.New(),
 		AuthorType: domain.ActorTypeAgent,
-		Body:       "❓ **Blocking @pavel @linus**: need both",
+		Body:       "❓ **Blocking @pavel @liam**: need both",
 	}
 	require.NoError(t, env.svc.Create(context.Background(), comment))
 
@@ -688,7 +688,7 @@ func blockingTriageCalls(notifySvc *MockNotificationService) []domain.Notificati
 }
 
 // TestEnforceBlockingTriage_AutoMode_StillNotifiesTargetUser pins the fix for
-// an internal ticket: before it, the "task.blocking_triage" notify lived downstream of
+// Before it, the "task.blocking_triage" notify lived downstream of
 // the triage MOVE, which auto-mode tasks skip — so a live ask on an auto task
 // armed human_gate (freezing the card) but never told the named human anything.
 // Measured live on prod 2026-09-06: 103 of 107 currently-armed human_gate tasks
@@ -1027,7 +1027,7 @@ func TestEnforceBlockingTriage_AssigneeBlockerNoCompletion_Triages(t *testing.T)
 }
 
 // TestEnforceBlockingTriage_UnrelatedCompletionWordFarFromMarker_ArmsGate is the
-// regression for an internal ticket: the server-side human_gate flag never got armed
+// regression: the server-side human_gate flag never got armed
 // on an internal ticket because the completion-report heuristic scanned the ENTIRE
 // comment body for keywords like "завершен", and this assignee's long analytical
 // comment happened to mention an unrelated "Helsinki-миграция ... завершена"
@@ -1107,7 +1107,7 @@ func TestEnforceBlockingTriage_NegatedCompletionKeyword_ArmsGate(t *testing.T) {
 			"её не поставит ни в `done`, ни в `review`. Так что мой предыдущий коммент «закрываю в done» был " +
 			"преждевременным: я описал намерение, а не результат. Не закрыл — не могу.\n\n" +
 			"Промежуточно карточка полежала в `in_progress` (я двигал её к `done` через активный статус) — вернул " +
-			"в `backlog`, чтобы диспетчер не начал респавнить Riker'а на работу, которой нет.\n\n" +
+			"в `backlog`, чтобы диспетчер не начал респавнить Robin'а на работу, которой нет.\n\n" +
 			"**Факты для приёмки — перепроверены живьём сегодня, 02.08:**\n\n" +
 			"| проверка | результат |\n" +
 			"|---|---|\n" +
@@ -1484,7 +1484,7 @@ func TestEnforceTriageExit_TaskNotInTriage_NoOp(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// releaseHumanGateOnWithdrawal (via Create) — an internal ticket
+// releaseHumanGateOnWithdrawal (via Create)
 // ---------------------------------------------------------------------------
 
 // seedAgentBlockingComment inserts a "❓ Blocking @alex" comment authored by
@@ -1823,10 +1823,10 @@ func TestIsAutoGeneratedComment(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// stripQuotedSpans / hasNegatorInScope quoting — an internal ticket
+// stripQuotedSpans / hasNegatorInScope quoting
 //
 // A comment that QUOTES the negator vocabulary while explaining the mechanism
-// used to perform a withdrawal: live probe an internal ticket released a real human_gate
+// used to perform a withdrawal: an internal ticket released a real human_gate
 // 11 ms after a summary comment whose only "не нужен" sat in backticks inside a
 // blockquote, and the genuine withdrawal 1.75 s later became a no-op.
 // ---------------------------------------------------------------------------
@@ -1933,7 +1933,7 @@ func TestReleaseHumanGateOnWithdrawal_QuotedNegatorOnly_KeepsGate(t *testing.T) 
 		{"inline code", "Механизм: негатор (`не нужен`) того же автора снимает флаг.", true},
 		{"fenced block", "Словарь негаторов:\n```\nне нужен\nснят\nresolved\n```\nЭто справка.", true},
 		{"blockquote", "Цитирую тред:\n> ask не нужен, снят\n\nПросто фиксирую.", false},
-		{"the live probe an internal ticket body", liveProbeSummaryBody, false},
+		{"the live probe body", liveProbeSummaryBody, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1955,9 +1955,9 @@ func TestReleaseHumanGateOnWithdrawal_QuotedNegatorOnly_KeepsGate(t *testing.T) 
 				"a QUOTED negator is not a withdrawal — the gate must stay armed")
 			assert.Empty(t, env.releaseComments(),
 				"and nothing may announce a release that did not happen")
-			// an internal ticket: the no-op is no longer SILENT. The author owns the live
+			// The no-op is no longer SILENT. The author owns the live
 			// marker here, so they are told why their words did not count —
-			// this is the one difference from the pre expectation of
+			// this is the one difference from the earlier expectation of
 			// zero system comments, and it must be a notice, never a release.
 			if tc.wantNotice {
 				require.Len(t, env.withdrawalMissNotices(), 1)
@@ -2100,9 +2100,9 @@ const billLongStatusReportBody = "## Развилка закрыта: **A нев
 	"```\n\n" +
 	"Форма запроса заведомо валидна — на US все три отдают данные, отвергается именно Россия. Причина внешняя: Google свернул рекламные сервисы в РФ в 2022, а все три эндпоинта производные от Google Ads/Trends. **DataForSEO не заменяет Яндекс ни объёмами, ни трендами, ни SERP.** Хороший урок про мою же рекомендацию: «инструмент оплачен и живёт в проде» ≠ «он умеет то, что мне нужно».\n\n" +
 	"### C принят для Obsidian — его линия снята\n\n" +
-	"Daedalus замерил обе посадочные: `entire.vc/local-sync/` и `/team-relay/` — `lang=en`, кириллицы **0 символов**, hreflang нет; в Яндекс.Вебмастере заведён только `http://entire.vc/` (не тот хост, что отдаёт страницы), `Top 0 queries`; дистрибуция вся англоязычная — каталог Obsidian, GitHub, forum.obsidian.md, r/ObsidianMD. RU-запрос физически некуда посадить. Шаг RU keyword research из его недельного аудита убирается — решение его, окончательное, и шаблон аудита его же, я туда не лезу.\n\n" +
+	"Dana замерил обе посадочные: `entire.vc/local-sync/` и `/team-relay/` — `lang=en`, кириллицы **0 символов**, hreflang нет; в Яндекс.Вебмастере заведён только `http://entire.vc/` (не тот хост, что отдаёт страницы), `Top 0 queries`; дистрибуция вся англоязычная — каталог Obsidian, GitHub, forum.obsidian.md, r/ObsidianMD. RU-запрос физически некуда посадить. Шаг RU keyword research из его недельного аудита убирается — решение его, окончательное, и шаблон аудита его же, я туда не лезу.\n\n" +
 	"### Почему карточку НЕ закрываю — и почему ask стал сильнее\n\n" +
-	"Daedalus прав, что просил не закрывать шире своей линейки. Проверил владельца RU-проперти сам (это моя зона как Content Marketing) — тем же методом:\n\n" +
+	"Dana прав, что просил не закрывать шире своей линейки. Проверил владельца RU-проперти сам (это моя зона как Content Marketing) — тем же методом:\n\n" +
 	"| домен | lang | кириллица | латиница |\n" +
 	"|---|---|---:|---:|\n" +
 	"| **prototypes.ventures** | **ru** | **7439** | 50005 |\n" +
@@ -2147,10 +2147,10 @@ func TestLastParagraph(t *testing.T) {
 		{"multiple blank lines between paragraphs", "Первое.\n\n\n\nВторое.", "Второе."},
 		{"trailing whitespace trimmed", "Первое.\n\nВторое.  \n\n", "Второе."},
 		{"empty", "", ""},
-		// Fixed 2026-08-24 (an internal ticket, live incident an internal ticket): a trailing
+		// Fixed 2026-08-24: a trailing
 		// "— Name" sign-off is not the comment's operative last word.
 		{"em-dash signature skipped, negator paragraph found", "Гейт снят — вопрос отвечен.\n\n— Robert", "Гейт снят — вопрос отвечен."},
-		{"hyphen signature skipped", "Гейт снят.\n\n- Howard", "Гейт снят."},
+		{"hyphen signature skipped", "Гейт снят.\n\n- Harper", "Гейт снят."},
 		{"two-word signature skipped", "Гейт снят.\n\n— The Fleet", "Гейт снят."},
 		{"signature-only body returns empty, not a false paragraph", "— Robert", ""},
 		{"dash BULLET is not a signature — too many words", "Первое.\n\n- Fixed the bug and verified live", "- Fixed the bug and verified live"},
@@ -2164,7 +2164,7 @@ func TestLastParagraph(t *testing.T) {
 }
 
 // TestReleaseHumanGateOnWithdrawal_LongStatusReport_LeavesGateIntact is AC1 of
-// an internal ticket: reproduce the real incident end-to-end. The SAME agent who
+// Reproduce the real incident end-to-end. The SAME agent who
 // owns the live ask posts the real long report as a plain (marker-less)
 // comment — it must NOT release the gate, because the report's own final
 // paragraph reaffirms the ask rather than withdrawing it.
@@ -2187,7 +2187,7 @@ func TestReleaseHumanGateOnWithdrawal_LongStatusReport_LeavesGateIntact(t *testi
 		"the report's mid-body negators are about a different topic / a superseded framing — the live ask must stay gated")
 	assert.Empty(t, env.releaseComments(),
 		"an internal ticket must not have widened the scope: this body still releases nothing")
-	// an internal ticket explicitly declined to widen the scope, so this control is
+	// Explicitly declined to widen the scope, so this control is
 	// unchanged in the only way that matters. What IS new: the report now says
 	// out loud that the gate stayed up and which region the server read. The
 	// notice is deliberately NOT phrased as "your withdrawal was rejected" —
@@ -2531,7 +2531,7 @@ func TestReleaseHumanGateOnWithdrawal_RawArmAfterMarker_SoleOwnerStillNoGapRequi
 }
 
 // TestReleaseHumanGateOnWithdrawal_ForgedRawArmMarker_DoesNotBlockSoleOwner is
-// an internal ticket (found in cross-verification of #486): hasRawArmMarker used
+// (found in cross-verification of #486): hasRawArmMarker used
 // to match on body substring alone, with no author check. Any agent could
 // post an ORDINARY comment carrying task_handler.go's exact raw-arm text —
 // nothing stopped it, since AuthorType is derived from the poster's own
@@ -2574,7 +2574,7 @@ func TestReleaseHumanGateOnWithdrawal_ForgedRawArmMarker_DoesNotBlockSoleOwner(t
 }
 
 // TestHasRawArmMarker_RequiresSystemAuthorType is the direct unit-level probe
-// for an internal ticket: identical body, different AuthorType — only the system
+// identical body, different AuthorType — only the system
 // one counts.
 func TestHasRawArmMarker_RequiresSystemAuthorType(t *testing.T) {
 	body := "🔒 Auto: human_gate взведён напрямую (PATCH/UI), без маркерного коммента — actor: x"
@@ -2832,7 +2832,7 @@ func TestCompletionKeywordSearchWindow_AnchorsToRealMarker(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// scanHumanGateOwnership vs enforceBlockingTriage disagreement — an internal ticket
+// scanHumanGateOwnership vs enforceBlockingTriage disagreement
 //
 // enforceBlockingTriage arms human_gate on hasBlockingMarker alone; it has
 // never looked at negators. Before this fix, scanHumanGateOwnership (which
@@ -2950,7 +2950,7 @@ func TestGetHumanGateOwner_RawArmedNoMarker_StillNoLiveMarker(t *testing.T) {
 	assert.Equal(t, "no_live_marker", info.ReasonIfNot)
 }
 
-// an internal ticket. The real CommentRepo returns a thread oldest-first and ignores
+// The real CommentRepo returns a thread oldest-first and ignores
 // SortDir, so releaseHumanGate's old single PageSize-100 read saw only the first
 // 100 comments. A marker sitting PAST comment 100 is the shape that fell off the
 // end of that read — here the marker is comment #121 of 130.

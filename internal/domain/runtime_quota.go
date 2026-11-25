@@ -58,6 +58,50 @@ type RuntimeQuotaList struct {
 	Observations  []RuntimeQuotaView `json:"observations"`
 }
 
+// Normalized quota windows of the hourly history and the analytics API.
+const (
+	QuotaWindow5h     = "5h"
+	QuotaWindowWeek   = "week"
+	QuotaWindowMonth  = "month"
+	QuotaWindowBudget = "budget"
+	QuotaWindowOther  = "other"
+)
+
+// QuotaWindows are the windows the analytics API can be asked for; "other"
+// is stored but has no common meaning to chart.
+var QuotaWindows = []string{QuotaWindow5h, QuotaWindowWeek, QuotaWindowMonth, QuotaWindowBudget}
+
+// NormalizeQuotaWindow maps a controller's window name onto the history's
+// window: 7d and 1w are the same week; anything not known is "other" (the raw
+// name is kept next to it).
+func NormalizeQuotaWindow(raw string) string {
+	switch raw {
+	case "5h":
+		return QuotaWindow5h
+	case "7d", "1w", "week":
+		return QuotaWindowWeek
+	case "month":
+		return QuotaWindowMonth
+	case "budget":
+		return QuotaWindowBudget
+	}
+	return QuotaWindowOther
+}
+
+// QuotaMeasured reports whether status can carry a measured used share:
+// available, and exhausted (an account at its limit, usually 1.0).
+func QuotaMeasured(status string) bool { return status == "available" || status == "exhausted" }
+
+// HistoryUsed is the used share the hourly history records for the
+// observation: the measured fraction for available and exhausted, and nil
+// for every other status or a missing fraction, never 0.
+func (o RuntimeQuotaObservation) HistoryUsed() *float64 {
+	if !QuotaMeasured(o.Status) {
+		return nil
+	}
+	return o.UsedFraction
+}
+
 // Stale reports whether the observation is older than its own max age at now.
 func (o RuntimeQuotaObservation) Stale(now time.Time) bool {
 	return now.Sub(o.ObservedAt) > time.Duration(o.MaxAgeSeconds)*time.Second

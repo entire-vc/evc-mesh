@@ -236,7 +236,7 @@ func TestCommentHandler_List_WithIncludeInternal(t *testing.T) {
 
 // TestCommentHandler_List_SortDirBinding pins that the handler binds and
 // normalizes sort_dir/order and passes the result through to the service
-// unchanged — the original defect (task 4222c17d, D3) was one layer down, in
+// unchanged — the original defect (D3) was one layer down, in
 // the repository hardcoding ASC regardless of what the handler bound, so this
 // test alone would NOT have caught that regression. It documents that this
 // layer is correct, so a future change here doesn't quietly break it while
@@ -659,7 +659,7 @@ func TestCommentHandler_GetRecentByWorkspace_Success(t *testing.T) {
 	commentID := uuid.New()
 	page := &domain.CommentViewPage{
 		Items: []domain.CommentView{
-			{CommentID: commentID, TaskID: taskID, TaskTitle: "Task B", AuthorName: "Garfield", CreatedAt: now},
+			{CommentID: commentID, TaskID: taskID, TaskTitle: "Task B", AuthorName: "Gary", CreatedAt: now},
 		},
 		NextCursor: &nextCursor,
 	}
@@ -699,7 +699,7 @@ func TestCommentHandler_GetRecentByWorkspace_Success(t *testing.T) {
 }
 
 // TestCommentHandler_GetRecentByWorkspace_URLRespectsForwardedHeaders pins
-// the an internal ticket rule for comments too: behind Caddy the deep-link must carry
+// the rule for comments too: behind Caddy the deep-link must carry
 // the public scheme/host from X-Forwarded-Proto/X-Forwarded-Host, never the
 // internal hop the request actually arrived on.
 func TestCommentHandler_GetRecentByWorkspace_URLRespectsForwardedHeaders(t *testing.T) {

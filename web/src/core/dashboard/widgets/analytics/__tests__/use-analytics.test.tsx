@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useAuthStore } from "@/stores/auth";
-import { CACHE_MS, analyticsParams, clearAnalyticsCache, fetchAnalytics, useAnalytics, type AnalyticsQuery } from "../use-analytics";
+import { CACHE_MS, analyticsParams, clearAnalyticsCache, fetchAnalytics, useAnalytics, useCachedGet, type AnalyticsQuery } from "../use-analytics";
 
 // The network is the only mock.
 vi.mock("@/lib/api", () => ({ api: vi.fn() }));
@@ -25,6 +25,17 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("useAnalytics", () => {
+  it("the cache isolates endpoints with identical filters and shares only the same endpoint", async () => {
+    function CachedProbe({ path, id }: { path: string; id: string }) {
+      const r = useCachedGet<{ path: string }>(path, { from: "2026-11-01" });
+      return <div data-testid={id}>{r.state === "ready" ? r.value.path : r.state}</div>;
+    }
+    vi.mocked(api).mockImplementation(async (path) => ({ path } as never));
+    render(<><CachedProbe path="/analytics" id="plain" /><CachedProbe path="/analytics/memory" id="memory" /><CachedProbe path="/analytics/memory" id="same" /></>);
+    await waitFor(() => expect(screen.getByTestId("same")).toHaveTextContent("/analytics/memory"));
+    expect(screen.getByTestId("plain")).toHaveTextContent("/api/v1/workspaces/ws1/analytics");
+    expect(api).toHaveBeenCalledTimes(2);
+  });
   it("six widgets with one filter make one request", async () => {
     const q: AnalyticsQuery = { period: { days: 30 } };
     render(

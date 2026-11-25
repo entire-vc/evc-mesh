@@ -194,9 +194,9 @@ describe("WorkspaceSettingsPage — Delete Workspace flow", () => {
   });
 });
 
-// Task #a935ce0f: a fetchMyRole failure (network/401/403/500) used to be
+// A fetchMyRole failure (network/401/403/500) used to be
 // indistinguishable from a genuine non-admin — every control just vanished.
-// These are the synthetic AC3/AC4 controls Garfield's diagnosis calls for
+// These are the synthetic AC3/AC4 controls Gary's diagnosis calls for
 // (the real partner-instance episode never reproduced as a members/me HTTP
 // error, so the failure has to be injected explicitly).
 describe("WorkspaceSettingsPage — role fetch failure banner (AC3/AC4)", () => {

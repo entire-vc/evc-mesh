@@ -27,7 +27,7 @@ const (
 	// HumanGateProvenanceDefaultApplied means the OPPOSITE of the three above:
 	// nobody answered by gate_deadline, and the gate's own pre-stated
 	// recommended_default was applied mechanically by the default-on-timeout
-	// sweep (task #060ccaae). Never conflate with attested — that means a human
+	// sweep. Never conflate with attested — that means a human
 	// answer was transcribed; this means no answer arrived at all.
 	HumanGateProvenanceDefaultApplied HumanGateProvenance = "default_applied"
 )
@@ -45,7 +45,7 @@ const (
 
 // HumanGateDecision is one row of the append-only ledger backing the third
 // human_gate exit: "the question was answered, the answer arrived through
-// another channel" (task #c56339b1). A row with RevokesID nil is a decision;
+// another channel". A row with RevokesID nil is a decision;
 // a row with RevokesID set is a revocation of the decision it names — never
 // an edit of that decision's own fields (migration 20260821001 enforces this
 // with a hard UPDATE-rejecting trigger).

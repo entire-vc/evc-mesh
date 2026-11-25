@@ -1,8 +1,8 @@
 -- +goose NO TRANSACTION
--- Task #2c0154db, finding F2 / F2b. The three scope-aware partial unique
--- indexes from #4edf3fb5 (uq_mem_ws_key/uq_mem_proj_key/uq_mem_agent_key,
+-- Finding F2 / F2b. The three scope-aware partial unique
+-- indexes from an internal ticket (uq_mem_ws_key/uq_mem_proj_key/uq_mem_agent_key,
 -- migration 086) enforce uniqueness over `status = 'active'`, but GetByKey
--- and every read path (recall/FTS/vector, task #2c0154db/F1) treat
+-- and every read path (recall/FTS/vector, F1) treat
 -- `status <> 'superseded' AND archived = false` as current -- a strictly
 -- wider set. The gap is exactly the 1454 `review_needed` rows: current to
 -- every reader, but outside the uniqueness guarantee, so a colliding
@@ -18,7 +18,7 @@
 -- ADD CONSTRAINT IF NOT EXISTS (42601 syntax error in PG for constraints).
 --
 -- HARD ORDERING GATE, not just a migration-file dependency: this MUST run
--- AFTER task #2c0154db/F2a (cmd/collapse-memories, PR #461) has actually
+-- AFTER F2a (cmd/collapse-memories, PR #461) has actually
 -- been executed against prod, collapsing every live collision under the
 -- WIDER predicate. Applying this first would fail outright (or worse,
 -- silently favor whichever colliding row CONCURRENTLY happens to index

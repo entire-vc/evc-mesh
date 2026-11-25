@@ -13,7 +13,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Regression: the class of a "❓ Blocking" gate is decided by the hard rules of
+// The class of a "❓ Blocking" gate is decided by the hard rules of
 // asks.py, not by whether the asker remembered a "[soft]" tag.
 
 func TestClassifyAsk(t *testing.T) {
@@ -204,7 +204,7 @@ func TestHardMarker_NeverReleasedByClock(t *testing.T) {
 	}
 }
 
-// legacyHard re-labels the gate hard, as the tag-only rule armed it before this change.
+// legacyHard re-labels the gate hard, as the tag-only rule armed it before that fix.
 func (e gateFlowEnv) legacyHard(t *testing.T) {
 	t.Helper()
 	e.taskRepo.mu.Lock()

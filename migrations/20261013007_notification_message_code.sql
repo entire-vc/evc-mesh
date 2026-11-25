@@ -1,6 +1,6 @@
 -- +goose Up
 
--- i18n L3.1 (#d65d14d6): an in-app notification stores the message code and its
+-- i18n L3.1: an in-app notification stores the message code and its
 -- language-neutral parameters, and the text is rendered in the viewer's
 -- language when it is read. title/body stay as the English fallback for rows
 -- written before this migration, for old clients and for agents.

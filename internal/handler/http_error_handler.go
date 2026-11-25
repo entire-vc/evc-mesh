@@ -23,7 +23,7 @@ import (
 // fallback, which is a bare 500. A caller sending a malformed request saw
 // "the server is broken" instead of "your request is wrong" — reproduced
 // live on GET /me/mentions and /me/document-mentions with no workspace_id
-// (#fe3ae257), and pre-existing on /me/tasks the same way; this fixes it for
+// and pre-existing on /me/tasks the same way; this fixes it for
 // every route at once rather than one handler at a time.
 //
 // fallback is Echo's own DefaultHTTPErrorHandler (captured by the caller

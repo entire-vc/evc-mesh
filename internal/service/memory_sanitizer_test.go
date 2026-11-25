@@ -171,7 +171,7 @@ func TestScanMemoryContent_EveryRuleIsCovered(t *testing.T) {
 // is a composite of shapes our corpus is full of — shell, SQL, Go, task ids,
 // tables, emoji, mixed Russian/English.
 func TestScanMemoryContent_AllowsOrdinaryMemoryProse(t *testing.T) {
-	const body = "Task: [Mesh·memory] санитайзер (#f78232c4)\n" +
+	const body = "Task: [Mesh·memory] санитайзер (#5eed0017)\n" +
 		"Did: добавил scanMemoryContent в write-путь Remember; SetProjectKnowledge покрыт транзитивно.\n" +
 		"Проверка: `ssh prod-host \"docker exec evc-mesh-postgres-1 psql -U mesh_read -d mesh -tAc 'SELECT count(*) FROM memories LIMIT 100;'\"`\n" +
 		"| правило | строк | \n|---|---|\n| role-tag | 1 |\n" +
@@ -241,7 +241,7 @@ func TestRemember_AcceptsCleanContent(t *testing.T) {
 	svc := newMemoryService(repo)
 
 	mem := baseMemory(uuid.New())
-	mem.Content = "Prod DB creds live in ~/.config/agents/garfield-prod.env; role mesh_read is read-only."
+	mem.Content = "Prod DB creds live in ~/.config/agents/gary-prod.env; role mesh_read is read-only."
 
 	if _, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{}); err != nil {
 		t.Fatalf("clean content must be written, got refusal: %v", err)

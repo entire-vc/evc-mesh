@@ -21,7 +21,7 @@ interface SparkState {
   // caller that doesn't have one yet, but the integrations page always has
   // one in scope (currentWorkspace) and must pass it — omitting it means
   // "whatever this deployment's env fallback is", not "the current
-  // workspace's own choice of catalog / on-off state" (#4a3195a5).
+  // workspace's own choice of catalog / on-off state".
   search: (query: string, tags: string[], limit?: number, agentType?: string, workspaceId?: string) => Promise<void>;
   fetchPopular: (limit?: number, workspaceId?: string) => Promise<void>;
   fetchAgent: (agentId: string, workspaceId?: string) => Promise<SparkAgentManifest | null>;

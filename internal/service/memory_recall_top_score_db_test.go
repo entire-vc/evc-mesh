@@ -23,13 +23,13 @@ import (
 // memory_embedding_pending_db_test.go: CI's untagged `go test ./...` runs this
 // against a migrated DATABASE_URL and skips when no database is reachable.
 //
-// The live stand for #2c44a087, kept as a ratchet. On a real Postgres with a
+// The live stand, kept as a ratchet. On a real Postgres with a
 // real (stub-embedded) dense arm, a seeded record recalled by a MATCHING query
 // and by an UNMATCHABLE query must produce different mesh_memory_recall_top_
 // score observations on the same hybrid series — the prod-measured separation
 // (both arms 1/61 ≈ 0.0164 vs dense-only 0.7/61 ≈ 0.0115). The unmatchable
 // query still returns a NON-EMPTY page because the dense arm always has
-// neighbours: that is Hugh's #4395a289 finding, the blindness the metric
+// neighbours: that is Hugh's an internal ticket finding, the blindness the metric
 // exists to remove — mesh_memory_recall_empty_total stays flat through both
 // recalls while top_score tells them apart.
 

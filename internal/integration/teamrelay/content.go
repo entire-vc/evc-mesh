@@ -45,7 +45,7 @@ type Document struct {
 //
 // The key never leaves the server. Team Relay does not accept it as a query
 // parameter at all (a deliberate change on their side, for the same reason our
-// own #1f458291 existed: query strings reach proxy logs, referrers and history),
+// own an internal ticket existed: query strings reach proxy logs, referrers and history),
 // so it travels only as a header, from this process.
 func FetchDocument(ctx context.Context, relayURL, shareSlug, docPath, agentKey string) (*Document, error) {
 	if relayURL == "" {

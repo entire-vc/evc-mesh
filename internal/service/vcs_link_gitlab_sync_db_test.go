@@ -29,7 +29,7 @@ import (
 const (
 	syncHeadSHA  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	syncOtherSHA = "1111111111111111111111111111111111111111"
-	syncMRURL    = "https://git.example.org/example/product/-/merge_requests/42"
+	syncMRURL    = "https://git.example.org/example/product/-/merge_requests/4242"
 )
 
 // fakeMREvidence is the GitLab API: answers per "project!iid".
@@ -79,6 +79,9 @@ func newGitLabSyncFixture(t *testing.T) *gitlabSyncFixture {
 	}
 	g.svc = NewVCSLinkService(g.repo,
 		WithVCSTaskRepo(postgres.NewTaskRepo(f.db)),
+		WithVCSStatusRepo(postgres.NewTaskStatusRepo(f.db)),
+		WithVCSTaskService(f.taskSvc),
+		WithVCSCommentService(NewCommentService(postgres.NewCommentRepo(f.db), postgres.NewTaskRepo(f.db), postgres.NewActivityLogRepo(f.db))),
 		WithVCSProjectRepo(postgres.NewProjectRepo(f.db)),
 		WithVCSMREvidenceSource(func(_ context.Context, ws uuid.UUID) (gitlabapi.MergeRequestEvidenceSource, bool) {
 			g.resolved = append(g.resolved, ws)
@@ -146,16 +149,16 @@ func assertEvidenceKept(t *testing.T, before, after domain.VCSLink) {
 
 func TestSyncLink_LateLinkWithoutWebhook_FillsHeadAndPipelineOnlyOnTarget(t *testing.T) {
 	g := newGitLabSyncFixture(t)
-	g.src.byRef["example/product!42"] = mergedEvidence(syncMRURL, syncHeadSHA, &gitlabapi.HeadPipeline{ID: 123, Status: "success", SHA: syncHeadSHA})
+	g.src.byRef["example/product!4242"] = mergedEvidence(syncMRURL, syncHeadSHA, &gitlabapi.HeadPipeline{ID: 123, Status: "success", SHA: syncHeadSHA})
 
 	taskID := g.task(t, g.f, "late link")
-	target := g.lateLink(t, taskID, syncMRURL, "42")
+	target := g.lateLink(t, taskID, syncMRURL, "4242")
 	// Same iid elsewhere: another repo on the same task, another card of the
 	// same workspace, the same URL in another workspace.
-	otherRepo := g.lateLink(t, taskID, "https://git.example.org/example/other-product/-/merge_requests/42", "42")
-	sibling := g.lateLink(t, g.task(t, g.f, "sibling"), syncMRURL, "42")
+	otherRepo := g.lateLink(t, taskID, "https://git.example.org/example/other-product/-/merge_requests/4242", "4242")
+	sibling := g.lateLink(t, g.task(t, g.f, "sibling"), syncMRURL, "4242")
 	foreign := newRecurringActorTypeFixture(t)
-	foreignLink := g.lateLink(t, g.task(t, foreign, "foreign"), syncMRURL, "42")
+	foreignLink := g.lateLink(t, g.task(t, foreign, "foreign"), syncMRURL, "4242")
 
 	var statusBefore uuid.UUID
 	require.NoError(t, g.f.db.Get(&statusBefore, `SELECT status_id FROM tasks WHERE id=$1`, taskID))
@@ -170,7 +173,7 @@ func TestSyncLink_LateLinkWithoutWebhook_FillsHeadAndPipelineOnlyOnTarget(t *tes
 	require.NotNil(t, after.PipelineStatus)
 	assert.Equal(t, "success", *after.PipelineStatus)
 	assertEvidenceKept(t, target, after)
-	assert.Equal(t, []string{"example/product!42"}, g.src.calls, "exactly one GitLab read, for the link's own project and iid")
+	assert.Equal(t, []string{"example/product!4242"}, g.src.calls, "exactly one GitLab read, for the link's own project and iid")
 
 	for _, other := range []domain.VCSLink{otherRepo, sibling, foreignLink} {
 		got := g.get(t, other.ID)
@@ -204,9 +207,9 @@ func TestSyncLink_LateLinkWithoutWebhook_FillsHeadAndPipelineOnlyOnTarget(t *tes
 
 func TestSyncLink_ScopedToTheLinksTask(t *testing.T) {
 	g := newGitLabSyncFixture(t)
-	g.src.byRef["example/product!42"] = mergedEvidence(syncMRURL, syncHeadSHA, &gitlabapi.HeadPipeline{ID: 123, Status: "success", SHA: syncHeadSHA})
+	g.src.byRef["example/product!4242"] = mergedEvidence(syncMRURL, syncHeadSHA, &gitlabapi.HeadPipeline{ID: 123, Status: "success", SHA: syncHeadSHA})
 	taskID := g.task(t, g.f, "owner")
-	l := g.lateLink(t, taskID, syncMRURL, "42")
+	l := g.lateLink(t, taskID, syncMRURL, "4242")
 
 	// A task of another workspace naming this link id.
 	foreign := newRecurringActorTypeFixture(t)
@@ -230,9 +233,9 @@ func TestSyncLink_ScopedToTheLinksTask(t *testing.T) {
 
 func TestSyncLink_PipelineOfAnotherSHAIsNotBound(t *testing.T) {
 	g := newGitLabSyncFixture(t)
-	g.src.byRef["example/product!42"] = mergedEvidence(syncMRURL, syncHeadSHA, &gitlabapi.HeadPipeline{ID: 122, Status: "success", SHA: syncOtherSHA})
+	g.src.byRef["example/product!4242"] = mergedEvidence(syncMRURL, syncHeadSHA, &gitlabapi.HeadPipeline{ID: 122, Status: "success", SHA: syncOtherSHA})
 	taskID := g.task(t, g.f, "mismatch")
-	l := g.lateLink(t, taskID, syncMRURL, "42")
+	l := g.lateLink(t, taskID, syncMRURL, "4242")
 
 	res, err := g.svc.SyncLink(g.ctx, taskID, l.ID)
 	require.NoError(t, err)
@@ -253,10 +256,10 @@ func TestSyncLink_NoConfirmedDataWritesNothing(t *testing.T) {
 		reason string
 		head   string
 	}{
-		{name: "not merged", ev: &gitlabapi.MergeRequestEvidence{State: "opened", SHA: syncHeadSHA, WebURL: syncMRURL, HeadPipeline: &gitlabapi.HeadPipeline{ID: 1, Status: "success", SHA: syncHeadSHA}}, reason: GitLabSyncReasonNotMerged},
+		{name: "unknown state", ev: &gitlabapi.MergeRequestEvidence{State: "unknown", SHA: syncHeadSHA, WebURL: syncMRURL, HeadPipeline: &gitlabapi.HeadPipeline{ID: 1, Status: "success", SHA: syncHeadSHA}}, reason: GitLabSyncReasonNotMerged},
 		{name: "merged without sha", ev: &gitlabapi.MergeRequestEvidence{State: "merged", WebURL: syncMRURL}, reason: GitLabSyncReasonNoHeadSHA},
 		{name: "another host", ev: func() *gitlabapi.MergeRequestEvidence {
-			e := mergedEvidence("https://gitlab.example.com/example/product/-/merge_requests/42", syncHeadSHA, &gitlabapi.HeadPipeline{ID: 1, Status: "success", SHA: syncHeadSHA})
+			e := mergedEvidence("https://gitlab.example.com/example/product/-/merge_requests/4242", syncHeadSHA, &gitlabapi.HeadPipeline{ID: 1, Status: "success", SHA: syncHeadSHA})
 			return &e
 		}(), reason: GitLabSyncReasonURLMismatch},
 		{name: "no pipeline", ev: func() *gitlabapi.MergeRequestEvidence { e := mergedEvidence(syncMRURL, syncHeadSHA, nil); return &e }(), reason: GitLabSyncReasonNoPipeline, head: syncHeadSHA},
@@ -266,11 +269,11 @@ func TestSyncLink_NoConfirmedDataWritesNothing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			g := newGitLabSyncFixture(t)
 			if tc.ev != nil {
-				g.src.byRef["example/product!42"] = *tc.ev
+				g.src.byRef["example/product!4242"] = *tc.ev
 			}
 			g.src.err = tc.err
 			taskID := g.task(t, g.f, tc.name)
-			l := g.lateLink(t, taskID, syncMRURL, "42")
+			l := g.lateLink(t, taskID, syncMRURL, "4242")
 
 			res, err := g.svc.SyncLink(g.ctx, taskID, l.ID)
 			if tc.err != nil {
@@ -295,7 +298,7 @@ func TestSyncLink_WorkspaceWithoutGitLabIs503(t *testing.T) {
 	g := newGitLabSyncFixture(t)
 	foreign := newRecurringActorTypeFixture(t)
 	taskID := g.task(t, foreign, "no integration")
-	l := g.lateLink(t, taskID, syncMRURL, "42")
+	l := g.lateLink(t, taskID, syncMRURL, "4242")
 
 	_, err := g.svc.SyncLink(g.ctx, taskID, l.ID)
 	var apiErr *apierror.Error
@@ -307,12 +310,12 @@ func TestSyncLink_WorkspaceWithoutGitLabIs503(t *testing.T) {
 
 func TestCreate_MergedGitLabLinkGetsHeadAndPipeline(t *testing.T) {
 	g := newGitLabSyncFixture(t)
-	g.src.byRef["example/product!42"] = mergedEvidence(syncMRURL, syncHeadSHA, &gitlabapi.HeadPipeline{ID: 123, Status: "success", SHA: syncHeadSHA})
+	g.src.byRef["example/product!4242"] = mergedEvidence(syncMRURL, syncHeadSHA, &gitlabapi.HeadPipeline{ID: 123, Status: "success", SHA: syncHeadSHA})
 	taskID := g.task(t, g.f, "create merged")
 
 	link, created, err := g.svc.Create(g.ctx, domain.CreateVCSLinkInput{
 		TaskID: taskID, Provider: domain.VCSProviderGitLab, LinkType: domain.VCSLinkTypePR,
-		ExternalID: "42", URL: syncMRURL, Status: domain.VCSLinkStatusMerged,
+		ExternalID: "4242", URL: syncMRURL, Status: domain.VCSLinkStatusMerged,
 	})
 	require.NoError(t, err)
 	assert.True(t, created)
@@ -333,7 +336,7 @@ func TestCreate_GitLabFailureDoesNotFailCreation(t *testing.T) {
 
 	link, created, err := g.svc.Create(g.ctx, domain.CreateVCSLinkInput{
 		TaskID: taskID, Provider: domain.VCSProviderGitLab, LinkType: domain.VCSLinkTypePR,
-		ExternalID: "42", URL: syncMRURL, Status: domain.VCSLinkStatusMerged,
+		ExternalID: "4242", URL: syncMRURL, Status: domain.VCSLinkStatusMerged,
 	})
 	require.NoError(t, err)
 	assert.True(t, created)

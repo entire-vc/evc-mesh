@@ -1,6 +1,6 @@
 -- +goose Up
 
--- Team Relay embed attachments (#4e97f465 A4): images a mounted document
+-- Team Relay embed attachments (an internal ticket A4): images a mounted document
 -- references must display in Mesh. The share's markdown keeps pointing at
 -- share-relative paths; Mesh keeps its own copy of each referenced binary as a
 -- document attachment, and the serve side rewrites the link at render time

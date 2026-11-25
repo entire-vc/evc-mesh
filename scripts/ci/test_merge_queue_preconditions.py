@@ -51,7 +51,7 @@ WORKFLOWS = REPO / ".github" / "workflows"
 # 2026-09-10 (gh api repos/entire-vc/evc-mesh/rulesets/21250306):
 #   Lint, Test, Build, Go coverage ≥80% (affected-set), Memory recall gate,
 #   Hold gate, Tenancy & RBAC gate, Repo tests (integration),
-#   Showcase migrated gate — plus "Authed E2E" until #8daab9da removed it
+#   Showcase migrated gate — plus "Authed E2E" until that fix removed it
 #   (dev canon moved to GitLab 2026-08-23; GitHub's copy had stale creds and
 #   produced only false-red on every mirror push, never a real merge gate).
 # This file only covers the subset that must ALSO fire on `merge_group` —

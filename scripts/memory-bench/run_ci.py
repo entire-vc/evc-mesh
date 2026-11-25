@@ -48,7 +48,7 @@ A baseline is a claim about a DISTRIBUTION, not a sample:
 
   Read that second term for exactly what it is: the N passes share ONE process,
   so it is repeatability, not the run-to-run noise it was called until
-  2026-07-30 (#ee17a86f). On every shipped baseline it reads 0.000, while two
+  2026-07-30. On every shipped baseline it reads 0.000, while two
   runs at the same measurement-path SHA moved a category by a full 0.250. The
   term that absorbs inter-run noise is therefore `tolerance`, floored at
   `MIN_TOLERANCE` — see that constant for the measurement and its limits.
@@ -99,6 +99,7 @@ Optional:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -451,7 +452,7 @@ def gold_rank(ranked: list[dict], gold: set[int]) -> int | None:
 
     CAVEAT worth knowing before reading None as "not indexed": `ranked` is
     what SURVIVED to the client. `scope`/`tags_any` are post-filters over a
-    workspace-wide candidate pool (#2c087b2a), so a fixture can be indexed
+    workspace-wide candidate pool, so a fixture can be indexed
     perfectly and still never arrive. Read `gold_rank` together with
     `rows_returned` vs `haystack_size` — when rows_returned < haystack_size
     the pool truncated, and None means "did not reach the client", not
@@ -653,6 +654,7 @@ def write_results_artifact(
     scores: dict[str, float],
     sizes: dict[str, tuple[int, int]],
     dense_arm: str = DENSE_ARM_UNKNOWN,
+    baseline_file: Path | None = None,
 ) -> Path | None:
     """Write the per-question results the run just produced.
 
@@ -678,12 +680,16 @@ def write_results_artifact(
         # the binary on the other end of stdio, and that binary decides a large
         # part of the behaviour scored here — `handleRecall` overrides the
         # caller's decay flag, ordering, importance floor and page size from a
-        # query profile. Until #faf92388 all three arms built it from the default
+        # query profile. Until an internal ticket all three arms built it from the default
         # branch unconditionally, so a run could not even state this, let alone
         # vary it. `mcp_ref` is the comparability axis; `mcp_commit` is the exact
         # build, recorded and never compared.
         "mcp_ref": resolve_mcp_ref(),
         "mcp_commit": resolve_mcp_commit(),
+        "mcp_source_ref": os.environ.get("MCP_SOURCE_REF", ""),
+        "api_commit": os.environ.get("CI_COMMIT_SHA", ""),
+        "baseline_sha256": (hashlib.sha256(baseline_file.read_bytes()).hexdigest()
+                            if baseline_file and baseline_file.is_file() else None),
         "top_k": top_k,
         "repeat": repeat,
         "scores": scores,
@@ -903,7 +909,7 @@ class Baseline(NamedTuple):
     an empty spread, and the gate then has no idea how much of any delta is
     judge noise — so it says so out loud instead of ruling on it.
 
-    WHAT THAT SPREAD IS, AND WHAT IT IS NOT (#ee17a86f). It is the max−min over
+    WHAT THAT SPREAD IS, AND WHAT IT IS NOT. It is the max−min over
     the `--repeat N` passes of ONE capture, and those passes run in one process,
     one container, one seeded workspace, one embedder (`for p in range(1,
     repeat+1)` in `main`). That is REPEATABILITY. It is **not** reproducibility,
@@ -1047,7 +1053,7 @@ def build_baseline_payload(
         "search_mode": run_mode,
         # Which system produced these numbers (ADR-0003). `search_mode` already
         # scopes the baseline to a retrieval mode; this scopes it to a target,
-        # which is the axis #b052cdda got wrong.
+        # which is the axis an internal ticket got wrong.
         "arm": arm,
         # How OLD the corpus was. The third comparability axis: recall multiplies
         # scores by exp(-Δt·ln2/half_life) with decay on by default, so the same
@@ -1065,7 +1071,7 @@ def build_baseline_payload(
         "top_k": top_k,
         "n_runs": len(per_pass_scores),
         "scores": scores,
-        # BOTH keys, deliberately, and this is expand-not-rename (#ee17a86f).
+        # BOTH keys, deliberately, and this is expand-not-rename.
         #
         # `within_capture_spread` is the honest name: these passes share one
         # process, so the number is repeatability, not the run-to-run noise the
@@ -1137,7 +1143,7 @@ def capture_blockers(
     # required arm stops ruling on anything until a human notices the field.
     # The dispatch that makes this reachable is `mcp_ref=<branch>` together with
     # `update_baseline`, which is a plausible thing to do while investigating a
-    # client change (#faf92388).
+    # client change.
     run_mcp_ref = resolve_mcp_ref()
     if run_mcp_ref != MCP_REF_UNSTATED_AS:
         blockers.append(
@@ -1199,7 +1205,7 @@ def effective_tolerance(category: str, tolerance: float, baseline: Baseline) -> 
     regression reports the judge's nondeterminism as a code defect.
 
     The second term used to be documented as "the run-to-run spread the baseline
-    actually observed". It is not (#ee17a86f): those passes share one process, so
+    actually observed". It is not: those passes share one process, so
     the number is repeatability and reads 0.000 across every category of the
     shipped baselines while real inter-run movement is a full tolerance-width.
     It is a lower bound, and `max()` with a lower bound is sound — it just means
@@ -1224,7 +1230,7 @@ def effective_tolerance(category: str, tolerance: float, baseline: Baseline) -> 
 #            when it holds for EVERY category and the run therefore enforced
 #            nothing at all.
 # The tolerance may not be lowered below the noise the instrument actually has
-# (#ee17a86f). This is the guard the recorded spread cannot be, because that
+# This is the guard the recorded spread cannot be, because that
 # number is within-capture repeatability and reads 0.000 everywhere.
 #
 # WHY A FLOOR AT ALL. `effective_tolerance` is `max(tolerance, spread)`. With
@@ -1756,7 +1762,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # Pre-flight: the write path refuses invisible characters and
     # instruction-override phrases, and this corpus carries both. The harness
-    # normalises them at store time (task #82e42882); this asserts, BEFORE any
+    # normalises them at store time; this asserts, BEFORE any
     # ingest and before a paid run spends anything, that the rewrite reaches
     # only distractor sessions.
     #
@@ -1774,6 +1780,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             f"write path ({', '.join(labels)}); 0 answer-bearing sessions touched"
         )
     print()
+
+    from recall_preflight import check
+    if check() != 0:
+        return EXIT_INCONCLUSIVE
 
     # `--repeat N` (baseline capture only) runs the dataset N times so the
     # baseline can be a mean with a measured spread rather than one sample.
@@ -1842,6 +1852,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         scores=scores,
         sizes=sizes,
         dense_arm=resolve_dense_arm_status(results),
+        baseline_file=baseline_file,
     )
     if results_file is not None:
         print(f"\nPer-question results: {results_file}")
@@ -2107,7 +2118,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     # window. That is the exact class of regression this gate exists to catch,
     # and it lived entirely in the client.
     #
-    # Until #faf92388 the question could not even be asked: all three arms
+    # Until an internal ticket the question could not even be asked: all three arms
     # checked the client out with no `ref:`, so every arm always built the
     # default branch and no client pull request was measurable here at all.
     #
@@ -2453,7 +2464,7 @@ def main() -> int:
         help=(
             f"Permit --tolerance below {MIN_TOLERANCE}. The recorded spread cannot "
             f"justify it — that number is within-capture repeatability, not run-to-run "
-            f"noise (#ee17a86f). Needs a fresh inter-run measurement, not an argument."
+            f"noise. Needs a fresh inter-run measurement, not an argument."
         ),
     )
     parser.add_argument(

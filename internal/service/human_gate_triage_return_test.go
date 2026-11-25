@@ -1,6 +1,6 @@
 package service
 
-// Contract under test (task #eab3a995): when a human_gate comes down, a task sitting in
+// Contract under test: when a human_gate comes down, a task sitting in
 // triage goes to the project's todo status, never to in_progress, whichever door the
 // release came through. Everything not in triage is left exactly where it is.
 
@@ -175,7 +175,7 @@ func TestGateClear_RearmedBeforeMove_IsNoOp(t *testing.T) {
 }
 
 // End to end through the comment service with the REAL task service: this is the
-// ContentHub #1498c950 repro (Pavel comments on a gated triage card).
+// ContentHub an internal ticket repro (Pavel comments on a gated triage card).
 func TestReleaseHumanGate_RealTaskService_PavelReplyLandsInTodo(t *testing.T) {
 	ts, repo, statusRepo := setupTaskService()
 	env := setupTriageEnvWithOptions(t, true, WithCommentTaskService(ts))
@@ -265,7 +265,7 @@ func TestGateClear_AlreadyClear_TriageCardNotMoved(t *testing.T) {
 	}
 }
 
-// Task #8f191cf7 (rule 4, #346bd658 / #d7c420c1): after the person answers, a card
+// (rule 4): after the person answers, a card
 // parked on them goes back to the agent that raised the ask.
 func TestGateClear_HandsPersonHeldCardBackToGateAuthor(t *testing.T) {
 	for name := range newGateReturnEnv(t).releasers() {

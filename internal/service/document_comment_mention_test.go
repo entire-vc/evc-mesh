@@ -162,7 +162,7 @@ func setupDocumentMentions(t *testing.T) *documentMentionFixture {
 	wsPub := NewMockWSPublisher()
 
 	agentID, userID := uuid.New(), uuid.New()
-	agents.AddAgent(base.wsID, &domain.Agent{ID: agentID, Slug: "daedalus", Name: "Daedalus"})
+	agents.AddAgent(base.wsID, &domain.Agent{ID: agentID, Slug: "dana", Name: "Dana"})
 	users.AddUser(base.wsID, &domain.User{ID: userID, Username: "pavel", Name: "Pavel"})
 
 	base.svc = NewDocumentCommentService(base.comments, base.docs, base.docs,
@@ -209,10 +209,10 @@ func TestExtractDocumentMentionSlugs(t *testing.T) {
 		name, body string
 		want       []string
 	}{
-		{"plain", "ping @daedalus about this", []string{"daedalus"}},
+		{"plain", "ping @dana about this", []string{"dana"}},
 		{"at line start", "@pavel take a look", []string{"pavel"}},
-		{"after a bracket", "(@pavel) and [@daedalus]", []string{"pavel", "daedalus"}},
-		{"deduplicated, order preserved", "@pavel @daedalus @pavel", []string{"pavel", "daedalus"}},
+		{"after a bracket", "(@pavel) and [@dana]", []string{"pavel", "dana"}},
+		{"deduplicated, order preserved", "@pavel @dana @pavel", []string{"pavel", "dana"}},
 		{"an email address is not a mention", "write to bob@example.com", []string{}},
 		{"mid-word is not a mention", "foo@bar", []string{}},
 		{"none", "no mentions at all", []string{}},
@@ -325,7 +325,7 @@ func TestCreate_LookupFailureIsNotReportedAsATypo(t *testing.T) {
 	boom := errors.New("agents table unavailable")
 	f.agents.errToReturn = boom
 
-	_, err := f.comment(context.Background(), "ping @daedalus")
+	_, err := f.comment(context.Background(), "ping @dana")
 
 	require.ErrorIs(t, err, boom)
 	var apiErr *apierror.Error
@@ -339,7 +339,7 @@ func TestMentionsDisabled_LeavesATraceInsteadOfRefusing(t *testing.T) {
 	base := setupDocumentCommentService(t)
 
 	in := base.createInput()
-	in.Body = "ping @daedalus"
+	in.Body = "ping @dana"
 	c, err := base.svc.Create(context.Background(), in)
 
 	require.NoError(t, err, "a service that cannot resolve must not refuse what it cannot judge")
@@ -356,7 +356,7 @@ func TestMentionsDisabled_LeavesATraceInsteadOfRefusing(t *testing.T) {
 func TestCreate_MentionedAgentIsNotified(t *testing.T) {
 	f := setupDocumentMentions(t)
 
-	c, err := f.comment(authoredBy(f.author, domain.ActorTypeUser, "Ann"), "@daedalus please review")
+	c, err := f.comment(authoredBy(f.author, domain.ActorTypeUser, "Ann"), "@dana please review")
 	require.NoError(t, err)
 
 	calls := f.agentNotify.Calls()
@@ -369,7 +369,7 @@ func TestCreate_MentionedAgentIsNotified(t *testing.T) {
 	assert.Equal(t, "Ann", got.ActorName)
 	assert.Equal(t, f.documentID, got.Payload["document_id"], "the payload must name the page to open")
 	assert.Equal(t, "Runbook", got.Payload["document_title"])
-	assert.Equal(t, "daedalus", got.Payload["mentioned_slug"])
+	assert.Equal(t, "dana", got.Payload["mentioned_slug"])
 	assert.Equal(t, c.ID, got.Payload["comment_id"])
 	assert.Nil(t, got.Task, "there is no task; an invented one would resolve to nothing")
 	assert.Equal(t, uuid.Nil, got.TaskID)
@@ -380,7 +380,7 @@ func TestCreate_MentionedAgentIsNotified(t *testing.T) {
 	require.Len(t, rows, 1)
 	assert.Equal(t, "agent", rows[0].MentionedKind)
 	assert.Equal(t, f.agentID, rows[0].MentionedID)
-	assert.Equal(t, "daedalus", rows[0].MentionedSlug)
+	assert.Equal(t, "dana", rows[0].MentionedSlug)
 }
 
 // TestCreate_MentionedUserIsNotified proves the human half: the notification
@@ -435,7 +435,7 @@ func TestCreate_TitleFallsBackWhenTheActorHasNoName(t *testing.T) {
 func TestCreate_MixedMentionsReachBothKinds(t *testing.T) {
 	f := setupDocumentMentions(t)
 
-	_, err := f.comment(context.Background(), "@daedalus and @pavel — both of you")
+	_, err := f.comment(context.Background(), "@dana and @pavel — both of you")
 	require.NoError(t, err)
 
 	assert.Len(t, f.agentNotify.Calls(), 1)
@@ -468,9 +468,9 @@ func TestCreate_AnAgentMentioningItselfIsNotDelivered(t *testing.T) {
 
 	in := f.createInput()
 	in.AuthorID, in.AuthorType = f.agentID, domain.ActorTypeAgent
-	in.Body = "@daedalus reminding itself"
+	in.Body = "@dana reminding itself"
 
-	_, err := f.svc.Create(authoredBy(f.agentID, domain.ActorTypeAgent, "Daedalus"), in)
+	_, err := f.svc.Create(authoredBy(f.agentID, domain.ActorTypeAgent, "Dana"), in)
 	require.NoError(t, err)
 
 	assert.Empty(t, f.agentNotify.Calls())
@@ -488,7 +488,7 @@ func TestCreate_AUserSharingAnAgentsIdStillGetsNotified(t *testing.T) {
 	in.AuthorID, in.AuthorType = f.agentID, domain.ActorTypeAgent
 	in.Body = "@twin over to you"
 
-	_, err := f.svc.Create(authoredBy(f.agentID, domain.ActorTypeAgent, "Daedalus"), in)
+	_, err := f.svc.Create(authoredBy(f.agentID, domain.ActorTypeAgent, "Dana"), in)
 	require.NoError(t, err)
 
 	require.Len(t, f.notify.Calls(), 1)
@@ -545,15 +545,15 @@ func TestUpdate_OnlyNewlyAddedMentionsAreNotified(t *testing.T) {
 	require.Len(t, f.notify.Calls(), 1)
 
 	_, err = f.svc.Update(context.Background(), c.ID, f.wsID, UpdateDocumentCommentInput{
-		Body:       "@pavel first pass, now also @daedalus",
+		Body:       "@pavel first pass, now also @dana",
 		EditorID:   f.author,
 		EditorType: domain.ActorTypeUser,
 	})
 	require.NoError(t, err)
 
 	assert.Len(t, f.notify.Calls(), 1, "@pavel was already there and must not be pinged twice")
-	require.Len(t, f.agentNotify.Calls(), 1, "@daedalus is new and must be told")
-	assert.Equal(t, "daedalus", f.agentNotify.Calls()[0].Payload["mentioned_slug"])
+	require.Len(t, f.agentNotify.Calls(), 1, "@dana is new and must be told")
+	assert.Equal(t, "dana", f.agentNotify.Calls()[0].Payload["mentioned_slug"])
 }
 
 // TestUpdate_UnresolvableMentionIsRefused: the refusal applies to an edit too,
@@ -698,7 +698,7 @@ func TestDelivery_MissingChannelsDegradeRatherThanPanic(t *testing.T) {
 	users := NewMockUserRepository()
 	mentionRepo := NewMockDocumentCommentMentionRepository()
 	agentID, userID := uuid.New(), uuid.New()
-	agents.AddAgent(base.wsID, &domain.Agent{ID: agentID, Slug: "daedalus"})
+	agents.AddAgent(base.wsID, &domain.Agent{ID: agentID, Slug: "dana"})
 	users.AddUser(base.wsID, &domain.User{ID: userID, Username: "pavel"})
 
 	// Resolution wired, delivery not: no agent notifier, no notification
@@ -710,7 +710,7 @@ func TestDelivery_MissingChannelsDegradeRatherThanPanic(t *testing.T) {
 	)
 
 	in := base.createInput()
-	in.Body = "@daedalus and @pavel"
+	in.Body = "@dana and @pavel"
 
 	c, err := svc.Create(context.Background(), in)
 

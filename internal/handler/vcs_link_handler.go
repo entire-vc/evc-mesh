@@ -193,7 +193,7 @@ func WithVCSIntegrationResolver(r *service.VCSIntegrationResolver) VCSLinkHandle
 // at all. When vcsIntegrations is wired, validation is ALWAYS mandatory —
 // an empty secret set means the provider is disabled and the caller must
 // refuse, never fall through to "no secret = allow". When vcsIntegrations
-// is nil, this reproduces the pre static behavior exactly:
+// is nil, this reproduces the earlier static behavior exactly:
 // validation is mandatory only when a secret was configured at
 // construction.
 // Both return service.WebhookSecret rather than a bare string so the caller
@@ -493,6 +493,7 @@ type gitHubPRPayload struct {
 	HTMLURL        string           `json:"html_url"`
 	State          string           `json:"state"`
 	Merged         bool             `json:"merged"`
+	MergedAt       string           `json:"merged_at"`
 	MergeCommitSHA string           `json:"merge_commit_sha"`
 	Head           gitHubRefPayload `json:"head"`
 }
@@ -565,8 +566,7 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 	// this delivery — uuid.Nil (its zero value) when validation is off
 	// entirely (required==false) or the matching secret was the unscoped
 	// env fallback. Threaded into GitHubWebhookEvent/ResolveTaskRef below so
-	// task-ref resolution can't touch a task outside this workspace
-	//
+	// task-ref resolution can't touch a task outside this workspace.
 	var matchedWorkspaceID uuid.UUID
 	if required {
 		if len(secrets) == 0 {
@@ -610,6 +610,7 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 			PRHTMLURL:   pr.HTMLURL,
 			PRState:     pr.State,
 			PRMerged:    pr.Merged,
+			PRMergedAt:  githubMergedAt(pr),
 			MergeSHA:    pr.MergeCommitSHA,
 			PRBranch:    pr.Head.Ref,
 			Repository:  payload.Repository.FullName,
@@ -673,6 +674,15 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// githubMergedAt is the PR's merge time from the payload, nil unless GitHub
+// says the PR is merged and the timestamp parses.
+func githubMergedAt(pr *gitHubPRPayload) *time.Time {
+	if pr == nil || !pr.Merged {
+		return nil
+	}
+	return domain.ParseVCSProviderTime(pr.MergedAt)
 }
 
 // releaseDelivery undoes the dedup Claim for a delivery that failed

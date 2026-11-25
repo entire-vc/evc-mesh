@@ -32,7 +32,7 @@ func TestResolveAssigneeType_AgentUUID(t *testing.T) {
 	agentRepo := NewMockAgentRepository()
 	userRepo := NewMockUserRepository()
 	agentID := uuid.New()
-	_ = agentRepo.Create(context.Background(), &domain.Agent{ID: agentID, Name: "riker"})
+	_ = agentRepo.Create(context.Background(), &domain.Agent{ID: agentID, Name: "robin"})
 
 	svc := &taskService{agentRepo: agentRepo, userRepo: userRepo}
 	got := svc.resolveAssigneeType(context.Background(), &agentID, domain.AssigneeTypeUser)
@@ -94,7 +94,7 @@ func TestAssignTask_HumanUUID_SavesTypeUser(t *testing.T) {
 		AssigneeType: domain.AssigneeTypeUnassigned,
 	}, nil))
 
-	// Assign with wrong type (simulates Riker MCP defaulting to "agent").
+	// Assign with wrong type (simulates Robin MCP defaulting to "agent").
 	err := svc.AssignTask(context.Background(), taskID, AssignTaskInput{
 		AssigneeID:   &userID,
 		AssigneeType: domain.AssigneeTypeAgent,
@@ -123,7 +123,7 @@ func TestAssignTask_AgentUUID_SavesTypeAgent(t *testing.T) {
 	).(*taskService)
 
 	agentID := uuid.New()
-	require.NoError(t, agentRepo.Create(context.Background(), &domain.Agent{ID: agentID, Name: "linus"}))
+	require.NoError(t, agentRepo.Create(context.Background(), &domain.Agent{ID: agentID, Name: "liam"}))
 
 	projID := uuid.New()
 	taskID := uuid.New()
@@ -203,7 +203,7 @@ func TestAssignTask_AgentAssignee_NoUserMemberEnroll(t *testing.T) {
 	).(*taskService)
 
 	agentID := uuid.New()
-	require.NoError(t, agentRepo.Create(context.Background(), &domain.Agent{ID: agentID, Name: "linus"}))
+	require.NoError(t, agentRepo.Create(context.Background(), &domain.Agent{ID: agentID, Name: "liam"}))
 
 	projID := uuid.New()
 	taskID := uuid.New()

@@ -87,7 +87,7 @@ func TestDocumentCommentMentionRepo_InsertBatch_WritesOneRowPerRecipient(t *test
 	}
 
 	err := repo.InsertBatch(context.Background(), []domain.DocumentCommentMention{
-		{CommentID: commentID, MentionedID: agentID, MentionedKind: "agent", MentionedSlug: "daedalus", ExtractedAt: now},
+		{CommentID: commentID, MentionedID: agentID, MentionedKind: "agent", MentionedSlug: "dana", ExtractedAt: now},
 		{CommentID: commentID, MentionedID: userID, MentionedKind: "user", MentionedSlug: "pavel", ExtractedAt: now},
 	})
 

@@ -19,12 +19,12 @@ import (
 // files here (e.g. agent_api_key_sha256_db_test.go): skip gracefully when no
 // Postgres is reachable rather than requiring a separate CI invocation.
 //
-// This is the negative-control test for an internal ticket: a tie group of comments
+// This is the negative-control test: a tie group of comments
 // sharing one created_at, with a page boundary landing inside the group.
 // Pre-fix, ORDER BY c.created_at DESC has no tiebreaker and the cursor is a
 // bare `created_at < $n`, so every row in the tie group not returned on the
 // first page is silently dropped — same class already fixed for tasks in
-// an internal ticket (ORDER BY updated_at DESC, id ASC).
+// (ORDER BY updated_at DESC, id ASC).
 
 func commentCursorTestDB(t *testing.T) *sqlx.DB {
 	t.Helper()

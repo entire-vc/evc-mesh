@@ -75,12 +75,12 @@ describe("DocMeta — the editor the API resolves", () => {
         doc={makeDoc({
           created_by_name: "Pavel Rogozhin",
           updated_by: "22222222-2222-2222-2222-222222222222",
-          updated_by_name: "Daedalus",
+          updated_by_name: "Dana",
         })}
       />,
     );
     expect(line()).toContain("Created by Pavel Rogozhin");
-    expect(line()).toContain("Last updated by Daedalus");
+    expect(line()).toContain("Last updated by Dana");
     // The date stops repeating the word "Updated" once an editor is named.
     expect(line()).toMatch(/Aug 1[34], 2026 \d{2}:\d{2}/);
     expect(line()).not.toContain("Updated Aug 14");

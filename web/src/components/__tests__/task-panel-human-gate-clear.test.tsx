@@ -1,5 +1,5 @@
 /**
- * The "Clear gate" button in the task panel (task #b044935d).
+ * The "Clear gate" button in the task panel.
  *
  * The button used to render only when the gate carried a marker comment
  * (`human_gate_info.marker_comment_id`). A gate armed through the API has no
@@ -101,7 +101,7 @@ function gatedTask(info: HumanGateInfo): Task {
 
 const MARKER_GATE: HumanGateInfo = {
   gated: true,
-  owner_name: "Riker",
+  owner_name: "Robin",
   marker_comment_id: "comment-1",
   marker_created_at: "2026-09-18T10:00:00Z",
   clearable_by_owner: true,
@@ -111,7 +111,7 @@ const MARKER_GATE: HumanGateInfo = {
 // What the server reports for an API-armed gate: no marker comment at all.
 const MARKERLESS_GATE: HumanGateInfo = {
   gated: true,
-  owner_name: "Riker",
+  owner_name: "Robin",
   clearable_by_owner: true,
   clear_path: "clear_endpoint",
 };

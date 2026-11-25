@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { AtSign, FileText, ListTodo, MessageSquare } from "lucide-react";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { Card, CardContent } from "@/components/ui/card";
-import { EntityIcon } from "@/components/ui/entity-icon";
+import { ProjectLabel } from "@/components/ui/project-label";
 import { cn } from "@/lib/cn";
 import { useProjectStore } from "@/stores/project";
 import type { CommentItem, DashboardWidgetView, MentionItem } from "../../types";
@@ -219,8 +219,7 @@ function CommentRow({ c, showAuthor, onOpen }: { c: CommentItem; showAuthor: boo
               {" · "}
             </>
           ) : null}
-          <EntityIcon value={c.projectIcon} className="mr-0.5 inline-block h-3 w-3 align-[-2px]" />
-          {c.projectName}
+          <ProjectLabel icon={c.projectIcon} name={c.projectName} />
         </p>
         <p className="line-clamp-2 break-words text-[11px] text-muted-foreground @max-xs:hidden">{plainPreview(c.body)}</p>
       </Link>

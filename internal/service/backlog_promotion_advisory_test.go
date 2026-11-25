@@ -14,18 +14,18 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Backlog promotion advisory rule tests (an internal ticket, parent an internal ticket).
+// Backlog promotion advisory rule tests.
 //
 // Contract under test — mirroring <ops-repo>/scripts/mesh-intake-sweep.py:
 //   - A task DEMOTED into backlog from a working status, with NO dependencies, is a
-//     deliberate park and must NOT be advised as promotable (an internal ticket: vacuously-true
+//     deliberate park and must NOT be advised as promotable (vacuously-true
 //     empty-dep-set undid a park in 26 minutes).
 //   - A task BORN in backlog (never moved), with no dependencies, IS promotable —
 //     that is genuine intake, the positive control.
 //   - The demotion-park guard must NOT protect a task that HAS dependencies, even one
 //     with a parent_task_id and a real (cleared) dependency — was_deliberately_parked's
 //     own dep_ids-empty gate means such a card is judged on dependency-clear alone
-//     (an internal ticket: a naive "last transition = demotion" check WITHOUT this gate would
+//     (a naive "last transition = demotion" check WITHOUT this gate would
 //     wrongly protect this exact class of card, diverging from the live sweep, which
 //     re-promoted it twice over 7.5h before the label route was added).
 //   - Advisory only: SweepAdvisory never calls MoveTask (there is no mover wired in at
@@ -166,7 +166,7 @@ func TestBacklogPromotionAdvisory_DemotedNoDeps_NotPromotable(t *testing.T) {
 	task := h.addTask(t, projectID, backlog.ID)
 	h.addMove(t, task, "In Progress", "Backlog", time.Now().Add(-26*time.Minute))
 	// No dependencies — all_deps_cleared([]) would be vacuously true; this is
-	// EXACTLY the an internal ticket shape (demoted, zero deps).
+	// EXACTLY the shape (demoted, zero deps).
 
 	decisions, err := h.svc.SweepAdvisory(context.Background())
 	if err != nil {
@@ -178,7 +178,7 @@ func TestBacklogPromotionAdvisory_DemotedNoDeps_NotPromotable(t *testing.T) {
 	}
 }
 
-// --- Negative control 2 (the an internal ticket trap): demoted + parented + real cleared
+// --- Negative control 2 (the trap): demoted + parented + real cleared
 // dependency → the demotion-park guard must NOT fire; the card is judged on its
 // (cleared) dependency alone, matching the live sweep's actual behaviour. This test
 // specifically guards against a NAIVE port that checks "last transition = demotion"
@@ -213,7 +213,7 @@ func TestBacklogPromotionAdvisory_DemotedParentedWithClearedDep_StillPromotable(
 	if !got.Promote {
 		t.Fatalf("expected promote=true (dependency-bearing card judged by dep-clear, not demotion) — "+
 			"a false here means the demotion-park guard incorrectly fired on a card WITH dependencies "+
-			"(the an internal ticket trap), got false, reason=%q", got.Reason)
+			"(the known trap), got false, reason=%q", got.Reason)
 	}
 }
 
@@ -320,7 +320,7 @@ func TestBacklogPromotionAdvisory_CancelledBlocker_ClearsDep(t *testing.T) {
 	}
 }
 
-// --- Workspace scope (an internal ticket, prerequisite of an internal ticket): mesh-intake-sweep.py
+// --- Workspace scope (prerequisite): mesh-intake-sweep.py
 // only ever polls ONE workspace (WORKSPACE_ID in <ops-repo>/scripts/mesh-intake-sweep.py,
 // same UUID as backlogInScopeWorkspaceID here). A backlog task whose project sits in
 // any OTHER workspace (Sandbox — Alex's personal workspace under Codex; Editorial)

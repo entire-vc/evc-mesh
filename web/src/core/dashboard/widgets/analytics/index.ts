@@ -3,6 +3,7 @@
 // The views are in views.tsx, loaded when a widget of the group is first drawn (see registry.ts).
 import type { WidgetDescriptor, WidgetSettingsSchema } from "../../types";
 import { coreCategory, coreSize } from "../../core-catalog";
+import { MEMORY_GROUPS, MEMORY_OPS } from "./memory-types";
 import { METRICS, METRIC_OPTIONS } from "./metrics";
 
 /** Every analytics widget: the period (SchemaForm `period`, default 30 days) and an optional project. */
@@ -106,6 +107,20 @@ export const descriptors: WidgetDescriptor[] = [
     title: "Cost by day",
     description: "Reported cost per day",
     settings: settings(),
+    actions: ["retry"],
+  },
+  {
+    ...core("memory-usage"),
+    title: "Mesh memory",
+    description: "Memory reads and writes: useful recall, misses, dead weight, tokens into context and base quality, by agent and period",
+    // The instance's starting point; the header filters (agents, sources, callers) live in the widget itself.
+    settings: settings({
+      period: { ...FILTER.period!, default: { days: 7 } },
+      op: { type: "string", title: "Operation", enum: [...MEMORY_OPS], "x-options": Object.fromEntries(MEMORY_OPS.map((o) => [o, o.replace(/_/g, " ")])), default: "all" },
+      view: { type: "string", title: "View", enum: ["table", "top", "chart"], "x-options": { table: "Table", top: "Top-N", chart: "Chart" }, default: "table" },
+      group_by: { type: "string", title: "Split by", enum: [...MEMORY_GROUPS], "x-options": Object.fromEntries(MEMORY_GROUPS.map((g) => [g, g.replace(/_/g, " ")])), default: "agent" },
+      group_by2: { type: "string", title: "Second split", enum: [...MEMORY_GROUPS], "x-options": Object.fromEntries(MEMORY_GROUPS.map((g) => [g, g.replace(/_/g, " ")])) },
+    }),
     actions: ["retry"],
   },
 ];

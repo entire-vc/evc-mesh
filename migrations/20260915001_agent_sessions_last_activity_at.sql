@@ -1,5 +1,5 @@
 -- +goose Up
--- Task #872f82a2 (audit #3bb599fc, finding 1): agent_sessions.EndStale ends any
+-- (finding 1): agent_sessions.EndStale ends any
 -- session with status='active' whose started_at is older than the sweep's
 -- timeout (6h, cmd/api/main.go), regardless of whether the session has had
 -- ANY activity since. That's a dispatcher-shaped assumption (one spawn = one

@@ -7,7 +7,7 @@ import (
 )
 
 // ClosedFollowUpRoot is the persistent identity of a finding the closed-card
-// follow-up mechanism routes (#5194afd4): the pair (source card, finding) maps
+// follow-up mechanism routes: the pair (source card, finding) maps
 // to exactly one follow-up root for the pair's whole life, so a repeat after
 // the root was closed reopens that root instead of opening a second card.
 //

@@ -1,8 +1,8 @@
-"""Tests for the embedSem-backlog drain wait (#ebd9dc1c).
+"""Tests for the embedSem-backlog drain wait.
 
 `remember()` returns before its embed lands (memory_service.go: `go
 s.embedAndStore(...)`), and that embed shares a bounded semaphore with the
-recall query-embed (#3d10774e). A harness that fires many writes with no
+recall query-embed. A harness that fires many writes with no
 pacing can queue a backlog deeper than the embedder drains per second; once
 deep enough, a LATER question's recall queues behind it long enough to trip
 the REST client's own timeout — measured live on PR #739 (17-20/24 questions,
@@ -72,7 +72,7 @@ class TestReadEmbedInflight(unittest.TestCase):
             self.assertIsNone(mcs._read_embed_inflight("http://127.0.0.1:8005"))
 
     def test_metric_absent_returns_none(self):
-        """A server predating #ebd9dc1c serves /metrics fine with no such gauge
+        """A server predating that fix serves /metrics fine with no such gauge
         — this must be indistinguishable from "can't observe it", not treated
         as a parse crash or as a false 0."""
         with mock.patch.object(

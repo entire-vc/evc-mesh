@@ -49,7 +49,7 @@ DEPS_FILE = Path(__file__).with_name('go_test_file_deps.txt')
 
 # Everything that can influence a Go test result, besides the globs that
 # go_test_file_deps.txt adds (see scope_globs). A changed file that matches NONE of
-# them cannot, so it never starts a Go test job. `.gitlab-ci.yml` carries the same
+# them cannot, so it never starts a Go test job. `.gitlab/ci/go.yml` carries the same
 # list as `rules:changes` between the go-test-scope markers, and
 # test_go_affected_packages.py fails when the two differ.
 BASE_SCOPE_GLOBS = (
@@ -60,6 +60,7 @@ BASE_SCOPE_GLOBS = (
     'go.work.sum',
     'migrations/**/*',
     '.gitlab-ci.yml',
+    '.gitlab/ci/go.yml',
     'scripts/ci/**/*',
     'docs/ci-templates/**/*',
     'docs/api/**/*',
@@ -79,6 +80,7 @@ FULL_GLOBS = {
     'go.work.sum': 'go.work.sum changed',
     'migrations/**/*': 'a database migration changed (every database test runs on it)',
     '.gitlab-ci.yml': 'a CI file changed',
+    '.gitlab/ci/go.yml': 'a CI file changed',
     'scripts/ci/**/*': 'a CI file changed',
     'docs/ci-templates/**/*': 'a CI file changed',
 }

@@ -251,10 +251,10 @@ func TestAgentCallbackURL_EveryWritePathIsReviewed(t *testing.T) {
 // above only knows the four names in agentRowWriters, so a method added under
 // another name (UpdateProfile, SetCallback, ...) would be invisible to it.
 // Adding one must be a conscious edit here: say whether it can persist
-// callback_url and, if so, validate it.
+// callback_url and, if so, validate it. ListByNameFold is a read (SELECT only).
 var reviewedAgentRepositoryMethods = []string{
 	"Create", "CreateWithHomeGrant", "Delete", "GetByAPIKeyPrefix", "GetByID", "GetBySlug",
-	"GetSubAgentTree", "List", "ListWithProjects", "RotateHomeGrantKey",
+	"GetSubAgentTree", "List", "ListByNameFold", "ListWithProjects", "RotateHomeGrantKey",
 	"SearchByPrefix", "SetAPIKeySHA256", "TouchLastSeenBatch", "Update", "UpdateHeartbeat", "UpdateStatus",
 }
 

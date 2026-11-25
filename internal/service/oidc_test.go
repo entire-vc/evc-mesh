@@ -19,8 +19,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Unit tests of the OpenID Connect key set and static-client config (card
-// an internal ticket). No database.
+// Unit tests of the OpenID Connect key set and static-client config.
+// No database.
 
 func newTestRSAKey(t *testing.T, bits int) *rsa.PrivateKey {
 	t.Helper()

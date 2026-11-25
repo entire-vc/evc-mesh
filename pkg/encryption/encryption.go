@@ -20,7 +20,7 @@
 // hands it to Team Relay as an agent key, and gets a 401 — a symptom that
 // looks exactly like "the remote party revoked our credential" and sends the
 // investigation to the wrong side of the network (this is the shape of
-// incident #c55556fa).
+// an internal ticket).
 //
 // New values are therefore written as "enc:v1:<base64(nonce||ciphertext)>".
 // The prefix turns encryption into a property of the value that both code and

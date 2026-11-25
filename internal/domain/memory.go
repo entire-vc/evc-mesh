@@ -181,6 +181,34 @@ type ScoredMemory struct {
 	// RRF score — rank-only, tightly clustered in [0.010, 0.016] — cannot carry
 	// that. Additive response field; existing clients ignore it.
 	DenseScore *float64 `json:"dense_score,omitempty"`
+	// Source names where this recall row comes from: memory, project_knowledge
+	// or doc (see ReadSourceOf). Set by the HTTP handler on every recall row;
+	// additive response field, existing clients ignore it.
+	Source string `json:"source,omitempty" db:"-"`
+}
+
+// Read sources of a served memory row (memory_read_events.results[].source and
+// the `source` field on recall rows).
+const (
+	ReadSourceMemory           = "memory"
+	ReadSourceProjectKnowledge = "project_knowledge"
+	ReadSourceDoc              = "doc"
+	ReadSourceProjectUpdate    = "project_update"
+)
+
+// ReadSourceOf classifies a memory row for read analytics: a Mesh Doc chunk is
+// doc, a project-scoped memory is project knowledge (set_project_knowledge and
+// remember(scope=project) write the same rows, and get_project_knowledge
+// serves them), everything else is memory.
+func ReadSourceOf(sourceType MemorySourceType, scope MemoryScope) string {
+	switch {
+	case sourceType == SourceDoc:
+		return ReadSourceDoc
+	case scope == ScopeProject:
+		return ReadSourceProjectKnowledge
+	default:
+		return ReadSourceMemory
+	}
 }
 
 // SearchMode reports which retrieval arms actually served a Recall.
@@ -381,7 +409,7 @@ type MemoryListResult struct {
 // Scope in particular is an isolation contract, not an optimisation: it was previously
 // passed to the vector arm only, which left it unenforced on every BM25-arm row and
 // entirely unenforced in bm25-only mode (the fail-open path taken whenever the embedder
-// is down). See the regression.
+// is down).
 type MemorySearchFilter struct {
 	IncludeExpired    bool
 	IncludeArchived   bool
@@ -481,7 +509,7 @@ const (
 // CompositeScore = seed_score × Π(edge_weight along the chain from seed to this node).
 //
 // Key/Scope/Tags exist so the CALLER can verify a scope/tag filter for itself,
-// not just trust that the server applied one. the regression found that a
+// not just trust that the server applied one. an internal ticket found that a
 // graph-boosted row carrying no metadata at all is indistinguishable from a
 // row that legitimately passed a filter — the missing fields hid the fact
 // that filters weren't reaching this arm in the first place.
@@ -495,6 +523,9 @@ type RecallGraphResult struct {
 	CompositeScore  float64               `json:"composite_score"`
 	Provenance      RecallGraphProvenance `json:"provenance"`
 	HopDistance     int                   `json:"hop_distance"`
+	// Source: see ScoredMemory.Source. Additive response field.
+	Source string       `json:"source,omitempty"`
+	Status MemoryStatus `json:"status,omitempty"`
 }
 
 // RecallGraphOpts holds parameters for a multi-hop graph recall traversal.
@@ -509,7 +540,7 @@ type RecallGraphOpts struct {
 	// Scope/Tags/TagsAny restrict BOTH the seed recall and the BFS-expanded neighbours.
 	// Graph expansion walks memory_edges, which carry no notion of scope, so without an
 	// explicit check here an out-of-scope memory adjacent to an in-scope seed would be
-	// returned — a filter bypass through the side door. See the regression.
+	// returned — a filter bypass through the side door.
 	Scope   string
 	Tags    []string
 	TagsAny []string
@@ -522,7 +553,7 @@ func (o RecallGraphOpts) SearchFilter() MemorySearchFilter {
 
 // MemoryChunk is one embedded slice of a longer memory (ADR-0002). The prod
 // embedder silently truncates input past ~512 tokens, so any memory longer
-// than that needs more than one vector to be fully searchable — see this change.
+// than that needs more than one vector to be fully searchable.
 //
 // ChunkStart/ChunkEnd are BYTE offsets (half-open [start, end)) into the
 // parent Memory's Content. Embedding is base64(little-endian float32 bytes),
@@ -626,7 +657,7 @@ type MemoryRevision struct {
 	Reason       *string    `json:"reason,omitempty" db:"reason"`
 	ActorAgentID *uuid.UUID `json:"actor_agent_id,omitempty" db:"actor_agent_id"`
 	// ActorUserID names the user behind a hand archive/unarchive; nil for agent
-	// writes and for every revision written before this change.
+	// writes and for every revision written before that fix.
 	ActorUserID *uuid.UUID `json:"actor_user_id,omitempty" db:"actor_user_id"`
 	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
 }

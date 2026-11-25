@@ -80,7 +80,7 @@ func blocks(blocker, dependent uuid.UUID) domain.TaskDependency {
 	return domain.TaskDependency{ID: uuid.New(), TaskID: dependent, DependsOnTaskID: blocker, DependencyType: domain.DependencyTypeBlocks}
 }
 
-// #53f30091 → #14580276, 11.10: the stale card formally blocked an open UI card.
+// → an internal ticket, 11.10: the stale card formally blocked an open UI card.
 // Parking it took it out of every feed and the dependent stalled ~16 h. A card
 // that open work is waiting on goes back to its own assignee's todo instead.
 func TestPark_BlockerOfOpenDependent_ReturnedToTodoNotParked(t *testing.T) {

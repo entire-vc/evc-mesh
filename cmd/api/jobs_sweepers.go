@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/handler"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
@@ -52,8 +53,35 @@ func startSweepers(deps *apiDeps) {
 	}()
 	log.Println("Agent events sweeper started (5m interval)")
 
+	// 10b-upl. Two-step upload sweeper: an upload declared and never confirmed
+	// leaves a session row and possibly a staged object under uploads/; both go
+	// once the session has been expired for a grace period. Confirmed sessions
+	// are kept a week so a repeated confirm still answers, then go too.
+	if deps.uploadSessionRepo != nil && deps.s3Client != nil {
+		uploadRepo, uploadStore := deps.uploadSessionRepo, deps.s3Client
+		go func() {
+			ticker := time.NewTicker(handler.UploadSweepInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+					if n, sweepErr := handler.SweepUploads(ctx, uploadRepo, uploadStore); sweepErr != nil {
+						log.Printf("[upload-sweeper] ERROR: %v", sweepErr)
+					} else if n > 0 {
+						log.Printf("[upload-sweeper] Removed %d expired upload sessions", n)
+					}
+					cancel()
+				case <-schedulerShutdownCh:
+					return
+				}
+			}
+		}()
+		log.Println("Upload session sweeper started")
+	}
+
 	// 10b-bis. Backlog promotion sweeper — auto-unparks ANY backlog task whose due_date
-	// has passed, moving it back to todo (the team workflow guide §0m passive-wait
+	// has passed, moving it back to todo (CLAUDE-workflow-reference.md §0m passive-wait
 	// pattern; complements the event-driven dependency-unblock auto-transition, which
 	// only fires on task completion, with a time-based trigger).
 	//
@@ -86,8 +114,8 @@ func startSweepers(deps *apiDeps) {
 	}()
 	log.Println("Backlog due-date promotion sweeper started (60s interval)")
 
-	// 10b-quater. Backlog promotion ADVISORY sweeper (an internal ticket, parent an internal ticket,
-	// unit 1 of 4). Mirrors <ops-repo>/scripts/mesh-intake-sweep.py's backlog→todo decision
+	// 10b-quater. Backlog promotion ADVISORY sweeper
+	// (unit 1 of 4). Mirrors <ops-repo>/scripts/mesh-intake-sweep.py's backlog→todo decision
 	// server-side, log-only — it NEVER calls MoveTask. Runs alongside the live Python
 	// sweep for a 7-day parallel comparison; only after that comparison
 	// shows zero unexplained divergence does a LATER task flip this to
@@ -150,7 +178,37 @@ func startSweepers(deps *apiDeps) {
 		}
 	}()
 
-	// 10b-ter. human_gate soft-timeout sweeper (an internal ticket, contract
+	// 10b-quater-ter. merged_at backfill: fills the provider's merge time on
+	// merged PR/MR links that predate the column or whose read failed at merge
+	// time. One page of 50 links per 2 minutes; after a full pass it rests 6h,
+	// so an unresolvable link is asked at most once per pass.
+	if backfiller, ok := deps.vcsLinkService.(service.MergedAtBackfiller); ok {
+		mergedAtSweeper := service.NewMergedAtSweeper(backfiller, 50, 6*time.Hour)
+		go func() {
+			ticker := time.NewTicker(2 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+					page, err := mergedAtSweeper.Tick(ctx)
+					cancel()
+					if err != nil {
+						log.Printf("[vcs-merged-at] ERROR: %v", err)
+					} else if page.Filled > 0 {
+						log.Printf("[vcs-merged-at] filled merged_at on %d of %d link(s)", page.Filled, page.Seen)
+					}
+				case <-schedulerShutdownCh:
+					return
+				}
+			}
+		}()
+		log.Println("merged_at backfill sweeper started (2m interval, 6h rest after a full pass)")
+	} else {
+		log.Println("[vcs-merged-at] WARN: vcs link service has no merged_at backfill; sweeper not started")
+	}
+
+	// 10b-ter. human_gate soft-timeout sweeper (contract
 	// docs/human-gate-decision-recorded.md §5). Releases soft-classified gates armed
 	// past DefaultHumanGateSoftTimeout; a hard-classified gate is structurally
 	// unreachable from this sweep (see FindSoftTimedOutGates in task_repo.go) — no
@@ -200,7 +258,7 @@ func startSweepers(deps *apiDeps) {
 			select {
 			case <-ticker.C:
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-				// Regression: first give marker gates armed hard under the old
+				// First give marker gates armed hard under the old
 				// tag-only rule their current class, so a stated default that is
 				// already past its deadline is applied in this same pass.
 				if rn, rerr := commentService.ReconcileMarkerGateClasses(ctx); rerr != nil {

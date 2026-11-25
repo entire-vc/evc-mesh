@@ -17,7 +17,7 @@ func sp(s string) *string { return &s }
 func okConstraint(id string, class ConstraintClass) OperationalConstraint {
 	return OperationalConstraint{
 		ID: id, Class: class, ReasonCode: "x_" + string(class),
-		NextActor:  ConstraintActor{Kind: ConstraintActorAgent, Name: sp("developer-one")},
+		NextActor:  ConstraintActor{Kind: ConstraintActorAgent, Name: sp("robin")},
 		Wake:       ConstraintWake{Predicate: "pipeline", Ref: sp("g/p#1")},
 		Source:     ConstraintSource{Kind: "runner"},
 		ObservedAt: rsNow.Add(-time.Minute),

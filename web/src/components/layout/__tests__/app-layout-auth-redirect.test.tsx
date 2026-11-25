@@ -1,5 +1,5 @@
 /**
- * Regression check for task #7893ab16 (App.tsx: BrowserRouter -> data
+ * Regression check for an internal ticket (App.tsx: BrowserRouter -> data
  * router). AppLayout's unauthenticated-visitor redirect (`<Navigate
  * to="/login..." replace />`, app-layout.tsx:163) is unchanged code — this
  * pins that it still fires the same way once mounted under

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 /**
- * Evidence run: every glyph in the REAL collapsed rail, both themes
- * (`#13ff4803`).
+ * Evidence run: every glyph in the REAL collapsed rail, both themes.
  *
  * `measure-rail-slide.mjs` next to this file answers "did anything move?" and
  * correctly answers no — every tile is 32x32 at cx=23.5 and every glyph is

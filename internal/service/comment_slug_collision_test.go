@@ -143,9 +143,9 @@ func TestNotifyMentions_CollidingSlugDeliversToBothAgentAndUser(t *testing.T) {
 func TestNotifyMentions_NonCollidingAgentSlugUnaffected(t *testing.T) {
 	env := setupCollisionTestEnv()
 
-	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "garfield"}
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "gary"}
 	env.agentSvc.AddAgent(env.wsID, agent)
-	// Deliberately no user named "garfield" — no collision.
+	// Deliberately no user named "gary" — no collision.
 
 	taskID := uuid.New()
 	env.taskRepo.items[taskID] = &domain.Task{
@@ -154,10 +154,10 @@ func TestNotifyMentions_NonCollidingAgentSlugUnaffected(t *testing.T) {
 	}
 	task := env.taskRepo.items[taskID]
 
-	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "@garfield please check"}
+	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "@gary please check"}
 	env.svc.notifyMentions(context.Background(), comment, task, "", env.wsID)
 
-	assert.Empty(t, env.notifySvc.Calls(), "no user named garfield exists — must not fabricate a notification")
+	assert.Empty(t, env.notifySvc.Calls(), "no user named gary exists — must not fabricate a notification")
 
 	rows := env.deliveryRepo.snapshot()
 	require.Len(t, rows, 1, "a non-colliding agent slug must still produce exactly one row, same as before this fix")

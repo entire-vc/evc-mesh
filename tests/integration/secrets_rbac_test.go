@@ -18,8 +18,8 @@ import (
 )
 
 // This file closes two proof gaps left open by the cross-tenant secrets
-// suite in cross_tenant_params_test.go (an internal ticket, follow-up to the
-// second verification round on an internal ticket):
+// suite in cross_tenant_params_test.go (follow-up to the
+// second verification round):
 //
 //  1. TestCrossTenant_StrangerCannotRotateOrDeleteASecret proves denial to an
 //     OUTSIDER — someone with no membership in the victim's workspace at

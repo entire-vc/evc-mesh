@@ -2,7 +2,7 @@ package domain
 
 import "testing"
 
-// #655c6d12: the recall service compared OrderBy against the bare
+// The recall service compared OrderBy against the bare
 // "decayed_relevance" while every producer emits "decayed_relevance:desc", so
 // the decay branch was unreachable. CanonicalOrderBy is where that spelling
 // question is now settled once; these cases pin both directions of it.

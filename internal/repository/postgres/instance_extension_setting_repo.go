@@ -152,7 +152,7 @@ const instanceOwnerWorkspaceSQL = `
 // IsInstanceAdmin reports whether userID is an owner/admin of the instance's
 // owner workspace — the oldest non-deleted workspace with a live administrator
 // (instanceOwnerWorkspaceSQL). The instance has no separate admin role today;
-// this is the decision recorded on card an internal ticket.
+// this is the decision recorded on an internal ticket.
 func (r *InstanceExtensionSettingRepo) IsInstanceAdmin(ctx context.Context, userID uuid.UUID) (bool, error) {
 	var ok bool
 	err := r.db.GetContext(ctx, &ok, `

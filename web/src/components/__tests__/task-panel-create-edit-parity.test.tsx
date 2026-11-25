@@ -1,6 +1,6 @@
 /**
  * The create screen and the edit screen are ONE form. This test is the wall
- * that keeps them one (task #88087321, third time Pavel has asked for it).
+ * that keeps them one (third time Pavel has asked for it).
  *
  * It renders TaskPanel twice against identical store state — mode="create" and
  * the normal task view — reads the Properties panel of each, and asserts that

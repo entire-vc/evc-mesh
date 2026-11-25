@@ -11,7 +11,7 @@ const fullState: BoardSavedViewState = {
   priorityFilter: "high",
   assigneeFilter: "agent",
   assigneeIdsFilter: ["user-1", "agent-7", "unassigned"],
-  cfFilters: { owner: { type: "text", textValue: "riker" } },
+  cfFilters: { owner: { type: "text", textValue: "robin" } },
   selectedTags: ["bug", "prod"],
   groupBy: "priority",
   showClosed: true,
@@ -39,7 +39,7 @@ describe("board saved-view capture/restore", () => {
       priority: "high",
       assignee: "agent",
       assignee_ids: ["user-1", "agent-7", "unassigned"],
-      custom_fields: { owner: { type: "text", textValue: "riker" } },
+      custom_fields: { owner: { type: "text", textValue: "robin" } },
       tags: ["bug", "prod"],
       group_by: "priority",
       show_closed: true,
@@ -137,7 +137,7 @@ describe("isBoardFiltersAtDefault (Reset filters menu item's disabled state)", (
   it("is false when a custom-field filter is active", () => {
     expect(
       isBoardFiltersAtDefault({
-        custom_fields: { owner: { type: "text", textValue: "riker" } },
+        custom_fields: { owner: { type: "text", textValue: "robin" } },
       }),
     ).toBe(false);
   });

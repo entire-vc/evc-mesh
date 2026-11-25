@@ -354,6 +354,7 @@ func (s *agentKeyService) audit(ctx context.Context, agent *domain.Agent, action
 	_ = s.activity.Create(ctx, &domain.ActivityLog{
 		ID: uuid.New(), WorkspaceID: agent.WorkspaceID, EntityType: "agent", EntityID: agent.ID,
 		Action: action, ActorID: by, ActorType: byType, Changes: changes, Source: "api",
+		CreatedAt: timeNow(),
 	})
 }
 

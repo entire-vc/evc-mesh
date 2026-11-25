@@ -11,7 +11,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Task #318de303, AC3: "throwaway/probe-карточкам hard-гейт запрещён (soft-гейт
+// AC3: "throwaway/probe-карточкам hard-гейт запрещён (soft-гейт
 // разрешён)". A disposable task (labeled throwaway/probe/kind:sweep, or titled as a
 // HARNESS FIXTURE) is never coming back to a human for an answer — a hard gate on one
 // just accumulates in Pavel's queue forever. Soft self-releases on the
@@ -49,7 +49,7 @@ func TestArmHumanGate_DisposableAPIHardRefused(t *testing.T) {
 		{name: "kind:sweep label", labels: []string{"kind:sweep"}},
 		{name: "label case-insensitive", labels: []string{"Throwaway"}},
 		{name: "HARNESS FIXTURE in title", title: "TestFoo — HARNESS FIXTURE, delete after run"},
-		{name: "title marker case-insensitive", title: "harness fixture for #4545660b"},
+		{name: "title marker case-insensitive", title: "harness fixture for #5eed0007"},
 	}
 
 	for _, tc := range cases {
@@ -103,7 +103,7 @@ func TestArmHumanGate_DisposableAPISoftAllowed(t *testing.T) {
 // TestArmHumanGate_MarkerSourceAllowsMissingDefault right above it in
 // human_gate_arming_test.go: a live "❓ Blocking @pavel" comment is a real human ask
 // arriving through a channel this service does not control. Refusing it outright would
-// silently drop the ask for its author — the exact #58a6f4ff/#f421ad57 failure class —
+// silently drop the ask for its author — the exact failure class —
 // so a disposable task downgrades the marker to soft instead of refusing it.
 func TestArmHumanGate_DisposableMarkerDowngradedNotDropped(t *testing.T) {
 	svc, repo, taskID := newDisposableArmingTestService(t, []string{"throwaway"}, "")

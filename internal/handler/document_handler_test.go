@@ -86,7 +86,7 @@ func TestDocumentHandler_List(t *testing.T) {
 }
 
 // A document written for a human has to come with a link that human can
-// actually open (task #14db79fd) — Title/Slug/ProjectID alone don't resolve
+// actually open — Title/Slug/ProjectID alone don't resolve
 // to one. List, Create, GetByID, GetByPath and Update all populate it, same
 // as decorateTaskList/computeTaskURL do for tasks.
 func TestDocumentHandler_List_SetsURL(t *testing.T) {
@@ -515,7 +515,7 @@ func TestDocumentHandler_GetByID_ReturnsTheBylineNames(t *testing.T) {
 	wsID := uuid.New()
 	editor := uuid.New()
 	editorType := domain.ActorTypeAgent
-	creatorName, editorName := "Ada", "howard"
+	creatorName, editorName := "Ada", "harper"
 
 	mockSvc := &MockDocumentService{
 		GetByIDInWorkspaceFunc: func(_ context.Context, id, _ uuid.UUID) (*domain.Document, error) {
@@ -535,7 +535,7 @@ func TestDocumentHandler_GetByID_ReturnsTheBylineNames(t *testing.T) {
 	var doc map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &doc))
 	assert.Equal(t, "Ada", doc["created_by_name"])
-	assert.Equal(t, "howard", doc["updated_by_name"])
+	assert.Equal(t, "harper", doc["updated_by_name"])
 	assert.Equal(t, editor.String(), doc["updated_by"])
 	assert.Equal(t, "agent", doc["updated_by_type"])
 }

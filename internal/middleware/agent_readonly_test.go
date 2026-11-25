@@ -13,7 +13,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// an internal ticket: an agent whose grant role is viewer wrote a comment (HTTP 200)
+// An agent whose grant role is viewer wrote a comment (HTTP 200)
 // because nothing applied that role to an agent actor.
 
 func newRoleAgentContext(method, role string) (echo.Context, *httptest.ResponseRecorder) {

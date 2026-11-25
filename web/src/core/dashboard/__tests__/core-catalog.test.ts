@@ -28,8 +28,10 @@ describe("core widget sizes and categories = catalog.go (§5.8)", () => {
     expect(mismatches(CORE_WIDGETS)).toEqual([]);
   });
 
-  it("every core id the client draws is in the catalog; the catalog copy is the 22 types of §5.8", () => {
-    expect(CORE_TYPES).toHaveLength(22);
+  it("every core id the client draws is in the catalog: the 22 types of §5.8 plus memory-usage (U6) and agent-usage (U4)", () => {
+    expect(CORE_TYPES).toHaveLength(24);
+    expect(coreWidgetType("memory-usage")?.category).toBe("analytics");
+    expect(CORE_WIDGETS.some((d) => d.id === "agent-usage")).toBe(true);
     expect(CORE_WIDGETS.map((d) => d.id).filter((id) => !coreWidgetType(id))).toEqual([]);
     expect(coreTypeId("triage")).toBe("triage-queue");
     expect(coreTypeId("sessions")).toBe("agents-active");

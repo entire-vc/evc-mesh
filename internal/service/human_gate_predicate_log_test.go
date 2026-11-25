@@ -14,7 +14,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// Independent verification of #5d3dc714 found this gap by mutation: making
+// Independent verification of an internal ticket found this gap by mutation: making
 // recordGatePredicate return unconditionally at the top left the ENTIRE suite green,
 // because no test ever wired a log repository into the service — every existing test
 // hits the `if s.gatePredicateLog == nil { return }` early-out.

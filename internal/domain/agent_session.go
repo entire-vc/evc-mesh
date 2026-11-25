@@ -117,6 +117,45 @@ type SessionUsage struct {
 	// Receipt, when set, binds the request's Idempotency-Key to the session
 	// in the addition's transaction.
 	Receipt *IdempotencyReceipt
+	// Turn, when set, is written as one agent_usage_turns row and added onto
+	// its agent_usage_hourly hour in the same transaction as the session
+	// addition.
+	Turn *UsageTurn
+}
+
+// UsageTurn is one runner turn (one harness spawn) for the usage journal. A nil
+// measure is "no figure" and is stored as NULL, never 0.
+type UsageTurn struct {
+	// ID is the journal row id; the caller picks it so the answer can name it.
+	ID uuid.UUID
+	// TurnRef is the runner's turn id: a second report with the same ref for
+	// the same agent adds nothing (UsageTurnRepeat).
+	TurnRef   *string
+	StartedAt *time.Time
+	// EndedAt picks the hour; without it the report time does.
+	EndedAt *time.Time
+	// Provider "" is derived from the model.
+	Provider     string
+	AccountRef   *string
+	BillingMode  *string
+	TokensIn     *int64
+	TokensOut    *int64
+	CacheRead    *int64
+	CacheWrite   *int64
+	CacheWrite1h *int64
+	CostReported *float64
+}
+
+// UsageTurnRepeat is returned by a report whose turn ref the agent already
+// reported. Nothing was written; Session is the session the first report
+// landed on (nil when it no longer exists), TurnID its journal row.
+type UsageTurnRepeat struct {
+	TurnID  uuid.UUID
+	Session *AgentSession
+}
+
+func (e *UsageTurnRepeat) Error() string {
+	return "usage turn already reported: " + e.TurnID.String()
 }
 
 // TaskCostSummary aggregates cost and quality metrics for a single task

@@ -106,6 +106,22 @@ func registerDocumentRoutes(deps *apiDeps) {
 	api.GET("/document-attachments/:att_id/download", documentAttachmentHandler.Download, wsAccess)
 	api.DELETE("/document-attachments/:att_id", documentAttachmentHandler.Delete, wsAccess, rbac(mw.PermUploadArtifact))
 
+	// Two-step uploads (docs/mcp-reference.md "Uploading files"): declare the
+	// file, PUT it to the returned presigned URL, confirm. The declare routes
+	// hang off their target and take the same guards as the direct uploads.
+	//
+	// The confirm route names no tenant and has no workspace resolver on
+	// purpose: an upload is visible only to the actor that declared it, so the
+	// handler answers 404 to an unknown id, another workspace's and another
+	// member's alike, and re-checks that the declarer may still write in the
+	// upload's workspace. connectorRBAC clamps an OAuth connector to its user's
+	// current role, as rbac() would.
+	uploadSessionHandler := deps.uploadSessionHandler
+	api.POST("/documents/:doc_id/attachments/uploads", uploadSessionHandler.CreateDocumentUpload, wsAccess, rbac(mw.PermUploadArtifact))
+	api.POST("/tasks/:task_id/artifacts/uploads", uploadSessionHandler.CreateArtifactUpload, wsAccess, rbac(mw.PermUploadArtifact))
+	connectorRBAC := deps.connectorRBAC
+	api.POST("/uploads/:upload_id/confirm", uploadSessionHandler.Confirm, connectorRBAC(mw.PermUploadArtifact))
+
 	// Document comment routes — Confluence-style inline comments on document text.
 	//
 	// The list/create pair hangs off :doc_id, which already resolves a tenant; the

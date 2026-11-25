@@ -69,7 +69,7 @@ and `data-testid="task-card"` / `data-task-id` in `web/src/pages/board.tsx`
 ## Deep-verify notes (§1c)
 
 - The client-side "card left the source column" assert alone was the
-  pre-`data-testid` gap this task exists to close (`#25aa01f1`'s AC): a
+  pre-`data-testid` gap this task exists to close (an internal ticket's AC): a
   visual reflow without a persisted status change would still make the card
   disappear from the source DOM subtree, so the server-side `GET` is not
   optional decoration — it is the assertion that actually distinguishes a

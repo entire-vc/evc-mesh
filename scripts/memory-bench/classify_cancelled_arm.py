@@ -7,8 +7,7 @@ mid-measurement, and a job evicted from its concurrency group by a SIBLING JOB
 OF ITS OWN RUN all report the same word, in the same grey, next to the same
 icon. `Memory recall canary (prod)` was in the third state for its entire
 existence — 3 of 3 pushes, twice dead at 0s — and nobody noticed, because the
-one word it produced is the word everyone has learned to read as weather
-(#3ce651a0).
+one word it produced is the word everyone has learned to read as weather.
 
 This module is the discriminator. It takes what GitHub records and returns which
 of those it was, so the workflow can go red for the two that are defects and stay
@@ -60,7 +59,7 @@ defect as an expected supersede, and the alarm would fall silent exactly on a
 busy repo. Only a run that already existed at the instant of death can have
 caused it.
 
-## The bound is right; the SOURCE is racy (#13fb482b)
+## The bound is right; the SOURCE is racy
 
 An earlier draft of this docstring claimed the bound "makes the verdict a pure
 function of recorded history". It does not, and the difference is not

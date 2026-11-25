@@ -27,7 +27,7 @@ type defaultTimeoutTaskMover interface {
 }
 
 // HumanGateDefaultTimeoutService finds gates whose gate_deadline has passed with no
-// answer and applies each one's own stated recommended_default (task #060ccaae):
+// answer and applies each one's own stated recommended_default:
 // records it as a human_gate_decisions row (provenance=default_applied), releases the
 // gate as a CONSEQUENCE of that write (same contract as every other decision — the gate
 // never clears on its own, only as a side effect of a recorded answer), returns the task
@@ -126,7 +126,7 @@ func (s *humanGateDefaultTimeoutService) applyOne(ctx context.Context, c domain.
 }
 
 // returnToTodo moves the task back to its project's todo-category status, per task
-// #060ccaae's "возврат в todo исполнителю" — applying a default means the executor
+// "возврат в todo исполнителю" — applying a default means the executor
 // should just proceed on that basis, not keep waiting in whatever status the ask froze
 // it in (often triage, from enforceBlockingTriage's own move). Returns the fetched task
 // (possibly nil on any lookup failure) so the caller can reuse it for notification

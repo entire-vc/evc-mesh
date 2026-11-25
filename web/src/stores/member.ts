@@ -19,7 +19,7 @@ interface MemberState {
   // failure, 401/403/500, ...) — distinct from myRole legitimately being
   // null because the server said "not a member" (404). A denied/unknown
   // role must never look identical to "we checked and you have none":
-  // an internal ticket, a silent catch here hid every admin control with no
+  // A silent catch here hid every admin control with no
   // explanation on a genuine transient failure.
   myRoleError: string | null;
   // False from the moment fetchMyRole starts until it settles (any outcome,

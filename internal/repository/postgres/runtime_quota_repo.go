@@ -110,6 +110,12 @@ func (r *RuntimeRepo) ReportQuota(ctx context.Context, ws uuid.UUID, ref string,
 		if err != nil {
 			return err
 		}
+		if historyErr := recordQuotaHour(ctx, tx, connection.ID, ref, o); historyErr != nil {
+			return historyErr
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM runtime_quota_hourly WHERE integration_id=$1 AND hour < $2`, connection.ID, time.Now().Add(-quotaHistoryRetention)); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

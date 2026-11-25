@@ -520,7 +520,7 @@ func TestRequireSelfOrPermission_AgentEditingOwnProfile_Allowed(t *testing.T) {
 }
 
 // TestRequireSelfOrPermission_AgentEditingAnotherAgent_Forbidden is the core
-// regression test for an internal ticket: agent A, authenticated with its own valid
+// regression test: agent A, authenticated with its own valid
 // X-Agent-Key, must NOT be able to rewrite agent B's profile.
 func TestRequireSelfOrPermission_AgentEditingAnotherAgent_Forbidden(t *testing.T) {
 	repo := newRBACMockMemberRepo()

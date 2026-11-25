@@ -29,7 +29,7 @@ const (
 	// Refusing the arm outright would still be strictly worse than the bug being fixed:
 	// the marker is the channel that DELIVERS a live ask, and a rejected arm is silent
 	// to its author — they post the question, believe it was handed over, and the card
-	// keeps being fed (the exact shape of an internal ticket and an internal ticket). Tightening this into
+	// keeps being fed (the exact shape of earlier tickets). Tightening this into
 	// a refusal is still task 1.4's own follow-up, which first has to give the author a
 	// way to see the refusal; auto-filling is the interim fix that makes every gate
 	// resolvable by a clock even before that lands.
@@ -74,7 +74,7 @@ type ArmHumanGateInput struct {
 	// an API arm). Stored with the source so a later reclassification can tell the
 	// marker it checked from a newer re-ask that re-armed the gate.
 	SourceCommentID uuid.UUID
-	// Predicate is the four-question check from the regression. REQUIRED for
+	// Predicate is the four-question check from an internal ticket. REQUIRED for
 	// ArmHumanGateSourceAPI; nil is allowed for ArmHumanGateSourceMarker, for the same
 	// reason RecommendedDefault is (see ArmHumanGateSourceMarker's note) — a marker is a
 	// live ask arriving through a channel we do not control, and refusing it is silent

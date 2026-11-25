@@ -4,6 +4,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/handler"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
+	"github.com/entire-vc/evc-mesh/internal/service"
 )
 
 // registerAgentRoutes mounts agent routes.
@@ -26,6 +27,14 @@ func registerAgentRoutes(deps *apiDeps) {
 	// "me" being parsed as a UUID parameter.
 	api.GET("/workspaces/:ws_id/agents", agentHandler.List)
 	api.POST("/workspaces/:ws_id/agents", agentHandler.Register, rbac(mw.PermRegisterAgent))
+	// Project reader (docs/project-reader.md): a service agent that can only
+	// read the allowlisted routes of one project. Human workspace admin only;
+	// revocation is DELETE /agents/:agent_id. No idempotency replay: the
+	// answer carries the key.
+	projectReaderHandler := handler.NewProjectReaderHandler(service.NewProjectReaderService(
+		deps.workspaceRepo, deps.userRepo, deps.agentRepo, deps.agentRepo))
+	api.POST("/workspaces/:ws_id/project-readers", projectReaderHandler.Issue,
+		rbac(mw.PermManageMembers), mw.RequireUserAuth())
 	api.GET("/agents/me", agentHandler.Me)
 	api.PATCH("/agents/me", agentHandler.UpdateMe)
 	api.GET("/agents/me/tasks", agentHandler.GetMyTasks)
@@ -37,7 +46,7 @@ func registerAgentRoutes(deps *apiDeps) {
 	// only, no permission check (mirrors the rest of /agents/me/*). Must
 	// stay registered ahead of /agents/:agent_id/workspaces below for the
 	// same "me" != UUID reason as every other /agents/me/* route (task
-	// an internal ticket — this route was missing entirely; a guest agent's own key
+	// This route was missing entirely; a guest agent's own key
 	// got a 403 asking where it's connected).
 	api.GET("/agents/me/workspaces", agentWorkspaceGrantHandler.ListMyWorkspaces)
 	// GET /agents/me/decision-requests — the open questions other agents asked

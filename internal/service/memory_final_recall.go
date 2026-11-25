@@ -76,7 +76,7 @@ func (s *memoryService) FinalRecall(ctx context.Context, req domain.FinalRecallO
 		}
 		picked := make([]domain.FinalRecallItem, 0, reserve)
 		for _, row := range graph {
-			if seen[row.ID] || !finalQueryOverlap(opts.Query, []domain.ScoredMemory{row.ScoredMemory}) {
+			if seen[row.ID] || !finalGraphQueryOverlap(opts.Query, row.ScoredMemory) {
 				continue
 			}
 			picked = append(picked, row)
@@ -170,11 +170,22 @@ func finalEligible(rows []domain.ScoredMemory, opts domain.RecallOpts, now time.
 }
 
 // finalRerank retains the query/key/project/scope tiers and importance tie-bands.
-// Within each tier, dense memory hits use their query's raw cosine similarity:
+// Within each tier, dense memory hits use their query's cosine similarity:
 // RRF rewards appearing in both arms and can otherwise bury a semantic answer.
+// Requested temporal decay still applies to this ranking signal; raw DenseScore
+// remains unchanged in the response. recallCandidates computes RecencyScore
+// using the effective half-life, including decayed_relevance ordering.
 // Sparse-only hits, documents and pins retain their slots. Graph scores are separate.
 func finalRerank(rows []domain.ScoredMemory, opts domain.RecallOpts) []domain.ScoredMemory {
 	q := strings.ToLower(opts.Query)
+	applyTimeDecay := opts.ApplyDecay || domain.IsDecayedRelevanceOrder(opts.OrderBy)
+	denseScore := func(row domain.ScoredMemory) float64 {
+		score := *row.DenseScore
+		if applyTimeDecay {
+			score *= row.RecencyScore
+		}
+		return score
+	}
 	boost := func(row domain.ScoredMemory) int {
 		key := strings.ToLower(row.Key)
 		value := 0
@@ -237,13 +248,31 @@ func finalRerank(rows []domain.ScoredMemory, opts domain.RecallOpts) []domain.Sc
 				dense = append(dense, row)
 			}
 		}
-		sort.SliceStable(dense, func(i, j int) bool { return *dense[i].DenseScore > *dense[j].DenseScore })
+		sort.SliceStable(dense, func(i, j int) bool { return denseScore(dense[i]) > denseScore(dense[j]) })
 		for i, index := range indices {
 			rows[index] = dense[i]
 		}
 		head = end
 	}
 	return rows
+}
+
+// Transcript speaker labels describe formatting, not a neighbour's relevance.
+// Strip the same line-leading markers recognized by chunkText, only in the
+// graph admission evidence. Stored content, keys, tags and base recall stay intact.
+func finalGraphQueryOverlap(query string, row domain.ScoredMemory) bool {
+	lines := strings.Split(row.Content, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimLeft(line, " \t")
+		for _, marker := range turnMarkers {
+			if body, ok := strings.CutPrefix(trimmed, marker); ok {
+				lines[i] = body
+				break
+			}
+		}
+	}
+	row.Content = strings.Join(lines, "\n")
+	return finalQueryOverlap(query, []domain.ScoredMemory{row})
 }
 
 func finalQueryOverlap(query string, rows []domain.ScoredMemory) bool {
